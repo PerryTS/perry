@@ -9,7 +9,7 @@ use perry_ffi::{
 
 use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
 use crate::server::response::ResponseShape;
-use crate::server::server::{synthesize_default_response_if_needed, HttpPendingRequest};
+use crate::server::server::{finalize_or_park_request, HttpPendingRequest};
 use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
 
 /// Non-blocking try_recv for HTTP/2 pending requests. Called by
@@ -113,11 +113,14 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
         }
         synthesize_default_h2_stream_response(pending.h2_stream_handle);
     }
-    if !pending.skip_default_response {
-        synthesize_default_response_if_needed(pending.response_handle);
+    if pending.skip_default_response {
+        perry_ffi::drop_handle(pending.request_handle);
+        perry_ffi::drop_handle(pending.response_handle);
+    } else {
+        // A compat handler may resume after `drain`, a timer, or an await.
+        // Keep its handles alive and let the shared pump deliver drain events.
+        finalize_or_park_request(&pending);
     }
-    perry_ffi::drop_handle(pending.request_handle);
-    perry_ffi::drop_handle(pending.response_handle);
 }
 
 fn synthesize_default_h2_stream_response(stream_handle: i64) {

@@ -922,18 +922,14 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     if !begin_streaming(handle) {
         return None;
     }
-    // P5: the chunk is framed and submitted to the socket now, and
-    // backpressure is the socket's own queued-byte count.
     let (conn, seq) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop)?;
-    if !crate::server::turnloop_route::send_body(conn, seq, bytes) {
-        return None;
-    }
-    let queued = perry_ffi::turnloop_net::queued_bytes(conn);
+    // A backpressured HTTP/2 write has already accepted these bytes. Preserve
+    // its answer instead of falling back to buffering a duplicate chunk.
+    let below_hwm = crate::server::turnloop_route::send_body(conn, seq, bytes)?;
     let sr = get_handle_mut::<ServerResponse>(handle)?;
     if callback != 0 {
         sr.pending_write_callbacks.push(callback);
     }
-    let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
     if !below_hwm {
         sr.needs_drain = true;
     }
@@ -1107,7 +1103,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         let finish_listeners = take_event_listeners(sr, "finish");
         let close_listeners = take_event_listeners(sr, "close");
         if let Some(c) = chunk {
-            crate::server::turnloop_route::send_body(conn, seq, &c);
+            let _ = crate::server::turnloop_route::send_body(conn, seq, &c);
         }
         crate::server::turnloop_route::finish_body(conn, seq, &trailers);
         crate::server::request::mark_connection_written(req_handle_of(handle));
@@ -1198,7 +1194,7 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
         return false;
     }
     if !first.is_empty() {
-        crate::server::turnloop_route::send_body(conn, seq, &first);
+        let _ = crate::server::turnloop_route::send_body(conn, seq, &first);
     }
     true
 }
@@ -1215,8 +1211,8 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
         return Vec::new();
     }
     let below = match sr.turnloop {
-        Some((conn, _)) if sr.turnloop_streaming => {
-            perry_ffi::turnloop_net::queued_bytes(conn) <= DEFAULT_HIGH_WATER_MARK
+        Some((conn, seq)) if sr.turnloop_streaming => {
+            crate::server::turnloop_route::writable_below_watermark(conn, seq)
         }
         _ => false,
     };

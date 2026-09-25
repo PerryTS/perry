@@ -1523,3 +1523,7 @@ mod prescan_tests {
         assert!(c.peer_settings.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "backpressure_tests.rs"]
+mod backpressure_tests;

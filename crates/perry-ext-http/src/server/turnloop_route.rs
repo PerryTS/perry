@@ -36,12 +36,14 @@ pub(crate) fn begin_stream(conn: i64, seq: u64, shape: ResponseShape) -> bool {
     }
 }
 
-/// A streaming `res.write(chunk)`. The boolean is Node's backpressure answer.
-pub(crate) fn send_body(conn: i64, seq: u64, bytes: &[u8]) -> bool {
+/// A streaming `res.write(chunk)`: accepted with Node's backpressure answer,
+/// or `None` when the transport no longer owns the response.
+pub(crate) fn send_body(conn: i64, seq: u64, bytes: &[u8]) -> Option<bool> {
     if is_h2(conn) {
         crate::server::turnloop_h2::h2_send_body(conn, seq as u32, bytes)
     } else {
         crate::server::turnloop_serve::send_body(conn, seq, bytes)
+            .then(|| writable_below_watermark(conn, seq))
     }
 }
 
@@ -51,5 +53,21 @@ pub(crate) fn finish_body(conn: i64, seq: u64, trailers: &[(String, String)]) {
         crate::server::turnloop_h2::h2_finish_body(conn, seq as u32, trailers);
     } else {
         crate::server::turnloop_serve::finish_body(conn, seq, trailers);
+    }
+}
+
+/// HTTP/2 also buffers bytes above the socket while waiting for peer credit.
+/// An empty socket queue alone does not mean that stream can emit `drain`.
+pub(crate) fn writable_below_watermark(conn: i64, seq: u64) -> bool {
+    if is_h2(conn) {
+        crate::server::turnloop_h2::conn::peek(conn, |connection| {
+            connection.streams.iter().any(|s| s.h2_id == seq as u32)
+                && crate::server::turnloop_h2::stream::writable_below_watermark(
+                    connection, seq as u32,
+                )
+        })
+        .unwrap_or(false)
+    } else {
+        perry_ffi::turnloop_net::queued_bytes(conn) <= 16 * 1024
     }
 }

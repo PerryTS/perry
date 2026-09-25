@@ -623,21 +623,22 @@ pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: ResponseShape) ->
     .unwrap_or(false)
 }
 
-/// A streaming `res.write(chunk)`. The boolean is Node's backpressure answer.
-pub(crate) fn h2_send_body(conn_id: i64, h2_id: u32, bytes: &[u8]) -> bool {
+/// A streaming `res.write(chunk)`. `None` means the stream is gone;
+/// `Some(false)` means the bytes were accepted with backpressure.
+pub(crate) fn h2_send_body(conn_id: i64, h2_id: u32, bytes: &[u8]) -> Option<bool> {
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
-            return false;
+            return None;
         };
         if conn.streams[i].no_body {
-            return true;
+            return Some(true);
         }
         conn.streams[i].outbox.extend_from_slice(bytes);
         pump_outbox(conn);
         flush(conn);
-        writable_below_watermark(conn, h2_id)
+        Some(writable_below_watermark(conn, h2_id))
     })
-    .unwrap_or(false)
+    .flatten()
 }
 
 /// A streaming `res.end()`: close the body framing and finish the stream.
