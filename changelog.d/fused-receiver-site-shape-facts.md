@@ -12,8 +12,7 @@ Loads on the pointer edge address off the biased value, so the handle is never
 materialised on a hit. A unit test checks all 65,536 tags against every
 payload boundary. Measured, in instructions per iteration: generic read
 `realsite` 112 → 109, ops4 `p1`/`p2` 47 → 43, `p2m` 46 → 41, `wget` 185 → 181,
-`monoext` 159 → 156. `ts.transpileModule`: −1.18% instructions (−2.09 G), output
-identical.
+`monoext` 159 → 156.
 
 `PERRY_RECV_ROUTE_COUNT=1` at compile time counts executions per route (census
 builds only; product builds emit nothing).
@@ -33,3 +32,12 @@ builds only; product builds emit nothing).
   compare against the class's own `@perry_class_shape_id_*`. A declared field is
   an own data property from birth, so a prototype accessor never changed the
   answer.
+- *The dictionary band has its own shape-slab directory.* Indexing it from
+  `SHAPE_ID_BASE` grew the slab's page vector to ~24,577 slots on the first
+  dictionary id. That one allocation moved the GC arena's pages relative to
+  the page-class table (1.65 M vs 0.20 M registered-page misses per
+  `ts.transpileModule`) and cost +2.3% instructions until the band got its own
+  directory.
+
+`ts.transpileModule`, 5 interleaved rounds: 124.07 G → 121.05 G instructions
+(−2.43%), output identical.
