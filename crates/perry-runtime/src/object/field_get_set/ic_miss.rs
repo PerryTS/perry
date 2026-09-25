@@ -933,6 +933,18 @@ pub(super) fn get_field_ic_miss_impl(
             // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays,
             // lazy arrays, Sets and Maps all carry their own distinct
             // `obj_type`.
+            //
+            // #10714: both emitted generic-get sites (the inline tower and
+            // the full-outline `js_object_get_field_ic` call) now answer a
+            // live plain Array's `.length` from its header BEFORE calling
+            // out, and the inline tower also follows one forwarding edge, so
+            // this arm sees only what they decline: a forwarding chain longer
+            // than one edge (`js_array_length` follows it and `clean_arr_ptr`
+            // compresses it to one, so the next inline read heals it), any
+            // stub on a full-outline site, and every Array read of a
+            // `--typed-feedback` build. The answers must stay identical — a
+            // change here must change `emit_plain_array_length_arm` in
+            // codegen's `expr/property_get/generic_dispatch.rs`.
             if gc_kind == Some(crate::gc::GC_TYPE_ARRAY) && unsafe { key_bytes_are(key, b"length") }
             {
                 if diag {

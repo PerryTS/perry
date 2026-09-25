@@ -112,6 +112,162 @@ fn recv_handle(
     }
 }
 
+/// `GcHeader.obj_type` of a plain Array (`perry_runtime::gc::GC_TYPE_ARRAY`).
+const GC_TYPE_ARRAY_I8: &str = "1";
+/// `perry_runtime::gc::GC_FLAG_FORWARDED` (0x80), spelled as a signed `i8`.
+const GC_FLAG_FORWARDED_I8: &str = "-128";
+
+/// `obj_type == GC_TYPE_ARRAY` and `GC_FLAG_FORWARDED` clear, read from the
+/// header in front of `handle`, emitted into the current block. Returns
+/// `(is_array, live_array)`. The caller must already have proved `handle` is a
+/// heap address above the handle band.
+///
+/// The two byte loads share one flat predicate: the flags byte sits next to
+/// the kind byte, so loading it for a receiver that turns out not to be an
+/// array costs one load from a line already in cache, and saves a branch on
+/// every array read.
+fn emit_array_header_test(ctx: &mut FnCtx<'_>, handle: &str) -> (String, String) {
+    let blk = ctx.block();
+    // `GcHeader` is `obj_type: u8` then `gc_flags: u8`, at offsets 0 and 1 of
+    // the header on every target, so these are byte loads whatever the order.
+    let type_addr = blk.sub(I64, handle, "8");
+    let type_ptr = blk.inttoptr(I64, &type_addr);
+    let gc_type = blk.load(I8, &type_ptr);
+    let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY_I8);
+    let flags_addr = blk.sub(I64, handle, "7");
+    let flags_ptr = blk.inttoptr(I64, &flags_addr);
+    let flags = blk.load(I8, &flags_ptr);
+    let forwarded = blk.and(I8, &flags, GC_FLAG_FORWARDED_I8);
+    let not_forwarded = blk.icmp_eq(I8, &forwarded, "0");
+    let live_array = blk.and(I1, &is_array, &not_forwarded);
+    (is_array, live_array)
+}
+
+/// `.length` on a receiver whose GC header says it is a plain Array (#10714),
+/// answered inline. Emitted starting in the CURRENT block; everything that is
+/// not a live plain Array, and any forwarding stub this does not heal (see
+/// below), branches to `other_label`. Returns the length and the block that
+/// carries it to `merge_label`, for the merge phi. The caller has already
+/// proved `handle` is a POINTER-tagged address above the handle band.
+///
+/// Without this, no dynamically typed `arr.length` could be served inline: the
+/// PIC requires a `GC_TYPE_OBJECT` receiver by construction (#72), so every
+/// such read called out to `get_field_ic_miss_impl`, walked the ladder above
+/// its array arm, and cached nothing because there is nothing to cache. On a
+/// natively compiled `tsc --noEmit` that was 1.7M of 6.3M misses (27%), and
+/// the three hottest miss sites in the run.
+///
+/// The answer is the one the runtime arm computes. A non-forwarded
+/// `GC_TYPE_ARRAY`'s `length` is the `u32` at payload offset 0, sparse arrays
+/// included — `js_array_length` and `clean_arr_ptr` both return that word for
+/// it. Buffers, typed arrays, lazy arrays, Maps and Sets all carry their own
+/// `obj_type`, and an Array subclass instance is a `GC_TYPE_OBJECT` whose
+/// `length` lives in its store or its shape, so none of them can take this
+/// arm. A primitive array's `length` is non-configurable, so an own property
+/// cannot shadow it. This is the header test the proven Array lowerings
+/// already inline (`plen.check_gc` in `property_get.rs`,
+/// `kindguard.array_header`, `apop.hdr`).
+///
+/// # Forwarding stubs
+///
+/// An array that grows past its capacity moves, and its old head becomes a
+/// stub: `GC_FLAG_FORWARDED` set and the live head's address in the first
+/// payload word, where `length` was. Every binding the growing code wrote
+/// through is re-pointed, but one it did not — a field holding the array
+/// while `obj.items.push(x)` grew it, an alias — keeps the stub until a
+/// collection heals it, and a loop that allocates nothing never collects. On
+/// the natively compiled `tsc`, a plain-array test alone still left 477,202
+/// `array_length` misses to the handler, 380,278 of them at one site. With
+/// `follow_stub`, a stub follows ONE edge here, exactly as
+/// `index_get/guarded_array.rs` does: the forwarding word is trusted only once
+/// it is a heap address above the handle band, and the destination is
+/// re-checked as a live plain Array before its `length` is read; that left
+/// 1,387. A longer or malformed chain takes `other_label`, where
+/// `clean_arr_ptr` follows the whole chain and compresses it to one edge, so
+/// the next read heals here. All of this is on the refusal edge: a live plain
+/// Array's read is the header test and the load, nothing more.
+///
+/// The inline tower follows stubs; the full-outline site does not. That mode
+/// exists to keep each site small (#5391), and the three extra blocks cost it
+/// more than they saved: on a 64M-read loop whose receivers are all live
+/// arrays, the full-outline arm with the follow ran at ~1450 ms against
+/// ~1040 ms without it (the emitted hot path is the same instructions; the
+/// larger CFG changed the loop's register allocation). A stub there takes the
+/// helper call, as every read did before this arm.
+///
+/// The load is a plain one: `push`/`pop`/`length =` all rewrite this word, so
+/// it must not be marked invariant, and the handle is already known to be
+/// above the handle band, so `safe_load_i32_from_ptr`'s sub-page select would
+/// guard nothing.
+fn emit_plain_array_length_arm(
+    ctx: &mut FnCtx<'_>,
+    handle: &str,
+    other_label: &str,
+    merge_label: &str,
+    follow_stub: bool,
+) -> (String, String) {
+    let load_idx = ctx.new_block("pget.array_length");
+    let load_label = ctx.block_label(load_idx);
+    let (is_array, live_array) = emit_array_header_test(ctx, handle);
+    let direct_label = ctx.block().label.clone();
+
+    let healed = if follow_stub {
+        let stub_idx = ctx.new_block("pget.array_stub");
+        let follow_idx = ctx.new_block("pget.array_stub_follow");
+        let target_idx = ctx.new_block("pget.array_stub_target");
+        let stub_label = ctx.block_label(stub_idx);
+        let follow_label = ctx.block_label(follow_idx);
+        let target_label = ctx.block_label(target_idx);
+        ctx.block().cond_br(&live_array, &load_label, &stub_label);
+
+        // Refused: an Array here is necessarily a forwarding stub (the live
+        // test failed on the flag); anything else leaves.
+        ctx.current_block = stub_idx;
+        ctx.block().cond_br(&is_array, &follow_label, other_label);
+
+        ctx.current_block = follow_idx;
+        let target = {
+            let blk = ctx.block();
+            let stub_ptr = blk.inttoptr(I64, handle);
+            let target = blk.load(I64, &stub_ptr);
+            let top = blk.lshr(I64, &target, "48");
+            let top_clear = blk.icmp_eq(I64, &top, "0");
+            let above_band = blk.icmp_ugt(I64, &target, "1048575"); // 0x100000
+            let heap_candidate = blk.and(I1, &top_clear, &above_band);
+            blk.cond_br(&heap_candidate, &target_label, other_label);
+            target
+        };
+
+        ctx.current_block = target_idx;
+        let (_, target_live) = emit_array_header_test(ctx, &target);
+        let healed_label = ctx.block().label.clone();
+        ctx.block().cond_br(&target_live, &load_label, other_label);
+        Some((target, healed_label))
+    } else {
+        ctx.block().cond_br(&live_array, &load_label, other_label);
+        None
+    };
+
+    ctx.current_block = load_idx;
+    let blk = ctx.block();
+    let live = match healed.as_ref() {
+        Some((target, healed_label)) => blk.phi(
+            I64,
+            &[
+                (handle, direct_label.as_str()),
+                (target.as_str(), healed_label.as_str()),
+            ],
+        ),
+        None => handle.to_string(),
+    };
+    let len_ptr = blk.inttoptr(I64, &live);
+    let len_i32 = blk.load(I32, &len_ptr);
+    let len = blk.uitofp(I32, &len_i32, DOUBLE);
+    let end_label = blk.label.clone();
+    blk.br(merge_label);
+    (len, end_label)
+}
+
 fn overridden_cache_name(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<String> {
     let Expr::LocalGet(base_local_id) = object else {
         return None;
@@ -212,6 +368,44 @@ pub(crate) fn lower_generic_property_get(
         // #9708: the helper takes the site's SLOT and resolves the cache
         // itself; nothing is read inline here, so no load is emitted.
         let cache_slot_ref = format!("@{}", cache_name);
+        // #10714: `.length` on a live plain Array is answered here, ahead of
+        // the helper (a forwarding stub is not followed in this mode — see
+        // `emit_plain_array_length_arm`). The helper cannot serve it any better than the inline
+        // tower's PIC can — an Array never matches an object ShapeId — so
+        // every such read paid the call, the helper's MRU probe, and the miss
+        // handler's ladder, and cached nothing. Every other receiver takes the
+        // call exactly as before. Profiling (`--typed-feedback`) builds keep
+        // the call for every receiver: the helper records the OBSERVE this arm
+        // would skip, and those builds keep their signal byte-identical.
+        let array_arm = (property == "length" && !crate::expr::typed_feedback_emission_enabled())
+            .then(|| {
+                let header_idx = ctx.new_block("pget.outline_array_header");
+                let call_idx = ctx.new_block("pget.outline_call");
+                let merge_idx = ctx.new_block("pget.outline_merge");
+                let header_label = ctx.block_label(header_idx);
+                let call_label = ctx.block_label(call_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                // The inline tower's pointer path in one test: the EXACT
+                // POINTER_TAG (a heap string's `.length` is the helper's) and a
+                // payload above the small-handle band (#340), before either header
+                // byte is read.
+                let blk = ctx.block();
+                let tag = blk.lshr(I64, &obj_bits, "48");
+                let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // 0x7FFD
+                let above_band = blk.icmp_ugt(I64, &entry_handle, "1048575"); // 0x100000
+                let candidate = blk.and(I1, &is_pointer, &above_band);
+                blk.cond_br(&candidate, &header_label, &call_label);
+                ctx.current_block = header_idx;
+                let arm = emit_plain_array_length_arm(
+                    ctx,
+                    &entry_handle,
+                    &call_label,
+                    &merge_label,
+                    false,
+                );
+                ctx.current_block = call_idx;
+                (arm, merge_idx, merge_label)
+            });
         let key_handle = emit_key_handle(ctx, &key_handle_global);
         let val = ctx.block().call(
             DOUBLE,
@@ -223,7 +417,19 @@ pub(crate) fn lower_generic_property_get(
                 (PTR, &cache_slot_ref),
             ],
         );
-        return Ok(val);
+        let Some(((len, len_end_label), merge_idx, merge_label)) = array_arm else {
+            return Ok(val);
+        };
+        let call_end_label = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        ctx.current_block = merge_idx;
+        return Ok(ctx.block().phi(
+            DOUBLE,
+            &[
+                (len.as_str(), len_end_label.as_str()),
+                (val.as_str(), call_end_label.as_str()),
+            ],
+        ));
     }
 
     // # Inline hit, two exits (T1); the hit is tag test -> shape compare -> load
@@ -608,6 +814,8 @@ pub(crate) fn lower_generic_property_get(
     // to serve a native Map/Set — whose `size` is their leading `u32` — from
     // its own arm; the byte is NOT consulted for the object path. A receiver
     // that is neither takes the ShapeId compare exactly like every other key.
+    // (`.length` reads it too, to serve a plain Array, but only AFTER the
+    // compare has failed — see `pget.array_kind` below.)
     let collection_size_idx = inline_collection_size.then(|| {
         let kind_idx = ctx.new_block("pget.collection_kind");
         let kind_label = ctx.block_label(kind_idx);
@@ -672,8 +880,41 @@ pub(crate) fn lower_generic_property_get(
     let token_eq = ctx.block().icmp_eq(I32, &pcid, &packed_stamp);
     let token_miss_idx = ctx.new_block("pic.token.miss");
     let token_miss_label = ctx.block_label(token_miss_idx);
-    ctx.block()
-        .cond_br(&token_eq, &hit_label, &token_miss_label);
+    // `.length` on a plain Array (#10714), tested on the compare's FALSE edge
+    // and nowhere earlier. See `emit_plain_array_length_arm` for what it
+    // answers and what it leaves to `pic.token.miss`.
+    //
+    // An Array can never take the hit: its `+4` word is `capacity`, a count
+    // rule 3 (#10828) bounds below the ShapeId floor, so the compare above
+    // already routes every Array here — and before this arm, on to the slow
+    // entry, which answered from the header and cached nothing (there is
+    // nothing an object cache can hold for it). Testing the header HERE, not
+    // ahead of the compare the way `.size` does, keeps a `.length` site's
+    // object HIT path the exact instruction sequence every other key's is;
+    // the price is that an Array pays the two loads and the compare first.
+    //
+    // Profiling (`--typed-feedback`) builds keep the old edge: every Array
+    // read records a guard-fail and a fallback-call on its way to the exit,
+    // and a read served without a call would change those records. The
+    // inherited-read hook below makes the same trade for the same reason.
+    let array_length_arm =
+        (inline_string_length && !crate::expr::typed_feedback_emission_enabled()).then(|| {
+            let kind_idx = ctx.new_block("pget.array_kind");
+            let kind_label = ctx.block_label(kind_idx);
+            ctx.block().cond_br(&token_eq, &hit_label, &kind_label);
+            ctx.current_block = kind_idx;
+            // `.length` takes no fused receiver test, so this is the
+            // entry-block mask; the edge here is dominated by the tag test,
+            // the heap-string split and the small-handle test above, so the
+            // arm's precondition (a POINTER-tagged address above the handle
+            // band) holds.
+            let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+            emit_plain_array_length_arm(ctx, &handle, &token_miss_label, &merge_label, true)
+        });
+    if array_length_arm.is_none() {
+        ctx.block()
+            .cond_br(&token_eq, &hit_label, &token_miss_label);
+    }
 
     ctx.current_block = token_miss_idx;
     // The cold re-read of the ShapeId word — see the hot load above.
@@ -1105,6 +1346,9 @@ pub(crate) fn lower_generic_property_get(
     }
     if let Some((size, collection_end_label)) = collection_size_arm.as_ref() {
         incoming.push((size, collection_end_label));
+    }
+    if let Some((len, array_end_label)) = array_length_arm.as_ref() {
+        incoming.push((len, array_end_label));
     }
     Ok(ctx.block().phi(DOUBLE, &incoming))
 }

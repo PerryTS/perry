@@ -1760,3 +1760,6 @@ fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
         "the merge must take the hook's value from `{inh_label}`:\n{phi}"
     );
 }
+
+#[path = "array_length_tests.rs"]
+mod array_length;
