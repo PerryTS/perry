@@ -1010,3 +1010,44 @@ fn rest_first_arg(rest: f64) -> f64 {
     }
     crate::array::js_array_get_f64(arr, 0)
 }
+
+/// `get [Symbol.species]` shared by every built-in constructor that carries
+/// one: returns the `this` value, so a subclass that inherits the accessor
+/// answers itself (ECMA-262 23.1.2.5, 24.1.2.3, 24.2.2.2, 25.1.5.3,
+/// 27.2.4.8, 22.2.5.2, 23.2.2.4).
+extern "C" fn builtin_species_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(IMPLICIT_THIS.with(|c| c.get()))
+}
+
+/// Install the standard own `get [Symbol.species]` accessor
+/// (`{ get, set: undefined, enumerable: false, configurable: true }`) on a
+/// built-in constructor (#11193). Each constructor gets its own getter
+/// function object, as in Node.
+pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::ClosureHeader) {
+    if ctor.is_null() {
+        return;
+    }
+    let sym = crate::symbol::well_known_symbol("species");
+    if sym.is_null() {
+        return;
+    }
+    let f = builtin_species_getter_thunk as *const u8;
+    crate::closure::js_register_closure_arity(f, 0);
+    let getter = crate::closure::js_closure_alloc(f, 0);
+    if getter.is_null() {
+        return;
+    }
+    super::super::native_module::set_bound_native_closure_name(getter, "get [Symbol.species]");
+    super::super::native_module::set_builtin_closure_length(getter as usize, 0);
+    let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+    let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
+    let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
+    unsafe {
+        crate::symbol::set_symbol_accessor_property(ctor_value, sym_value, get_bits, 0);
+        crate::symbol::set_symbol_property_attrs(
+            ctor as usize,
+            sym as usize,
+            super::super::PropertyAttrs::new(false, false, true),
+        );
+    }
+}

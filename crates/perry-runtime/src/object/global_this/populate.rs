@@ -290,6 +290,13 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
         // on the constructor closure so rebound usage like
         // `const O = Object; O.keys(x)` dispatches through the real helpers.
         install_builtin_constructor_statics(name, closure_ptr);
+        // #11193: `C[Symbol.species]` getter returning `this`.
+        if matches!(
+            name,
+            "Array" | "Map" | "Set" | "Promise" | "RegExp" | "ArrayBuffer" | "SharedArrayBuffer"
+        ) {
+            install_builtin_species_accessor(closure_ptr);
+        }
         if name == "Number" {
             install_number_static_data_properties(closure_ptr);
         }

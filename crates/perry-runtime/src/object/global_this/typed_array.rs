@@ -698,6 +698,8 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // "length")` to keep working.
     install_typed_array_proto_accessors(proto);
     install_typed_array_to_string_tag(proto);
+    // #11193: `%TypedArray%[Symbol.species]`, inherited by `Uint8Array` & co.
+    super::install_builtin_species_accessor(ctor);
     // The per-kind prototypes (`Int8Array.prototype`, …) inherit ALL of their
     // methods from this shared `%TypedArray%.prototype` (their `[[Prototype]]`),
     // so `Int8Array.prototype.hasOwnProperty("map") === false` and

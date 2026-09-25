@@ -44,6 +44,16 @@ pub(crate) unsafe fn species_constructor(owner: usize, kind: u8) -> SpeciesChoic
     if sv.is_undefined() || sv.is_null() {
         return SpeciesChoice::Default;
     }
+    // #11193: the intrinsic `%TypedArray%[@@species]` getter answers the
+    // intrinsic constructor itself; keep the same-kind fast allocation.
+    // The lookup can allocate on first use, so `s` is rooted across it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_nanbox_f64(s);
+    let intrinsic = intrinsic_constructor(kind);
+    let s = s_handle.get_nanbox_f64();
+    if s.to_bits() == intrinsic.to_bits() {
+        return SpeciesChoice::Default;
+    }
     if !is_constructor(s) {
         throw_type_error(b"object.constructor[Symbol.species] is not a constructor");
     }
