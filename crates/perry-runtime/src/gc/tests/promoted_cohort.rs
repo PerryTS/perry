@@ -113,8 +113,8 @@ fn sabotaged_backoff_charges_a_retaining_schedule_a_full_per_live_set() {
 #[test]
 fn the_cohort_never_makes_old_reclaim_due() {
     let _iso = GcTestIsolationGuard::new();
-    let previous_retaining = GC_MAJOR_PACING_RETAINING.with(std::cell::Cell::get);
-    let previous_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(std::cell::Cell::get);
+    let previous_retaining = GC_MAJOR_PACING_RETAINING.with(TriggerInput::get);
+    let previous_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get);
     GC_MAJOR_PACING_RETAINING.with(|c| c.set(true));
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|c| c.set(4 * MB));
     cohort::seed_for_tests(0, 0, 0);
@@ -124,7 +124,7 @@ fn the_cohort_never_makes_old_reclaim_due() {
         cohort::full_due(),
         "premise: the cohort is far past its bound"
     );
-    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(std::cell::Cell::get);
+    let baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get);
     assert!(!old_reclaim_pressure_due(274 * MB, baseline));
     cohort::seed_for_tests(0, 0, 0);
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|c| c.set(previous_baseline));

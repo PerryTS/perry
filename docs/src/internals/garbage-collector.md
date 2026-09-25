@@ -53,6 +53,21 @@ bytes on each sweep's `[gc] blocks:` line.
 <!-- gc-symbol: a_dead_block_of_plain_objects_is_reclaimed_without_visiting_it in crates/perry-runtime/src/gc/tests/block_skip.rs -->
 <!-- gc-symbol: a_live_neighbour_keeps_its_block_on_the_per_object_path in crates/perry-runtime/src/gc/tests/block_skip.rs -->
 
+**The allocation-point trigger check.** `gc_check_trigger` runs on every
+`gc_malloc` and every arena block fill, and nearly always finds nothing due. An
+evaluation of its ladder (old-gen reclaim, whole arena, young scavenge cap,
+malloc count) that finds nothing due publishes a watermark: the malloc-count
+threshold, and the young cap re-expressed as a bound on the inline allocator's
+current-block offset — the only two ladder quantities that move without a
+runtime write. Until one is crossed, the next check is two loads and two
+compares instead of the ladder. Every other input is a `TriggerInput` cell
+whose writes retire the watermark, and heap-generation advances and Eden block
+switches retire it too, so a skipped check is one that would have returned
+without acting. Unit-test builds re-derive every fast-path answer with the full
+ladder and fail on a mismatch (`crates/perry-runtime/src/gc/trigger_watermark.rs`).
+<!-- gc-symbol: repeated_gc_malloc_is_answered_by_the_fast_path in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
+<!-- gc-symbol: a_watermark_the_ladder_disagrees_with_trips_the_verifier in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
+
 **Per-live-object cost of a synchronous full.** Three parts of a full scale
 with the live set, and each has a cheaper exact form:
 

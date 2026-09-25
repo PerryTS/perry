@@ -51,13 +51,13 @@ crate::perry_thread_local! {
     /// total_size -> user_ptrs of swept holes of exactly that size.
     static OLD_FREE_MAP: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<usize>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    static OLD_FREE_BYTES: Cell<usize> = const { Cell::new(0) };
+    static OLD_FREE_BYTES: super::TriggerInput<usize> = const { super::TriggerInput::new(0) };
     static OLD_FREE_NONEMPTY: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Total bytes currently sitting in reusable old-gen holes.
 pub(crate) fn old_free_bytes() -> usize {
-    OLD_FREE_BYTES.with(Cell::get)
+    OLD_FREE_BYTES.with(TriggerInput::get)
 }
 
 /// Hot-cache slot claimed by `OLD_FREE_BYTES`, which

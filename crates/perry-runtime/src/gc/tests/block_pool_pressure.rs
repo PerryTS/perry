@@ -93,7 +93,7 @@ fn blocked_critical_pressure_keeps_the_full_cycle_and_drain_sticky() {
         "suppressed allocation bookkeeping defers pressure"
     );
     assert!(
-        GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
+        GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "critical pressure must retain the full-cycle debt across every guard"
     );
     assert!(crate::arena::block_pool_bytes_for_test() >= crate::arena::BLOCK_SIZE);

@@ -192,7 +192,7 @@ fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool
                 "construction must return before collecting its completed output"
             );
             assert!(
-                GC_NEXT_MALLOC_TRIGGER.with(Cell::get) <= malloc_object_count(),
+                GC_NEXT_MALLOC_TRIGGER.with(TriggerInput::get) <= malloc_object_count(),
                 "post-parse accounting must not cancel the completed 32 MiB output request"
             );
         }
@@ -215,7 +215,7 @@ fn exercise_large_parse_output_debt(use_result_entry: bool, block_boundary: bool
     if block_boundary {
         assert_eq!(gc_collection_count(), collections_before);
         assert!(
-            GC_NEXT_MALLOC_TRIGGER.with(Cell::get) <= malloc_object_count(),
+            GC_NEXT_MALLOC_TRIGGER.with(TriggerInput::get) <= malloc_object_count(),
             "a blocked boundary must preserve the completed-byte request"
         );
         drop(blocked);

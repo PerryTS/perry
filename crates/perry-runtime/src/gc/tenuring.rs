@@ -219,7 +219,7 @@ crate::perry_thread_local! {
     static PREV_COPIED_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Influx-driven multiplier (1, 2, or 4) applied to the scavenge nursery
     /// cap. Power of two; grows/shrinks one step at a time, debounced.
-    static NURSERY_CAP_SCALE: Cell<u8> = const { Cell::new(1) };
+    static NURSERY_CAP_SCALE: super::TriggerInput<u8> = const { super::TriggerInput::new(1) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
@@ -227,12 +227,12 @@ crate::perry_thread_local! {
     /// paces exactly as it did before the object denomination existed — until
     /// #8122's allocation census (below) replaces the seed with a measurement
     /// of THIS program's objects, halfway to the first cap.
-    static MEAN_SURVIVING_OBJECT_BYTES: Cell<usize> =
-        const { Cell::new(NURSERY_CAP_REFERENCE_OBJECT_BYTES) };
+    static MEAN_SURVIVING_OBJECT_BYTES: super::TriggerInput<usize> =
+        const { super::TriggerInput::new(NURSERY_CAP_REFERENCE_OBJECT_BYTES) };
     /// #8122: has ANY census — the collector's survivor census or the one-time
     /// allocation census — replaced the seed? Once true the allocation probe
     /// never runs again (its walk is paid at most once per process).
-    static OBJECT_CENSUS_SEEDED: Cell<bool> = const { Cell::new(false) };
+    static OBJECT_CENSUS_SEEDED: super::TriggerInput<bool> = const { super::TriggerInput::new(false) };
 }
 
 #[cfg(test)]
@@ -356,8 +356,8 @@ pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
 /// [`nursery_cap_object_scale_permille`]. Named so the composition below reads
 /// as the two-term policy it is.
 pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
-    let constant_band =
-        gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
+    let constant_band = gc_scavenge_nursery_cap_bytes()
+        .saturating_mul(NURSERY_CAP_SCALE.with(TriggerInput::get) as usize);
     // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
     // ILP32 target (watchOS/visionOS are 32-bit) would saturate a 64 MB band
     // against a 1000-per-mille factor at `u32::MAX` and the following divide
@@ -376,7 +376,7 @@ pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
 /// Seeded at [`NURSERY_CAP_REFERENCE_OBJECT_BYTES`] so a process that has never
 /// completed a copying minor paces bit-identically to the pre-#7929 collector.
 pub(super) fn mean_surviving_object_bytes() -> usize {
-    MEAN_SURVIVING_OBJECT_BYTES.with(Cell::get)
+    MEAN_SURVIVING_OBJECT_BYTES.with(TriggerInput::get)
 }
 
 /// Mean surviving object size the 16 MB constant band was calibrated against.
@@ -495,14 +495,21 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
 /// (tests reset it).
 #[inline]
 pub(super) fn object_census_seeded() -> bool {
-    OBJECT_CENSUS_SEEDED.with(Cell::get)
+    OBJECT_CENSUS_SEEDED.with(TriggerInput::get)
+}
+
+/// The young-generation occupancy at which the one-time allocation census is
+/// taken: halfway to the base cap. Shared with the trigger watermark (#10698),
+/// which must not let a fast-path answer carry past the reading that seeds.
+pub(super) fn object_census_seed_point_bytes() -> usize {
+    super::policy::gc_scavenge_nursery_cap_bytes() / 2
 }
 
 pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: usize) {
-    if OBJECT_CENSUS_SEEDED.with(Cell::get) {
+    if OBJECT_CENSUS_SEEDED.with(TriggerInput::get) {
         return;
     }
-    if from_space_in_use_bytes < super::policy::gc_scavenge_nursery_cap_bytes() / 2 {
+    if from_space_in_use_bytes < object_census_seed_point_bytes() {
         return;
     }
     // Take the walk at most once even if it yields nothing (an empty or
@@ -706,7 +713,7 @@ pub(super) fn retune_after_scavenge(
 /// steady workload (growing halves the observed ratio, 4%/2 = 2% > 1%).
 fn retune_nursery_cap_scale(eden_live_bytes: usize) {
     let cap = scavenge_nursery_cap_effective_bytes();
-    let scale = NURSERY_CAP_SCALE.with(Cell::get);
+    let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
     if eden_live_bytes > cap / 25 {
         CAP_SHRINK_STREAK.with(|s| s.set(0));
         if scale < NURSERY_CAP_SCALE_MAX {
@@ -860,7 +867,7 @@ pub(super) fn reset_for_test() {
 /// calibration seed yet?
 #[cfg(test)]
 pub(super) fn object_census_seeded_for_test() -> bool {
-    OBJECT_CENSUS_SEEDED.with(Cell::get)
+    OBJECT_CENSUS_SEEDED.with(TriggerInput::get)
 }
 
 #[cfg(test)]

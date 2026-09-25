@@ -98,6 +98,7 @@ mod temp_roots;
 mod tiny_parse_pressure;
 mod tls_fill_reentrancy;
 mod trigger_path_tls;
+mod trigger_watermark;
 mod triggers;
 mod typed_layout_intact_residual;
 mod u8_inline_cache;

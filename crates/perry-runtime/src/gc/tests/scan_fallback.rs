@@ -57,7 +57,7 @@ fn old_reclaim_runs_precisely_at_a_safepoint() {
         "the safepoint path has precise roots, so it must not force the scan"
     );
     assert!(
-        !GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
+        !GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "the safepoint collection retires the request, so the allocation-point \
          arm finds nothing due and never runs a second, conservative cycle"
     );
@@ -188,7 +188,7 @@ fn host_pressure_defers_when_a_generated_frame_is_live() {
     );
     assert!(GC_SAFEPOINT_PENDING.with(std::cell::Cell::get));
     assert!(
-        GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
+        GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "level >= 2 must owe a FULL cycle, not a minor"
     );
 
@@ -442,7 +442,7 @@ fn host_pressure_deferral_still_has_a_drain_when_moving_loop_polls_are_off() {
         "deferring never scans, whatever the pacing mode"
     );
     assert!(
-        GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get),
+        GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "the owed FULL cycle is still armed, so the next allocation-point \
          trigger check collects it even with no safepoint machinery running"
     );

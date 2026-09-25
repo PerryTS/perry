@@ -61,7 +61,7 @@ fn arm_one_pending_collection() {
 }
 
 fn pending_collection_still_owed() -> bool {
-    GC_OLD_RECLAIM_PENDING.with(std::cell::Cell::get)
+    GC_OLD_RECLAIM_PENDING.with(TriggerInput::get)
 }
 
 fn clear_pending_collection() {

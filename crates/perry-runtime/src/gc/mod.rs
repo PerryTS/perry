@@ -207,6 +207,10 @@ use tenuring::*;
 mod oldgen;
 use oldgen::*;
 pub(crate) mod heap_generation;
+/// #10698: `gc_check_trigger`'s "nothing is due" watermark and the
+/// `TriggerInput` cell type whose writes retire it.
+pub(crate) mod trigger_watermark;
+pub(crate) use trigger_watermark::TriggerInput;
 mod oldgen_defrag;
 use oldgen_defrag::*;
 mod cycle;

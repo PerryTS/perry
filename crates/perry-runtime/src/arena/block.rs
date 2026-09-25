@@ -586,6 +586,10 @@ impl Arena {
     pub(crate) fn set_current(&mut self, idx: usize) {
         self.current = idx;
         super::from_space::invalidate_sealed_young_bytes();
+        // #10698: the trigger watermark bounds the offset of the block that
+        // WAS current against the bytes sealed in the others; neither holds
+        // across a switch.
+        crate::gc::trigger_watermark::retire_trigger_watermark();
     }
 
     /// Lazy variant of `new`: starts with a single tombstone block
@@ -1026,7 +1030,7 @@ thread_local! {
     /// at the four mutation sites (Arena::new initial block, fresh
     /// alloc into a tombstone slot or the end, and release inside
     /// `arena_reset_empty_blocks`).
-    pub(crate) static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static ARENA_TOTAL_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 }
 
 crate::perry_thread_local! {
@@ -1053,7 +1057,7 @@ crate::perry_thread_local! {
     /// debug-asserts this cache against the O(blocks) recompute so a
     /// missed mutation site fails tests instead of silently skewing
     /// the OldReclaim trigger.
-    pub(crate) static OLD_GEN_IN_USE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static OLD_GEN_IN_USE_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 
 }
 
@@ -1169,7 +1173,12 @@ pub(crate) fn hot_inline_state() -> *mut InlineArenaState {
 
 /// Delta-maintenance for `OLD_GEN_IN_USE_BYTES` — see the thread-local's
 /// doc comment for the full mutation-site inventory.
-#[inline]
+///
+/// Out of line (#10698): the write retires the GC trigger watermark, which is
+/// a call, and this is reached from `Arena::try_block_alloc`'s old-gen arm —
+/// inlined into every Eden allocation. A call site there, even on the arm
+/// Eden never takes, moved the Eden bump path's register allocation.
+#[inline(never)]
 pub(crate) fn old_gen_in_use_bytes_add(delta: usize) {
     if delta == 0 {
         return;

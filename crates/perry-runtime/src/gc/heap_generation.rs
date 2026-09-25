@@ -77,6 +77,10 @@ pub(crate) fn heap_generation() -> u64 {
 fn advance() {
     // `try_with`: a scope can close while thread-locals are being destroyed.
     let _ = HEAP_GENERATION.try_with(|g| g.set(g.get().wrapping_add(1)));
+    // #10698: the allocation-point trigger's watermark holds the young
+    // generation's sealed bytes fixed, which is only true until the heap
+    // changes -- the same key `arena::from_space`'s sealed-bytes cache uses.
+    crate::gc::trigger_watermark::retire_trigger_watermark();
 }
 
 /// A region of code that may free or move heap memory. See the module docs.

@@ -116,7 +116,7 @@ crate::perry_thread_local! {
     pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_NAMED_MUTABLE_ROOT_SCANNERS: RefCell<Vec<(PerryFfiNamedMutableRootScanner, usize)>> = RefCell::new(Vec::new());
     pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
-    pub(super) static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+    pub(super) static GC_ROOT_LOCK_DEPTH: super::TriggerInput<usize> = const { super::TriggerInput::new(0) };
 }
 
 /// Guard returned by `lock_gc_root_registry`.

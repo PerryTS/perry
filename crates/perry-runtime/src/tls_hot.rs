@@ -533,6 +533,31 @@ pub(crate) fn hot_if_published() -> Option<&'static HotTls> {
 /// Stop serving the named handle-stack pointer before its raw thread-local is
 /// destroyed. The generic-slot form had this teardown protection through
 /// `SlotGuard`; the named fast path must preserve it (#9183).
+/// This thread's cache if [`fill`] has completed, **without** filling it.
+///
+/// For writers that can run inside `fill` itself. `fill` resolves the named
+/// fields' thread-locals, so a lazily initialised one's initializer runs in
+/// there — `Arena::new` for `ARENA` — and if that initializer reaches any
+/// [`HotKey`] the ordinary way, [`hot`] sees the cache unfilled, re-enters
+/// `fill`, and re-runs the same initializer until the stack runs out (#10698:
+/// the trigger watermark's retirement on `ARENA_TOTAL_BYTES`'s first write).
+///
+/// `None` also means no `HotKey` has been resolved through the cache on this
+/// thread yet, since every such access fills it first.
+#[inline(always)]
+pub(crate) fn hot_if_filled() -> Option<&'static HotTls> {
+    if let Some(slots) = hot_if_published() {
+        return Some(slots);
+    }
+    HOT.try_with(|cell| {
+        let slots = cell.get();
+        // SAFETY: as in `hot_via_tls`: `HOT` is const-init with no `Drop`.
+        unsafe { (!(*slots).temp_roots.is_null()).then(|| &*slots) }
+    })
+    .ok()
+    .flatten()
+}
+
 #[inline(always)]
 pub(crate) fn unpublish_runtime_handle_stack() {
     // Teardown is cold. Clear the cache without filling it. Android's pooled

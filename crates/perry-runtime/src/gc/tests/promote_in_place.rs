@@ -345,14 +345,14 @@ fn the_untraced_promotion_budget_is_bounded_and_scales_to_the_heap_budget() {
 #[test]
 fn a_contradicting_measurement_schedules_the_old_reclaim_it_needs() {
     let _guard = InPlacePromotionTestGuard::untraced();
-    let previous = GC_OLD_RECLAIM_PENDING.with(Cell::get);
+    let previous = GC_OLD_RECLAIM_PENDING.with(TriggerInput::get);
 
     // A measurement that AGREES with the predictor changes nothing.
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
     seed_untraced_promoted_bytes_for_tests(64 * 1024 * 1024);
     note_young_survival(16 * 1024 * 1024, 16 * 1024 * 1024);
     assert!(
-        !GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        !GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "a confirming measurement must not schedule a reclaim"
     );
 
@@ -361,7 +361,7 @@ fn a_contradicting_measurement_schedules_the_old_reclaim_it_needs() {
     seed_untraced_promoted_bytes_for_tests(64 * 1024 * 1024);
     note_young_survival(16 * 1024 * 1024, 0);
     assert!(
-        GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "#7902: a contradicted predictor must schedule the old-gen reclaim that \
          can decide the cohort it already promoted"
     );
@@ -372,7 +372,7 @@ fn a_contradicting_measurement_schedules_the_old_reclaim_it_needs() {
     seed_untraced_promoted_bytes_for_tests(0);
     note_young_survival(16 * 1024 * 1024, 0);
     assert!(
-        !GC_OLD_RECLAIM_PENDING.with(Cell::get),
+        !GC_OLD_RECLAIM_PENDING.with(TriggerInput::get),
         "a low measurement with no untraced run behind it schedules nothing"
     );
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(previous));

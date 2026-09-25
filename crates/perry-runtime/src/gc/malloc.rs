@@ -244,7 +244,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
     // (`setjmp` only captures callee-saved regs) can't see it as a root.
     // Running before means the fresh allocation simply doesn't exist yet
     // during the GC cycle.
-    gc_check_trigger();
+    super::policy::gc_check_trigger_inlined();
 
     unsafe {
         let mut raw = alloc(layout);

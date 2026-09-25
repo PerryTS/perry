@@ -40,13 +40,13 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     }
     let arena_total = crate::arena::arena_total_bytes();
     let next_base = policy::next_arena_trigger_base();
-    let armed = policy::GC_TRIGGER_ARMED.with(Cell::get);
+    let armed = policy::GC_TRIGGER_ARMED.with(TriggerInput::get);
     let from_space = crate::arena::copying_from_space_in_use_bytes();
     let nursery_cap = tenuring::scavenge_nursery_cap_effective_bytes();
     let old_reclaimable = policy::old_gen_reclaimable_pressure_bytes();
     let external = policy::external_side_live_bytes();
-    let external_drained = policy::GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get);
-    let old_baseline = policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get);
+    let external_drained = policy::GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(TriggerInput::get);
+    let old_baseline = policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get);
     let old_band = policy::gc_old_reclaim_growth_band_bytes(old_baseline);
     // #10928: INERT. `old_threshold` gates nothing since the absolute
     // first-crossing arm was deleted from `old_reclaim_pressure_due`; the
@@ -57,10 +57,10 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     // damage was: a live-looking number with no behaviour behind it.
     // Scheduled for deletion with the constant after the campaign.
     let old_threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
-    let old_pending = policy::GC_OLD_RECLAIM_PENDING.with(Cell::get);
-    let retaining = policy::GC_MAJOR_PACING_RETAINING.with(Cell::get);
+    let old_pending = policy::GC_OLD_RECLAIM_PENDING.with(TriggerInput::get);
+    let retaining = policy::GC_MAJOR_PACING_RETAINING.with(TriggerInput::get);
     let malloc = malloc_object_count();
-    let next_malloc = policy::GC_NEXT_MALLOC_TRIGGER.with(Cell::get);
+    let next_malloc = policy::GC_NEXT_MALLOC_TRIGGER.with(TriggerInput::get);
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     let old_free = old_free_bytes();
     eprintln!(
@@ -151,7 +151,7 @@ pub(super) fn full_started(site: &'static str, trigger: GcTriggerKind) {
     eprintln!(
         "[gc-full] site={site} trigger={trigger:?} count_at_site={count} old_reclaimable={} old_baseline={}",
         policy::old_gen_reclaimable_pressure_bytes(),
-        policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get)
+        policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get)
     );
 }
 
@@ -187,7 +187,7 @@ pub(super) fn budgeted_started(
         "[gc-budgeted] start trigger={trigger:?} kind={collection} progress={} old_reclaimable={} old_baseline={} arena_total={}",
         progress.as_str(),
         policy::old_gen_reclaimable_pressure_bytes(),
-        policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get),
+        policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(TriggerInput::get),
         crate::arena::arena_total_bytes()
     );
     BUDGETED.with(|b| {

@@ -1,4 +1,5 @@
 use super::heap_budget::*;
+use super::trigger_watermark::TriggerWatermark;
 use super::*;
 
 pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
@@ -115,10 +116,33 @@ pub(super) fn young_scavenge_cap_due() -> bool {
 /// than paying two more thread-local reads. The read happens where it always
 /// did: after the census seed, which changes only the young-side factor.
 fn young_scavenge_cap_due_with_old_reclaimable(old_reclaimable: impl FnOnce() -> usize) -> bool {
+    young_scavenge_cap_probe(old_reclaimable).due
+}
+
+/// [`young_scavenge_cap_due_with_old_reclaimable`]'s answer plus what it read
+/// to reach it — `None` when the cap is not in force and nothing was read.
+struct YoungScavengeCapProbe {
+    due: bool,
+    reading: Option<super::trigger_watermark::YoungArmReading>,
+}
+
+fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungScavengeCapProbe {
     if !nursery_cap_active() {
-        return false;
+        return YoungScavengeCapProbe {
+            due: false,
+            reading: None,
+        };
     }
     let from_space_in_use = crate::arena::copying_from_space_in_use_bytes();
+    // The current Eden block's share of that reading: the inline offset,
+    // whenever the inline allocator is initialized (see
+    // `synced_current_eden_block_bytes`). Read here, before anything else
+    // runs, so it is the value the occupancy was summed from.
+    let inline_offset = {
+        // SAFETY: this thread's own inline allocator state, read only.
+        let inline = unsafe { &*crate::arena::hot_inline_state() };
+        (!inline.data.is_null()).then_some(inline.offset)
+    };
     // #8122: before the first copying minor has measured survivors, denominate
     // the FIRST cap in this program's objects too (one header walk, once per
     // process, halfway to the base cap). Not while a collection is in
@@ -133,7 +157,23 @@ fn young_scavenge_cap_due_with_old_reclaimable(old_reclaimable: impl FnOnce() ->
     {
         super::tenuring::maybe_seed_object_census_from_allocation(from_space_in_use);
     }
-    from_space_in_use >= scavenge_nursery_cap_dueness_bytes_with(old_reclaimable)
+    let cap = scavenge_nursery_cap_dueness_bytes_with(old_reclaimable);
+    // #10698: while the census is unseeded, the first reading at or past the
+    // seed point seeds it and re-denominates the cap, so "not due" only
+    // holds below whichever comes first.
+    let limit = if super::tenuring::object_census_seeded() {
+        cap
+    } else {
+        cap.min(super::tenuring::object_census_seed_point_bytes())
+    };
+    YoungScavengeCapProbe {
+        due: from_space_in_use >= cap,
+        reading: Some(super::trigger_watermark::YoungArmReading {
+            from_space_in_use,
+            limit,
+            inline_offset,
+        }),
+    }
 }
 
 /// #10169: does the young generation hold at least one BASE nursery cap of
@@ -163,7 +203,7 @@ fn scavenge_nursery_cap_dueness_bytes() -> usize {
 
 fn scavenge_nursery_cap_dueness_bytes_with(old_reclaimable: impl FnOnce() -> usize) -> usize {
     #[cfg(test)]
-    if let Some(bytes) = GC_NURSERY_CAP_TEST_DUE_BYTES.with(Cell::get) {
+    if let Some(bytes) = GC_NURSERY_CAP_TEST_DUE_BYTES.with(TriggerInput::get) {
         return bytes;
     }
     let influx_driven = super::tenuring::influx_driven_nursery_cap_bytes();
@@ -179,7 +219,7 @@ fn scavenge_nursery_cap_dueness_bytes_with(old_reclaimable: impl FnOnce() -> usi
 #[cfg(test)]
 thread_local! {
     /// Test-only override for [`scavenge_nursery_cap_dueness_bytes`].
-    static GC_NURSERY_CAP_TEST_DUE_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
+    static GC_NURSERY_CAP_TEST_DUE_BYTES: TriggerInput<Option<usize>> = const { TriggerInput::new(None) };
 }
 
 /// RAII override making the young-gen scavenge cap due at `bytes` of from-space
@@ -237,7 +277,7 @@ impl Drop for ScavengeNurseryCapTestGuard {
 /// back with it, automatically and in the configuration it was measured in.
 fn nursery_cap_active() -> bool {
     #[cfg(test)]
-    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(Cell::get) {
+    if GC_NURSERY_CAP_TEST_SUPPRESSED.with(TriggerInput::get) {
         return false;
     }
     gc_moving_loop_polls_enabled()
@@ -329,7 +369,7 @@ thread_local! {
     /// (#7056), which silently broke that escape hatch: 22 `gc::tests` that
     /// legitimately assert raw-cell trigger arithmetic started failing against
     /// the capped value. The guard has to suppress the cap directly.
-    static GC_NURSERY_CAP_TEST_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+    static GC_NURSERY_CAP_TEST_SUPPRESSED: TriggerInput<bool> = const { TriggerInput::new(false) };
 }
 
 crate::perry_thread_local! {
@@ -351,8 +391,8 @@ crate::perry_thread_local! {
     /// If a sweep frees <25%, the step is halved (down to a 16MB
     /// floor) so live-set-bound programs don't grow their working
     /// set unboundedly between collections.
-    pub(super) static GC_NEXT_TRIGGER_BYTES: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(GC_THRESHOLD_INITIAL_BYTES) };
+    pub(super) static GC_NEXT_TRIGGER_BYTES: TriggerInput<usize> =
+        const { TriggerInput::new(GC_THRESHOLD_INITIAL_BYTES) };
 
     /// Whether GC_NEXT_TRIGGER_BYTES has been explicitly set on this thread
     /// (re-arm after a collection, parse bump, tiny-parse lowering). While
@@ -360,8 +400,8 @@ crate::perry_thread_local! {
     /// `effective_next_arena_trigger` substitutes the device-derived ceiling
     /// instead — an ARMED trigger above the ceiling is legitimate (big live
     /// set headroom floor, medium-parse bumps) and must not be clamped.
-    pub(super) static GC_TRIGGER_ARMED: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
+    pub(super) static GC_TRIGGER_ARMED: TriggerInput<bool> =
+        const { TriggerInput::new(false) };
 
     /// Per-program adaptive GC step. Doubles (up to MAX) when sweeps
     /// are mostly-garbage; halves (down to 16MB) when sweeps reclaim
@@ -375,8 +415,8 @@ crate::perry_thread_local! {
     /// so that programs with large legitimate live sets (>10k tracked
     /// malloc objects) don't GC-thrash on every subsequent allocation.
     /// See `gc_check_trigger` for the update rule.
-    pub(super) static GC_NEXT_MALLOC_TRIGGER: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(100_000) };
+    pub(super) static GC_NEXT_MALLOC_TRIGGER: TriggerInput<usize> =
+        const { TriggerInput::new(100_000) };
 
     /// Issue #745: track whether a medium-or-larger parse already
     /// raised `GC_NEXT_TRIGGER_BYTES` this GC cycle. Cleared in
@@ -604,9 +644,9 @@ pub(crate) enum JsonOutputSweep {
 /// an earlier deferred completion so JSON can carry forward output bytes
 /// produced after that request instead of dropping an extra buffer's debt.
 pub(crate) fn gc_service_json_output_sweep() -> JsonOutputSweep {
-    let was_due = malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(Cell::get);
+    let was_due = malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(TriggerInput::get);
     gc_check_trigger();
-    if malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(Cell::get) {
+    if malloc_object_count() >= GC_NEXT_MALLOC_TRIGGER.with(TriggerInput::get) {
         JsonOutputSweep::Pending
     } else if was_due {
         JsonOutputSweep::CompletedAtBoundary
@@ -647,7 +687,7 @@ const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
 
 crate::perry_thread_local! {
     static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GC_EXTERNAL_SIDE_LIVE_BYTES: TriggerInput<usize> = const { TriggerInput::new(0) };
     /// Medium-parse pacing (2026-09-14): [`external_side_live_bytes`] as the
     /// last collection ended — the base of the parse-boundary growth band
     /// ([`external_side_parse_pressure_due_with`]). A byte COUNT, never an
@@ -658,14 +698,14 @@ crate::perry_thread_local! {
     /// collection or mutator operation has released since the last full — see
     /// [`external_side_old_reclaim_pressure_bytes`]. A byte COUNT, never an
     /// address.
-    pub(super) static GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
+    pub(super) static GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL: TriggerInput<usize> =
+        const { TriggerInput::new(0) };
 }
 
 /// Live bytes currently held by external Map/Set side buffers on this thread.
 #[inline]
 pub(super) fn external_side_live_bytes() -> usize {
-    GC_EXTERNAL_SIDE_LIVE_BYTES.with(Cell::get)
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(TriggerInput::get)
 }
 
 /// Medium-parse pacing (2026-09-14): how many bytes of external side allocation
@@ -764,7 +804,8 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 /// so other workloads can reach the full-collection threshold earlier. The full
 /// baseline resets the released-byte contribution before pricing the next band.
 pub(super) fn external_side_old_reclaim_pressure_bytes() -> usize {
-    external_side_live_bytes().saturating_add(GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get))
+    external_side_live_bytes()
+        .saturating_add(GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(TriggerInput::get))
 }
 
 #[inline]
@@ -848,7 +889,7 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
     // for its duration even though the process default is off. Compiled out
     // entirely in release builds.
     #[cfg(test)]
-    if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(Cell::get) {
+    if let Some(forced) = GC_MOVING_LOOP_POLLS_TEST_OVERRIDE.with(TriggerInput::get) {
         return forced;
     }
 
@@ -912,7 +953,7 @@ thread_local! {
     /// `CopyingPointerSet::new` all consult `gc_moving_loop_polls_enabled()`
     /// (and `gc_scavenge_enabled()` is env-gated OFF by default in tests), this
     /// single override flips all of the moving-mode behavior coherently.
-    static GC_MOVING_LOOP_POLLS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+    static GC_MOVING_LOOP_POLLS_TEST_OVERRIDE: TriggerInput<Option<bool>> = const { TriggerInput::new(None) };
 }
 
 /// RAII guard that pins LEGACY (non-moving, budgeted/direct, 128 MiB-ceiling) GC
@@ -1243,11 +1284,11 @@ impl GcTriggerSnapshot {
 crate::perry_thread_local! {
     pub(super) static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
-    pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
+    pub(super) static GC_OLD_RECLAIM_PENDING: TriggerInput<bool> = const { TriggerInput::new(false) };
     /// #10169: a document-sized JSON leaf was born old under young pressure
     /// since the last trigger decision (`note_young_leaf_born_old`).
-    pub(super) static GC_YOUNG_LEAF_BORN_OLD: Cell<bool> = const { Cell::new(false) };
-    pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    pub(super) static GC_YOUNG_LEAF_BORN_OLD: TriggerInput<bool> = const { TriggerInput::new(false) };
+    pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: TriggerInput<usize> = const { TriggerInput::new(0) };
     /// Live allocated arena bytes measured right after the last FULL
     /// mark-sweep — the baseline for major-GC pacing
     /// (`arena_growth_full_escalation_due`).
@@ -1313,7 +1354,7 @@ crate::perry_thread_local! {
     /// #10928: how far left to shift the old-reclaim growth band because the
     /// preceding old-reclaim fulls were unproductive. Reset to 0 by the first
     /// productive one. Capped at `OLD_RECLAIM_BACKOFF_SHIFT_MAX`.
-    pub(super) static GC_OLD_RECLAIM_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
+    pub(super) static GC_OLD_RECLAIM_BACKOFF_SHIFT: TriggerInput<u32> = const { TriggerInput::new(0) };
     /// #10960: live bytes the PREVIOUS priced full left behind, so
     /// `update_old_reclaim_backoff` can tell a futile full (it re-traced the
     /// same live set) from one that found the live set GROWING. Zero before
@@ -1327,7 +1368,7 @@ crate::perry_thread_local! {
     /// Deliberately the LAST minor's verdict rather than a running maximum: a
     /// heap that stops retaining must pace tightly again on its very next
     /// collection, not after a decay window.
-    pub(super) static GC_MAJOR_PACING_RETAINING: Cell<bool> = const { Cell::new(false) };
+    pub(super) static GC_MAJOR_PACING_RETAINING: TriggerInput<bool> = const { TriggerInput::new(false) };
     /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
     /// `gc_check_trigger`: the full collection must not recursively trigger
     /// another reclaim if a hook it runs allocates.
@@ -1922,7 +1963,7 @@ pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
     // a 65.1 MB arena, comfortably past the 20% yield test - so the shift stays
     // 0 there and the band is unchanged. It engages on the futile-full shape
     // the yield test was written for.
-    let shift = GC_OLD_RECLAIM_BACKOFF_SHIFT.with(Cell::get);
+    let shift = GC_OLD_RECLAIM_BACKOFF_SHIFT.with(TriggerInput::get);
     band.checked_shl(shift).unwrap_or(usize::MAX)
 }
 
@@ -2042,7 +2083,7 @@ pub(super) fn test_set_old_reclaim_backoff_shift(shift: u32) -> u32 {
 
 #[cfg(test)]
 pub(super) fn test_old_reclaim_backoff_shift() -> u32 {
-    GC_OLD_RECLAIM_BACKOFF_SHIFT.with(Cell::get)
+    GC_OLD_RECLAIM_BACKOFF_SHIFT.with(TriggerInput::get)
 }
 
 #[cfg(test)]
@@ -3077,7 +3118,36 @@ fn gc_finish_malloc_trigger_collection(
 /// a budgeted cycle. Allocation-side assists spend at most
 /// `GC_MUTATOR_ASSIST_WORK_UNITS` and only enter phases that already consume
 /// that budget; unsliced phases stay active for host-driven budgeted steps.
+///
+/// #10698: this runs on every `gc_malloc`, and nearly every call finds
+/// nothing due. When the last full evaluation found nothing due and none of
+/// its inputs has changed since, two loads against the watermark it
+/// published answer the question; see `gc/trigger_watermark.rs` for why that
+/// answer is the ladder's own.
+///
+/// Out of line, as it always was in practice: the arena slow path calls it
+/// from `arena_cell_alloc`, which is inlined into every arena allocation, and
+/// the fast path buys nothing there. `gc_malloc` inlines
+/// [`gc_check_trigger_inlined`] instead.
+#[inline(never)]
 pub fn gc_check_trigger() {
+    gc_check_trigger_inlined();
+}
+
+/// [`gc_check_trigger`] with its fast path inlined into the caller, for
+/// `gc_malloc` — the one caller that runs it once per allocation.
+#[inline(always)]
+pub(super) fn gc_check_trigger_inlined() {
+    if super::trigger_watermark::nothing_due() {
+        #[cfg(test)]
+        super::trigger_watermark::verify_nothing_due();
+        return;
+    }
+    gc_check_trigger_evaluate();
+}
+
+#[inline(never)]
+fn gc_check_trigger_evaluate() {
     if GC_BUDGETED_STEP_ACTIVE.with(Cell::get) {
         return;
     }
@@ -3101,8 +3171,19 @@ pub fn gc_check_trigger() {
     // arm that acts returns, so the state each later question sees is the
     // state the first one saw, and a repeatable answer can be reused. An
     // answer from the #10169 flag branch is re-evaluated, exactly as before.
+    //
+    // #10698: an evaluation that finds nothing due also says how long that
+    // answer holds. It is published only on the path below that returns
+    // without acting, which is where the next call's fast path stands in.
+    let nothing_due_watermark = Cell::new(TriggerWatermark::RETIRED);
     let mut due_memo = DueTriggerMemo::new();
-    let mut due = || due_memo.get(gc_budgeted_due_trigger_eval);
+    let mut due = || {
+        due_memo.get(|| {
+            let (due, repeatable, watermark) = gc_budgeted_due_trigger_probe();
+            nothing_due_watermark.set(watermark);
+            (due, repeatable)
+        })
+    };
 
     // #5476: a workload that churns *large* temporaries (>16 KB, born directly
     // in the old arena) grows the old generation without ever exercising the
@@ -3386,6 +3467,7 @@ pub fn gc_check_trigger() {
     }
 
     if !gc_budgeted_cycle_active() && due().is_none() {
+        super::trigger_watermark::publish_trigger_watermark(nothing_due_watermark.get());
         return;
     }
 
@@ -3482,12 +3564,12 @@ pub(super) enum BudgetedGcTrigger {
 
 crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
-    static GC_BUDGETED_CYCLE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static GC_BUDGETED_CYCLE_ACTIVE: TriggerInput<bool> = const { TriggerInput::new(false) };
     static GC_BUDGETED_STEP_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) fn gc_budgeted_cycle_active() -> bool {
-    GC_BUDGETED_CYCLE_ACTIVE.with(Cell::get)
+    GC_BUDGETED_CYCLE_ACTIVE.with(TriggerInput::get)
 }
 
 fn gc_budgeted_start_blocked() -> bool {
@@ -3534,6 +3616,7 @@ pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
     // evidence that the test can fail, and the reason the list is "what the
     // fast path reads" rather than "what the module declares".
     let _ = gc_budgeted_due_trigger();
+    let _ = super::trigger_watermark::nothing_due();
     vec![
         (
             "GC_OLD_RECLAIM_PENDING",
@@ -3558,6 +3641,10 @@ pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
             GC_MAJOR_PACING_RETAINING.slot_index(),
         ),
         ("GC_FLAGS", GC_FLAGS.slot_index()),
+        (
+            "GC_TRIGGER_WATERMARK",
+            super::trigger_watermark::trigger_watermark_slot_index(),
+        ),
         (
             "GC_BUDGETED_CYCLE_ACTIVE",
             GC_BUDGETED_CYCLE_ACTIVE.slot_index(),
@@ -3623,6 +3710,15 @@ impl DueTriggerMemo {
 /// cap; no earlier arm reads the census and the malloc arm after it does not
 /// either, and a second evaluation cannot seed again.
 pub(super) fn gc_budgeted_due_trigger_eval() -> (Option<BudgetedGcTrigger>, bool) {
+    let (due, repeatable, _) = gc_budgeted_due_trigger_probe();
+    (due, repeatable)
+}
+
+/// [`gc_budgeted_due_trigger_eval`], plus — when nothing is due — the
+/// watermark under which that answer keeps holding (#10698). Every other
+/// answer carries [`TriggerWatermark::RETIRED`].
+fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerWatermark) {
+    const RETIRED: TriggerWatermark = TriggerWatermark::RETIRED;
     // #10169: a leaf born old under young pressure gives the nursery minor
     // ONE-TIME priority over old-reclaim, and only while the young generation
     // is still unmeasured. A young generation that a minor has already
@@ -3633,19 +3729,19 @@ pub(super) fn gc_budgeted_due_trigger_eval() -> (Option<BudgetedGcTrigger>, bool
     // stays live: old-reclaim would re-mark it in place at every full, so it
     // is promoted by a minor first. The flag is consumed here whatever the
     // decision, so it can never starve old-reclaim.
-    if GC_YOUNG_LEAF_BORN_OLD.with(Cell::get) {
+    if GC_YOUNG_LEAF_BORN_OLD.with(TriggerInput::get) {
         GC_YOUNG_LEAF_BORN_OLD.with(|flag| flag.set(false));
         if !super::young_generation_measured_retained() && young_scavenge_cap_due() {
-            return (Some(BudgetedGcTrigger::YoungScavengeCap), false);
+            return (Some(BudgetedGcTrigger::YoungScavengeCap), false, RETIRED);
         }
     }
-    let old_pending = GC_OLD_RECLAIM_PENDING.with(Cell::get);
+    let old_pending = GC_OLD_RECLAIM_PENDING.with(TriggerInput::get);
     // #6010: external Map/Set side-buffer bytes escalate to OldReclaim too.
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let old_in_use = old_reclaimable.saturating_add(external_side_old_reclaim_pressure_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
     if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
-        return (Some(BudgetedGcTrigger::OldReclaim), true);
+        return (Some(BudgetedGcTrigger::OldReclaim), true, RETIRED);
     }
 
     // Two separately-scoped arena arms (see `young_scavenge_cap_due` for why
@@ -3654,21 +3750,26 @@ pub(super) fn gc_budgeted_due_trigger_eval() -> (Option<BudgetedGcTrigger>, bool
     // only.
     let total = crate::arena::arena_total_bytes();
     if total >= next_arena_trigger_base() {
-        return (Some(BudgetedGcTrigger::ArenaBytes), true);
+        return (Some(BudgetedGcTrigger::ArenaBytes), true, RETIRED);
     }
     // Old-gen is untouched since the read above: the arms in between only
     // read, and the census seed walks the young generation.
-    if young_scavenge_cap_due_with_old_reclaimable(|| old_reclaimable) {
-        return (Some(BudgetedGcTrigger::YoungScavengeCap), true);
+    let young = young_scavenge_cap_probe(|| old_reclaimable);
+    if young.due {
+        return (Some(BudgetedGcTrigger::YoungScavengeCap), true, RETIRED);
     }
 
     let malloc_count = malloc_object_count();
     let next_malloc_trigger = GC_NEXT_MALLOC_TRIGGER.with(|c| c.get());
     if malloc_count >= next_malloc_trigger {
-        return (Some(BudgetedGcTrigger::MallocCount), true);
+        return (Some(BudgetedGcTrigger::MallocCount), true, RETIRED);
     }
 
-    (None, true)
+    (
+        None,
+        true,
+        TriggerWatermark::after_nothing_due(next_malloc_trigger, young.reading),
+    )
 }
 
 /// Phase 1 of the moving-GC project: run a copying (moving) minor at a

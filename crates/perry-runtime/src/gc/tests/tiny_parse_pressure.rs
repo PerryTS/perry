@@ -563,7 +563,7 @@ fn a_full_collection_clears_the_drained_debt() {
     );
     js_gc_collect();
     assert_eq!(
-        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(std::cell::Cell::get),
+        GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(crate::gc::TriggerInput::get),
         0,
         "the full that the debt was held for pays it"
     );
