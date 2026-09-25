@@ -19,6 +19,7 @@ pub(crate) use type_infer::for_init_decl_type;
 use alias_tracking::track_decl_aliases;
 use binding_guards::apply_binding_guards;
 use native_fetch::register_native_fetch_and_streams;
+pub(crate) use native_new::native_instance_for_new;
 use native_new::register_native_from_new_and_calls;
 use type_infer::infer_decl_type;
 

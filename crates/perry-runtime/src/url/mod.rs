@@ -223,6 +223,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_authority_without_path_special_vs_non_special() {
+        // #11322: only special schemes seed an empty path segment (`/`).
+        for (input, expected_path) in [
+            ("http://a", "/"),
+            ("https://a:8443", "/"),
+            ("ws://a", "/"),
+            ("wss://a", "/"),
+            ("ftp://a", "/"),
+            ("ilovejs://127.0.0.1:1234", ""),
+            ("mongodb://db.local:27017", ""),
+            ("foo://a?q=1", ""),
+            ("foo://a#h", ""),
+            ("foo://a/", "/"),
+        ] {
+            let (_, _, _, _, pathname, _, _) = parse_url(input);
+            assert_eq!(pathname, expected_path, "pathname of {input}");
+        }
+    }
+
+    #[test]
     fn test_parse_file_url() {
         let (protocol, host, hostname, _, pathname, _, _) = parse_url("file:///Users/test/file.ts");
         assert_eq!(protocol, "file:");

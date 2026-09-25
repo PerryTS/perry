@@ -131,7 +131,19 @@ pub(crate) fn parse_url(url_str: &str) -> (String, String, String, String, Strin
             pathname = remaining[path_idx..].to_string();
         } else {
             host = remaining.to_string();
-            pathname = "/".to_string();
+            // WHATWG: only a special scheme's path is a list that the parser
+            // seeds with an empty segment, serializing as `/`. A non-special
+            // scheme with an authority and no path (`foo://a:5`,
+            // `mongodb://db:27017`) has an EMPTY path, so `pathname` is ""
+            // and `href` carries no trailing slash (#11322).
+            pathname = if matches!(
+                protocol.as_str(),
+                "http:" | "https:" | "ws:" | "wss:" | "ftp:"
+            ) {
+                "/".to_string()
+            } else {
+                String::new()
+            };
         }
 
         // Extract hostname and port from host. For IPv6 the port (if any)

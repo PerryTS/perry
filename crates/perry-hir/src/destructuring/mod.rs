@@ -41,4 +41,5 @@ pub(crate) use helpers::{ast_expr_contains_function_expr, rewrite_use_state_tupl
 pub(crate) use pattern_binding::{lower_array_pattern_binding_guarded, lower_pattern_binding};
 pub(crate) use var_decl::for_init_decl_type;
 pub(crate) use var_decl::lower_var_decl_with_destructuring;
+pub(crate) use var_decl::native_instance_for_new;
 pub(crate) use var_decl_sources::resolvable_native_module_for_spec;

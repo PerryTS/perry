@@ -17,128 +17,15 @@ pub(crate) fn register_native_from_new_and_calls(
     decl: &ast::VarDeclarator,
     name: &str,
 ) {
-    // Check if this is a native class instantiation and register it
+    // `new ClassName(...)` / `new mod.Class(...)`. The classification is
+    // shared with plain assignment (`x = new ClassName(...)`, see
+    // `lower::expr_assign`) so a binding declared without an initializer and
+    // assigned later is tagged exactly like one initialized in its
+    // declaration (#11322).
     if let Some(init_expr) = &decl.init {
         if let ast::Expr::New(new_expr) = init_expr.as_ref() {
-            if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                let local_name = class_ident.sym.as_ref();
-                // A user `class Big {...}` in scope shadows the
-                // hardcoded library-name fallback below. Without
-                // this gate `class Big { f0=0; ... } const b = new
-                // Big()` routed through big.js's handle-based
-                // dispatch so every property read returned 0.
-                let user_class_defined = ctx.classes_index.contains_key(local_name)
-                    || ctx.pending_classes.iter().any(|c| c.name == local_name);
-                // #wall: alias-aware native-instance tagging. An
-                // ALIASED import (`import { BlockList as Wj4 } from
-                // "net"; const q = new Wj4()`) must register `q` under
-                // the IMPORTED class ("BlockList"), not the local alias
-                // ("Wj4"), or `q.addSubnet(...)` dispatch (keyed on
-                // `("net","BlockList")`) misses and falls to generic
-                // property access ("addSubnet is not a function").
-                // `lookup_native_module` is alias-aware (the named
-                // import registers `local → (module, Some(<imported>))`),
-                // so resolve the local to its imported export name and
-                // use THAT as the class name for the hardcoded match and
-                // the final registration. For the un-aliased case the
-                // export equals the local, so this is a no-op.
-                let class_name: &str = ctx
-                    .lookup_native_module(local_name)
-                    .and_then(|(_m, method)| method)
-                    .filter(|export| {
-                        export
-                            .chars()
-                            .next()
-                            .map(|c| c.is_uppercase())
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(local_name);
-                // First try the general native module lookup (covers all imported native classes)
-                let module_name = if let Some((m, method)) = ctx.lookup_native_module(local_name) {
-                    match (m, method) {
-                        ("url", Some("URL" | "URLSearchParams"))
-                        | ("util", Some("TextEncoder" | "TextDecoder")) => None,
-                        _ => Some(m.to_string()),
-                    }
-                } else if user_class_defined {
-                    None
-                } else {
-                    // Fallback to hardcoded map for known classes.
-                    // Pool/Client/MongoClient are intentionally NOT
-                    // listed here: those names collide with user
-                    // classes and TS-source npm packages (e.g.
-                    // `@perryts/mysql` exports its own `Pool`), so
-                    // an unconditional mapping misclassified them
-                    // as `pg`/`mongodb` and routed `.query()` /
-                    // `.end()` to `js_pg_*` runtime symbols that
-                    // don't exist in user TS code, failing at link
-                    // time. The legitimate `import { Pool } from
-                    // "pg"` flow is caught by the general lookup
-                    // above. (Issue #536.)
-                    match class_name {
-                        "EventEmitter" | "EventEmitterAsyncResource" => Some("events".to_string()),
-                        "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                        "AsyncResource" => Some("async_hooks".to_string()),
-                        // #2875: explicit-resource-management stacks.
-                        // Registering the binding as a native instance
-                        // routes `stack.use/.adopt/.defer/.dispose/
-                        // .move/.disposed` through the
-                        // `__disposable__` dispatch rows.
-                        "DisposableStack" | "AsyncDisposableStack" => {
-                            Some("__disposable__".to_string())
-                        }
-                        "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                        _ => None,
-                    }
-                };
-                // Handle-backed constructors dispatch through
-                // HANDLE_*_DISPATCH; don't register as typed native
-                // instances (see the mirroring gates in lower.rs).
-                let module_name = match (class_name, module_name.as_deref()) {
-                    ("StringDecoder", Some("string_decoder")) => None,
-                    ("DiffieHellman" | "DiffieHellmanGroup", Some("crypto" | "node:crypto")) => {
-                        None
-                    }
-                    _ => module_name,
-                };
-                if let Some(module) = module_name {
-                    ctx.register_native_instance(name.to_string(), module, class_name.to_string());
-                }
-            } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
-                if let (ast::Expr::Ident(module_ident), ast::MemberProp::Ident(class_ident)) =
-                    (member.obj.as_ref(), &member.prop)
-                {
-                    let module_alias = module_ident.sym.as_ref();
-                    if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
-                        let class_name = class_ident.sym.as_ref();
-                        let is_known_native_class = matches!(
-                            (module_name, class_name),
-                            ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
-                                // #2129: `new http.Agent()` /
-                                // `new https.Agent()` share the
-                                // class-filtered ("http", "Agent")
-                                // native table rows.
-                                | ("http" | "https", "Agent")
-                                | ("net" | "node:net", "BlockList" | "SocketAddress")
-                                | ("dns" | "dns/promises", "Resolver")
-                                | ("vm", "SourceTextModule" | "SyntheticModule")
-                                | ("sqlite", "DatabaseSync")
-                        ) || (module_name == "stream"
-                            && STREAM_CTOR_NAMES.contains(&class_name));
-                        if is_known_native_class {
-                            let (mod_for_class, cls_for_class) = match (module_name, class_name) {
-                                ("http" | "https", "Agent") => ("http", "Agent"),
-                                ("net" | "node:net", _) => ("net", class_name),
-                                _ => (module_name, class_name),
-                            };
-                            ctx.register_native_instance(
-                                name.to_string(),
-                                mod_for_class.to_string(),
-                                cls_for_class.to_string(),
-                            );
-                        }
-                    }
-                }
+            if let Some((module, class_name)) = native_instance_for_new(ctx, new_expr) {
+                ctx.register_native_instance(name.to_string(), module, class_name);
             }
         }
     }
@@ -163,55 +50,13 @@ pub(crate) fn register_native_from_new_and_calls(
         );
     }
 
-    // Check if this is an awaited native class instantiation (e.g., await new Redis())
+    // Awaited native class instantiation (e.g. `await new Redis()`): same
+    // classification as the non-awaited arm above.
     if let Some(init_expr) = &decl.init {
         if let ast::Expr::Await(await_expr) = init_expr.as_ref() {
             if let ast::Expr::New(new_expr) = await_expr.arg.as_ref() {
-                if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                    let class_name = class_ident.sym.as_ref();
-                    // Same user-class shadowing rule as the
-                    // non-await new-expr path above.
-                    let user_class_defined = ctx.classes_index.contains_key(class_name)
-                        || ctx.pending_classes.iter().any(|c| c.name == class_name);
-                    // First try the general native module lookup.
-                    // Pool/Client/MongoClient are intentionally NOT
-                    // in the fallback map — see the sync `new` arm
-                    // above for the rationale (issue #536).
-                    let module_name =
-                        if let Some((m, method)) = ctx.lookup_native_module(class_name) {
-                            match (m, method) {
-                                ("url", Some("URL" | "URLSearchParams"))
-                                | ("util", Some("TextEncoder" | "TextDecoder")) => None,
-                                _ => Some(m.to_string()),
-                            }
-                        } else if user_class_defined {
-                            None
-                        } else {
-                            match class_name {
-                                "EventEmitter" | "EventEmitterAsyncResource" => {
-                                    Some("events".to_string())
-                                }
-                                "AsyncLocalStorage" => Some("async_hooks".to_string()),
-                                "AsyncResource" => Some("async_hooks".to_string()),
-                                "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                                _ => None,
-                            }
-                        };
-                    let module_name = match (class_name, module_name.as_deref()) {
-                        ("StringDecoder", Some("string_decoder")) => None,
-                        (
-                            "DiffieHellman" | "DiffieHellmanGroup",
-                            Some("crypto" | "node:crypto"),
-                        ) => None,
-                        _ => module_name,
-                    };
-                    if let Some(module) = module_name {
-                        ctx.register_native_instance(
-                            name.to_string(),
-                            module,
-                            class_name.to_string(),
-                        );
-                    }
+                if let Some((module, class_name)) = native_instance_for_new(ctx, new_expr) {
+                    ctx.register_native_instance(name.to_string(), module, class_name);
                 }
             }
         }
@@ -482,4 +327,140 @@ pub(crate) fn register_native_from_new_and_calls(
             }
         }
     }
+}
+
+/// Classifies a `new <callee>(...)` expression as a native-instance
+/// construction, returning the `(module, class)` pair the bound local should
+/// be registered under, or `None` when the result is an ordinary heap object
+/// (user classes, the heap-backed `url`/`util` classes, handle-backed
+/// constructors, anything unrecognized).
+///
+/// This is the single source of truth for BOTH binding forms:
+/// `const x = new C(...)` (above) and `x = new C(...)` (`lower::expr_assign`).
+/// They used to carry separate copies, and the assignment copy lacked the
+/// exclusions below — so `let u; u = new URL(s)` with `import { URL } from
+/// "url"` tagged `u` as a `url` native instance, and every `u.hostname` then
+/// lowered to a receiver-bound `NativeMethodCall` that returned `undefined`
+/// on the plain heap URL object (#11322, mongodb 7.0.0's `HostAddress`).
+pub(crate) fn native_instance_for_new(
+    ctx: &LoweringContext,
+    new_expr: &ast::NewExpr,
+) -> Option<(String, String)> {
+    match new_expr.callee.as_ref() {
+        ast::Expr::Ident(class_ident) => {
+            native_instance_for_new_ident(ctx, class_ident.sym.as_ref())
+        }
+        ast::Expr::Member(member) => native_instance_for_new_member(ctx, member),
+        _ => None,
+    }
+}
+
+fn native_instance_for_new_ident(
+    ctx: &LoweringContext,
+    local_name: &str,
+) -> Option<(String, String)> {
+    // A user `class Big {...}` in scope shadows the hardcoded library-name
+    // fallback below. Without this gate `class Big { f0=0; ... } const b =
+    // new Big()` routed through big.js's handle-based dispatch so every
+    // property read returned 0.
+    let user_class_defined = ctx.classes_index.contains_key(local_name)
+        || ctx.pending_classes.iter().any(|c| c.name == local_name);
+    // #wall: alias-aware native-instance tagging. An ALIASED import
+    // (`import { BlockList as Wj4 } from "net"; const q = new Wj4()`) must
+    // register `q` under the IMPORTED class ("BlockList"), not the local alias
+    // ("Wj4"), or `q.addSubnet(...)` dispatch (keyed on `("net","BlockList")`)
+    // misses and falls to generic property access ("addSubnet is not a
+    // function"). `lookup_native_module` is alias-aware (the named import
+    // registers `local → (module, Some(<imported>))`), so resolve the local to
+    // its imported export name and use THAT as the class name for the
+    // hardcoded match and the final registration. For the un-aliased case the
+    // export equals the local, so this is a no-op.
+    let class_name: &str = ctx
+        .lookup_native_module(local_name)
+        .and_then(|(_m, method)| method)
+        .filter(|export| {
+            export
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+        })
+        .unwrap_or(local_name);
+    // First try the general native module lookup (covers all imported native
+    // classes). URL/URLSearchParams/TextEncoder/TextDecoder construct plain
+    // heap objects whose properties live on a real prototype; tagging them
+    // would reroute reads through receiver-bound native dispatch.
+    let module_name = if let Some((m, method)) = ctx.lookup_native_module(local_name) {
+        match (m, method) {
+            ("url", Some("URL" | "URLSearchParams"))
+            | ("util", Some("TextEncoder" | "TextDecoder")) => None,
+            _ => Some(m.to_string()),
+        }
+    } else if user_class_defined {
+        None
+    } else {
+        // Fallback to hardcoded map for known classes. Pool/Client/MongoClient
+        // are intentionally NOT listed here: those names collide with user
+        // classes and TS-source npm packages (e.g. `@perryts/mysql` exports
+        // its own `Pool`), so an unconditional mapping misclassified them as
+        // `pg`/`mongodb` and routed `.query()` / `.end()` to `js_pg_*` runtime
+        // symbols that don't exist in user TS code, failing at link time. The
+        // legitimate `import { Pool } from "pg"` flow is caught by the general
+        // lookup above. (Issue #536.)
+        match class_name {
+            "EventEmitter" | "EventEmitterAsyncResource" => Some("events".to_string()),
+            "AsyncLocalStorage" => Some("async_hooks".to_string()),
+            "AsyncResource" => Some("async_hooks".to_string()),
+            // #2875: explicit-resource-management stacks. Registering the
+            // binding as a native instance routes `stack.use/.adopt/.defer/
+            // .dispose/.move/.disposed` through the `__disposable__` dispatch
+            // rows.
+            "DisposableStack" | "AsyncDisposableStack" => Some("__disposable__".to_string()),
+            "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
+            _ => None,
+        }
+    };
+    // Handle-backed constructors dispatch through HANDLE_*_DISPATCH; don't
+    // register as typed native instances (see the mirroring gates in
+    // lower.rs).
+    let module_name = match (class_name, module_name.as_deref()) {
+        ("StringDecoder", Some("string_decoder")) => None,
+        ("DiffieHellman" | "DiffieHellmanGroup", Some("crypto" | "node:crypto")) => None,
+        _ => module_name,
+    };
+    module_name.map(|module| (module, class_name.to_string()))
+}
+
+fn native_instance_for_new_member(
+    ctx: &LoweringContext,
+    member: &ast::MemberExpr,
+) -> Option<(String, String)> {
+    let (ast::Expr::Ident(module_ident), ast::MemberProp::Ident(class_ident)) =
+        (member.obj.as_ref(), &member.prop)
+    else {
+        return None;
+    };
+    let (module_name, _) = ctx.lookup_native_module(module_ident.sym.as_ref())?;
+    let class_name = class_ident.sym.as_ref();
+    let is_known_native_class = matches!(
+        (module_name, class_name),
+        ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
+            // #2129: `new http.Agent()` / `new https.Agent()` share the
+            // class-filtered ("http", "Agent") native table rows.
+            | ("http" | "https", "Agent")
+            | ("net" | "node:net", "BlockList" | "SocketAddress")
+            | ("dns" | "dns/promises", "Resolver")
+            | ("vm", "SourceTextModule" | "SyntheticModule")
+            | ("sqlite", "DatabaseSync")
+    ) || (module_name == "stream"
+        && STREAM_CTOR_NAMES.contains(&class_name));
+    if !is_known_native_class {
+        return None;
+    }
+    let (mod_for_class, cls_for_class) = match (module_name, class_name) {
+        ("http" | "https", "Agent") => ("http", "Agent"),
+        ("net" | "node:net", _) => ("net", class_name),
+        _ => (module_name, class_name),
+    };
+    Some((mod_for_class.to_string(), cls_for_class.to_string()))
 }

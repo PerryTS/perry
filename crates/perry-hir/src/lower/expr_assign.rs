@@ -255,22 +255,26 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     }
                 }
             }
-            // Check for `new NativeClass(...)` assignment: `instance = new Database('mango.db')`
+            // Check for `new NativeClass(...)` assignment: `instance = new Database('mango.db')`.
+            // Classified by the SAME helper the `let/const/var` initializer
+            // path uses, so `let u; u = new C(...)` tags `u` exactly like
+            // `const u = new C(...)` would. This arm used to keep its own,
+            // looser copy that tagged every imported-native `new` — including
+            // the heap-object `url` URL/URLSearchParams and `util`
+            // TextEncoder/TextDecoder that the initializer path deliberately
+            // excludes — so a later-assigned `import { URL } from "url"`
+            // instance read `undefined` for every property (#11322).
             if let ast::Expr::New(new_expr) = inner_rhs {
-                if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                    let class_name_str = class_ident.sym.as_ref();
-                    let native_info = ctx
-                        .lookup_native_module(class_name_str)
-                        .map(|(m, _)| m.to_string());
-                    if let Some(module_name) = native_info {
-                        register_assignment_native_instance(
-                            ctx,
-                            var_name.clone(),
-                            module_name,
-                            class_name_str.to_string(),
-                            true,
-                        );
-                    }
+                if let Some((module_name, class_name)) =
+                    crate::destructuring::native_instance_for_new(ctx, new_expr)
+                {
+                    register_assignment_native_instance(
+                        ctx,
+                        var_name.clone(),
+                        module_name,
+                        class_name,
+                        true,
+                    );
                 }
             }
             // Check for variable-to-variable assignment: `x = y` where y is a known native instance.
