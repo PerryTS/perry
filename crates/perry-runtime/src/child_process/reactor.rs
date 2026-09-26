@@ -60,7 +60,9 @@ use streams::{
     cp_pipe_from_child_stderr, cp_pipe_from_child_stdout, cp_pipe_from_file, cp_spawn_reader,
     CpPipe,
 };
-pub(crate) use streams::{cp_release_loop_streams, on_stream_completion};
+pub(crate) use streams::cp_release_loop_streams;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use streams::on_stream_completion;
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -1366,7 +1368,9 @@ pub(crate) fn cp_reactor_pump() {
     // turnloop P2: a child's pipes are loop operations now, so their bytes
     // exist only once the loop has been turned. A caller that drives this pump
     // without parking — the `await` poll loop, and the lifecycle tests below —
-    // would otherwise spin against a queue nothing can fill.
+    // would otherwise spin against a queue nothing can fill. (wasm32 has no
+    // turnloop, so nothing is adopted and there is nothing to drain.)
+    #[cfg(not(target_arch = "wasm32"))]
     crate::turnloop_proc::drain_pending();
     cp_reactor_pump_inner();
     CP_PUMPING.with(|p| p.set(false));

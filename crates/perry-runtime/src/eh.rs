@@ -138,6 +138,10 @@ const UNWIND_DATA_REG: (c_int, c_int) = (0, 1); // RAX, RDX
 const UNWIND_DATA_REG: (c_int, c_int) = (0, 1); // R0/X0, R1/X1
 #[cfg(target_arch = "x86")]
 const UNWIND_DATA_REG: (c_int, c_int) = (0, 2); // EAX, EDX
+// WASI (#11377): clang's `__builtin_eh_return_data_regno` is 0/1 on
+// WebAssembly, the pair wasm libunwind's `_Unwind_SetGR` understands.
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+const UNWIND_DATA_REG: (c_int, c_int) = (0, 1);
 
 /// `PERRYJS\0` — vendor-tagged exception class. The personality is
 /// class-agnostic (every Perry landing pad is a catch-all), but the tag keeps
@@ -241,16 +245,22 @@ pub unsafe extern "C" fn perry_eh_personality(
         let mut before: c_int = 0;
         let ip = _Unwind_GetIPInfo(context, &mut before);
         let region = _Unwind_GetRegionStart(context);
-        let mut info: libc::Dl_info = std::mem::zeroed();
-        let name = if libc::dladdr(region as *const libc::c_void, &mut info) != 0
-            && !info.dli_sname.is_null()
-        {
-            std::ffi::CStr::from_ptr(info.dli_sname)
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            String::from("?")
+        #[cfg(not(target_os = "wasi"))]
+        let name = {
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            if libc::dladdr(region as *const libc::c_void, &mut info) != 0
+                && !info.dli_sname.is_null()
+            {
+                std::ffi::CStr::from_ptr(info.dli_sname)
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                String::from("?")
+            }
         };
+        // WASI has no `dladdr` (#11377).
+        #[cfg(target_os = "wasi")]
+        let name = String::from("?");
         eprintln!(
             "[perry-eh] personality actions={:#x} region={:#x} ({name}) ip=+{:#x} lpad={:?}",
             actions,
