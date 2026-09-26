@@ -524,6 +524,20 @@ pub(crate) struct Arena {
 
 impl Drop for Arena {
     fn drop(&mut self) {
+        // #11319: entries of the process-global closure side tables keyed by
+        // an owner in these blocks would outlive the memory they describe.
+        // Test builds keep the blocks mapped (#4665 below) and make those
+        // tables per-thread, so there is nothing to release there — and
+        // touching a per-thread table from this TLS destructor could fault.
+        if !cfg!(test) {
+            let ranges: Vec<(usize, usize)> = self
+                .blocks
+                .iter()
+                .filter(|block| !block.data.is_null())
+                .map(|block| (block.data as usize, block.data as usize + block.size))
+                .collect();
+            crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
+        }
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ
             // releases fully-idle nursery blocks through the pool/allocator
