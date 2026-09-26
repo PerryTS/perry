@@ -13,6 +13,18 @@
 //! replaces the previous one (write to `<path>.tmp`, then rename). Both
 //! instruments are diagnostic only: nothing may branch on them for behaviour,
 //! and when the variable is unset every probe is one relaxed atomic load.
+//!
+//! Every instrument here is compiled in only with the `hot-diag` cargo feature
+//! (#10572). Without it each `*_on()` is a constant `false`, so the probes,
+//! tables and renderers behind them are not linked, and `gc_init` aborts at
+//! startup if one of [`HOT_DIAG_KNOBS`] is set — an instrument that silently
+//! wrote nothing would read as "never happened". The auto-optimize rebuild adds
+//! the feature when one of the knobs (or `PERRY_GC_INSTRUMENTS=1`) is set while
+//! compiling.
+
+// Without `hot-diag` the probes below have no armed caller. `allow` rather
+// than a cascade of cfgs keeps them compiled, so they cannot rot unbuilt.
+#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -35,6 +47,47 @@ pub(crate) fn sink_from_env(name: &str) -> Option<Sink> {
         "1" | "stderr" | "on" | "true" | "yes" => Some(Sink::Stderr),
         path => Some(Sink::File(path.to_string())),
     }
+}
+
+/// Run-time knobs served by the `hot-diag` cargo feature. Must match
+/// `HOT_DIAG_KNOBS` in the compiler's `optimized_libs/freshness.rs` (pinned by
+/// `hot_diag_knobs_match_the_runtime`).
+// Read only by the feature-off startup check below.
+#[cfg_attr(feature = "hot-diag", allow(dead_code))]
+pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
+    "PERRY_REGEX_DIAG",
+    "PERRY_IC_DIAG",
+    "PERRY_LAYOUT_DIAG",
+    "PERRY_ENUM_DIAG",
+    "PERRY_BUFFER_DIAG",
+    "PERRY_RECEIVER_REPR_DIAG",
+];
+
+/// Startup check for binaries built without the instruments: a knob that
+/// would arm one (same spelling rules as [`sink_from_env`]) aborts.
+#[cfg(not(feature = "hot-diag"))]
+pub(crate) fn refuse_knobs_without_hot_diag() {
+    if let Some(knob) = HOT_DIAG_KNOBS
+        .iter()
+        .copied()
+        .find(|knob| sink_from_env(knob).is_some())
+    {
+        hot_diag_unavailable(knob);
+    }
+}
+
+#[cfg(not(feature = "hot-diag"))]
+#[cold]
+#[inline(never)]
+fn hot_diag_unavailable(knob: &str) -> ! {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "perry: {knob} is set, but this binary was built without the hot-path \
+         diagnostics (cargo feature `hot-diag`). Recompile with {knob} set while \
+         compiling (or with PERRY_GC_INSTRUMENTS=1) so the instrument is linked in."
+    );
+    std::process::abort()
 }
 
 /// A failed file write used to be swallowed (`if ... .is_ok()`), so an
@@ -94,10 +147,15 @@ fn regex_sink() -> &'static Option<Sink> {
 /// Is the regex instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn regex_on() -> bool {
-    if REGEX_SINK.get().is_none() {
-        regex_sink();
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if REGEX_SINK.get().is_none() {
+            regex_sink();
+        }
+        REGEX_ON.load(Ordering::Relaxed)
     }
-    REGEX_ON.load(Ordering::Relaxed)
 }
 
 #[derive(Default)]
@@ -509,10 +567,15 @@ pub fn layout_on() -> bool {
     if let Some(armed) = LAYOUT_TEST_ARMED.with(std::cell::Cell::get) {
         return armed;
     }
-    if LAYOUT_SINK.get().is_none() {
-        layout_sink();
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if LAYOUT_SINK.get().is_none() {
+            layout_sink();
+        }
+        LAYOUT_ON.load(Ordering::Relaxed)
     }
-    LAYOUT_ON.load(Ordering::Relaxed)
 }
 
 /// Which of the three dynamically learned mask paths inserted a new key.
@@ -764,10 +827,15 @@ impl Drop for LayoutDiagTestGuard {
 /// Is the IC-miss instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn ic_on() -> bool {
-    if IC_SINK.get().is_none() {
-        ic_sink();
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if IC_SINK.get().is_none() {
+            ic_sink();
+        }
+        IC_ON.load(Ordering::Relaxed)
     }
-    IC_ON.load(Ordering::Relaxed)
 }
 
 /// Why `js_object_get_field_ic_miss` answered the way it did. The order is
@@ -1182,10 +1250,15 @@ fn enum_sink() -> &'static Option<Sink> {
 /// Is the enumeration/concat execution counter armed?
 #[inline]
 pub fn enum_on() -> bool {
-    if ENUM_SINK.get().is_none() {
-        enum_sink();
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if ENUM_SINK.get().is_none() {
+            enum_sink();
+        }
+        ENUM_ON.load(Ordering::Relaxed)
     }
-    ENUM_ON.load(Ordering::Relaxed)
 }
 
 /// What actually runs at the two allocation sites the byte-share ranking put
@@ -1349,10 +1422,15 @@ fn buffer_sink() -> &'static Option<Sink> {
 /// Is the buffer-probe instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn buffer_on() -> bool {
-    if BUFFER_SINK.get().is_none() {
-        buffer_sink();
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if BUFFER_SINK.get().is_none() {
+            buffer_sink();
+        }
+        BUFFER_ON.load(Ordering::Relaxed)
     }
-    BUFFER_ON.load(Ordering::Relaxed)
 }
 
 // Plain relaxed atomics rather than the thread-local `RefCell` the other

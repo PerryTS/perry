@@ -57,9 +57,18 @@ impl Drop for GcDiagTestGuard {
 /// [`gc_diag_enabled`], and value-parsed for the same reason (#7991): the three
 /// mark-verifier call sites were presence-only, so `=0` armed a verifier that
 /// walks the whole heap.
+///
+/// Served by the `gc-instruments` feature (#10572): without it this is a
+/// constant `false`, so the mark verifiers behind it (~28 KiB) are not linked,
+/// and `gc_init` aborts if the knob is set (`instruments::INSTRUMENT_KNOBS`).
 pub(crate) fn gc_verify_mark_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_VERIFY_MARK"))
+    #[cfg(not(feature = "gc-instruments"))]
+    return false;
+    #[cfg(feature = "gc-instruments")]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_VERIFY_MARK"))
+    }
 }
 
 pub struct GcStats {

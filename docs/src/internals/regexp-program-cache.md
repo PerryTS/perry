@@ -51,7 +51,10 @@ Unicode empty-match advancement, without allocating exec result arrays.
 
 `PERRY_REGEX_DIAG=1` reports compile and validation counts, identity/content
 hits, bytes hashed, canonical dispatches, searches, and scratch allocation and
-growth counts. Diagnostics deliberately inspect source bytes for attribution;
+growth counts. Set it while compiling as well as while running: it is
+served by perry-runtime's `hot-diag` feature, which an auto-optimized build only
+links when the knob (or `PERRY_GC_INSTRUMENTS=1`) is set at compile time, and a
+binary built without it aborts at startup rather than report nothing. Diagnostics deliberately inspect source bytes for attribution;
 measure timings with diagnostics disabled. Cache payload lives in traced GC
 cells; the census separately reports native cache metadata as
 `regex.program_cache`.

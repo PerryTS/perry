@@ -46,7 +46,7 @@ attr-census = []
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "bun-cli-utils", "dyn-eval", "keepalive-anchors", "alloc-mimalloc", "gc-instruments"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "bun-cli-utils", "dyn-eval", "keepalive-anchors", "alloc-mimalloc", "gc-instruments", "hot-diag"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points so they survive into the staticlib archive. Without these anchors,
@@ -77,8 +77,11 @@ alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # GC diagnostic instruments (binary size): the heap census (`PERRY_GC_CENSUS`),
 # the from-space quarantine (`PERRY_GC_PROTECT_FROMSPACE`), the seeded
 # collection schedule (`PERRY_GC_SCHEDULE_SEED`), the from-space scan
-# (`PERRY_GC_FROMSPACE_SCAN`) and allocation-site sampling
-# (`PERRY_ALLOC_SITE_SAMPLE`). ~180 KB that no shipped program needs. In
+# (`PERRY_GC_FROMSPACE_SCAN`), allocation-site sampling
+# (`PERRY_ALLOC_SITE_SAMPLE`), and the mark / page-classifier verifiers
+# (`PERRY_GC_VERIFY_MARK`, `PERRY_GC_VERIFY_CLASSIFIER`, #10572). ~210 KB that
+# no shipped program needs. (`PERRY_GC_VERIFY_EVACUATION` is NOT here: CI
+# harnesses set it at run time on binaries compiled without it.) In
 # `default` so `cargo test` and the full prebuilt archives keep them; the
 # auto-optimize rebuild adds it whenever one of those knobs (or
 # `PERRY_GC_INSTRUMENTS=1`) is set at compile time, and the core prebuilt
@@ -86,6 +89,16 @@ alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # of the knobs is set at run time — an instrument that silently did nothing
 # would turn every gate that relies on it green (CLAUDE.md "gate unable to fail").
 gc-instruments = []
+
+# Hot-path mutator diagnostics (`hot_diag`, #10572): `PERRY_REGEX_DIAG`,
+# `PERRY_IC_DIAG`, `PERRY_LAYOUT_DIAG`, `PERRY_ENUM_DIAG`, `PERRY_BUFFER_DIAG`,
+# `PERRY_RECEIVER_REPR_DIAG`. Same contract as `gc-instruments`: in `default`
+# so `cargo test` and the full prebuilt archives keep them; the auto-optimize
+# rebuild adds it when one of those knobs (or `PERRY_GC_INSTRUMENTS=1`) is set
+# at compile time; a binary built without it aborts at startup when one is set
+# at run time. Without it every probe's `*_on()` is a constant `false`, which
+# also drops the relaxed load `enum_on()` cost every string concat.
+hot-diag = []
 
 # Prebuilt native runtime for programs whose existing feature analysis requires
 # only this subset. Keep in sync with optimized_libs/prebuilt_core.rs (tested).

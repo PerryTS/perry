@@ -1665,6 +1665,17 @@ fn gc_instrument_knobs_match_the_runtime() {
     assert_eq!(runtime, super::freshness::GC_INSTRUMENT_KNOBS);
 }
 
+#[test]
+fn hot_diag_knobs_match_the_runtime() {
+    // #10572: same pairing as the GC instruments, for `hot_diag`'s probes.
+    let root = super::super::find_perry_workspace_root().unwrap();
+    let src = std::fs::read_to_string(root.join("crates/perry-runtime/src/hot_diag.rs")).unwrap();
+    let start = src.find("HOT_DIAG_KNOBS: &[&str] = &[").unwrap();
+    let end = start + src[start..].find("];").unwrap();
+    let runtime: Vec<&str> = src[start..end].split('"').skip(1).step_by(2).collect();
+    assert_eq!(runtime, super::freshness::HOT_DIAG_KNOBS);
+}
+
 // #11174: a no-auto HTTP rebuild bundles runtime code into the stdlib archive.
 // Exercise Cargo feature unification with a real miniature workspace; the
 // runtime refuses to build if the command silently drops its default engines.

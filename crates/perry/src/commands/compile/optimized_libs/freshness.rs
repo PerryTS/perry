@@ -114,17 +114,47 @@ pub(crate) const GC_INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_FROMSPACE_SCAN",
     "PERRY_GC_FROMSPACE_SCAN_ABORT",
     "PERRY_ALLOC_SITE_SAMPLE",
+    "PERRY_GC_VERIFY_MARK",
+    "PERRY_GC_VERIFY_CLASSIFIER",
 ];
+
+fn all_instruments_requested() -> bool {
+    std::env::var("PERRY_GC_INSTRUMENTS")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+}
 
 /// Link the GC instruments into this build: `PERRY_GC_INSTRUMENTS=1`, or any
 /// instrument knob set while compiling (so `PERRY_GC_SCHEDULE_SEED=7 perry
 /// compile … && PERRY_GC_SCHEDULE_SEED=7 ./a.out` just works).
 pub(crate) fn gc_instruments_requested() -> bool {
-    std::env::var("PERRY_GC_INSTRUMENTS")
-        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+    all_instruments_requested()
         || GC_INSTRUMENT_KNOBS
             .iter()
             .any(|knob| std::env::var_os(knob).is_some_and(|v| !v.is_empty()))
+}
+
+/// Run-time knobs served only by perry-runtime's `hot-diag` feature (#10572).
+/// Must match `HOT_DIAG_KNOBS` in `perry-runtime/src/hot_diag.rs` (pinned by
+/// `hot_diag_knobs_match_the_runtime`).
+pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
+    "PERRY_REGEX_DIAG",
+    "PERRY_IC_DIAG",
+    "PERRY_LAYOUT_DIAG",
+    "PERRY_ENUM_DIAG",
+    "PERRY_BUFFER_DIAG",
+    "PERRY_RECEIVER_REPR_DIAG",
+];
+
+/// Link the hot-path diagnostics into this build: `PERRY_GC_INSTRUMENTS=1`
+/// (every runtime instrument), or a hot-diag knob armed while compiling. A
+/// knob counts as armed under the runtime's own spelling rules
+/// (`hot_diag::sink_from_env`): `0`/`off`/`false`/`no` leave it off.
+pub(crate) fn hot_diag_requested() -> bool {
+    all_instruments_requested()
+        || HOT_DIAG_KNOBS.iter().any(|knob| {
+            std::env::var(knob)
+                .is_ok_and(|v| !matches!(v.trim(), "" | "0" | "off" | "false" | "no"))
+        })
 }
 
 pub(crate) fn auto_optimized_cache_key(
@@ -155,7 +185,7 @@ pub(crate) fn auto_optimized_cache_key(
     cobuilt.sort_unstable();
     cobuilt.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|hotdiag={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -210,6 +240,7 @@ pub(crate) fn auto_optimized_cache_key(
         // so a future change to gate it again would get its own cache dir.
         true,
         gc_instruments_requested(),
+        hot_diag_requested(),
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -322,6 +353,12 @@ pub(crate) fn auto_optimized_cross_features(
     // set, so a stress run can never silently exercise nothing.
     if gc_instruments_requested() {
         cross_features.push("perry-runtime/gc-instruments".to_string());
+    }
+    // `hot_diag`'s mutator probes (#10572): same contract as the GC
+    // instruments — off unless a knob asks, abort at startup if one is set on
+    // a binary built without them.
+    if hot_diag_requested() {
+        cross_features.push("perry-runtime/hot-diag".to_string());
     }
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());

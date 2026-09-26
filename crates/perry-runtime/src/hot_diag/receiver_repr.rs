@@ -4,6 +4,9 @@
 //! caller first tests [`receiver_repr_on`], so an unarmed process pays one
 //! relaxed load and enters none of the range, registry, or ownership probes.
 
+// See the parent module: without `hot-diag` nothing arms these probes.
+#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
+
 use super::{sink_from_env, write_sink, Sink};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -115,13 +118,19 @@ fn receiver_repr_sink() -> &'static Option<Sink> {
 /// One relaxed load after the environment has been parsed once.
 #[inline]
 pub fn receiver_repr_on() -> bool {
-    if RECEIVER_REPR_SINK.get().is_none() {
-        receiver_repr_sink();
-    }
-    let armed = RECEIVER_REPR_ON.load(Ordering::Relaxed);
     #[cfg(test)]
-    let armed = armed || TEST_FORCE_ON.load(Ordering::Relaxed);
-    armed
+    if TEST_FORCE_ON.load(Ordering::Relaxed) {
+        return true;
+    }
+    #[cfg(not(feature = "hot-diag"))]
+    return false;
+    #[cfg(feature = "hot-diag")]
+    {
+        if RECEIVER_REPR_SINK.get().is_none() {
+            receiver_repr_sink();
+        }
+        RECEIVER_REPR_ON.load(Ordering::Relaxed)
+    }
 }
 
 #[inline]

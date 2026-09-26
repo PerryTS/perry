@@ -504,6 +504,8 @@ pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_FROMSPACE_SCAN",
     "PERRY_GC_FROMSPACE_SCAN_ABORT",
     "PERRY_ALLOC_SITE_SAMPLE",
+    "PERRY_GC_VERIFY_MARK",
+    "PERRY_GC_VERIFY_CLASSIFIER",
 ];
 
 /// The first instrument knob set (non-empty) in the environment, if any.

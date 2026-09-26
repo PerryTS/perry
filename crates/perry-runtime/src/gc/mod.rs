@@ -979,6 +979,8 @@ pub fn gc_init() {
     crate::perf_hooks::init_time_origin();
     #[cfg(not(feature = "gc-instruments"))]
     instruments::refuse_instrument_knobs_without_instruments();
+    #[cfg(not(feature = "hot-diag"))]
+    crate::hot_diag::refuse_knobs_without_hot_diag();
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.
     census::census_on_gc_init();
