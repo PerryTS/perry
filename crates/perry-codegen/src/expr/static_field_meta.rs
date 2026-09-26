@@ -41,6 +41,90 @@ fn static_block_fns(ctx: &FnCtx<'_>, template: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The interned name bytes of a static field, as (`@bytes`, len).
+fn static_field_name_bytes(ctx: &mut FnCtx<'_>, field_name: &str) -> (String, String) {
+    let idx = ctx.strings.intern(field_name);
+    let entry = ctx.strings.entry(idx);
+    (
+        format!("@{}", entry.bytes_global),
+        entry.byte_len.to_string(),
+    )
+}
+
+/// `C.x` through its compiled alias, unless the alias is detached
+/// (`TAG_HOLE` — see `class_static_alias_sync`): then the generic [[Get]].
+fn emit_detached_static_get(
+    ctx: &mut FnCtx<'_>,
+    class_id: u32,
+    field_name: &str,
+    value: &str,
+) -> String {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let detached = ctx
+        .block()
+        .icmp_eq(crate::types::I64, &bits, crate::nanbox::TAG_HOLE_I64);
+    let from_l = ctx.block_label(ctx.current_block);
+    let slow_idx = ctx.new_block("staticget.detached");
+    let join_idx = ctx.new_block("staticget.join");
+    let slow_l = ctx.block_label(slow_idx);
+    let join_l = ctx.block_label(join_idx);
+    ctx.block().cond_br(&detached, &slow_l, &join_l);
+    ctx.current_block = slow_idx;
+    let (bytes, len) = static_field_name_bytes(ctx, field_name);
+    let slow = ctx.block().call(
+        DOUBLE,
+        "js_class_static_field_get",
+        &[
+            (crate::types::I32, &(class_id as i32).to_string()),
+            (PTR, &bytes),
+            (crate::types::I64, &len),
+        ],
+    );
+    let slow_end_l = ctx.block_label(ctx.current_block);
+    ctx.block().br(&join_l);
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(value, &from_l), (&slow, &slow_end_l)])
+}
+
+/// `C.x = v`: when the compiled alias is detached, the generic [[Set]] runs in
+/// its own block and joins; the caller emits the attached store in the
+/// current block and then branches to the returned join block.
+fn emit_detached_static_put(
+    ctx: &mut FnCtx<'_>,
+    class_id: u32,
+    field_name: &str,
+    global_name: &str,
+    value: &str,
+) -> usize {
+    let current = ctx.block().load(DOUBLE, &format!("@{global_name}"));
+    let bits = ctx.block().bitcast_double_to_i64(&current);
+    let detached = ctx
+        .block()
+        .icmp_eq(crate::types::I64, &bits, crate::nanbox::TAG_HOLE_I64);
+    let slow_idx = ctx.new_block("staticset.detached");
+    let fast_idx = ctx.new_block("staticset.attached");
+    let join_idx = ctx.new_block("staticset.join");
+    let slow_l = ctx.block_label(slow_idx);
+    let fast_l = ctx.block_label(fast_idx);
+    let join_l = ctx.block_label(join_idx);
+    ctx.block().cond_br(&detached, &slow_l, &fast_l);
+    ctx.current_block = slow_idx;
+    let (bytes, len) = static_field_name_bytes(ctx, field_name);
+    ctx.block().call_void(
+        "js_class_static_field_put",
+        &[
+            (crate::types::I32, &(class_id as i32).to_string()),
+            (PTR, &bytes),
+            (crate::types::I64, &len),
+            (DOUBLE, value),
+        ],
+    );
+    ctx.block().br(&join_l);
+    ctx.current_block = fast_idx;
+    join_idx
+}
+
 fn private_static_storage_name(class_id: u32, field_name: &str) -> String {
     format!("#<perry:private-value:{class_id}:{field_name}>")
 }
@@ -54,7 +138,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
                 let g_ref = format!("@{}", global_name);
-                Ok(ctx.block().load(DOUBLE, &g_ref))
+                let value = ctx.block().load(DOUBLE, &g_ref);
+                match ctx.class_ids.get(class_name).copied() {
+                    Some(class_id) if !field_name.starts_with('#') => {
+                        Ok(emit_detached_static_get(ctx, class_id, field_name, &value))
+                    }
+                    _ => Ok(value),
+                }
             } else {
                 Ok(double_literal(0.0))
             }
@@ -67,6 +157,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());
             let global_name = ctx.static_field_globals.get(&key).cloned();
+            // A detached alias (`TAG_HOLE`: deleted / accessor / read-only)
+            // takes the generic [[Set]] instead of the direct store below.
+            let join_idx = match (global_name.as_ref(), ctx.class_ids.get(class_name).copied()) {
+                (Some(global_name), Some(class_id)) if !field_name.starts_with('#') => Some(
+                    emit_detached_static_put(ctx, class_id, field_name, global_name, &v),
+                ),
+                _ => None,
+            };
             if let Some(global_name) = global_name.as_ref() {
                 let g_ref = format!("@{}", global_name);
                 // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root
@@ -104,6 +202,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (PTR, &global_slot),
                     ],
                 );
+            }
+            if let Some(join_idx) = join_idx {
+                let join_l = ctx.block_label(join_idx);
+                ctx.block().br(&join_l);
+                ctx.current_block = join_idx;
             }
             Ok(v)
         }

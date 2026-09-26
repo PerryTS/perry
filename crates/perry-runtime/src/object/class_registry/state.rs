@@ -105,6 +105,44 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f6
     }
     // The class function object's own-property bag (barriered, traced).
     crate::object::class_value::class_static_set(class_id, name, value);
+    class_static_alias_sync(class_id, name);
+}
+
+/// Keep a declared static field's compiled alias (its `@perry_static_*`
+/// global, which statically lowered `C.x` reads and writes) coherent with the
+/// class function object's own property: the global holds the value while
+/// `name` is a plain writable own data property, and `TAG_HOLE` otherwise —
+/// deleted, an accessor, or read-only — which sends compiled reads and writes
+/// to the generic [[Get]] / [[Set]] (`js_class_static_field_get` / `_put`).
+/// Called after every mutation of a class static.
+pub(crate) fn class_static_alias_sync(class_id: u32, name: &str) {
+    let Some(slot) = CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
+        slots
+            .borrow()
+            .get(&class_id)
+            .and_then(|f| f.get(name))
+            .copied()
+    }) else {
+        return;
+    };
+    let plain = !class_is_key_deleted(class_id, name)
+        && class_static_defined_attrs(class_id, name).is_none_or(|(writable, _, _)| writable)
+        && class_own_static_accessor_ptrs(class_id, name).is_none()
+        && super::class_dynamic_static_accessor_descriptor(
+            class_id,
+            name,
+            crate::object::class_value::class_value(class_id),
+        )
+        .is_none();
+    let value = plain
+        .then(|| crate::object::class_value::class_static_get(class_id, name))
+        .flatten()
+        .unwrap_or(f64::from_bits(crate::value::TAG_HOLE));
+    // SAFETY: codegen only registers addresses of process-lifetime LLVM
+    // globals, and those slots are mutable GC roots.
+    unsafe {
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(slot as *mut f64, value);
+    }
 }
 
 /// Associate a declared static field's runtime-table entry with the LLVM
@@ -133,20 +171,7 @@ pub(crate) fn class_register_declared_static_global_slot(
 /// static, through its compiled backing cell as well. This is the terminal
 /// write used by `C.x`, `C["x"]`, and `C[key]` runtime assignment paths.
 pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
-    let global_slot = CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
-        slots
-            .borrow()
-            .get(&class_id)
-            .and_then(|fields| fields.get(name))
-            .copied()
-    });
-    if let Some(global_slot) = global_slot {
-        // SAFETY: codegen only registers addresses of process-lifetime LLVM
-        // globals, and those slots are mutable GC roots.
-        unsafe {
-            crate::gc::runtime_store_root_nanbox_f64_raw_slot(global_slot as *mut f64, value);
-        }
-    }
+    // The store re-syncs the declared static's compiled alias.
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
@@ -200,6 +225,7 @@ pub(crate) fn class_static_set_defined_attrs(
             .or_default()
             .insert(name.to_string(), (writable, enumerable, configurable));
     });
+    class_static_alias_sync(class_id, name);
 }
 
 /// `(writable, enumerable)` if this static key was installed by
@@ -223,6 +249,7 @@ pub(crate) fn class_has_own_dynamic_prop(class_id: u32, name: &str) -> bool {
 
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     crate::object::class_value::class_static_remove(class_id, name);
+    class_static_alias_sync(class_id, name);
 }
 
 pub(crate) fn class_prototype_method_value_cache_root_store(

@@ -500,6 +500,20 @@ pub extern "C" fn js_object_set_field_by_name(
                         );
                         crate::typed_feedback::invalidate_method_change(class_id);
                     } else {
+                        // A read-only own static (defineProperty writable:false):
+                        // strict-mode [[Set]] throws; the value stays.
+                        if has_own_data
+                            && super::class_registry::class_static_defined_attrs(class_id, &name)
+                                .is_some_and(|(writable, _, _)| !writable)
+                        {
+                            let message = format!(
+                                "Cannot assign to read only property '{name}' of function '{}'",
+                                super::class_registry::class_ref_to_string(class_id)
+                            );
+                            crate::node_submodules::diagnostics::throw_type_error_no_code(
+                                message.as_bytes(),
+                            );
+                        }
                         // #9526: a declared static has two views: runtime class
                         // property dispatch and the LLVM global used by direct
                         // `C.name` reads. Keep both coherent for every runtime

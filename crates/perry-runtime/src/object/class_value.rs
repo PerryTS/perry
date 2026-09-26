@@ -324,6 +324,41 @@ pub(crate) fn class_static_read(ptr: usize, prop: &str, key: *const crate::Strin
     f64::from_bits(value.bits())
 }
 
+/// A statically lowered `C.x` whose compiled alias is detached (`TAG_HOLE`:
+/// the static was deleted, redefined as an accessor or made read-only): the
+/// generic [[Get]] on the class function object.
+///
+/// # Safety
+/// `name_ptr` points at `name_len` bytes of UTF-8 (codegen rodata).
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_field_get(
+    class_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+) -> f64 {
+    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    let receiver = class_value_ptr(class_id as u32) as *const crate::object::ObjectHeader;
+    f64::from_bits(crate::object::js_object_get_field_by_name(receiver, key).bits())
+}
+
+/// A statically lowered `C.x = v` whose compiled alias is detached: the
+/// generic [[Set]] on the class function object (a setter, a read-only
+/// refusal, or re-creating a deleted static — which re-attaches the alias).
+///
+/// # Safety
+/// As [`js_class_static_field_get`].
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_field_put(
+    class_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+    value: f64,
+) {
+    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    let receiver = class_value_ptr(class_id as u32) as *mut crate::object::ObjectHeader;
+    crate::object::js_object_set_field_by_name(receiver, key, value);
+}
+
 // ---------------------------------------------------------------------------
 // Statics: the class function object's OWN properties.
 // ---------------------------------------------------------------------------
