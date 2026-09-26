@@ -96,15 +96,13 @@ def _runtime_link_augment(seeds):
 def _is_fanout_leaf(name):
     """Crates we never fan *into* when a dependency changes.
 
-    `perry-ext-*` and `perry-stdlib` are runtime FFI shims whose UNIT tests are
-    self-contained pure-Rust logic — they do not exercise perry-runtime internals,
-    so a perry-runtime change need not re-run them per-PR (the nightly full run +
-    perry's integration tests cover that interaction). Excluding them from the
-    reverse-dep fan-out keeps a foundational change from selecting ~40 crates, and
-    avoids perry-runtime feature-unification rebuilds. A direct change *to* one of
-    these crates still selects it (it starts as a seed).
+    `perry-ext-*` shims stay out of dependency fan-out to bound per-PR test
+    links and feature-unification rebuilds; direct changes still select them.
+    `perry-stdlib` MUST participate: its unit tests exercise runtime GC, arena,
+    closure, promise and event-loop behavior. Excluding it hid runtime-caused
+    failures until an unrelated stdlib change selected the suite (#11423).
     """
-    return name == "perry-stdlib" or name.startswith("perry-ext-")
+    return name.startswith("perry-ext-")
 
 
 def _reverse_dep_closure(md, seeds):
@@ -133,7 +131,7 @@ def _reverse_dep_closure(md, seeds):
 
 
 def _has_lib_mode() -> int:
-    """Exit 0 if any package named on stdin has a `lib` target, else exit 1.
+    """Exit 0 if any package named on stdin has a library target, else exit 1.
 
     `cargo test --lib` errors ("no library targets") when *no* selected package
     has a library — e.g. a perry-only diff selects just the bin-only `perry`
@@ -141,8 +139,11 @@ def _has_lib_mode() -> int:
     """
     names = set(sys.stdin.read().split())
     md = _load_metadata()
+    # Cargo reports an explicit crate-type as the kind (e.g. stdlib's rlib),
+    # rather than always spelling library targets "lib".
+    library_kinds = {"lib", "rlib", "staticlib", "dylib", "cdylib", "proc-macro"}
     has = any(
-        any("lib" in t["kind"] for t in p["targets"])
+        any(library_kinds.intersection(t["kind"]) for t in p["targets"])
         for p in md["packages"]
         if p["name"] in names
     )
