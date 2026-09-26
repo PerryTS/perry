@@ -581,6 +581,16 @@ fn main() {
             .flag_if_supported("-fasynchronous-unwind-tables")
             .compile("perry_sjlj");
     }
+    // WASI (#11379): the closure-body signature probe; `ref.test` needs the
+    // GC proposal, enabled for this one file.
+    println!("cargo:rerun-if-changed=src/ffi/perry_wasi_sig.c");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
+        cc::Build::new()
+            .file("src/ffi/perry_wasi_sig.c")
+            .flag("-mgc")
+            .opt_level(2)
+            .compile("perry_wasi_sig");
+    }
     println!(
         "cargo:rustc-env=PERRY_RUNTIME_TARGET={}",
         std::env::var("TARGET").expect("TARGET not set by Cargo")

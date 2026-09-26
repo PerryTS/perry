@@ -6272,6 +6272,37 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Standalone WASI (#11379): link the wasm32 objects against the runtime
+    // built for wasm32-wasip2 and stop; none of the native link machinery
+    // below (auto-optimize, stdlib, stubs, link cache) applies.
+    #[cfg(feature = "target-wasi")]
+    if target.as_deref() == Some("wasi") {
+        let stem = args
+            .input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        let stem = super::super::sanitize::sanitize_for_linker_argv(stem);
+        let exe_path = args
+            .output
+            .clone()
+            .unwrap_or_else(|| output_path::default_output_path(false, false, Some("wasi"), &stem));
+        let runtime_lib = find_runtime_library(Some("wasi"))?;
+        super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
+        if let OutputFormat::Text = format {
+            println!("Wrote WASI component: {}", exe_path.display());
+        }
+        return Ok(CompileResult {
+            output_path: exe_path,
+            target: "wasi".to_string(),
+            bundle_id: None,
+            is_dylib: false,
+            codegen_cache_stats: None,
+            link_cache_stats: None,
+            build_cache_stats: None,
+        });
+    }
+
     // Issue #76 follow-up — auto-provision the wasmi host staticlib. A
     // program that references `WebAssembly.*` sets `ctx.needs_wasm_runtime`
     // (feature_detect.rs), which links `libperry_wasm_host.a`. That archive

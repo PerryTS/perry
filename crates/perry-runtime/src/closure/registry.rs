@@ -406,10 +406,55 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
     // is a couple of bit tests, cheaper than the second hash probe the old
     // `DISPATCH_CACHE` cost, and it cannot go stale — a late registration
     // (#6475) rewrites the very record the next miss reads.
-    match body_record(func_ptr) {
+    let strategy = match body_record(func_ptr) {
         Some(record) => record.dispatch_strategy(),
         None => DispatchStrategy::direct(),
+    };
+    #[cfg(target_os = "wasi")]
+    let strategy = wasi_exact_arity(func_ptr, strategy);
+    strategy
+}
+
+/// WASI: dispatch every fixed-arity body with exactly its real parameter
+/// count ([`wasi_body_params`]), since a wasm call whose type differs from
+/// its target's traps. The registered arity can differ from it — runtime
+/// thunks register their JS `.length` — and an unregistered body would
+/// otherwise be called with whatever count the call site has.
+#[cfg(target_os = "wasi")]
+fn wasi_exact_arity(func_ptr: *const u8, strategy: DispatchStrategy) -> DispatchStrategy {
+    match (strategy.kind, wasi_body_params(func_ptr)) {
+        (DispatchKind::Arity(_) | DispatchKind::Direct, Some(params)) => DispatchStrategy {
+            kind: DispatchKind::Arity(params),
+            ..strategy
+        },
+        _ => strategy,
     }
+}
+
+/// WASI: the number of `f64` parameters `func_ptr` really takes after the
+/// closure pointer, asked of the engine with `ref.test`
+/// (`ffi/perry_wasi_sig.c`). `None` for a type outside `(closure, f64 x
+/// 0..=32) -> f64`.
+#[cfg(target_os = "wasi")]
+pub(crate) fn wasi_body_params(func_ptr: *const u8) -> Option<u32> {
+    extern "C" {
+        fn perry_wasi_closure_params(fp: *const u8) -> core::ffi::c_int;
+    }
+    // Keyed by the function-table index a wasm function pointer is, never a
+    // heap address.
+    std::thread_local! {
+        static PARAMS: std::cell::RefCell<std::collections::HashMap<u32, i32>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = func_ptr as usize as u32;
+    let n = PARAMS
+        .with(|m| m.borrow().get(&key).copied())
+        .unwrap_or_else(|| {
+            let n = unsafe { perry_wasi_closure_params(func_ptr) };
+            PARAMS.with(|m| m.borrow_mut().insert(key, n));
+            n
+        });
+    u32::try_from(n).ok()
 }
 
 /// #6475: evict a func_ptr from the recent-bodies dispatch cache.

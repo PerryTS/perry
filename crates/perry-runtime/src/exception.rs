@@ -48,6 +48,7 @@ pub(crate) use savepoints::{
     catch_subsystem, catch_subsystem_used, note_catch_subsystem_used, CatchStack,
 };
 
+#[cfg(not(target_os = "wasi"))]
 extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
@@ -188,6 +189,7 @@ pub(crate) fn current_try_depth() -> usize {
 // setjmp trampoline (#9305): no Rust frame is ever a longjmp target.
 // ---------------------------------------------------------------------------
 
+#[cfg(not(target_os = "wasi"))]
 extern "C" {
     /// C-side setjmp trampoline (`src/ffi/perry_sjlj.c`, compiled by
     /// build.rs). Arms `env` via the platform `setjmp` inside its own C
@@ -210,6 +212,18 @@ extern "C" {
         body: unsafe extern "C" fn(*mut core::ffi::c_void),
         ctx: *mut core::ffi::c_void,
     ) -> core::ffi::c_int;
+}
+
+/// WASI (#11378): no longjmp ever lands (`js_throw` ends the program there),
+/// so the "trampoline" just runs the body, which always completes.
+#[cfg(target_os = "wasi")]
+unsafe fn perry_sjlj_try(
+    _env: *mut core::ffi::c_void,
+    body: unsafe extern "C" fn(*mut core::ffi::c_void),
+    ctx: *mut core::ffi::c_void,
+) -> core::ffi::c_int {
+    unsafe { body(ctx) };
+    0
 }
 
 /// Arm the jmp_buf `env` (from [`js_try_push`]) and run `f` under it.
@@ -375,67 +389,89 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             HandlerKind::Unwind => std::ptr::null_mut(),
         }
     });
-    if fatal {
-        // No open `try`: this throw ends the process. Run the `exit`
-        // listeners first (Node emits `exit` before writing its
-        // uncaught-exception report — verified against node 26.5.1 with the
-        // two streams separated), then report and leave with the status the
-        // listeners may have rewritten via `process.exitCode`.
+    // WASI (#11378): there is no exception transport yet — setjmp/longjmp
+    // and unwinding on wasm need the exception-handling proposal (phase 3c).
+    // Every throw ends the program the way an uncaught one does: `exit`
+    // listeners, Node's report, exit status. A throw an open `try` would
+    // have caught says so first, rather than pretending it was uncaught.
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = jb_ptr;
+        if !fatal {
+            eprintln!(
+                "perry: this exception would be caught by an enclosing `try`, \
+                 but catching exceptions is not supported on WASI yet (#11378)"
+            );
+        }
         let status = crate::process::run_process_exit_sequence(Some(1));
         print_uncaught(value);
         emit_uncaught_backtrace();
         std::process::exit(status);
     }
-    if !jb_ptr.is_null() {
-        // Windows MSVC: `longjmp` inspects `_JUMP_BUFFER.Frame` (the first
-        // 8 bytes of the jmp_buf) and, when it is nonzero, performs a REAL
-        // stack unwind via `RtlUnwindEx` instead of a register restore. Our
-        // one-arg `setjmp` extern leaves that slot holding whatever was in
-        // RDX at the call (the CRT `_setjmp` stores its second parameter),
-        // so the unwind target is garbage — measured 0xC0000028
-        // (STATUS_BAD_STACK) in a release binary, and GS-cookie aborts via
-        // `_report_gsfailure` under the panic=unwind test harness (#7356).
-        // Zero the slot to force the non-unwinding POSIX-style `longjmp`;
-        // that is exactly the semantics the savepoint restores above
-        // assume (skipped cleanups are replayed manually).
-        #[cfg(windows)]
-        unsafe {
-            // GC_STORE_AUDIT(STACK): native jmp_buf control word is not GC-managed storage.
-            (jb_ptr as *mut u64).write(0);
-        }
-        unsafe { longjmp(jb_ptr, 1) }
-    }
-    // Invoke/landingpad handler: raise. The unwinder transfers control to
-    // the innermost try-containing generated frame's landing pad — the
-    // handler this entry describes. Returning here means the walk failed
-    // DESPITE an armed handler: lost unwind tables between the throw point
-    // and the handler frame (e.g. a runtime rebuilt without
-    // -C force-unwind-tables). That is a build/configuration defect, not a
-    // JS error — fail loudly instead of masking it as an uncaught throw.
-    // Owned single-phase transport: walks to the handler using cached
-    // CFI and installs its register context directly. Never returns on
-    // success. Declines (undecodable frame, disabled, or verification
-    // mode) fall through to the system unwinder below — same semantics,
-    // slower.
-    //
-    // Not on Windows: `eh_walker` is Itanium-unwind machinery and the module
-    // is `#[cfg(not(windows))]`; `crate::eh` there is `eh_windows.rs`, whose
-    // `raise_perry_exception` below is the whole transport. These two calls
-    // landing unguarded is what broke the Windows build of this crate (#7354).
-    #[cfg(not(windows))]
+    #[cfg(not(target_os = "wasi"))]
     {
-        crate::eh_walker::predict_before_raise();
-        crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
+        if fatal {
+            // No open `try`: this throw ends the process. Run the `exit`
+            // listeners first (Node emits `exit` before writing its
+            // uncaught-exception report — verified against node 26.5.1 with the
+            // two streams separated), then report and leave with the status the
+            // listeners may have rewritten via `process.exitCode`.
+            let status = crate::process::run_process_exit_sequence(Some(1));
+            print_uncaught(value);
+            emit_uncaught_backtrace();
+            std::process::exit(status);
+        }
+        if !jb_ptr.is_null() {
+            // Windows MSVC: `longjmp` inspects `_JUMP_BUFFER.Frame` (the first
+            // 8 bytes of the jmp_buf) and, when it is nonzero, performs a REAL
+            // stack unwind via `RtlUnwindEx` instead of a register restore. Our
+            // one-arg `setjmp` extern leaves that slot holding whatever was in
+            // RDX at the call (the CRT `_setjmp` stores its second parameter),
+            // so the unwind target is garbage — measured 0xC0000028
+            // (STATUS_BAD_STACK) in a release binary, and GS-cookie aborts via
+            // `_report_gsfailure` under the panic=unwind test harness (#7356).
+            // Zero the slot to force the non-unwinding POSIX-style `longjmp`;
+            // that is exactly the semantics the savepoint restores above
+            // assume (skipped cleanups are replayed manually).
+            #[cfg(windows)]
+            unsafe {
+                // GC_STORE_AUDIT(STACK): native jmp_buf control word is not GC-managed storage.
+                (jb_ptr as *mut u64).write(0);
+            }
+            unsafe { longjmp(jb_ptr, 1) }
+        }
+        // Invoke/landingpad handler: raise. The unwinder transfers control to
+        // the innermost try-containing generated frame's landing pad — the
+        // handler this entry describes. Returning here means the walk failed
+        // DESPITE an armed handler: lost unwind tables between the throw point
+        // and the handler frame (e.g. a runtime rebuilt without
+        // -C force-unwind-tables). That is a build/configuration defect, not a
+        // JS error — fail loudly instead of masking it as an uncaught throw.
+        // Owned single-phase transport: walks to the handler using cached
+        // CFI and installs its register context directly. Never returns on
+        // success. Declines (undecodable frame, disabled, or verification
+        // mode) fall through to the system unwinder below — same semantics,
+        // slower.
+        //
+        // Not on Windows: `eh_walker` is Itanium-unwind machinery and the module
+        // is `#[cfg(not(windows))]`; `crate::eh` there is `eh_windows.rs`, whose
+        // `raise_perry_exception` below is the whole transport. These two calls
+        // landing unguarded is what broke the Windows build of this crate (#7354).
+        #[cfg(not(windows))]
+        {
+            crate::eh_walker::predict_before_raise();
+            crate::eh_walker::try_fast_transport(crate::eh::exception_object_addr());
+        }
+        let reason = crate::eh::raise_perry_exception();
+        eprintln!(
+            "perry: FATAL: exception transport failed (reason={reason}): a try \
+             handler is armed but the unwinder found no landing pad. The runtime \
+             or an intermediate object was built without unwind tables."
+        );
+        print_uncaught(value);
+        emit_uncaught_backtrace();
+        std::process::abort();
     }
-    let reason = crate::eh::raise_perry_exception();
-    eprintln!(
-        "perry: FATAL: exception transport failed (reason={reason}): a try \
-         handler is armed but the unwinder found no landing pad. The runtime \
-         or an intermediate object was built without unwind tables."
-    );
-    print_uncaught(value);
-    emit_uncaught_backtrace();
-    std::process::abort();
 }
 
 /// Get the current exception value

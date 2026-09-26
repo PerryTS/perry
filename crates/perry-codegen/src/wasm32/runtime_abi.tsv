@@ -2245,15 +2245,28 @@ js_node_http_server_close	void	i64,i64
 js_node_http_server_close_all_connections	void	i64
 js_node_http_server_close_idle_connections	void	i64
 js_node_http_server_has_active	i32s	
+js_node_http_server_headers_timeout	f64	i64
+js_node_http_server_idle_timeout	f64	i64
+js_node_http_server_keep_alive_timeout	f64	i64
+js_node_http_server_keep_alive_timeout_buffer	f64	i64
 js_node_http_server_listen	i64	i64,i64
 js_node_http_server_listening	i32s	i64
 js_node_http_server_listening_value	f64	i64
+js_node_http_server_max_headers_count	f64	i64
+js_node_http_server_max_requests_per_socket	f64	i64
 js_node_http_server_on	f64	i64,ptr,i64
 js_node_http_server_process_pending	i32s	
 js_node_http_server_ref	i64	i64
 js_node_http_server_remove_all_listeners	f64	i64,ptr
 js_node_http_server_remove_listener	f64	i64,ptr,i64
+js_node_http_server_request_timeout	f64	i64
 js_node_http_server_response_standalone_new	i64	f64
+js_node_http_server_set_headers_timeout	f64	i64,f64
+js_node_http_server_set_idle_timeout	f64	i64,f64
+js_node_http_server_set_keep_alive_timeout	f64	i64,f64
+js_node_http_server_set_keep_alive_timeout_buffer	f64	i64,f64
+js_node_http_server_set_max_headers_count	f64	i64,f64
+js_node_http_server_set_max_requests_per_socket	f64	i64,f64
 js_node_http_server_set_request_timeout	f64	i64,f64
 js_node_http_server_set_timeout_method	i64	i64,f64,i64
 js_node_http_server_unref	i64	i64
@@ -2262,10 +2275,23 @@ js_node_https_server_address_json	ptr	i64
 js_node_https_server_close	void	i64,i64
 js_node_https_server_close_all_connections	void	i64
 js_node_https_server_close_idle_connections	void	i64
+js_node_https_server_headers_timeout	f64	i64
+js_node_https_server_idle_timeout	f64	i64
+js_node_https_server_keep_alive_timeout	f64	i64
+js_node_https_server_keep_alive_timeout_buffer	f64	i64
 js_node_https_server_listen	i64	i64,i64
 js_node_https_server_listening_value	f64	i64
+js_node_https_server_max_headers_count	f64	i64
+js_node_https_server_max_requests_per_socket	f64	i64
 js_node_https_server_on	f64	i64,ptr,i64
 js_node_https_server_ref	i64	i64
+js_node_https_server_request_timeout	f64	i64
+js_node_https_server_set_headers_timeout	f64	i64,f64
+js_node_https_server_set_idle_timeout	f64	i64,f64
+js_node_https_server_set_keep_alive_timeout	f64	i64,f64
+js_node_https_server_set_keep_alive_timeout_buffer	f64	i64,f64
+js_node_https_server_set_max_headers_count	f64	i64,f64
+js_node_https_server_set_max_requests_per_socket	f64	i64,f64
 js_node_https_server_set_request_timeout	f64	i64,f64
 js_node_https_server_set_timeout_method	i64	i64,f64,i64
 js_node_https_server_unref	i64	i64
@@ -2653,37 +2679,45 @@ js_parse_int	f64	ptr,f64
 js_path_arg_header	i64	f64
 js_path_basename	ptr	ptr
 js_path_basename_ext	ptr	ptr,ptr
+js_path_basename_ext_value	ptr	f64,f64
 js_path_delimiter_get	ptr	
 js_path_dirname	ptr	ptr
 js_path_extname	ptr	ptr
 js_path_format	ptr	f64
 js_path_is_absolute	i32s	ptr
 js_path_join	ptr	ptr,ptr
+js_path_join_value	ptr	f64,f64
 js_path_matches_glob	i32s	ptr,ptr
+js_path_matches_glob_value	i32s	f64,f64
 js_path_normalize	ptr	ptr
 js_path_parse	ptr	ptr
 js_path_relative	ptr	ptr,ptr
 js_path_relative_checked	ptr	f64,f64
 js_path_resolve	ptr	ptr
 js_path_resolve_join	ptr	ptr,ptr
+js_path_resolve_join_value	ptr	f64,f64
 js_path_sep_get	ptr	
 js_path_to_namespaced_path	ptr	ptr
 js_path_to_namespaced_path_value	f64	f64
 js_path_win32_basename	ptr	ptr
 js_path_win32_basename_ext	ptr	ptr,ptr
+js_path_win32_basename_ext_value	ptr	f64,f64
 js_path_win32_delimiter_get	ptr	
 js_path_win32_dirname	ptr	ptr
 js_path_win32_extname	ptr	ptr
 js_path_win32_format	ptr	f64
 js_path_win32_is_absolute	i32s	ptr
 js_path_win32_join	ptr	ptr,ptr
+js_path_win32_join_value	ptr	f64,f64
 js_path_win32_matches_glob	i32s	ptr,ptr
+js_path_win32_matches_glob_value	i32s	f64,f64
 js_path_win32_normalize	ptr	ptr
 js_path_win32_parse	ptr	ptr
 js_path_win32_relative	ptr	ptr,ptr
 js_path_win32_relative_checked	ptr	f64,f64
 js_path_win32_resolve	ptr	ptr
 js_path_win32_resolve_join	ptr	ptr,ptr
+js_path_win32_resolve_join_value	ptr	f64,f64
 js_path_win32_sep_get	ptr	
 js_path_win32_to_namespaced_path	ptr	ptr
 js_path_win32_to_namespaced_path_value	f64	f64
@@ -2721,6 +2755,18 @@ js_perry_agent_post	i32s	ptr,ptr
 js_perry_agent_post_available	i32s	
 js_perry_agent_post_dispatched	i64	
 js_perry_embedded_files	ptr	
+js_perry_native_f32	f64	f64
+js_perry_native_f64	f64	f64
+js_perry_native_i16	f64	f64
+js_perry_native_i32	f64	f64
+js_perry_native_i64	f64	f64
+js_perry_native_i8	f64	f64
+js_perry_native_isize	f64	f64
+js_perry_native_u16	f64	f64
+js_perry_native_u32	f64	f64
+js_perry_native_u64	f64	f64
+js_perry_native_u8	f64	f64
+js_perry_native_usize	f64	f64
 js_perry_net_abi_layout	i64	
 js_perry_net_accept_start	i32s	i64,ptr
 js_perry_net_adopt_stream	i32s	i64,i32s,i64,ptr
@@ -3467,11 +3513,15 @@ js_string_add_value	f64	f64,f64
 js_string_addref	void	ptr
 js_string_addref_if_heap_string	void	f64
 js_string_alloc_space	ptr	
+js_string_anchor	ptr	ptr,ptr
 js_string_append	ptr	ptr,ptr
 js_string_append_chain	ptr	ptr,i32s
 js_string_append_known_heap	ptr	ptr,ptr
 js_string_array_range_loop_guard	i32s	f64,i32s,i32s
 js_string_at	f64	ptr,i32s
+js_string_big	ptr	ptr
+js_string_blink	ptr	ptr
+js_string_bold	ptr	ptr
 js_string_builder_new	ptr	i32u
 js_string_char_at	ptr	ptr,i32s
 js_string_char_code_at	f64	ptr,i32s
@@ -3495,6 +3545,9 @@ js_string_ends_with	i32s	ptr,ptr
 js_string_ends_with_at	i32s	ptr,ptr,i32s
 js_string_equals	i32s	ptr,ptr
 js_string_error	void	ptr
+js_string_fixed	ptr	ptr
+js_string_fontcolor	ptr	ptr,ptr
+js_string_fontsize	ptr	ptr,ptr
 js_string_from_bytes	ptr	ptr,i32u
 js_string_from_bytes_longlived	ptr	ptr,i32u
 js_string_from_bytes_with_capacity	ptr	ptr,i32u,i32u
@@ -3509,9 +3562,11 @@ js_string_index_of_from	i32s	ptr,ptr,i32s
 js_string_index_to_i32	i32s	f64
 js_string_intern	ptr	ptr,i64
 js_string_is_well_formed	f64	ptr
+js_string_italics	ptr	ptr
 js_string_last_index_of	i32s	ptr,ptr
 js_string_last_index_of_from	i32s	ptr,ptr,f64,i32s
 js_string_length	i32u	ptr
+js_string_link	ptr	ptr,ptr
 js_string_locale_compare	f64	ptr,ptr
 js_string_locale_compare_opts	f64	ptr,ptr,f64
 js_string_match_all_js	f64	f64,f64
@@ -3529,13 +3584,19 @@ js_string_print	void	ptr
 js_string_raw	ptr	f64,f64
 js_string_repeat	ptr	ptr,f64
 js_string_replace_all_js	f64	f64,f64,f64
+js_string_replace_all_regex	ptr	ptr,ptr,ptr
 js_string_replace_all_regex_dyn	ptr	ptr,ptr,f64
+js_string_replace_all_regex_fn	ptr	ptr,ptr,f64
+js_string_replace_all_regex_named	ptr	ptr,ptr,ptr
 js_string_replace_all_search_dyn	ptr	ptr,f64,f64
 js_string_replace_all_string	ptr	ptr,ptr,ptr
 js_string_replace_all_string_dyn	ptr	ptr,ptr,f64
 js_string_replace_all_string_fn	ptr	ptr,ptr,f64
 js_string_replace_js	f64	f64,f64,f64
+js_string_replace_regex	ptr	ptr,ptr,ptr
 js_string_replace_regex_dyn	ptr	ptr,ptr,f64
+js_string_replace_regex_fn	ptr	ptr,ptr,f64
+js_string_replace_regex_named	ptr	ptr,ptr,ptr
 js_string_replace_search_dyn	ptr	ptr,f64,f64
 js_string_replace_string	ptr	ptr,ptr,ptr
 js_string_replace_string_dyn	ptr	ptr,ptr,f64
@@ -3544,6 +3605,7 @@ js_string_search_js	f64	f64,f64
 js_string_search_value	f64	ptr,f64
 js_string_search_value_to_string	ptr	f64,i32s
 js_string_slice	ptr	ptr,i32s,i32s
+js_string_small	ptr	ptr
 js_string_split	ptr	ptr,ptr
 js_string_split_js	f64	f64,f64,f64
 js_string_split_n	ptr	ptr,ptr,i32s
@@ -3554,11 +3616,14 @@ js_string_split_regex_n	ptr	ptr,ptr,i32s
 js_string_split_value	ptr	ptr,f64,f64
 js_string_starts_with	i32s	ptr,ptr
 js_string_starts_with_at	i32s	ptr,ptr,i32s
+js_string_strike	ptr	ptr
+js_string_sub	ptr	ptr
 js_string_substr	ptr	ptr,f64,f64
 js_string_substring	ptr	ptr,i32s,i32s
 js_string_suffix_advance	void	f64,ptr,i32s
 js_string_suffix_char_code_at	f64	f64,ptr,i32s
 js_string_suffix_length	f64	f64,ptr
+js_string_sup	ptr	ptr
 js_string_to_char_array	i64	i64
 js_string_to_locale_lower_case	ptr	ptr,f64
 js_string_to_locale_upper_case	ptr	ptr,f64

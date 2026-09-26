@@ -294,27 +294,113 @@ def parse_rust(files: dict[str, str]) -> tuple[dict[str, list[RustFn]], dict[str
             inner = m.group(2) or m.group(3)
             if inner:
                 aliases[m.group(1)].add(" ".join(inner.split()))
-        for m in EXTERN_FN_RE.finditer(text):
-            # Attributes: the text between the previous item boundary and here.
-            head_start = max(text.rfind("}", 0, m.start()), text.rfind(";", 0, m.start()))
-            head = text[head_start + 1 : m.start()]
-            export = EXPORT_NAME_RE.search(head)
-            if not export and "no_mangle" not in head:
+        scan_extern_fns(text, lambda off: f"{path}:{line_of(text, off)}", defs)
+        for where_off, expanded in expand_macros(text):
+            scan_extern_fns(expanded, lambda _off: f"{path}:{line_of(text, where_off)}", defs)
+    return defs, aliases
+
+
+def scan_extern_fns(text: str, where, defs: dict[str, list[RustFn]]) -> None:
+    for m in EXTERN_FN_RE.finditer(text):
+        # Attributes: the text between the previous item boundary and here.
+        head_start = max(text.rfind("}", 0, m.start()), text.rfind(";", 0, m.start()))
+        head = text[head_start + 1 : m.start()]
+        export = EXPORT_NAME_RE.search(head)
+        if not export and "no_mangle" not in head:
+            continue
+        name = export.group(1) if export else m.group(1)
+        open_paren = m.end() - 1
+        close = balanced(text, open_paren)
+        if close < 0:
+            continue
+        params = []
+        for p in split_top(text[open_paren + 1 : close - 1]):
+            if ":" in p:
+                params.append(" ".join(p.split(":", 1)[1].split()))
+        rest = text[close : close + 400]
+        rm = re.match(r"\s*->\s*(.+?)\s*(?:\{|where\b|;)", rest, re.S)
+        ret = " ".join(rm.group(1).split()) if rm else "()"
+        defs[name].append(RustFn(name, params, ret, where(m.start())))
+
+
+MACRO_DEF_RE = re.compile(r"\bmacro_rules!\s*(\w+)\s*\{")
+METAVAR_RE = re.compile(r"\$(\w+):(\w+)")
+# `$( … )*` / `$( … ),*` repetitions: attribute pass-through in every macro
+# this has to read, dropped from both the pattern and the expansion.
+REPETITION_RE = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)\s*[,;]?\s*[*+?]")
+
+
+def macro_arms(text: str, body_start: int, body_end: int) -> list[tuple[str, str]]:
+    """`(pattern) => { body }` arms of one `macro_rules!` body."""
+    arms, i = [], body_start
+    while True:
+        m = re.compile(r"\s*[(\[{]").match(text, i)
+        if not m or m.end() > body_end:
+            return arms
+        opener = text[m.end() - 1]
+        closer = {"(": ")", "[": "]", "{": "}"}[opener]
+        pat_end = balanced(text, m.end() - 1, opener, closer)
+        arrow = re.compile(r"\s*=>\s*([(\[{])").match(text, pat_end)
+        if pat_end < 0 or not arrow:
+            return arms
+        bo = arrow.group(1)
+        body_close = balanced(text, arrow.end() - 1, bo, {"(": ")", "[": "]", "{": "}"}[bo])
+        if body_close < 0:
+            return arms
+        arms.append((text[m.end() : pat_end - 1], text[arrow.end() : body_close - 1]))
+        i = body_close
+        semi = re.compile(r"\s*;").match(text, i)
+        if semi:
+            i = semi.end()
+
+
+def arm_regex(pattern: str) -> re.Pattern | None:
+    pattern = REPETITION_RE.sub(" ", pattern)
+    out, pos = [], 0
+    for m in METAVAR_RE.finditer(pattern):
+        out.append(r"\s*".join(re.escape(t) for t in pattern[pos : m.start()].split()))
+        out.append(rf"\s*(?P<{m.group(1)}>.+?)\s*")
+        pos = m.end()
+    out.append(r"\s*".join(re.escape(t) for t in pattern[pos:].split()))
+    try:
+        return re.compile(r"^\s*" + "".join(out) + r"\s*,?\s*$", re.S)
+    except re.error:
+        return None
+
+
+def expand_macros(text: str) -> list[tuple[int, str]]:
+    """Expand the local `macro_rules!` whose bodies define `extern "C" fn`s.
+
+    Only the simple shape the runtime uses: literal tokens and `$name:frag`
+    metavariables, matched against each invocation's argument text. Returns
+    (invocation offset, expanded body) pairs."""
+    out = []
+    for md in MACRO_DEF_RE.finditer(text):
+        body_end = balanced(text, md.end() - 1, "{", "}")
+        if body_end < 0:
+            continue
+        arms = [(arm_regex(p), b) for p, b in macro_arms(text, md.end(), body_end - 1)]
+        arms = [(rx, b) for rx, b in arms if rx and EXTERN_FN_RE.search(b.replace("$", ""))]
+        if not arms:
+            continue
+        for inv in re.finditer(rf"\b{md.group(1)}!\s*([(\[{{])", text):
+            if inv.start() == md.start():
                 continue
-            name = export.group(1) if export else m.group(1)
-            open_paren = m.end() - 1
-            close = balanced(text, open_paren)
+            o = inv.group(1)
+            close = balanced(text, inv.end() - 1, o, {"(": ")", "[": "]", "{": "}"}[o])
             if close < 0:
                 continue
-            params = []
-            for p in split_top(text[open_paren + 1 : close - 1]):
-                if ":" in p:
-                    params.append(" ".join(p.split(":", 1)[1].split()))
-            rest = text[close : close + 400]
-            rm = re.match(r"\s*->\s*(.+?)\s*(?:\{|where\b|;)", rest, re.S)
-            ret = " ".join(rm.group(1).split()) if rm else "()"
-            defs[name].append(RustFn(name, params, ret, f"{path}:{line_of(text, m.start())}"))
-    return defs, aliases
+            args = re.sub(r"#\[[^\]]*\]", " ", text[inv.end() : close - 1])
+            for rx, body in arms:
+                am = rx.match(args)
+                if not am:
+                    continue
+                expanded = REPETITION_RE.sub(" ", body)
+                for var, val in sorted(am.groupdict().items(), key=lambda kv: -len(kv[0])):
+                    expanded = expanded.replace(f"${var}", val)
+                out.append((inv.start(), expanded))
+                break
+    return out
 
 
 PTR_PREFIX_RE = re.compile(r"^(\*\s*(mut|const)\b|&)")
@@ -807,6 +893,8 @@ def self_test() -> int:
             }
             let shared = &[DOUBLE, DOUBLE];
             m.declare_function("let_bound", DOUBLE, shared);
+            m.declare_function("macro_ok", DOUBLE, &[DOUBLE]);
+            m.declare_function("macro_ptrw", I64, &[DOUBLE, DOUBLE]);
             ctx.pending_declares.push(("pend".to_string(), I64, vec![I64]));
             let r = blk.call(I64, "call_site", &[(DOUBLE, &x)]);
             blk.call_void("call_void_site", &[(I64, &h)]);
@@ -848,6 +936,20 @@ def self_test() -> int:
         #[no_mangle] pub extern "C" fn call_void_site(v: i64) -> u32 { 0 }
         #[no_mangle] pub extern "C" fn native_row(h: i64, v: f64) -> f64 { 0.0 }
         pub extern "C" fn not_exported(v: f64) {}
+        macro_rules! entry {
+            ($(#[$meta:meta])* $name:ident => $target:path, $ret:ty) => {
+                $(#[$meta])*
+                #[no_mangle]
+                pub extern "C" fn $name(a: f64, b: f64) -> $ret { $target(a, b) }
+            };
+        }
+        entry!(
+            /// a doc comment on the invocation
+            macro_ptrw => super::join,
+            *mut StringHeader
+        );
+        macro_rules! scalar { ($f:ident, $c:ident) => { #[no_mangle] pub extern "C" fn $f(v: f64) -> f64 { v } }; }
+        scalar!(macro_ok, I8);
         """,
         "my_stubs.rs": """
         #[no_mangle] pub extern "C" fn stubbed() -> f64 { 0.0 }
@@ -863,7 +965,7 @@ def self_test() -> int:
         "arity": {"arity_bug"},
         "ret_missing": {"missing_ret"},
         "ret_ignored": {"ignored_ret", "call_void_site"},
-        "ptrw_as_i64": {"ptrw", "pend"},
+        "ptrw_as_i64": {"ptrw", "pend", "macro_ptrw"},
         "i64_as_ptr": {"i64ptr"},
         "unresolved": {"nowhere"},
         "unclassified": {"odd"},
@@ -878,8 +980,8 @@ def self_test() -> int:
             failures.append(f"{cat}: expected {sorted(expect.get(cat, set()))}, got {sorted(got)}")
     if rep.skipped != {"declare": 1, "call": 1}:
         failures.append(f"skipped: expected declare 1 + call 1, got {rep.skipped}")
-    if rep.declared != 21:
-        failures.append(f"declared: expected 21 symbols, got {rep.declared}")
+    if rep.declared != 23:
+        failures.append(f"declared: expected 23 symbols, got {rep.declared}")
     origins = {e["symbol"]: e["origin"] for c in CATEGORIES for e in rep.entries.get(c, []) if "origin" in e}
     for sym, origin in (("pend", "pending_declare"), ("call_void_site", "call"), ("loop_b", "declare")):
         if origins.get(sym) != origin:

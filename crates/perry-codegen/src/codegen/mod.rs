@@ -3852,7 +3852,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let ll_text = llmod.to_ir();
         #[cfg(feature = "target-wasi")]
         let ll_text = if wasm32 {
-            crate::wasm32::adapt_runtime_abi(&ll_text)
+            crate::wasm32::lower_module(&ll_text)
         } else {
             ll_text
         };
@@ -3871,6 +3871,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             return Ok(ll_text.into_bytes());
         }
         match crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref()) {
+            #[cfg(feature = "target-wasi")]
+            Ok(object) if wasm32 => return Ok(crate::wasm32::trim_object(object)),
             Ok(object) => return Ok(object),
             Err(error) if apply_rs4gc_budget_retry(&mut llmod, &error)? => continue,
             Err(error) => return Err(error),

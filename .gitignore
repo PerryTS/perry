@@ -247,3 +247,4 @@ test-files/.perry-cache/
 /examples/wasm_ui_demo.html
 android-build/app/src/main/jniLibs/
 /res/
+.cache/wasi/
