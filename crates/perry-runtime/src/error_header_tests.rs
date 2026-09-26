@@ -94,6 +94,9 @@ fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_shape() {
         );
         assert!(!crate::closure::is_closure_ptr(err as usize));
         let pad = *((err as *const u8).add(12) as *const u32);
-        assert_eq!(pad, 0, "the padding word must be scrubbed, not left as garbage");
+        assert_eq!(
+            pad, 0,
+            "the padding word must be scrubbed, not left as garbage"
+        );
     }
 }

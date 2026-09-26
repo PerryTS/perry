@@ -462,7 +462,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             };
 
-
             // The captured-singleton helper writes captures internally. Boxed
             // slots still take the dedicated, idempotent setter afterward so
             // their lifetime edges are declared; fresh closures need every

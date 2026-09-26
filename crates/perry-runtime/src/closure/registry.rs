@@ -248,7 +248,6 @@ fn update_body_record(func_ptr: *const u8, update: impl FnOnce(&mut ClosureBodyR
     });
 }
 
-
 /// Per-call dispatch strategy for a closure body. Derived from the body's
 /// `ClosureBodyRecord` on a miss and memoized in `DISPATCH_RECENT`.
 /// Arrow-ness rides in the same entry so receiverless calls can avoid a

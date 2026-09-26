@@ -701,11 +701,18 @@ impl ShapeSlab {
     pub(super) fn estimated_bytes(&self) -> usize {
         let mut pages = 0usize;
         let mut chunks = 0usize;
-        for page in self.pages.iter().chain(self.dict_pages.iter()).chain(self.exotic_pages.iter()).flatten() {
+        for page in self
+            .pages
+            .iter()
+            .chain(self.dict_pages.iter())
+            .chain(self.exotic_pages.iter())
+            .flatten()
+        {
             pages += 1;
             chunks += page.iter().filter(|c| c.is_some()).count();
         }
-        (self.pages.capacity() + self.dict_pages.capacity() + self.exotic_pages.capacity()) * std::mem::size_of::<Option<Page>>()
+        (self.pages.capacity() + self.dict_pages.capacity() + self.exotic_pages.capacity())
+            * std::mem::size_of::<Option<Page>>()
             + pages * PAGE_LEN * std::mem::size_of::<Option<Chunk>>()
             + chunks * CHUNK_LEN * std::mem::size_of::<ShapeRecord>()
     }

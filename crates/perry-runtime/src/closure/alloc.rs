@@ -376,11 +376,18 @@ pub struct ClosureHeader {
 
 const _: () = {
     assert!(std::mem::offset_of!(ClosureHeader, capture_count) == 0);
-    assert!(std::mem::offset_of!(ClosureHeader, shape_id) == crate::codegen_abi::CLOSURE_SHAPE_OFFSET);
+    assert!(
+        std::mem::offset_of!(ClosureHeader, shape_id) == crate::codegen_abi::CLOSURE_SHAPE_OFFSET
+    );
     #[cfg(target_pointer_width = "64")]
     {
-        assert!(std::mem::offset_of!(ClosureHeader, func_ptr) == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET);
-        assert!(std::mem::offset_of!(ClosureHeader, props) == crate::codegen_abi::CLOSURE_PROPS_OFFSET);
+        assert!(
+            std::mem::offset_of!(ClosureHeader, func_ptr)
+                == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET
+        );
+        assert!(
+            std::mem::offset_of!(ClosureHeader, props) == crate::codegen_abi::CLOSURE_PROPS_OFFSET
+        );
         assert!(std::mem::size_of::<ClosureHeader>() == crate::codegen_abi::CLOSURE_HEADER_SIZE);
     }
 };

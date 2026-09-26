@@ -424,7 +424,10 @@ impl ShapeObjectKind {
     /// A non-`GC_TYPE_OBJECT` receiver kind: minted in the exotic band.
     #[inline]
     pub(crate) fn is_exotic(self) -> bool {
-        matches!(self, ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary)
+        matches!(
+            self,
+            ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary
+        )
     }
 
     /// The discriminant `facts_key` folds and `ShapeRecord` stores. Stable:

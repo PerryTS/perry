@@ -687,7 +687,6 @@ pub(super) unsafe fn dispatch_common(
     None
 }
 
-
 /// `Function.prototype.bind` / `call` / `apply` applied to `object`: the
 /// behaviour the by-name tower has always had for these three names, as one
 /// callable unit, so the shape-proven method path (`function_shape_call`)

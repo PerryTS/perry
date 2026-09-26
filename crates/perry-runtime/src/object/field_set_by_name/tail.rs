@@ -187,7 +187,6 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
 
-
         if super::arguments_object_set_field(obj, key, value) {
             return;
         }

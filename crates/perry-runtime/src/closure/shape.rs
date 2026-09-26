@@ -130,7 +130,11 @@ pub(crate) fn function_base_shape(kind: FunctionProtoKind) -> u32 {
 /// The shared FunctionDictionary ShapeId: "ask the object".
 #[inline]
 pub(crate) fn function_dictionary_shape() -> u32 {
-    base_slot(4, ShapeObjectKind::FunctionDictionary, shapes::PROTO_ID_PER_OBJECT)
+    base_slot(
+        4,
+        ShapeObjectKind::FunctionDictionary,
+        shapes::PROTO_ID_PER_OBJECT,
+    )
 }
 
 /// The ShapeId a fresh closure of `func_ptr` is born with.
@@ -225,7 +229,9 @@ pub(crate) fn note_function_own_state_changed(owner: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::closure::{closure_set_dynamic_prop, closure_set_static_prototype, js_closure_alloc};
+    use crate::closure::{
+        closure_set_dynamic_prop, closure_set_static_prototype, js_closure_alloc,
+    };
 
     extern "C" fn plain_body(_c: *const ClosureHeader) -> f64 {
         1.0
@@ -247,11 +253,18 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let c = fresh(plain_body);
-        let word = unsafe { *((c as *const u8).add(super::super::CLOSURE_SHAPE_OFFSET) as *const u32) };
+        let word =
+            unsafe { *((c as *const u8).add(super::super::CLOSURE_SHAPE_OFFSET) as *const u32) };
         assert!(shapes::is_exotic_shape_id(word), "{word:#x}");
-        assert!(!shapes::is_site_matchable_shape_id(word), "no own-slot site may hold it");
+        assert!(
+            !shapes::is_site_matchable_shape_id(word),
+            "no own-slot site may hold it"
+        );
         assert_eq!(kind_of(c), Some(ShapeObjectKind::Function));
-        assert_eq!(shapes::shape_proto_id(word), Some(INTRINSIC_SERIAL_FUNCTION));
+        assert_eq!(
+            shapes::shape_proto_id(word),
+            Some(INTRINSIC_SERIAL_FUNCTION)
+        );
         assert!(unsafe { closure_has_base_shape(c) });
         assert!(crate::closure::is_closure_ptr(c as usize));
     }
@@ -264,7 +277,10 @@ mod tests {
         let c = fresh(async_body);
         let id = unsafe { (*c).shape_id };
         assert_eq!(kind_of(c), Some(ShapeObjectKind::Function));
-        assert_eq!(shapes::shape_proto_id(id), Some(INTRINSIC_SERIAL_ASYNC_FUNCTION));
+        assert_eq!(
+            shapes::shape_proto_id(id),
+            Some(INTRINSIC_SERIAL_ASYNC_FUNCTION)
+        );
         assert_ne!(id, unsafe { (*fresh(plain_body)).shape_id });
     }
 
@@ -287,7 +303,10 @@ mod tests {
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let a = fresh(plain_body);
         let proto = crate::object::js_object_alloc(0, 0);
-        closure_set_static_prototype(a as usize, crate::value::js_nanbox_pointer(proto as i64).to_bits());
+        closure_set_static_prototype(
+            a as usize,
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
         assert_eq!(kind_of(a), Some(ShapeObjectKind::FunctionDictionary));
 
         let b = fresh(plain_body);
@@ -308,8 +327,13 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let c = fresh(plain_body);
-        let sym = unsafe { crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
-        crate::symbol::store_object_symbol_property_root(c as usize, (sym.to_bits() & crate::value::POINTER_MASK) as usize, 1.0f64.to_bits());
+        let sym =
+            unsafe { crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+        crate::symbol::store_object_symbol_property_root(
+            c as usize,
+            (sym.to_bits() & crate::value::POINTER_MASK) as usize,
+            1.0f64.to_bits(),
+        );
         assert_eq!(kind_of(c), Some(ShapeObjectKind::FunctionDictionary));
     }
 

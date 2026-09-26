@@ -55,11 +55,13 @@ pub(crate) unsafe fn try_function_shape_method_call(
         return None;
     }
     // (2) The prototype the shape names, and its own data slot for the key.
-    let proto = crate::object::FUNCTION_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
+    let proto =
+        crate::object::FUNCTION_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
     if proto == 0 {
         return None;
     }
-    let value = crate::object::native_get::try_data_get_bytes(JSValue::pointer(proto as *mut u8), name)?;
+    let value =
+        crate::object::native_get::try_data_get_bytes(JSValue::pointer(proto as *mut u8), name)?;
     // (3) Identity by the slot's value.
     if !value.is_pointer() {
         return None;
@@ -125,7 +127,10 @@ mod tests {
                 .expect("the shape path must answer bind on a base-shaped function");
             assert_eq!(hits(), before + 1, "the path must FIRE, not only agree");
             let bound_ptr = JSValue::from_bits(bound.to_bits()).as_pointer::<ClosureHeader>();
-            assert_eq!((*bound_ptr).func_ptr, crate::closure::BOUND_FUNCTION_FUNC_PTR);
+            assert_eq!(
+                (*bound_ptr).func_ptr,
+                crate::closure::BOUND_FUNCTION_FUNC_PTR
+            );
             assert_eq!(crate::closure::js_closure_call0(bound_ptr), 42.0);
             crate::object::FUNCTION_INTRINSIC_PROTO_PTR.store(saved, Ordering::Release);
         }
@@ -143,12 +148,16 @@ mod tests {
             let target_v = crate::value::js_nanbox_pointer(target as i64);
             let this_arg = [f64::from_bits(crate::value::TAG_UNDEFINED)];
             let before = hits();
-            assert!(try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none());
+            assert!(
+                try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none()
+            );
 
             // The intrinsic is back, but the receiver left its base shape.
             install_proto(crate::object::global_this::function_prototype_bind_thunk_for_test());
             crate::closure::closure_set_dynamic_prop(target as usize, "bind", 1.0);
-            assert!(try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none());
+            assert!(
+                try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none()
+            );
             assert_eq!(hits(), before);
             crate::object::FUNCTION_INTRINSIC_PROTO_PTR.store(saved, Ordering::Release);
         }

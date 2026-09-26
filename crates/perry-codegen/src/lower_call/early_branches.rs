@@ -653,7 +653,8 @@ pub fn try_lower_closure_typed_local_call(
                             );
                             let hdr_ptr = blk.inttoptr(I64, &hdr_addr);
                             let kind_flags = blk.load(crate::types::I16, &hdr_ptr);
-                            let kind_mask = u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8 | 0xFF;
+                            let kind_mask =
+                                u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8 | 0xFF;
                             let masked =
                                 blk.and(crate::types::I16, &kind_flags, &kind_mask.to_string());
                             let kind_ok = blk.icmp_eq(
