@@ -62,3 +62,15 @@ pub unsafe extern "C" fn js_perry_agent_post(
 pub extern "C" fn js_perry_agent_post_dispatched() -> u64 {
     super::dispatched()
 }
+
+/// The agent the calling thread acts for ([`crate::agent::current_agent`]):
+/// its own if it is a `worker_threads` worker, otherwise the primary agent.
+///
+/// For a binding that keeps a queue of work produced by several agents' loops
+/// and must hand each agent only its own (#11340): a socket event produced on
+/// a worker's loop names objects on the worker's heap, so the primary thread
+/// must never drain it.
+#[no_mangle]
+pub extern "C" fn js_perry_agent_current() -> u64 {
+    crate::agent::current_agent()
+}

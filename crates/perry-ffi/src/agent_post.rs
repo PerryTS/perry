@@ -46,6 +46,27 @@ extern "C" {
     fn js_perry_agent_post_available() -> i32;
     fn js_perry_agent_post(run: Option<extern "C" fn(*mut c_void)>, ctx: *mut c_void) -> i32;
     fn js_perry_agent_post_dispatched() -> u64;
+    fn js_perry_agent_current() -> u64;
+}
+
+/// The agent the calling thread acts for: its own id on a `worker_threads`
+/// worker, the primary agent's otherwise (including a second thread pumping
+/// on the primary's behalf).
+///
+/// A binding whose loop completions land in a process-wide queue keys that
+/// queue by this, so each agent drains only work that names its own heap
+/// (#11340). The value is an opaque identity: compare it, never interpret it.
+pub fn current_agent() -> u64 {
+    #[cfg(any(not(test), feature = "runtime-link"))]
+    {
+        // SAFETY: a plain thread-local read in the linked runtime.
+        unsafe { js_perry_agent_current() }
+    }
+    #[cfg(all(test, not(feature = "runtime-link")))]
+    {
+        // No runtime is linked: every thread is the one agent there is.
+        0
+    }
 }
 
 /// Work a binding hands to the loop of the agent it is acting for.
