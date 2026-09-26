@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-PERRY="${1:?usage: $0 <perry built with --features target-wasi>}"
+PERRY="$(realpath "${1:?usage: $0 <perry built with --features target-wasi>}")"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
