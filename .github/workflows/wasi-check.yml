@@ -6,8 +6,11 @@ name: WASI Check
 #   wasi-codegen   a compiler built with `--features target-wasi` compiles
 #                  sample programs for WASI and every runtime call in the IR
 #                  matches the runtime's signature (#11378;
-#                  `scripts/wasi_ir_check.sh`).
-# Both scripts run locally the same way.
+#                  `scripts/wasi_ir_check.sh`); then, with the pinned wasi-sdk
+#                  and wasmtime (`scripts/wasi_toolchain.sh`), `perry compile
+#                  --target wasi` links programs that run under wasmtime with
+#                  Node's output (#11379; `scripts/wasi_smoke.sh`).
+# The scripts run locally the same way.
 #
 # Checked against CLAUDE.md's "four ways a gate can be unable to fail":
 #
@@ -22,7 +25,9 @@ name: WASI Check
 #      keyed on `github.run_id` (#7966) so they queue instead of superseding.
 #   4. The subject is asserted live: the script fails unless cargo reports a
 #      perry-runtime artifact under the wasm32-wasip2 target directory, so a
-#      green run cannot be a host build or a silently skipped check.
+#      green run cannot be a host build or a silently skipped check. The IR
+#      check requires wasm32 IR and a non-zero count of verified calls; the
+#      smoke test requires every program to run and at least one to exist.
 
 on:
   pull_request:
@@ -38,7 +43,12 @@ on:
       - "scripts/wasi_check.sh"
       - "scripts/runtime_abi_check.py"
       - "scripts/wasi_ir_check.sh"
+      - "scripts/wasi_toolchain.sh"
+      - "scripts/wasi_build_runtime.sh"
+      - "scripts/wasi_smoke.sh"
+      - "scripts/wasi_smoke/**"
       - "crates/perry-codegen/src/**"
+      - "crates/perry/src/commands/compile/**"
       - ".github/workflows/wasi-check.yml"
   # Main-line arm: one daily sweep, not one run per merge — see
   # docs/src/testing/ci-gate-scheduling.md before adding `push: branches: [main]`.
@@ -101,8 +111,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - name: Install Rust toolchain with the WASI target
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target wasm32-wasip2
       - uses: ./.github/actions/setup-llvm22
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -115,3 +125,13 @@ jobs:
 
       - name: wasm32 IR matches the runtime ABI
         run: ./scripts/wasi_ir_check.sh target/perry-dev/perry
+
+      # Pinned, sha256-verified wasi-sdk + wasmtime; exported for later steps.
+      - name: Install the WASI toolchain
+        run: ./scripts/wasi_toolchain.sh "$RUNNER_TEMP/wasi" | sed -e 's/^export //' -e "s/'//g" >> "$GITHUB_ENV"
+
+      - name: Build the runtime for wasm32-wasip2
+        run: ./scripts/wasi_build_runtime.sh
+
+      - name: Programs compiled with --target wasi run under wasmtime
+        run: ./scripts/wasi_smoke.sh target/perry-dev/perry

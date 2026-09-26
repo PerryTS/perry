@@ -41,14 +41,25 @@ pub(crate) unsafe fn dispatch_wide_abi(
     args: &[f64],
     width: usize,
 ) -> f64 {
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let provided = args.len().min(width);
+    // WASI (#11378): the padding below relies on native C ABIs ignoring
+    // surplus arguments; a wasm `call_indirect` must match its target's type
+    // exactly, so a padded call would trap (and a 1025-parameter type is not
+    // even a valid wasm component). Say so instead.
+    #[cfg(target_os = "wasi")]
+    {
+        let _ = (closure, func_ptr, args);
+        throw_too_wide_for_wasi(width)
+    }
+    #[cfg(not(target_os = "wasi"))]
+    {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let provided = args.len().min(width);
 
-    // `padded!(slots, [0], 1, + + …)` doubles the index list once per `+`
-    // (six doublings = 64 indices) and emits the transmuted call with one
-    // `f64` parameter per index. The indices are constant expressions into a
-    // fixed-size array, so the loads carry no bounds checks.
-    macro_rules! padded {
+        // `padded!(slots, [0], 1, + + …)` doubles the index list once per `+`
+        // (six doublings = 64 indices) and emits the transmuted call with one
+        // `f64` parameter per index. The indices are constant expressions into a
+        // fixed-size array, so the loads carry no bounds checks.
+        macro_rules! padded {
         (@f64 $i:expr) => { f64 };
         ($slots:ident, [$($i:expr),+], $step:expr, + $($more:tt)*) => {
             padded!($slots, [$($i,)+ $($i + $step),+], $step * 2, $($more)*)
@@ -63,29 +74,43 @@ pub(crate) unsafe fn dispatch_wide_abi(
             f(closure $(, $slots[$i])+)
         }};
     }
-    macro_rules! fill {
-        ($len:literal) => {{
-            let mut slots = [undef; $len];
-            slots[..provided].copy_from_slice(&args[..provided]);
-            slots
-        }};
-    }
+        macro_rules! fill {
+            ($len:literal) => {{
+                let mut slots = [undef; $len];
+                slots[..provided].copy_from_slice(&args[..provided]);
+                slots
+            }};
+        }
 
-    match width {
-        0..=64 => {
-            let slots = fill!(64);
-            padded!(slots, [0usize], 1usize, + + + + + +)
+        match width {
+            0..=64 => {
+                let slots = fill!(64);
+                padded!(slots, [0usize], 1usize, + + + + + +)
+            }
+            65..=256 => {
+                let slots = fill!(256);
+                padded!(slots, [0usize], 1usize, + + + + + + + +)
+            }
+            257..=MAX_DYNAMIC_CALL_WIDTH => {
+                let slots = fill!(1024);
+                padded!(slots, [0usize], 1usize, + + + + + + + + + +)
+            }
+            _ => throw_too_wide(width),
         }
-        65..=256 => {
-            let slots = fill!(256);
-            padded!(slots, [0usize], 1usize, + + + + + + + +)
-        }
-        257..=MAX_DYNAMIC_CALL_WIDTH => {
-            let slots = fill!(1024);
-            padded!(slots, [0usize], 1usize, + + + + + + + + + +)
-        }
-        _ => throw_too_wide(width),
     }
+}
+
+#[cfg(target_os = "wasi")]
+#[cold]
+#[inline(never)]
+fn throw_too_wide_for_wasi(width: usize) -> ! {
+    let message = format!(
+        "Calling a closure that takes {width} parameter slots dynamically is not \
+         supported on WASI yet (#11378): wasm needs an exact-arity call"
+    );
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
 #[cold]

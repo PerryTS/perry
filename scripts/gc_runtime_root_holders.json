@@ -274,6 +274,12 @@
       "why": "#9707: dense side array of `TrustedTargets`, two `Option<TrustedDirectTarget>` per eligible arrow. TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64} is a static code pointer plus plain integers \u2014 the same payload the deleted CLOSURE_ARROW_FUNCTION_REGISTRY / CLOSURE_VERSIONED_LOOP_REGISTRY held under this verdict. Nothing for the collector."
     },
     {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "PARAMS",
+      "verdict": "not_a_gc_pointer",
+      "why": "WASI only (cfg(target_os = \"wasi\")): memo of each closure body's real parameter count, keyed by the wasm function-table index of its function pointer (a code address, never a heap address) and valued by an i32 count. Nothing for the collector."
+    },
+    {
       "file": "crates/perry-runtime/src/dyn_eval/registry_lifetime.rs",
       "name": "ACTIVE_FUNCTIONS",
       "verdict": "not_a_gc_pointer",

@@ -73,6 +73,23 @@ impl Tok {
         })
     }
 
+    /// The token for an IR type as codegen spells it (a module-local
+    /// definition, which has no Rust signedness to go by).
+    fn from_ir(ty: &str) -> Option<Tok> {
+        Some(match ty {
+            "double" => Tok::F64,
+            "float" => Tok::F32,
+            "i64" => Tok::I64,
+            "i32" => Tok::I32 { signed: false },
+            "i16" => Tok::I16 { signed: false },
+            "i8" => Tok::I8 { signed: false },
+            "i1" => Tok::Bool,
+            "ptr" => Tok::Ptr,
+            "void" => Tok::Void,
+            _ => return None,
+        })
+    }
+
     fn ir(self) -> &'static str {
         match self {
             Tok::F64 => "double",
@@ -387,11 +404,31 @@ fn adapter(
 /// Rewrite one module's IR text so every call to a runtime symbol matches the
 /// runtime's real wasm32 signature. The identity on a module with nothing to
 /// adapt.
-pub(crate) fn adapt_runtime_abi(ir: &str) -> String {
-    adapt_with(ir, table())
+///
+/// The module's retyped closure bodies ([`super::closure_abi`]) are adapted
+/// like runtime symbols, so a direct call still passing the closure as `i64`
+/// reaches the `ptr` parameter.
+pub(crate) fn adapt_runtime_abi(
+    ir: &str,
+    locals: &HashMap<String, super::closure_abi::Retyped>,
+) -> String {
+    let locals: HashMap<&str, Sig> = locals
+        .iter()
+        .filter_map(|(name, r)| {
+            let ret = Tok::from_ir(&r.ret)?;
+            let params = r
+                .params
+                .iter()
+                .map(|p| Tok::from_ir(p))
+                .collect::<Option<_>>()?;
+            Some((name.as_str(), Sig { ret, params }))
+        })
+        .collect();
+    let table = table();
+    adapt_with(ir, &|name| locals.get(name).or_else(|| table.get(name)))
 }
 
-fn adapt_with(ir: &str, table: &HashMap<&str, Sig>) -> String {
+fn adapt_with<'t>(ir: &str, table: &dyn Fn(&str) -> Option<&'t Sig>) -> String {
     let mut out = String::with_capacity(ir.len() + 4096);
     // (symbol, call ret, call arg types) -> adapter name
     let mut adapters: HashMap<(String, String, Vec<String>), String> = HashMap::new();
@@ -400,7 +437,7 @@ fn adapt_with(ir: &str, table: &HashMap<&str, Sig>) -> String {
         let body = line.trim_end_matches('\n');
         let nl = &line[body.len()..];
         if let Some((name, suffix)) = parse_declare(body) {
-            if let Some(sig) = table.get(name) {
+            if let Some(sig) = table(name) {
                 let (ret, params) = sig.ir_shape();
                 let _ = write!(
                     out,
@@ -411,7 +448,7 @@ fn adapt_with(ir: &str, table: &HashMap<&str, Sig>) -> String {
             }
         }
         if let Some(site) = parse_call(body) {
-            if let Some(sig) = table.get(site.name) {
+            if let Some(sig) = table(site.name) {
                 let (real_ret, real_params) = sig.ir_shape();
                 let call_args: Vec<&str> = site.args.iter().map(|(t, _)| *t).collect();
                 if site.ret != real_ret || call_args != real_params {
@@ -447,6 +484,11 @@ fn adapt_with(ir: &str, table: &HashMap<&str, Sig>) -> String {
 mod tests {
     use super::*;
 
+    fn run(ir: &str) -> String {
+        let t = tbl();
+        adapt_with(ir, &|n| t.get(n))
+    }
+
     fn tbl() -> HashMap<&'static str, Sig> {
         parse_table(
             "# header\n\
@@ -464,7 +506,7 @@ mod tests {
                   declare i64 @user_fn(i64)\n\
                   define void @f() {\n\
                   entry:\n  %1 = call double @js_two(double 1.0, double 2.0)\n  %2 = call i64 @user_fn(i64 3)\n  ret void\n}\n";
-        assert_eq!(adapt_with(ir, &tbl()), ir);
+        assert_eq!(run(ir), ir);
     }
 
     #[test]
@@ -473,7 +515,7 @@ mod tests {
                   declare void @js_takes_ptr(i64)\n\
                   define void @f(i64 %h) {\n\
                   entry:\n  %1 = call i64 @js_ptr_ret(i64 %h, i32 4)\n  %2 = call i64 @js_ptr_ret(i64 %1, i32 5)\n  call void @js_takes_ptr(i64 %2)\n  ret void\n}\n";
-        let out = adapt_with(ir, &tbl());
+        let out = run(ir);
         // Declarations become the runtime's real signatures.
         assert!(out.contains("declare ptr @js_ptr_ret(ptr, i32)\n"), "{out}");
         assert!(out.contains("declare void @js_takes_ptr(ptr)\n"), "{out}");
@@ -494,7 +536,7 @@ mod tests {
     #[test]
     fn narrow_returns_widen_by_the_runtime_types_signedness() {
         let ir = "  %1 = call i64 @js_usize_ret()\n  %2 = call i64 @js_signed(double %x)\n";
-        let out = adapt_with(ir, &tbl());
+        let out = run(ir);
         assert!(
             out.contains("zext i32 %r to i64"),
             "usize widens unsigned: {out}"
@@ -510,7 +552,7 @@ mod tests {
         let ir = "  %1 = invoke double @js_two(double %a) to label %ok unwind label %lp\n\
                   \x20 %2 = tail call double @js_two(i64 %b, double %c)\n\
                   \x20 call void @js_signed(double %d)\n";
-        let out = adapt_with(ir, &tbl());
+        let out = run(ir);
         // Missing argument: a defined zero, not garbage.
         assert!(
             out.contains("call double @js_two(double %a0, double 0.0)"),

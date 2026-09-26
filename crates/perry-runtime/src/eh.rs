@@ -86,6 +86,13 @@ extern "C" {
 /// same CFI the raise path does, so if it cannot see past this module's own
 /// nested Rust frames, the raise path is broken too — abort loudly at the
 /// first `try` instead of stranding the first cross-helper throw.
+///
+/// WASI has no unwinder to check yet: `try` blocks lower to plain calls and a
+/// throw ends the program (#11378), so there is nothing to verify.
+#[cfg(target_os = "wasi")]
+pub(crate) fn verify_unwind_tables_once() {}
+
+#[cfg(not(target_os = "wasi"))]
 pub(crate) fn verify_unwind_tables_once() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
@@ -107,11 +114,13 @@ pub(crate) fn verify_unwind_tables_once() {
     });
 }
 
+#[cfg(not(target_os = "wasi"))]
 #[inline(never)]
 fn selfcheck_frame_a() -> usize {
     std::hint::black_box(selfcheck_frame_b()) + usize::from(std::hint::black_box(false))
 }
 
+#[cfg(not(target_os = "wasi"))]
 #[inline(never)]
 fn selfcheck_frame_b() -> usize {
     unsafe extern "C" fn count(

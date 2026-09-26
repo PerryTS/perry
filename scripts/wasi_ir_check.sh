@@ -6,9 +6,10 @@
 #   cargo build --profile perry-dev -p perry --features target-wasi
 #   ./scripts/wasi_ir_check.sh target/perry-dev/perry
 #
-# Linking a `.wasm` is phase 4 (#11379), so the compile is expected to fail
-# at the link step for now; what this checks is the codegen output, which
-# `PERRY_SAVE_LL` captures before that. A program that produces no IR fails.
+# What this checks is the codegen output, which `PERRY_SAVE_LL` captures
+# before the link, so it needs neither wasi-sdk nor a WASI runtime archive (the
+# link step fails without them, and that is ignored here; linking and running
+# is `scripts/wasi_smoke.sh`). A program that produces no IR fails.
 #
 # Liveness: every saved module must carry the wasm32 triple (a host compile
 # would pass the ABI check vacuously against nothing) and the ABI check must
@@ -45,7 +46,7 @@ for name in "${SAMPLES[@]}"; do
   fi
   dir="$OUT/$name"
   mkdir -p "$dir"
-  # The link step fails until #11379; the IR is saved before it runs.
+  # The link may fail (no wasi-sdk here); the IR is saved before it runs.
   ( cd "$dir" && PERRY_SAVE_LL="$dir" PERRY_NO_AUTO_OPTIMIZE=1 PERRY_NO_CACHE=1 \
       timeout 300 "$PERRY" compile "$src" -o "$dir/out" --target wasi >"$dir/log.txt" 2>&1 ) || true
   if ! compgen -G "$dir/*.ll" >/dev/null; then

@@ -581,6 +581,29 @@ fn main() {
             .flag_if_supported("-fasynchronous-unwind-tables")
             .compile("perry_sjlj");
     }
+    // WASI (#11379): the closure-body signature probe; `ref.test` needs the
+    // GC proposal, enabled for this one file. Only a clang that knows `-mgc`
+    // (wasi-sdk's, see scripts/wasi_toolchain.sh) can build it. With any other
+    // C compiler — a distro clang under `cargo check`, say — it is skipped
+    // with a warning, and a `--target wasi` link then fails loudly on the
+    // undefined `perry_wasi_closure_params` instead of misbehaving.
+    println!("cargo:rerun-if-changed=src/ffi/perry_wasi_sig.c");
+    println!("cargo:rerun-if-env-changed=CC_wasm32_wasip2");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
+        let mut sig = cc::Build::new();
+        if sig.is_flag_supported("-mgc").unwrap_or(false) {
+            sig.file("src/ffi/perry_wasi_sig.c")
+                .flag("-mgc")
+                .opt_level(2)
+                .compile("perry_wasi_sig");
+        } else {
+            println!(
+                "cargo:warning=perry_wasi_sig.c not built: the C compiler does not \
+                 support -mgc; set CC_wasm32_wasip2 to wasi-sdk's clang \
+                 (scripts/wasi_toolchain.sh) to build a linkable WASI runtime"
+            );
+        }
+    }
     println!(
         "cargo:rustc-env=PERRY_RUNTIME_TARGET={}",
         std::env::var("TARGET").expect("TARGET not set by Cargo")

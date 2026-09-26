@@ -120,7 +120,10 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
         || triple.contains("ios")
         || triple.contains("tvos")
         || triple.contains("watchos")
-        || triple.contains("visionos");
+        || triple.contains("visionos")
+        // wasm32 WASI (#11378): must match perry-runtime's `is_valid_obj_ptr`
+        // floor for `target_os = "wasi"`.
+        || triple.contains("wasi");
     if mainstream_os {
         0x10_0000
     } else {
@@ -473,6 +476,7 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             "aarch64-linux-android",
             "x86_64-pc-windows-msvc",
+            "wasm32-unknown-wasip2",
         ] {
             assert_eq!(heap_addr_lower_bound_inclusive(triple), 0x10_0000);
         }

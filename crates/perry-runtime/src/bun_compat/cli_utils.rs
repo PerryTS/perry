@@ -488,6 +488,13 @@ fn is_executable(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// WASI (#11377) cannot run a program and has no execute bit, so nothing is
+/// executable and `Bun.which` finds nothing.
+#[cfg(target_os = "wasi")]
+fn is_executable(_path: &std::path::Path) -> bool {
+    false
+}
+
 #[no_mangle]
 pub extern "C" fn js_bun_which(command: f64, options: f64) -> f64 {
     let command = value_to_string(command);

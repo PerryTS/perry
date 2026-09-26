@@ -74,8 +74,8 @@ pub(crate) fn resolve_direct_func_ptr(
     if lookup_closure_rest(func_ptr).is_some() {
         return None;
     }
-    if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared > arity {
+    if let Some(declared) = super::dispatch_arity(func_ptr) {
+        if super::arity_needs_dispatch(declared, arity) {
             return None;
         }
     }

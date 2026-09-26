@@ -459,6 +459,9 @@ pub(super) fn mark_stack_roots_unchecked(
                                                // Every jmp_buf that CAN be longjmp'd to is armed through the C
                                                // trampoline `exception::arm_trap_and_run` instead — never add a raw
                                                // `setjmp` whose buffer reaches `js_throw`.
+                                               // WASI: wasm keeps no machine registers in linear memory, so there is
+                                               // nothing to spill (and no `setjmp` without the EH proposal, #11378).
+    #[cfg(not(target_os = "wasi"))]
     unsafe {
         crate::ffi::setjmp::setjmp(jmp_buf.0.as_mut_ptr() as *mut std::os::raw::c_int);
     }
