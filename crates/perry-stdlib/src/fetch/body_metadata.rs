@@ -859,6 +859,7 @@ mod tests {
 
     #[test]
     fn selects_urlencoded_and_multipart_parsers_from_content_type() {
+        let _band = crate::fetch::handle_band_test_lock();
         let encoded = form_data_from_body(
             b"name=Perry+TS&name=second",
             "application/x-www-form-urlencoded; charset=UTF-8",
@@ -889,6 +890,7 @@ mod tests {
 
     #[test]
     fn appended_blob_becomes_a_file_and_serializes_binary_multipart() {
+        let _band = crate::fetch::handle_band_test_lock();
         let blob_id = alloc_blob(BlobData::blob(
             vec![0, 0xff, b'\r', b'\n'],
             "application/octet-stream".to_string(),
@@ -948,6 +950,7 @@ mod tests {
 
     #[test]
     fn request_owns_serialized_form_data_and_default_content_type() {
+        let _band = crate::fetch::handle_band_test_lock();
         let form = js_form_data_new();
         unsafe {
             js_form_data_append(

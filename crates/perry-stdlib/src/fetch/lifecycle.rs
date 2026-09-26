@@ -346,6 +346,7 @@ mod tests {
 
     #[test]
     fn full_collection_reclaims_fetch_handles_and_retains_edges() {
+        let _band = crate::fetch::handle_band_test_lock();
         // The GC and its precise roots are per-thread. Keep this test's full
         // collections away from unrelated fixtures' unrooted Rust locals.
         std::thread::spawn(|| unsafe {
@@ -393,6 +394,7 @@ mod tests {
 
     #[test]
     fn automatic_full_traces_recycle_more_than_the_entire_handle_band() {
+        let _band = crate::fetch::handle_band_test_lock();
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
             // Headers allocate no GC payload. Registry pressure itself must
@@ -410,6 +412,7 @@ mod tests {
 
     #[test]
     fn collection_does_not_sweep_another_mutators_handles() {
+        let _band = crate::fetch::handle_band_test_lock();
         let id = handle_id(js_headers_new());
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
@@ -428,6 +431,7 @@ mod ownership_tests {
 
     #[test]
     fn request_signal_and_form_data_files_follow_their_owners() {
+        let _band = crate::fetch::handle_band_test_lock();
         std::thread::spawn(|| unsafe {
             perry_runtime::gc::gc_init();
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -484,6 +488,7 @@ mod root_shape_tests {
 
     #[test]
     fn heap_container_and_raw_native_slot_keep_handles_alive() {
+        let _band = crate::fetch::handle_band_test_lock();
         std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -520,6 +525,7 @@ mod root_shape_tests {
 
     #[test]
     fn minor_keeps_registry_edges_and_thread_exit_releases_entries() {
+        let _band = crate::fetch::handle_band_test_lock();
         let (headers, method) = std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
             let headers = js_headers_new();
@@ -542,6 +548,7 @@ mod root_shape_tests {
 #[cfg(test)]
 #[test]
 fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
+    let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| {
         perry_runtime::gc::gc_init();
         let previous = perry_runtime::gc::js_gc_force_evacuation_test_override(1);

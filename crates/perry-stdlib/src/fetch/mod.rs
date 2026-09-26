@@ -256,6 +256,25 @@ fn alloc_fetch_handle_id() -> usize {
     id
 }
 
+/// Serializes the unit tests that allocate or release Fetch handle ids
+/// (#11417).
+///
+/// The registries and `FREE_FETCH_HANDLE_IDS` are process-global and the free
+/// list is LIFO, so an id one test releases is handed straight to whichever
+/// concurrent test allocates next. A test asserting "the full trace released
+/// my id" (`!HEADERS_REGISTRY.contains_key(&id)`) then sees ANOTHER test's
+/// record under the same number and fails although reclamation worked. The
+/// id band is shared by design; the tests take turns on it.
+#[cfg(test)]
+static HANDLE_BAND_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn handle_band_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    HANDLE_BAND_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod headers_json_test;
 

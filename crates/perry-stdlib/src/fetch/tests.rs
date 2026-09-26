@@ -2,6 +2,7 @@ use super::*;
 
 #[test]
 fn fetch_json_preserves_document_key_order() {
+    let _band = crate::fetch::handle_band_test_lock();
     let source = br#"{"title":"t","permission":[],"zeta":1,"10":"ten","2":"two"}"#;
     let parsed = unsafe { parse_json_body(source) }.expect("valid JSON body");
     let output =
@@ -21,6 +22,7 @@ fn fetch_json_preserves_document_key_order() {
 /// pins the engine translation, whose three arms are easy to swap silently.
 #[test]
 fn fetch_redirect_mode_maps_onto_the_engines_redirect_mode() {
+    let _band = crate::fetch::handle_band_test_lock();
     use turnloop_http::client::RedirectMode;
 
     assert_eq!(
@@ -47,6 +49,7 @@ fn fetch_redirect_mode_maps_onto_the_engines_redirect_mode() {
 /// starts with an empty thread-local scanner registry and cannot register.
 #[test]
 fn fetch_root_scanner_registers_for_each_application_thread() {
+    let _band = crate::fetch::handle_band_test_lock();
     for application in 1..=2 {
         let (before, after_first, after_second) = std::thread::spawn(|| {
             let before = perry_runtime::gc::gc_named_ffi_mutable_root_scanner_count();
@@ -76,6 +79,7 @@ fn fetch_root_scanner_registers_for_each_application_thread() {
 
 #[test]
 fn fetch_handle_ids_use_high_small_handle_range() {
+    let _band = crate::fetch::handle_band_test_lock();
     use perry_runtime::value::addr_class;
     assert!(FETCH_HANDLE_ID_START >= addr_class::COMMON_HANDLE_BAND_END);
     assert!(FETCH_HANDLE_ID_END <= addr_class::HANDLE_BAND_MAX);
@@ -97,6 +101,7 @@ fn fetch_handle_ids_use_high_small_handle_range() {
 /// dereferenced an unmapped low address.
 #[test]
 fn string_from_header_rejects_handle_band_ids() {
+    let _band = crate::fetch::handle_band_test_lock();
     use perry_runtime::value::addr_class;
     for &id in &[
         1usize,                                  // common native handle
@@ -116,6 +121,7 @@ fn string_from_header_rejects_handle_band_ids() {
 
 #[test]
 fn response_constructor_copies_headers_initializer() {
+    let _band = crate::fetch::handle_band_test_lock();
     let mut source = HeadersStore::default();
     source.set("x", "a");
     let source_id = alloc_headers(source);
@@ -185,6 +191,7 @@ fn response_constructor_copies_headers_initializer() {
 /// collection and the cache hands out a dangling closure.
 #[test]
 fn fetch_root_scanner_emits_method_caches_and_request_signal() {
+    let _band = crate::fetch::handle_band_test_lock();
     let headers_id = alloc_headers(HeadersStore::default());
     let headers_get = headers_bound_method_value(headers_id, "get");
     let form_id = handle_id(body_metadata::js_form_data_new());
@@ -252,6 +259,7 @@ fn fetch_root_scanner_emits_method_caches_and_request_signal() {
 /// sharing the process-global tables are untouched.
 #[test]
 fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
+    let _band = crate::fetch::handle_band_test_lock();
     struct Relocate {
         targets: Vec<u64>,
     }
@@ -334,6 +342,7 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
 /// rather than hangs.
 #[test]
 fn request_reads_release_the_registry_guard() {
+    let _band = crate::fetch::handle_band_test_lock();
     let request = unsafe {
         js_request_new(
             std::ptr::null(),
@@ -505,6 +514,7 @@ fn fetch_fn_body<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// re-reads through it.
 #[test]
 fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
+    let _band = crate::fetch::handle_band_test_lock();
     const SOURCES: &[(&str, &str)] = &[
         ("fetch/headers.rs", include_str!("headers.rs")),
         ("fetch/body_metadata.rs", include_str!("body_metadata.rs")),
@@ -586,6 +596,7 @@ fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
 /// retain identity while the record is live, including after data mutation.
 #[test]
 fn method_caches_stop_rooting_after_handle_removal() {
+    let _band = crate::fetch::handle_band_test_lock();
     for _ in 0..32 {
         let headers_id = alloc_headers(HeadersStore::default());
         let form_id = handle_id(body_metadata::js_form_data_new());
@@ -631,6 +642,7 @@ fn method_caches_stop_rooting_after_handle_removal() {
 
 #[test]
 fn copied_headers_bind_methods_to_the_new_handle() {
+    let _band = crate::fetch::handle_band_test_lock();
     let source = alloc_headers(HeadersStore::default());
     let original = headers_bound_method_value(source, "get");
     let copy = HEADERS_REGISTRY
@@ -661,6 +673,7 @@ fn copied_headers_bind_methods_to_the_new_handle() {
 
 #[test]
 fn copied_form_data_does_not_inherit_bound_methods() {
+    let _band = crate::fetch::handle_band_test_lock();
     let source = handle_id(body_metadata::js_form_data_new());
     dispatch::dispatch_form_data_property(source, "get").unwrap();
     let forms = body_metadata::FORM_DATA_REGISTRY.lock().unwrap();

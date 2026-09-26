@@ -147,6 +147,7 @@ mod tests {
 
     #[test]
     fn init_headers_are_lowercased_so_they_override() {
+        let _band = crate::fetch::handle_band_test_lock();
         // `url_from_header` set => the Request registry is not consulted, so
         // this exercises only the `init.headers` merge path. The init keys must
         // be lowercased so they collapse onto (and override) the canonical
@@ -182,6 +183,7 @@ mod tests {
 
     #[test]
     fn pending_redirect_code_selects_the_fetch_redirect_mode() {
+        let _band = crate::fetch::handle_band_test_lock();
         use super::super::FetchRedirectMode;
 
         let resolve = |pending: i32| {
