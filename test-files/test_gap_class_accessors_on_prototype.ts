@@ -165,3 +165,42 @@ class Live {
   s.only = 9;
   out("9.sub", [s._v, s.only]);
 }
+
+// --- 10. a write to a getter-only accessor: TypeError in strict code (a
+// "use strict" function, a class body), ignored in sloppy code (this file's
+// top level runs sloppy under node, like the _sloppy.cts twin)
+class ReadOnly {
+  get v() {
+    return 1;
+  }
+  poke() {
+    (this as any).v = 2;
+  }
+}
+function strictWrite(o: any): string {
+  "use strict";
+  try {
+    o.v = 5;
+    return "no throw";
+  } catch (e) {
+    return (e as Error).constructor.name + ": " + (e as Error).message;
+  }
+}
+{
+  const r: any = new ReadOnly();
+  out("10.strict-fn-write", strictWrite(r));
+  try {
+    r.poke();
+    out("10.class-body-write", "no throw");
+  } catch (e) {
+    out("10.class-body-write", (e as Error).constructor.name);
+  }
+  let sloppy = "no throw";
+  try {
+    r.v = 5;
+  } catch (e) {
+    sloppy = (e as Error).constructor.name;
+  }
+  out("10.sloppy-write", sloppy);
+  out("10.after", [r.v, Object.prototype.hasOwnProperty.call(r, "v")]);
+}

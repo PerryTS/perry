@@ -369,12 +369,22 @@ pub(crate) fn set_field_by_name_object_tail(
                     // the write: no data property is created.
                     let this_f64: f64 =
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    if super::class_registry::class_chain_setter_apply(
+                    match super::class_registry::class_chain_setter_apply(
                         class_id, name, this_f64, value,
-                    )
-                    .is_some()
-                    {
-                        return;
+                    ) {
+                        Some(true) => return,
+                        // This entry point is the strict one (issue #615:
+                        // strict is the TS default; sloppy writes reach
+                        // `js_put_value_set` with `strict = 0`, whose
+                        // OrdinarySet walk refuses the same write silently).
+                        Some(false) => {
+                            let class_name = super::class_registry::class_name_for_id(class_id)
+                                .unwrap_or_else(|| "Object".to_string());
+                            crate::collection_iter::throw_type_error(&format!(
+                                "Cannot set property {name} of #<{class_name}> which has only a getter"
+                            ));
+                        }
+                        None => {}
                     }
                 }
             }
