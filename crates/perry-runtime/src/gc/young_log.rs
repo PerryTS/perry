@@ -269,13 +269,16 @@ pub(crate) fn bits_are_minor_relevant(bits: u64) -> bool {
 pub(crate) struct YoungLogWalk {
     /// The walk was minor-scoped and visited only the logged keys.
     pub(crate) partial: bool,
-    /// Keys the log named when the walk started (after dedup).
+    /// Full walk: entries considered (the whole table). Partial walk: keys
+    /// drained from the log, deduped within each batch; re-keying can add batches.
     pub(crate) logged: u64,
     /// Entries actually visited (a full walk visits the whole table).
     pub(crate) visited: u64,
     /// Entries still relevant after the visit, i.e. the log size afterwards.
     pub(crate) kept: u64,
-    /// Table size at walk time — `table_len - visited` is the work skipped.
+    /// Table size in the same units as a visit (distinct owners for closure
+    /// side tables). A partial walk may revisit re-keyed entries, so `visited`
+    /// can exceed this count.
     pub(crate) table_len: u64,
 }
 

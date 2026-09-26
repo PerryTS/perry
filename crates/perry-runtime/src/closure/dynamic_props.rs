@@ -617,6 +617,26 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
     }
 }
 
+fn closure_side_table_owners() -> Vec<usize> {
+    let mut owners: Vec<usize> = Vec::new();
+    if let Ok(props) = get_closure_props().lock() {
+        owners.extend(props.keys().copied());
+    }
+    if let Ok(prototypes) = get_closure_prototypes().lock() {
+        owners.extend(prototypes.keys().copied());
+    }
+    if let Ok(deleted) = get_closure_deleted_keys().lock() {
+        owners.extend(deleted.keys().copied());
+    }
+    #[cfg(feature = "wasm-host")]
+    if let Ok(externals) = get_wasm_funcref_externals().lock() {
+        owners.extend(externals.keys().copied());
+    }
+    owners.sort_unstable();
+    owners.dedup();
+    owners
+}
+
 /// Mutable GC scanner for closure dynamic-property side-table metadata.
 ///
 /// The side table is keyed by closure address. The key itself is metadata
@@ -640,22 +660,7 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
         scan_closure_side_tables_young(visitor);
         return;
     }
-    let mut owners: Vec<usize> = Vec::new();
-    if let Ok(props) = get_closure_props().lock() {
-        owners.extend(props.keys().copied());
-    }
-    if let Ok(prototypes) = get_closure_prototypes().lock() {
-        owners.extend(prototypes.keys().copied());
-    }
-    if let Ok(deleted) = get_closure_deleted_keys().lock() {
-        owners.extend(deleted.keys().copied());
-    }
-    #[cfg(feature = "wasm-host")]
-    if let Ok(externals) = get_wasm_funcref_externals().lock() {
-        owners.extend(externals.keys().copied());
-    }
-    owners.sort_unstable();
-    owners.dedup();
+    let owners = closure_side_table_owners();
     let table_len = owners.len() as u64;
     // A full walk is authoritative: rebuild the log from what it finds.
     // Notes made by owner-move hooks while the walk runs land in the emptied
@@ -688,25 +693,11 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
 /// which is also what closes the pre-#9754 gap where an entry re-keyed
 /// mid-walk was skipped by the mark pass and only rewritten later.
 fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let table_len = {
-        let props = get_closure_props().lock().map(|m| m.len()).unwrap_or(0);
-        let prototypes = get_closure_prototypes()
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let deleted = get_closure_deleted_keys()
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        #[cfg(feature = "wasm-host")]
-        let externals = get_wasm_funcref_externals()
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        #[cfg(not(feature = "wasm-host"))]
-        let externals = 0;
-        (props + prototypes + deleted + externals) as u64
-    };
+    // Count the same distinct owners as the full walk, not map memberships.
+    // Enumerating them is diagnostic work: ordinary minor collections must
+    // retain the young log's ability to skip the full owner population.
+    let table_len = (cfg!(test) || crate::gc::gc_diag_enabled())
+        .then(|| closure_side_table_owners().len() as u64);
     #[cfg(any(debug_assertions, test))]
     debug_assert_closure_young_log_complete();
     let mut logged = 0u64;
@@ -728,16 +719,18 @@ fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     }
     let kept_len = kept.len() as u64;
     CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
-    crate::gc::young_log::note_walk(
-        CLOSURE_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: true,
-            logged,
-            visited,
-            kept: kept_len,
-            table_len,
-        },
-    );
+    if let Some(table_len) = table_len {
+        crate::gc::young_log::note_walk(
+            CLOSURE_YOUNG_LOG_NAME,
+            crate::gc::young_log::YoungLogWalk {
+                partial: true,
+                logged,
+                visited,
+                kept: kept_len,
+                table_len,
+            },
+        );
+    }
 }
 
 /// Rule 2 of `gc/young_log.rs`: re-derive the relevant owners from the three
