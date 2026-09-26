@@ -229,6 +229,9 @@ pub extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promi
 }
 
 #[cfg(test)]
+mod test_link_shims;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
