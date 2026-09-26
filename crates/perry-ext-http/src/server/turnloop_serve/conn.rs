@@ -125,8 +125,12 @@ fn pending() -> &'static Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>> {
 /// `IncomingMessage` handles whose connection died before their response
 /// completed. Node raises `'aborted'` on the request; the sink cannot run JS,
 /// so the pump drains this and fires the listeners on its own tick.
-fn aborted() -> &'static Mutex<Vec<i64>> {
-    static ABORTED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+///
+/// Each entry is tagged with the agent whose loop queued it — the server's
+/// owner, since the completion sink runs there — and only that agent's pump
+/// takes it (#11433).
+fn aborted() -> &'static Mutex<Vec<(u64, i64)>> {
+    static ABORTED: OnceLock<Mutex<Vec<(u64, i64)>>> = OnceLock::new();
     ABORTED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -142,21 +146,32 @@ pub(crate) fn note_aborted_handle(handle: i64) {
     aborted()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push(handle);
+        .push((perry_ffi::agent_post::current_agent(), handle));
 }
 
 /// Take the `IncomingMessage` handles whose connection died mid-request.
 pub(crate) fn take_aborted() -> Vec<i64> {
     let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *queue)
+    take_owned(&mut queue)
+}
+
+/// Remove and return the calling agent's entries, leaving every other agent's
+/// in place for its own pump (#11433).
+fn take_owned(queue: &mut Vec<(u64, i64)>) -> Vec<i64> {
+    let agent = perry_ffi::agent_post::current_agent();
+    let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(queue)
+        .into_iter()
+        .partition(|(owner, _)| *owner == agent);
+    *queue = theirs;
+    mine.into_iter().map(|(_, handle)| handle).collect()
 }
 
 /// Connection-socket handles (`alloc_connection_socket`) whose TCP connection
 /// has fully closed. Same pattern as `aborted()`: the completion sink cannot
 /// run JS, so the pump drains this and fires the socket's `'close'`
 /// listeners on its own tick.
-fn closed_sockets() -> &'static Mutex<Vec<i64>> {
-    static CLOSED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+fn closed_sockets() -> &'static Mutex<Vec<(u64, i64)>> {
+    static CLOSED: OnceLock<Mutex<Vec<(u64, i64)>>> = OnceLock::new();
     CLOSED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -164,13 +179,13 @@ fn note_closed_socket(socket_handle: i64) {
     closed_sockets()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push(socket_handle);
+        .push((perry_ffi::agent_post::current_agent(), socket_handle));
 }
 
 /// Take the connection-socket handles due a `'close'` emit.
 pub(crate) fn take_closed_sockets() -> Vec<i64> {
     let mut queue = closed_sockets().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *queue)
+    take_owned(&mut queue)
 }
 
 /// Note that this connection's in-flight request (if any) will never be
@@ -184,10 +199,7 @@ fn note_aborted(id: i64) {
     .flatten()
     .filter(|h| *h != 0);
     if let Some(handle) = handle {
-        aborted()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(handle);
+        note_aborted_handle(handle);
     }
 }
 

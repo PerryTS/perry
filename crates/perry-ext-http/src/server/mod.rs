@@ -277,6 +277,30 @@ mod tests {
         s
     }
 
+    /// #11433 — a server belongs to the agent that created it, and no other
+    /// agent's pump may treat it as its own. Every agent runs this extension's
+    /// pump, so this is what keeps a Worker from dispatching the primary
+    /// agent's requests on the Worker's thread.
+    #[test]
+    fn a_server_belongs_to_the_agent_that_created_it() {
+        let here = HttpServer::with_handler(0);
+        assert!(here.owned_here());
+        let worker_owner = std::thread::spawn(|| {
+            perry_runtime::agent::enter_worker_agent();
+            let s = HttpServer::with_handler(0);
+            assert!(s.owned_here(), "the creating Worker owns its server");
+            s.owner_agent
+        })
+        .join()
+        .unwrap();
+        let mut foreign = HttpServer::with_handler(0);
+        foreign.owner_agent = worker_owner;
+        assert!(
+            !foreign.owned_here(),
+            "the primary agent must not drain a Worker's server"
+        );
+    }
+
     /// Issue #2210 — `HttpServer::with_handler` seeds Node's
     /// documented timeout defaults so a fresh server reads back the
     /// same numbers Node returns when no options are passed.

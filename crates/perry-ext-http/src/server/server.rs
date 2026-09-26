@@ -134,6 +134,21 @@ pub struct HttpServer {
     pub bun_error_handler: i64,
     /// Observable `Server.development` option.
     pub bun_development: bool,
+    /// The JS agent that created this server (#11433). Its handler and
+    /// listeners are closures in that agent's heap, and its connections live on
+    /// that agent's loop, so only that agent's pump may drain it. Every agent's
+    /// event loop runs this extension's pump — a `node:worker_threads` Worker's
+    /// included — and before this tag a Worker's pump would take a request
+    /// addressed to the primary agent's server and run the primary's handler on
+    /// the Worker's thread.
+    pub owner_agent: u64,
+}
+
+impl HttpServer {
+    /// Whether the calling agent owns this server and may run its JS.
+    pub(crate) fn owned_here(&self) -> bool {
+        self.owner_agent == perry_ffi::agent_post::current_agent()
+    }
 }
 
 impl HttpServer {
@@ -170,6 +185,7 @@ impl HttpServer {
             is_bun_server: false,
             bun_error_handler: 0,
             bun_development: false,
+            owner_agent: perry_ffi::agent_post::current_agent(),
         }
     }
 }
@@ -1025,8 +1041,9 @@ pub unsafe extern "C" fn js_node_http_server_remove_listener(
 #[no_mangle]
 pub extern "C" fn js_node_http_server_has_active() -> i32 {
     let mut active = 0i32;
+    // Only this agent's servers keep this agent alive (#11433).
     iter_handles_of::<HttpServer, _>(|s| {
-        if server_is_active(s) {
+        if s.owned_here() && server_is_active(s) {
             active = 1;
         }
     });
@@ -1034,7 +1051,7 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
         return 1;
     }
     iter_handles_of::<crate::server::https_server::HttpsServer, _>(|s| {
-        if server_is_active(&s.base) {
+        if s.base.owned_here() && server_is_active(&s.base) {
             active = 1;
         }
     });
@@ -1042,7 +1059,7 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
         return 1;
     }
     iter_handles_of::<crate::server::http2_server::Http2SecureServer, _>(|s| {
-        if server_is_active(&s.base) {
+        if s.base.owned_here() && server_is_active(&s.base) {
             active = 1;
         }
     });
@@ -1055,6 +1072,19 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
         active = 1;
     }
     active
+}
+
+/// Whether `server_handle` names an HTTP, HTTPS or HTTP/2 server the calling
+/// agent owns. A handle that names none of them reads as not owned.
+pub(crate) fn server_handle_owned_here(server_handle: i64) -> bool {
+    if let Some(s) = get_handle::<HttpServer>(server_handle) {
+        return s.owned_here();
+    }
+    if let Some(s) = get_handle::<crate::server::https_server::HttpsServer>(server_handle) {
+        return s.base.owned_here();
+    }
+    get_handle::<crate::server::http2_server::Http2SecureServer>(server_handle)
+        .is_some_and(|s| s.base.owned_here())
 }
 
 /// Drain pending requests + upgrades from every registered server,
@@ -1099,9 +1129,17 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // #4905 — fire `'connection'` listeners for connections accepted since
     // the last tick, before their requests are dispatched (Node fires
     // `'connection'` ahead of `'request'`).
+    // Only the events of servers this agent owns (#11433); another agent's stay
+    // queued for its own pump.
     let connection_events: Vec<(i64, i64)> = PENDING_CONNECTION_EVENTS
         .lock()
-        .map(|mut q| q.drain(..).collect())
+        .map(|mut q| {
+            let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(&mut *q)
+                .into_iter()
+                .partition(|(server_handle, _)| server_handle_owned_here(*server_handle));
+            *q = theirs;
+            mine
+        })
         .unwrap_or_default();
     for (server_handle, socket_handle) in connection_events {
         // The handle may back an HttpServer or an HttpsServer (whose
@@ -1140,8 +1178,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // Snapshot handle ids first so we can mutate handle state
     // (drain channels, free per-request handles) without the
     // DashMap iterator dangling.
+    // #11433: each loop below visits only the servers this agent created.
     let mut http_handles: Vec<i64> = Vec::new();
     perry_ffi::iter_handle_ids_of::<HttpServer, _>(|id| http_handles.push(id));
+    http_handles.retain(|h| get_handle::<HttpServer>(*h).is_some_and(HttpServer::owned_here));
     for h in http_handles {
         // #4903 — fire the deferred `'listening'` emit + listen callbacks
         // before draining requests: the listen callback is usually what
@@ -1160,6 +1200,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     let mut https_handles: Vec<i64> = Vec::new();
     perry_ffi::iter_handle_ids_of::<crate::server::https_server::HttpsServer, _>(|id| {
         https_handles.push(id)
+    });
+    https_handles.retain(|h| {
+        get_handle::<crate::server::https_server::HttpsServer>(*h)
+            .is_some_and(|s| s.base.owned_here())
     });
     for h in https_handles {
         count += drain_deferred_listen_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
@@ -1185,6 +1229,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     let mut h2_handles: Vec<i64> = Vec::new();
     perry_ffi::iter_handle_ids_of::<crate::server::http2_server::Http2SecureServer, _>(|id| {
         h2_handles.push(id)
+    });
+    h2_handles.retain(|h| {
+        get_handle::<crate::server::http2_server::Http2SecureServer>(*h)
+            .is_some_and(|s| s.base.owned_here())
     });
     for h in h2_handles {
         count += drain_deferred_listen_for::<crate::server::http2_server::Http2SecureServer, _>(

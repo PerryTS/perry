@@ -107,9 +107,16 @@ pub(super) fn start_stdin_reader() {
 pub extern "C" fn js_worker_threads_process_pending() -> i32 {
     let mut processed = 0;
 
+    // Only the events addressed to this agent (#11433); a Worker's own pump
+    // must leave its parent's events where the parent will find them.
+    let agent = perry_runtime::agent::current_agent();
     let events: Vec<WorkerEvent> = {
         let mut q = PARENT_EVENTS.lock().unwrap();
-        q.drain(..).collect()
+        let (mine, theirs): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut *q)
+            .into_iter()
+            .partition(|(parent, _)| *parent == agent);
+        *q = theirs;
+        mine.into_iter().map(|(_, event)| event).collect()
     };
     for event in events {
         match event {
@@ -191,13 +198,37 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
     processed
 }
 
+/// `perry_runtime::agent::retire_agent` hook: events addressed to an agent that
+/// has exited can never be delivered (a nested Worker's children outliving it).
+fn purge_parent_events(agent: perry_runtime::agent::AgentId) {
+    let dropped: VecDeque<_> = {
+        let mut q = PARENT_EVENTS.lock().unwrap();
+        let (dead, live): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut *q)
+            .into_iter()
+            .partition(|(parent, _)| *parent == agent);
+        *q = live;
+        dead
+    };
+    drop(dropped);
+}
+
+pub(super) fn ensure_parent_event_retire_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| perry_runtime::agent::register_retire_hook(purge_parent_events));
+}
+
 /// Check if worker_threads has pending work (stdin reader active)
 #[no_mangle]
 pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     let started = STDIN_READER_STARTED.with(|s| *s.borrow());
     let eof = STDIN_EOF.with(|eof| *eof.borrow());
     let has_messages = PENDING_MESSAGES.with(|q| !q.borrow().is_empty());
-    let has_worker_events = !PARENT_EVENTS.lock().unwrap().is_empty();
+    let agent = perry_runtime::agent::current_agent();
+    let has_worker_events = PARENT_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(parent, _)| *parent == agent);
     // turnloop P0: O(1) (`LIVE_REFED_WORKERS`); debug builds re-derive it.
     let has_live_refed_worker = LIVE_REFED_WORKERS.load(Ordering::Acquire) != 0;
     #[cfg(debug_assertions)]

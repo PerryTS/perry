@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{LazyLock, Mutex};
 
+use perry_runtime::agent::AgentId;
 use perry_runtime::closure::ClosureHeader;
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
 use perry_runtime::thread::{
@@ -103,6 +104,9 @@ thread_local! {
     static NEXT_BROADCAST_ID: RefCell<u64> = const { RefCell::new(10_000) };
     /// Non-zero while running inside an in-process Worker thread.
     static CURRENT_WORKER_ID: Cell<u64> = const { Cell::new(0) };
+    /// The agent that created the in-process Worker running on this thread:
+    /// where its `parentPort.postMessage` events are delivered.
+    static CURRENT_PARENT_AGENT: Cell<AgentId> = const { Cell::new(perry_runtime::agent::PRIMARY_AGENT) };
     /// workerData for the current in-process Worker.
     static CURRENT_WORKER_DATA: RefCell<Option<SerializedValue>> = const { RefCell::new(None) };
     /// Worker threadName for the current in-process Worker.
@@ -187,7 +191,13 @@ static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
 /// `WORKERS` lock by `WorkerRecord::set_liveness` (records are never removed,
 /// only marked dead), so the per-turn keep-alive check is an atomic load.
 static LIVE_REFED_WORKERS: AtomicU64 = AtomicU64::new(0);
-static PARENT_EVENTS: LazyLock<Mutex<VecDeque<WorkerEvent>>> =
+/// Worker → parent events, each tagged with the agent that created the Worker
+/// (#11433). Every agent's pump reaches `js_worker_threads_process_pending` —
+/// a Worker's own await loop included — so an untagged queue let a Worker drain
+/// the events addressed to its parent: its first `postMessage` was then
+/// dispatched on the Worker's own thread, against listeners that live in the
+/// parent's heap, and the parent never saw it.
+static PARENT_EVENTS: LazyLock<Mutex<VecDeque<(AgentId, WorkerEvent)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 type WorkerEntry = extern "C" fn();
@@ -918,8 +928,8 @@ fn event_name(value: f64) -> Option<String> {
     string_value_to_string(value)
 }
 
-fn push_parent_event(event: WorkerEvent) {
-    PARENT_EVENTS.lock().unwrap().push_back(event);
+fn push_parent_event(parent: AgentId, event: WorkerEvent) {
+    PARENT_EVENTS.lock().unwrap().push_back((parent, event));
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
@@ -1291,6 +1301,7 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
     ensure_worker_gc_scanner();
+    worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
@@ -1348,6 +1359,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     drop(workers);
 
     let thread_options = options_state.clone();
+    // Captured on the creating thread: this Worker's events go to THIS agent.
+    let parent_agent = perry_runtime::agent::current_agent();
     // #8546: the Worker re-runs its module bodies on its own thread, but it is
     // the SAME image as its parent (same code addresses, same class ids), so it
     // shares the parent's class tables instead of building a second copy. Its
@@ -1381,13 +1394,14 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             let worker_agent = perry_runtime::agent::enter_worker_agent();
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
+            CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
             CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
             CURRENT_THREAD_NAME
                 .with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
             CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
             CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
             worker_surface::install_web_worker_globals();
-            push_parent_event(WorkerEvent::Online(worker_id));
+            push_parent_event(parent_agent, WorkerEvent::Online(worker_id));
 
             let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
             let mut exit_code = 0;
@@ -1470,15 +1484,15 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             let exit_code = match result {
                 Ok(()) => exit_code,
                 Err(_) => {
-                    push_parent_event(WorkerEvent::Error(worker_id));
+                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
                     1
                 }
             };
-            push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
+            push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, exit_code));
         });
     if spawned.is_err() {
-        push_parent_event(WorkerEvent::Error(worker_id));
-        push_parent_event(WorkerEvent::Exit(worker_id, 1));
+        push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
+        push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, 1));
     }
 
     object_value(worker_obj)
@@ -1583,7 +1597,8 @@ pub extern "C" fn js_worker_threads_post_message(data: f64) -> f64 {
     let worker_id = CURRENT_WORKER_ID.with(|id| id.get());
     if worker_id != 0 {
         let message = unsafe { serialize_nanbox_for_thread(data.to_bits()) };
-        push_parent_event(WorkerEvent::Message(worker_id, message));
+        let parent = CURRENT_PARENT_AGENT.with(Cell::get);
+        push_parent_event(parent, WorkerEvent::Message(worker_id, message));
         return js_undefined();
     }
     let str_ptr = unsafe { js_json_stringify(data, 0) };
