@@ -404,7 +404,7 @@ fn install_symbol_iterator(shared: *mut ObjectHeader) {
 /// Allocate one family prototype with an own `next` method (spec descriptor),
 /// a `[Symbol.toStringTag]`, and `[[Prototype]] === shared %IteratorPrototype%`.
 fn build_family_proto(
-    next_thunk: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+    next_thunk: crate::closure::body_call::js_body_fn_ty!(a),
     tag: &str,
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {

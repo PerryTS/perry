@@ -466,7 +466,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             // Iteration / search methods: real generic-engine thunks (rest
             // shape — spec `.length` recorded separately below).
-            type RestThunk = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
+            type RestThunk = crate::closure::body_call::js_body_fn_ty!(a);
             let arraylike_thunks: [(&str, RestThunk, u32); 14] = [
                 ("forEach", array_proto_forEach_thunk, 1),
                 ("map", array_proto_map_thunk, 1),

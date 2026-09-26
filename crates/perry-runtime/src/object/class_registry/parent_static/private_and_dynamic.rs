@@ -260,7 +260,7 @@ pub(crate) unsafe fn class_private_instance_getter_value(
     if getter == 0 {
         return None;
     }
-    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
     Some(f(receiver))
 }
 
@@ -278,7 +278,7 @@ pub(crate) unsafe fn class_private_instance_setter_apply(
     if decl.set == 0 {
         return false;
     }
-    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(decl.set);
+    let f = crate::closure::body_call::js_method_body_fn!(decl.set as *const u8; value);
     let _ = f(receiver, value);
     true
 }

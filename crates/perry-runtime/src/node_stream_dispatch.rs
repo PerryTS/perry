@@ -12,19 +12,19 @@ use crate::value::JSValue;
 pub(crate) type StubFn = unsafe extern "C" fn();
 
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> StubFn {
+pub(crate) fn cast0(f: crate::closure::body_call::js_body_fn_ty!()) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> StubFn {
+pub(crate) fn cast1(f: crate::closure::body_call::js_body_fn_ty!(a)) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> StubFn {
+pub(crate) fn cast2(f: crate::closure::body_call::js_body_fn_ty!(a, a)) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(super) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> StubFn {
+pub(super) fn cast3(f: crate::closure::body_call::js_body_fn_ty!(a, a, a)) -> StubFn {
     unsafe { std::mem::transmute(f) }
 }
 

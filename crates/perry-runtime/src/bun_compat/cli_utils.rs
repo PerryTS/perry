@@ -53,7 +53,7 @@ fn number_arg(value: f64) -> Option<f64> {
     }
 }
 
-fn closure1(name: &str, func: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
+fn closure1(name: &str, func: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
     js_register_closure_arity(func as *const u8, 1);
     let closure = js_closure_alloc(func as *const u8, 0);
     crate::object::set_bound_native_closure_name(closure, name);
@@ -61,11 +61,7 @@ fn closure1(name: &str, func: extern "C" fn(*const ClosureHeader, f64) -> f64) -
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn closure2(
-    name: &str,
-    func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-    length: u32,
-) -> f64 {
+fn closure2(name: &str, func: crate::closure::body_call::js_body_fn_ty!(a, a), length: u32) -> f64 {
     js_register_closure_arity(func as *const u8, 2);
     let closure = js_closure_alloc(func as *const u8, 0);
     crate::object::set_bound_native_closure_name(closure, name);
@@ -75,7 +71,7 @@ fn closure2(
 
 fn closure3(
     name: &str,
-    func: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a, a, a),
     length: u32,
 ) -> f64 {
     js_register_closure_arity(func as *const u8, 3);

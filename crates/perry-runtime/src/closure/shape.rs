@@ -433,7 +433,7 @@ mod tests {
         shapes::shape_object_kind_by_id(unsafe { (*c).shape_id })
     }
 
-    fn fresh(body: extern "C" fn(*const ClosureHeader) -> f64) -> *mut ClosureHeader {
+    fn fresh(body: crate::closure::body_call::js_body_fn_ty!()) -> *mut ClosureHeader {
         js_closure_alloc(body as *const u8, 0)
     }
 

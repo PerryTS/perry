@@ -985,7 +985,7 @@ extern "C" fn module_loader_next_load(
 fn module_loader_callback(
     slot: &'static std::thread::LocalKey<Cell<*const crate::closure::ClosureHeader>>,
     name: &str,
-    func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a, a),
 ) -> f64 {
     let ptr = slot.with(|cell| {
         let existing = cell.get();

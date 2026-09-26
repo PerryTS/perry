@@ -120,7 +120,7 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
         (
             b"next".as_slice(),
             &next_h,
-            async_generator_next_wrapper as extern "C" fn(*const ClosureHeader, f64) -> f64,
+            async_generator_next_wrapper as crate::closure::body_call::js_body_fn_ty!(a),
         ),
         (b"return".as_slice(), &ret_h, async_generator_return_wrapper),
         (b"throw".as_slice(), &throw_h, async_generator_throw_wrapper),

@@ -1189,9 +1189,7 @@ fn call_async_step_direct(
     // the stored function pointer instead.
     unsafe {
         let func_ptr = (*step_closure).func_ptr;
-        let func: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64 =
-            std::mem::transmute(func_ptr);
-        func(step_closure, value, is_error_bits)
+        crate::closure::body_call::js_body_call!(func_ptr, step_closure, value, is_error_bits)
     }
 }
 

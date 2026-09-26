@@ -112,7 +112,7 @@ pub(crate) const KEY_REACTOR_ID: &[u8] = b"__perryDgramReactorId";
 pub(crate) const KEY_ASYNC_ID: &[u8] = b"__perryDgramAsyncId";
 pub(crate) const KEY_TRIGGER_ASYNC_ID: &[u8] = b"__perryDgramTriggerAsyncId";
 
-type MethodThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
+type MethodThunk = crate::closure::body_call::js_body_fn_ty!(a);
 
 struct MethodSpec {
     name: &'static str,

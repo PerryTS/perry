@@ -700,7 +700,7 @@ fn register_async_from_sync_thunks_once() {
 fn install_async_from_sync_method(
     obj: *mut crate::object::ObjectHeader,
     name: &[u8],
-    func: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a),
     iter: f64,
 ) -> f64 {
     // `obj`, `iter` and the freshly-allocated closure are live young objects

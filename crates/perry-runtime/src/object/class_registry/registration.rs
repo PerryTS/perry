@@ -212,7 +212,7 @@ extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::Closur
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let this = crate::object::js_implicit_this_get();
-    let f: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    let f = unsafe { crate::closure::body_call::js_method_body_fn!(raw as *const u8;) };
     f(this)
 }
 
@@ -226,7 +226,7 @@ extern "C" fn class_accessor_setter_thunk(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let this = crate::object::js_implicit_this_get();
-    let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    let f = unsafe { crate::closure::body_call::js_method_body_fn!(raw as *const u8; a0) };
     f(this, value)
 }
 

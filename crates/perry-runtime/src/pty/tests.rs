@@ -28,7 +28,7 @@ extern "C" fn exited(_closure: *const ClosureHeader, event: f64) -> f64 {
     cp_undefined()
 }
 
-fn callback(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
+fn callback(f: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
     crate::closure::js_register_closure_arity(f as *const u8, 1);
     cp_box_ptr(crate::closure::js_closure_alloc(f as *const u8, 0).cast())
 }

@@ -427,6 +427,7 @@ fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
         return None;
     }
     let reader = unsafe {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: StreamGetReaderFn = std::mem::transmute(f);
         func(stream)
     };

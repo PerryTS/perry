@@ -299,9 +299,8 @@ pub(crate) fn module_set_field_rooted(
     handle.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| module_set_field(obj, name, value));
 }
 
-pub(crate) type ModuleFunction1 = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
-pub(crate) type ModuleFunction2 =
-    extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64;
+pub(crate) type ModuleFunction1 = crate::closure::body_call::js_body_fn_ty!(a);
+pub(crate) type ModuleFunction2 = crate::closure::body_call::js_body_fn_ty!(a, a);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ModuleLoaderHookEntry {

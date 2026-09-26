@@ -411,20 +411,20 @@ pub(crate) fn emit_method_site(
         Some(cell) => crate::rooting::implicit_this_save_at(ctx, cell, recv_box),
         None => crate::rooting::implicit_this_save(ctx, recv_box),
     };
-    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-        Vec::with_capacity(lowered_args.len() + 1);
-    call_args.push((I64, &handle));
-    call_args.extend(lowered_args.iter().map(|a| (DOUBLE, a.as_str())));
+    let mut call_args: Vec<String> = lowered_args.to_vec();
     // Pad with `undefined` up to the arity the prime admits, so a body that
     // declares a few more parameters than this call passes is entered
     // directly (`dispatch_with_arity` pads the same way). A body declaring
     // fewer ignores the extra registers.
     let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let pad = crate::runtime_abi::method_site_padded_argc(lowered_args.len()) - lowered_args.len();
-    for _ in 0..pad {
-        call_args.push((DOUBLE, undefined.as_str()));
-    }
-    let hit_value = ctx.block().call_indirect(DOUBLE, &fptr, &call_args);
+    call_args.extend(std::iter::repeat_n(undefined, pad));
+    let hit_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Pointer(&fptr),
+        &handle,
+        &call_args,
+    );
     match &cell {
         Some(cell) => crate::rooting::implicit_this_restore_at(ctx, cell, saved),
         None => crate::rooting::implicit_this_restore(ctx, saved),

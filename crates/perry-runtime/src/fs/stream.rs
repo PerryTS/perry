@@ -1647,50 +1647,44 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
     let id = alloc_stream(state);
     let method_funcs: [(&str, extern "C" fn()); 8] = [
         ("write", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_write_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a, a), extern "C" fn()>(
+                write_stream_write_impl,
+            )
         }),
         ("end", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_end_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a, a), extern "C" fn()>(
+                write_stream_end_impl,
+            )
         }),
         ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                write_stream_on_impl,
+            )
         }),
         ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_once_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                write_stream_once_impl,
+            )
         }),
         ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                write_stream_on_impl,
+            )
         }),
         ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 write_stream_close_impl,
             )
         }),
         ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 write_stream_close_impl,
             )
         }),
         ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(stream_emit_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                stream_emit_impl,
+            )
         }),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_WRITE_STREAM, &method_funcs);
@@ -1720,59 +1714,54 @@ fn create_read_stream_with_state(state: StreamState) -> f64 {
     store_open_failure(id);
     let method_funcs: [(&str, extern "C" fn()); 10] = [
         ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                read_stream_on_impl,
+            )
         }),
         ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_once_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                read_stream_once_impl,
+            )
         }),
         ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                read_stream_on_impl,
+            )
         }),
         ("pipe", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_pipe_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                read_stream_pipe_impl,
+            )
         }),
         ("pause", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 read_stream_pause_impl,
             )
         }),
         ("resume", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 read_stream_resume_impl,
             )
         }),
         ("isPaused", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 read_stream_is_paused_impl,
             )
         }),
         ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 read_stream_close_impl,
             )
         }),
         ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 read_stream_close_impl,
             )
         }),
         ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(stream_emit_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                stream_emit_impl,
+            )
         }),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
@@ -1819,88 +1808,82 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
     let id = alloc_utf8_stream(state);
     let method_funcs: [(&str, extern "C" fn()); 16] = [
         ("write", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 utf8_stream_write_impl,
             )
         }),
         ("flush", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 utf8_stream_flush_impl,
             )
         }),
         ("flushSync", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 utf8_stream_flush_sync_impl,
             )
         }),
         ("end", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 utf8_stream_end_impl,
             )
         }),
         ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 utf8_stream_destroy_impl,
             )
         }),
         ("reopen", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 utf8_stream_reopen_impl,
             )
         }),
         ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_on_impl,
+            )
         }),
         ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_once_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_once_impl,
+            )
         }),
         ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_on_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_on_impl,
+            )
         }),
         ("off", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_off_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_off_impl,
+            )
         }),
         ("removeListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_off_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_off_impl,
+            )
         }),
         ("removeAllListeners", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 utf8_stream_remove_all_impl,
             )
         }),
         ("listenerCount", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
                 utf8_stream_listener_count_impl,
             )
         }),
         ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_emit_impl)
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
+                utf8_stream_emit_impl,
+            )
         }),
         ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 utf8_stream_destroy_impl,
             )
         }),
         ("@@__perry_wk_dispose", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
+            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
                 utf8_stream_destroy_impl,
             )
         }),

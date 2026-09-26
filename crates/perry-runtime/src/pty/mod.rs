@@ -444,7 +444,7 @@ mod platform_impl {
             cp_undefined()
         }
 
-        fn listener_value(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
+        fn listener_value(f: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
             crate::closure::js_register_closure_arity(f as *const u8, 1);
             let closure = crate::closure::js_closure_alloc(f as *const u8, 0);
             cp_box_ptr(closure as *const u8)

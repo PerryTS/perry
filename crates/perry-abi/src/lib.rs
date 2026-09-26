@@ -37,6 +37,72 @@ pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
 pub const GC_HEADER_SIZE: usize = 8;
 
+
+/// The JS BODY calling convention. Every native body a function object runs —
+/// a compiled closure body, a value wrapper, a native builtin installed as a
+/// function object — is
+///
+/// ```text
+/// double body(i64 callee, double a0, double a1, ...)
+/// ```
+///
+/// where `callee` is the function object (its captures follow the header).
+/// Passing more JS arguments than a body declares is safe (the caller owns
+/// the stack argument area); fewer is padded with `undefined` by the caller.
+/// The runtime calls bodies only through `closure/body_call.rs`; emitted code
+/// only through `expr::body_call::emit_js_body_call`.
+pub const JS_BODY_CALLEE_PARAM: usize = 0;
+/// Native parameter index of the first JS argument.
+pub const JS_BODY_FIRST_ARG_PARAM: usize = 1;
+/// `js_closure_call{N}(callee, a0..aN-1)` exists for `N <= JS_CLOSURE_CALL_MAX_ARGS`;
+/// wider calls use `js_closure_call_array`.
+pub const JS_CLOSURE_CALL_MAX_ARGS: usize = 16;
+/// The fixed-arity entries, indexed by JS argument count.
+pub const JS_CLOSURE_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 1] = [
+    "js_closure_call0",
+    "js_closure_call1",
+    "js_closure_call2",
+    "js_closure_call3",
+    "js_closure_call4",
+    "js_closure_call5",
+    "js_closure_call6",
+    "js_closure_call7",
+    "js_closure_call8",
+    "js_closure_call9",
+    "js_closure_call10",
+    "js_closure_call11",
+    "js_closure_call12",
+    "js_closure_call13",
+    "js_closure_call14",
+    "js_closure_call15",
+    "js_closure_call16",
+];
+/// Every runtime entry point emitted code calls to run a JS function. Each can
+/// run arbitrary JS and therefore collect: `scripts/gc_root_dominance_check.py`
+/// reads its poll-capable set from THIS list.
+pub const JS_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 5] = [
+    "js_closure_call0",
+    "js_closure_call1",
+    "js_closure_call2",
+    "js_closure_call3",
+    "js_closure_call4",
+    "js_closure_call5",
+    "js_closure_call6",
+    "js_closure_call7",
+    "js_closure_call8",
+    "js_closure_call9",
+    "js_closure_call10",
+    "js_closure_call11",
+    "js_closure_call12",
+    "js_closure_call13",
+    "js_closure_call14",
+    "js_closure_call15",
+    "js_closure_call16",
+    "js_closure_call1_receiverless",
+    "js_closure_call_array",
+    "js_closure_call_apply_with_spread",
+    "js_native_call_value",
+];
 /// `object::method_site::MethodEntry` — the words the emitted method-call site
 /// reads (`perry-codegen/src/expr/method_site.rs`).
 pub const METHOD_SITE_WORD_OFFSET: usize = 0;

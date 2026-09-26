@@ -624,6 +624,16 @@ jobs:
           python3 scripts/check_gc_env_knobs.py --self-test
           python3 scripts/check_gc_env_knobs.py
 
+      # `this`-as-a-parameter lane, stage 0: every call of a JS function body
+      # goes through one funnel per side (runtime `closure/body_call.rs`,
+      # codegen `expr/body_call.rs`), so a body-ABI change is made in one place
+      # and the compiler finds every caller.
+      - name: JS body-call funnel
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_js_body_call_funnel.py --self-test
+          python3 scripts/check_js_body_call_funnel.py
+
       # #7982. The in-process LLVM reader's unit gate builds three tracked `.ll`
       # corpora and asserts they RAN — which proves the tests ran, not that they
       # test today's IR. All three froze on 2026-08-03 and carried zero

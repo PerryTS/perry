@@ -439,6 +439,7 @@ pub(crate) fn call_worker_threads_getter(
     if ptr.is_null() {
         return fallback();
     }
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
     let getter: WorkerThreadsValueGetter = unsafe { std::mem::transmute(ptr) };
     getter()
 }

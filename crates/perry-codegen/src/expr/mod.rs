@@ -36,6 +36,7 @@ pub(crate) mod array_length;
 mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
+pub(crate) mod body_call;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 mod literal_descriptor;

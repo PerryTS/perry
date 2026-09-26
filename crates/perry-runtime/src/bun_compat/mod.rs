@@ -159,14 +159,14 @@ fn set_field(obj: *mut crate::object::ObjectHeader, key: &[u8], value: f64) {
     js_object_set_field_by_name(obj, key_ptr(key), value);
 }
 
-fn bound_method0(func: extern "C" fn(*const ClosureHeader) -> f64, capture: f64) -> f64 {
+fn bound_method0(func: crate::closure::body_call::js_body_fn_ty!(), capture: f64) -> f64 {
     js_register_closure_arity(func as *const u8, 0);
     let closure = js_closure_alloc(func as *const u8, 1);
     js_closure_set_capture_f64(closure, 0, capture);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn bound_method1(func: extern "C" fn(*const ClosureHeader, f64) -> f64, capture: f64) -> f64 {
+fn bound_method1(func: crate::closure::body_call::js_body_fn_ty!(a), capture: f64) -> f64 {
     js_register_closure_arity(func as *const u8, 1);
     let closure = js_closure_alloc(func as *const u8, 1);
     js_closure_set_capture_f64(closure, 0, capture);

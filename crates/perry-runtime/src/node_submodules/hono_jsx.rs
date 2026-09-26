@@ -105,6 +105,7 @@ pub(crate) extern "C" fn thunk_hono_render_to_readable_stream(
         // value is at least usable (degraded vs. a real ReadableStream).
         return html_value;
     }
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
     let f: RenderStreamFn = unsafe { std::mem::transmute(raw) };
     unsafe { f(html_value) }
 }

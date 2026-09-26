@@ -48,9 +48,9 @@ struct ExportSpec {
 }
 
 enum ExportThunk {
-    Fn1(extern "C" fn(*const ClosureHeader, f64) -> f64),
-    Fn2(extern "C" fn(*const ClosureHeader, f64, f64) -> f64),
-    Fn3(extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64),
+    Fn1(crate::closure::body_call::js_body_fn_ty!(a)),
+    Fn2(crate::closure::body_call::js_body_fn_ty!(a, a)),
+    Fn3(crate::closure::body_call::js_body_fn_ty!(a, a, a)),
 }
 
 impl ExportThunk {

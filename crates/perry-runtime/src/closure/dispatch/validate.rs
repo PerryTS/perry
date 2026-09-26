@@ -141,8 +141,8 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
 /// checked`) — so a proxy callee arrives here as its bare registry id
 /// (`PROXY_ID_BAND_START + id`). The compiler emits a `ProxyApply` node only
 /// when it can statically prove the callee is a proxy; a proxy read out of a
-/// dynamically-typed slot (`const g = obj.m` / `arr[0]` / `map.get(k)`, or a
-/// method detached by `js_closure_unbind_this`) reaches this generic path with
+/// dynamically-typed slot (`const g = obj.m` / `arr[0]` / `map.get(k)`)
+/// reaches this generic path with
 /// no static hint, and `get_valid_func_ptr` correctly refuses to dereference the
 /// id (#5976/#6321) — which turned the SIGSEGV into a spurious TypeError. Node
 /// calls the proxy. Re-boxing the id and asking the proxy registry costs nothing

@@ -704,7 +704,7 @@ pub(super) extern "C" fn ns_iterator1(closure: *const ClosureHeader, opts: f64) 
     build_readable_async_iterator(this_value(closure), destroy_on_return_from_options(opts))
 }
 
-fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const ClosureHeader) -> f64) {
+fn install_async_iterator_symbol(target: f64, func: crate::closure::body_call::js_body_fn_ty!()) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");

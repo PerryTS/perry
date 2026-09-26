@@ -157,17 +157,14 @@ macro_rules! define_direct_call_site {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy)]
-        pub struct $site(extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64);
+        pub struct $site(crate::closure::body_call::js_body_fn_ty!($($arg),+));
 
         impl $site {
             /// Resolve `closure` once, before the loop.
             #[inline]
             pub fn resolve(closure: *const ClosureHeader) -> Self {
                 $site(resolve_direct_func_ptr(closure, $arity).map_or($slow, |func_ptr| unsafe {
-                    std::mem::transmute::<
-                        *const u8,
-                        extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
-                    >(func_ptr)
+                    crate::closure::body_call::js_body_fn!(func_ptr; $($arg),+)
                 }))
             }
 
@@ -186,12 +183,11 @@ macro_rules! define_direct_call_site {
             pub(crate) fn is_direct(&self) -> bool {
                 !std::ptr::fn_addr_eq(
                     self.0,
-                    $slow as extern "C" fn(*const ClosureHeader, $(define_direct_call_site!(@f64 $arg)),+) -> f64,
+                    $slow as crate::closure::body_call::js_body_fn_ty!($($arg),+),
                 )
             }
         }
     };
-    (@f64 $arg:ident) => { f64 };
 }
 
 define_direct_call_site!(

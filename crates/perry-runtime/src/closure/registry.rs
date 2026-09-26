@@ -1180,229 +1180,31 @@ pub unsafe fn dispatch_rest_bundled(
 
     // Use a macro for higher rest arities so this stays in sync with the
     // documented 0..=15 support and the generated closure-call ceiling.
+    // One arm per fixed arity: the body takes `(callee, fixed..., rest
+    // [, arguments])`. Every arm goes through the body-call funnel.
     macro_rules! rest_arm {
-        (@ty $i:tt) => {
-            f64
-        };
         ($($i:tt),* $(,)?) => {{
             if let Some(arguments_double) = all_arguments_double {
-                #[cfg(panic = "abort")]
-                let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                #[cfg(not(panic = "abort"))]
-                let f: extern "C-unwind" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure $(, a!($i))*, rest_double, arguments_double)
+                crate::closure::body_call::js_body_call_unwind!(
+                    func_ptr, closure $(, a!($i))*, rest_double, arguments_double
+                )
             } else {
-                #[cfg(panic = "abort")]
-                let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                #[cfg(not(panic = "abort"))]
-                let f: extern "C-unwind" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure $(, a!($i))*, rest_double)
+                crate::closure::body_call::js_body_call_unwind!(
+                    func_ptr, closure $(, a!($i))*, rest_double
+                )
             }
         }};
     }
 
     match k {
-        0 => {
-            if let Some(arguments_double) = all_arguments_double {
-                #[cfg(panic = "abort")]
-                let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                #[cfg(not(panic = "abort"))]
-                let f: extern "C-unwind" fn(*const ClosureHeader, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, rest_double, arguments_double)
-            } else {
-                #[cfg(panic = "abort")]
-                let f: extern "C" fn(*const ClosureHeader, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                #[cfg(not(panic = "abort"))]
-                let f: extern "C-unwind" fn(*const ClosureHeader, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, rest_double)
-            }
-        }
-        1 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), rest_double, arguments_double)
-            } else {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), rest_double)
-            }
-        }
-        2 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), rest_double, arguments_double)
-            } else {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), rest_double)
-            }
-        }
-        3 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), a!(2), rest_double, arguments_double)
-            } else {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), a!(2), rest_double)
-            }
-        }
-        4 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    rest_double,
-                    arguments_double,
-                )
-            } else {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), a!(2), a!(3), rest_double)
-            }
-        }
-        5 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(
-                    *const ClosureHeader,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    a!(4),
-                    rest_double,
-                    arguments_double,
-                )
-            } else {
-                let f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(func_ptr);
-                f(closure, a!(0), a!(1), a!(2), a!(3), a!(4), rest_double)
-            }
-        }
-        6 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(
-                    *const ClosureHeader,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    a!(4),
-                    a!(5),
-                    rest_double,
-                    arguments_double,
-                )
-            } else {
-                let f: extern "C" fn(
-                    *const ClosureHeader,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    a!(4),
-                    a!(5),
-                    rest_double,
-                )
-            }
-        }
-        7 => {
-            if let Some(arguments_double) = all_arguments_double {
-                let f: extern "C" fn(
-                    *const ClosureHeader,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    a!(4),
-                    a!(5),
-                    a!(6),
-                    rest_double,
-                    arguments_double,
-                )
-            } else {
-                let f: extern "C" fn(
-                    *const ClosureHeader,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(func_ptr);
-                f(
-                    closure,
-                    a!(0),
-                    a!(1),
-                    a!(2),
-                    a!(3),
-                    a!(4),
-                    a!(5),
-                    a!(6),
-                    rest_double,
-                )
-            }
-        }
+        0 => rest_arm!(),
+        1 => rest_arm!(0),
+        2 => rest_arm!(0, 1),
+        3 => rest_arm!(0, 1, 2),
+        4 => rest_arm!(0, 1, 2, 3),
+        5 => rest_arm!(0, 1, 2, 3, 4),
+        6 => rest_arm!(0, 1, 2, 3, 4, 5),
+        7 => rest_arm!(0, 1, 2, 3, 4, 5, 6),
         8 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7),
         9 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8),
         10 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
@@ -1462,28 +1264,20 @@ pub unsafe fn dispatch_with_arity(
             }
         };
     }
-    // One match arm per declared arity. Each arm transmutes `func_ptr` to
-    // the concrete `(closure, f64 x N)` signature and forwards the (padded)
-    // args. Arities up to 32 have exact arms so high-arity closures dispatched
+    // One match arm per declared arity. Each arm calls the body through the
+    // body-call funnel with exactly N (padded) JS arguments. Arities up to 32 have exact arms so high-arity closures dispatched
     // dynamically — e.g. qs's recursive `stringify`, which declares 18
     // params and self-calls with 18 args (#3527) — call their body
     // correctly instead of mis-calling and corrupting registers; wider
     // bodies take the padded ladder in `wide_call` (#10420). The
-    // `arm!` macro builds the fn type and the (padded) call args from the
-    // arg-index token list; `arm!(@ty $i)` maps any index token to `f64`.
+    // `arm!` macro builds the (padded) call args from the arg-index token list.
     macro_rules! arm {
-        (@ty $i:tt) => { f64 };
-        ($($i:tt),* $(,)?) => {{
-            let f: extern "C" fn(*const ClosureHeader $(, arm!(@ty $i))*) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure $(, a!($i))*)
-        }};
+        ($($i:tt),* $(,)?) => {
+            crate::closure::body_call::js_body_call!(func_ptr, closure $(, a!($i))*)
+        };
     }
     match k {
-        0 => {
-            let f: extern "C" fn(*const ClosureHeader) -> f64 = std::mem::transmute(func_ptr);
-            f(closure)
-        }
+        0 => arm!(),
         1 => arm!(0),
         2 => arm!(0, 1),
         3 => arm!(0, 1, 2),
@@ -1562,16 +1356,20 @@ pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
 /// prepends the bound args, sets `IMPLICIT_THIS` to the bound receiver, and calls
 /// the target closure.
 ///
-/// Captures layout:
+/// Captures layout (`js_function_bind`, `dispatch/bound.rs`):
 ///   [0] = target closure value (f64, NaN-boxed)
 ///   [1] = bound `this` value (f64)
 ///   [2] = bound-args JS Array pointer (i64; 0 when no partial args)
+///   [3] = target name snapshot (for the `bound <name>` name)
+///   [4] = `length` snapshot
 pub const BOUND_FUNCTION_FUNC_PTR: *const u8 = 0xBADD_B12D_u64 as *const u8;
 
-/// Flag stored in the high bit of capture_count to indicate that capture slot 0
-/// holds `this` (i.e., this closure is an object literal method that captures `this`).
-/// When the closure is detached from the object (assigned to a variable via PropertyGet),
-/// `js_closure_unbind_this` clones it and clears slot 0 so `this` becomes undefined.
+/// Flag stored in the high bit of capture_count: the closure's LAST capture
+/// slot (index `real_capture_count - 1`) holds its `this` — an arrow's lexical
+/// receiver, or the object an object-literal method was created on (patched
+/// by `lower_object_literal`). `clone_closure_rebind_this` rewrites that slot
+/// for `call`/`apply`/borrowed-method dispatch unless `NO_THIS_REBIND_FLAG` is
+/// also set.
 pub const CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 
 /// Flag stored in bit 30 of `capture_count` marking a closure whose captured

@@ -85,7 +85,7 @@ pub extern "C" fn js_module_source_map_new(payload: f64, options: f64) -> f64 {
     obj.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| module_object_value(obj))
 }
 
-type SourceMapThunk = extern "C" fn(*const ClosureHeader, f64) -> f64;
+type SourceMapThunk = crate::closure::body_call::js_body_fn_ty!(a);
 
 fn source_map_method(name: &str, thunk: SourceMapThunk) -> f64 {
     let func_ptr = thunk as *const u8;
@@ -128,7 +128,7 @@ extern "C" fn source_map_line_lengths_getter(_closure: *const ClosureHeader) -> 
     f64::from_bits(JSValue::array_ptr(cloned).bits())
 }
 
-fn source_map_getter(name: &str, thunk: extern "C" fn(*const ClosureHeader) -> f64) -> f64 {
+fn source_map_getter(name: &str, thunk: crate::closure::body_call::js_body_fn_ty!()) -> f64 {
     let func_ptr = thunk as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 0);
     let closure = js_closure_alloc(func_ptr, 0);
@@ -196,12 +196,12 @@ fn source_map_prototype() -> f64 {
             (
                 4,
                 "payload",
-                source_map_payload_getter as extern "C" fn(*const ClosureHeader) -> f64,
+                source_map_payload_getter as crate::closure::body_call::js_body_fn_ty!(),
             ),
             (
                 3,
                 "lineLengths",
-                source_map_line_lengths_getter as extern "C" fn(*const ClosureHeader) -> f64,
+                source_map_line_lengths_getter as crate::closure::body_call::js_body_fn_ty!(),
             ),
         ] {
             let getter = source_map_getter(name, thunk);

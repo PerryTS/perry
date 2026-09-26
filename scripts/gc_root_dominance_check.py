@@ -1487,14 +1487,8 @@ POLL_CAPABLE_RUNTIME = {
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
     # `js_apply_function`) were not symbols; these are.
-    "js_closure_call0", "js_closure_call1", "js_closure_call2",
-    "js_closure_call3", "js_closure_call4", "js_closure_call5",
-    "js_closure_call6", "js_closure_call7", "js_closure_call8",
-    "js_closure_call9", "js_closure_call10", "js_closure_call11",
-    "js_closure_call12", "js_closure_call13", "js_closure_call14",
-    "js_closure_call15", "js_closure_call16",
-    "js_closure_call_array", "js_closure_call_apply_with_spread",
-    "js_native_call_value",
+    # ... every JS-call entry point, read from `perry_abi::JS_CALL_ENTRIES`
+    # (added below) so a new entry cannot be missing here.
     "js_object_get_property_key", "js_object_set_property_key",
     "js_object_set_property_key_method",
     "js_object_get_field_by_name", "js_object_set_field_by_name",
@@ -1689,6 +1683,24 @@ POLL_CAPABLE_RUNTIME = {
     # `lower_call/new.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
+
+
+def _js_call_entries():
+    """`perry_abi::JS_CALL_ENTRIES` — the runtime entry points emitted code
+    calls to run a JS function. Read from the ABI crate, the one list both
+    sides compile against; an empty read is an error, never an empty set."""
+    abi = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "crates", "perry-abi", "src", "lib.rs")
+    with open(abi, encoding="utf-8") as fh:
+        text = fh.read()
+    m = re.search(r"pub const JS_CALL_ENTRIES:[^=]*=\s*\[(.*?)\];", text, re.S)
+    names = re.findall(r'"([A-Za-z0-9_]+)"', m.group(1)) if m else []
+    if not names:
+        raise SystemExit("gc_root_dominance_check: perry_abi::JS_CALL_ENTRIES not found")
+    return set(names)
+
+
+POLL_CAPABLE_RUNTIME |= _js_call_entries()
 
 
 def compute_poll_reaching(all_funcs):

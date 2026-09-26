@@ -1673,7 +1673,7 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 
 /// Build a stream object with a `write` field bound to the given stub.
 fn build_stream_object_with_write(
-    write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64, f64) -> f64,
+    write_stub: crate::closure::body_call::js_body_fn_ty!(a, a, a),
     fd: f64,
     writable: f64,
 ) -> *mut crate::object::ObjectHeader {
@@ -1833,13 +1833,11 @@ fn build_stream_object_with_write(
     // replaces the stream stubs below with its real listener/flow operations;
     // stdout and stderr retain the stubs.
     if let Some(start) = teardown_start {
-        let set_field_with_stub =
-            |idx: u32, stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64| {
-                let c = js_closure_alloc(stub as *const u8, 0);
-                js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
-            };
-        let lifecycle: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64 = if is_stdin
-        {
+        let set_field_with_stub = |idx: u32, stub: crate::closure::body_call::js_body_fn_ty!(a)| {
+            let c = js_closure_alloc(stub as *const u8, 0);
+            js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
+        };
+        let lifecycle: crate::closure::body_call::js_body_fn_ty!(a) = if is_stdin {
             process_stdin_detach_stub
         } else {
             process_stream_on_once_stub

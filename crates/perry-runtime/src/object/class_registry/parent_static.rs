@@ -1053,13 +1053,13 @@ pub(crate) unsafe fn class_symbol_getter_value(
                     let prev_this =
                         this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     crate::object::static_private_owner_push(receiver);
-                    let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
+                    let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
                     let result = f();
                     crate::object::static_private_owner_pop();
                     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     result
                 } else {
-                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
+                    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
                     f(receiver)
                 };
                 return Some(result);
@@ -1101,12 +1101,14 @@ pub(crate) unsafe fn class_symbol_setter_apply(
                         let prev_this = this_scope
                             .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                         crate::object::static_private_owner_push(receiver);
-                        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
+                        let f =
+                            crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
                         let _ = f(value);
                         crate::object::static_private_owner_pop();
                         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     } else {
-                        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
+                        let f =
+                            crate::closure::body_call::js_method_body_fn!(setter as *const u8; a0);
                         let _ = f(receiver, value);
                     }
                 }
@@ -1174,7 +1176,7 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 // `this`, not the shared compile-time ClassRef.
                 crate::object::static_this_arm_if_unarmed(receiver);
                 crate::object::static_private_owner_push(owner);
-                let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
+                let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
                 let result = f();
                 crate::object::static_private_owner_pop();
                 crate::object::static_this_disarm();
@@ -1216,7 +1218,7 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
                     // actual constructor value for this evaluation.
                     crate::object::static_this_arm_if_unarmed(receiver);
                     crate::object::static_private_owner_push(receiver);
-                    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
+                    let f = crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
                     let _ = f(value);
                     crate::object::static_private_owner_pop();
                     crate::object::static_this_disarm();
@@ -1420,27 +1422,27 @@ pub(crate) unsafe fn call_static_method(
         }
     }
     match param_count {
-        0 => (std::mem::transmute::<usize, extern "C" fn() -> f64>(func_ptr))(),
-        1 => (std::mem::transmute::<usize, extern "C" fn(f64) -> f64>(func_ptr))(a(
+        0 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8;))(),
+        1 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0))(a(
             args_ptr, args_len, 0,
         )),
-        2 => (std::mem::transmute::<usize, extern "C" fn(f64, f64) -> f64>(func_ptr))(
+        2 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
         ),
-        3 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64) -> f64>(func_ptr))(
+        3 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
         ),
-        4 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64) -> f64>(func_ptr))(
+        4 => (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3))(
             a(args_ptr, args_len, 0),
             a(args_ptr, args_len, 1),
             a(args_ptr, args_len, 2),
             a(args_ptr, args_len, 3),
         ),
         5 => {
-            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64) -> f64>(func_ptr))(
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4))(
                 a(args_ptr, args_len, 0),
                 a(args_ptr, args_len, 1),
                 a(args_ptr, args_len, 2),
@@ -1448,20 +1450,18 @@ pub(crate) unsafe fn call_static_method(
                 a(args_ptr, args_len, 4),
             )
         }
-        6 => (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64>(
-            func_ptr,
-        ))(
-            a(args_ptr, args_len, 0),
-            a(args_ptr, args_len, 1),
-            a(args_ptr, args_len, 2),
-            a(args_ptr, args_len, 3),
-            a(args_ptr, args_len, 4),
-            a(args_ptr, args_len, 5),
-        ),
+        6 => {
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+                a(args_ptr, args_len, 5),
+            )
+        }
         7 => {
-            (std::mem::transmute::<usize, extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64>(
-                func_ptr,
-            ))(
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5, a6))(
                 a(args_ptr, args_len, 0),
                 a(args_ptr, args_len, 1),
                 a(args_ptr, args_len, 2),
@@ -1471,19 +1471,18 @@ pub(crate) unsafe fn call_static_method(
                 a(args_ptr, args_len, 6),
             )
         }
-        _ => (std::mem::transmute::<
-            usize,
-            extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64,
-        >(func_ptr))(
-            a(args_ptr, args_len, 0),
-            a(args_ptr, args_len, 1),
-            a(args_ptr, args_len, 2),
-            a(args_ptr, args_len, 3),
-            a(args_ptr, args_len, 4),
-            a(args_ptr, args_len, 5),
-            a(args_ptr, args_len, 6),
-            a(args_ptr, args_len, 7),
-        ),
+        _ => {
+            (crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0, a1, a2, a3, a4, a5, a6, a7))(
+                a(args_ptr, args_len, 0),
+                a(args_ptr, args_len, 1),
+                a(args_ptr, args_len, 2),
+                a(args_ptr, args_len, 3),
+                a(args_ptr, args_len, 4),
+                a(args_ptr, args_len, 5),
+                a(args_ptr, args_len, 6),
+                a(args_ptr, args_len, 7),
+            )
+        }
     }
 }
 

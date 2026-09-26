@@ -648,7 +648,6 @@ js_closure_set_box_capture_ptr	void	ptr,i32u,i64
 js_closure_set_capture_bits	void	ptr,i32u,i64
 js_closure_set_capture_f64	void	ptr,i32u,f64
 js_closure_set_capture_ptr	void	ptr,i32u,i64
-js_closure_unbind_this	f64	f64
 js_closure_unbox_callee_checked	i64	f64
 js_closure_unbox_callee_checked_rebind	i64	f64,f64
 js_cluster_disconnect	f64	f64

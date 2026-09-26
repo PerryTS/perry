@@ -42,11 +42,7 @@ fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 0) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[], declared)
         },
-        _ => {
-            let func: extern "C" fn(*const ClosureHeader) -> f64 =
-                unsafe { std::mem::transmute(func_ptr) };
-            func(closure)
-        }
+        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure) },
     }
 }
 
@@ -87,11 +83,7 @@ fn dispatch_call1_resolved(
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 1) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
         },
-        _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64) -> f64 =
-                unsafe { std::mem::transmute(func_ptr) };
-            func(closure, arg0)
-        }
+        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure, arg0) },
     }
 }
 
@@ -155,11 +147,7 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 2) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
         },
-        _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
-                unsafe { std::mem::transmute(func_ptr) };
-            func(closure, arg0, arg1)
-        }
+        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1) },
     }
 }
 
@@ -186,11 +174,9 @@ pub extern "C" fn js_closure_call3(
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 3) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
         },
-        _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-                unsafe { std::mem::transmute(func_ptr) };
-            func(closure, arg0, arg1, arg2)
-        }
+        _ => unsafe {
+            crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2)
+        },
     }
 }
 
@@ -226,11 +212,9 @@ pub extern "C" fn js_closure_call4(
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 4) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
         },
-        _ => {
-            let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64 =
-                unsafe { std::mem::transmute(func_ptr) };
-            func(closure, arg0, arg1, arg2, arg3)
-        }
+        _ => unsafe {
+            crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2, arg3)
+        },
     }
 }
 
@@ -272,9 +256,9 @@ pub extern "C" fn js_closure_call5(
             };
         }
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(func_ptr) };
-    func(closure, arg0, arg1, arg2, arg3, arg4)
+    unsafe {
+        crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2, arg3, arg4)
+    }
 }
 
 /// Call a closure with 6 arguments, returning f64
@@ -321,9 +305,11 @@ pub extern "C" fn js_closure_call6(
             };
         }
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(func_ptr) };
-    func(closure, arg0, arg1, arg2, arg3, arg4, arg5)
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5
+        )
+    }
 }
 
 #[inline]
@@ -386,9 +372,11 @@ pub extern "C" fn js_closure_call7(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 7) {
         return result;
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(func_ptr) };
-    func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6
+        )
+    }
 }
 
 /// Call a closure with 8 arguments, returning f64
@@ -419,9 +407,11 @@ pub extern "C" fn js_closure_call8(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 8) {
         return result;
     }
-    let func: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(func_ptr) };
-    func(closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7
+        )
+    }
 }
 
 /// Call a closure with 9 arguments, returning f64
@@ -453,21 +443,11 @@ pub extern "C" fn js_closure_call9(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 9) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8
+        )
+    }
 }
 
 /// Call a closure with 10 arguments, returning f64
@@ -500,22 +480,11 @@ pub extern "C" fn js_closure_call10(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 10) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9
+        )
+    }
 }
 
 /// Call a closure with 11 arguments, returning f64
@@ -555,23 +524,11 @@ pub extern "C" fn js_closure_call11(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 11) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10
+        )
+    }
 }
 
 /// Call a closure with 12 arguments, returning f64
@@ -612,24 +569,12 @@ pub extern "C" fn js_closure_call12(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 12) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            arg11
+        )
+    }
 }
 
 /// Call a closure with 13 arguments, returning f64
@@ -671,25 +616,12 @@ pub extern "C" fn js_closure_call13(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 13) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            arg11, arg12
+        )
+    }
 }
 
 /// Call a closure with 14 arguments, returning f64
@@ -733,27 +665,12 @@ pub extern "C" fn js_closure_call14(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 14) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
-        arg13,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            arg11, arg12, arg13
+        )
+    }
 }
 
 /// Call a closure with 15 arguments, returning f64
@@ -800,28 +717,12 @@ pub extern "C" fn js_closure_call15(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 15) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
-        arg13, arg14,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            arg11, arg12, arg13, arg14
+        )
+    }
 }
 
 /// Call a closure with 16 arguments, returning f64
@@ -869,29 +770,12 @@ pub extern "C" fn js_closure_call16(
     if let Some(result) = dispatch_rest_or_declared_arity(closure, func_ptr, &args, 16) {
         return result;
     }
-    let func: extern "C" fn(
-        *const ClosureHeader,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-    ) -> f64 = unsafe { std::mem::transmute(func_ptr) };
-    func(
-        closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
-        arg13, arg14, arg15,
-    )
+    unsafe {
+        crate::closure::body_call::js_body_call!(
+            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            arg11, arg12, arg13, arg14, arg15
+        )
+    }
 }
 
 #[cfg(test)]
@@ -919,5 +803,61 @@ mod receiverless_tests {
         assert_eq!(arrow_result, sentinel);
         assert_eq!(crate::object::js_implicit_this_get(), sentinel);
         crate::object::js_implicit_this_set(original);
+    }
+}
+
+/// `perry_abi::JS_CLOSURE_CALL_ENTRIES` is what codegen DECLARES; these are
+/// the functions it links to. Each entry must name the function taking
+/// exactly its index's JS argument count (the coercion below fails to compile
+/// otherwise), in order.
+#[cfg(test)]
+mod abi_table_tests {
+    use super::*;
+
+    macro_rules! entry {
+        ($f:ident; $($x:tt),*) => {{
+            let f: crate::closure::body_call::js_body_fn_ty!($($x),*) = $f;
+            (stringify!($f), f as *const u8)
+        }};
+    }
+
+    #[test]
+    fn closure_call_entries_match_the_abi_table() {
+        // `js_closure_call0` is `extern "C-unwind"` in unwinding (test) builds.
+        let call0 = {
+            let f: extern "C-unwind" fn(*const ClosureHeader) -> f64 = js_closure_call0;
+            ("js_closure_call0", f as *const u8)
+        };
+        let real = [
+            call0,
+            entry!(js_closure_call1; a),
+            entry!(js_closure_call2; a, a),
+            entry!(js_closure_call3; a, a, a),
+            entry!(js_closure_call4; a, a, a, a),
+            entry!(js_closure_call5; a, a, a, a, a),
+            entry!(js_closure_call6; a, a, a, a, a, a),
+            entry!(js_closure_call7; a, a, a, a, a, a, a),
+            entry!(js_closure_call8; a, a, a, a, a, a, a, a),
+            entry!(js_closure_call9; a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call10; a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call11; a, a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call12; a, a, a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call13; a, a, a, a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call14; a, a, a, a, a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call15; a, a, a, a, a, a, a, a, a, a, a, a, a, a, a),
+            entry!(js_closure_call16; a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a),
+        ];
+        let table = crate::codegen_abi::JS_CLOSURE_CALL_ENTRIES;
+        assert_eq!(real.len(), table.len());
+        for (argc, ((name, ptr), declared)) in real.iter().zip(table.iter()).enumerate() {
+            assert_eq!(name, declared, "JS_CLOSURE_CALL_ENTRIES[{argc}]");
+            assert!(!ptr.is_null());
+        }
+        for name in table {
+            assert!(
+                crate::codegen_abi::JS_CALL_ENTRIES.contains(&name),
+                "{name} is a JS-call entry but not in JS_CALL_ENTRIES"
+            );
+        }
     }
 }

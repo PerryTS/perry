@@ -600,10 +600,10 @@ pub(crate) unsafe fn gc_capture_slot_range(
 }
 
 /// Allocate a closure with space for captured values.
-/// The high bit of `capture_count` may contain CAPTURES_THIS_FLAG to indicate
-/// that slot 0 is reserved for `this`. The flag is preserved in the header
-/// for later use by `js_closure_unbind_this`, but the actual allocation size
-/// uses only the lower 31 bits.
+/// The two high bits of `capture_count` may carry `CAPTURES_THIS_FLAG` (the
+/// LAST capture slot holds `this`) and `NO_THIS_REBIND_FLAG`. Both are
+/// preserved in the stored header; the allocation size uses only the count
+/// (`real_capture_count`).
 /// Returns pointer to ClosureHeader
 #[no_mangle]
 pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader {

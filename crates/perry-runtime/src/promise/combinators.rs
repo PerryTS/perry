@@ -1385,17 +1385,26 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     unsafe {
         match then_param_count {
             0 => {
-                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(then_func_ptr);
-                f(this_f64);
+                crate::closure::body_call::js_method_body_call!(
+                    then_func_ptr as *const u8,
+                    this_f64
+                );
             }
             1 => {
-                let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(then_func_ptr);
-                f(this_f64, resolve_f64);
+                crate::closure::body_call::js_method_body_call!(
+                    then_func_ptr as *const u8,
+                    this_f64,
+                    resolve_f64
+                );
             }
             _ => {
                 // 2+ params: pass resolve/reject; any extra slots arrive as NaN.
-                let f: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(then_func_ptr);
-                f(this_f64, resolve_f64, reject_f64);
+                crate::closure::body_call::js_method_body_call!(
+                    then_func_ptr as *const u8,
+                    this_f64,
+                    resolve_f64,
+                    reject_f64
+                );
             }
         }
     }

@@ -244,11 +244,12 @@ pub(super) fn try_lower_imported_object_method_call(
         &closure_symbol,
         &fallback_label,
     );
-    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-        Vec::with_capacity(lowered_args.len() + 1);
-    direct_args.push((I64, &closure_handle));
-    direct_args.extend(lowered_args.iter().map(|arg| (DOUBLE, arg.as_str())));
-    let direct_value = ctx.block().call(DOUBLE, &closure_symbol, &direct_args);
+    let direct_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Symbol(&closure_symbol),
+        &closure_handle,
+        &lowered_args,
+    );
     let direct_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -396,11 +397,12 @@ pub(super) fn try_lower_dynamic_object_method_call(
             &closure_symbol,
             &miss_label,
         );
-        let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-            Vec::with_capacity(lowered_args.len() + 1);
-        direct_args.push((I64, &closure_handle));
-        direct_args.extend(lowered_args.iter().map(|arg| (DOUBLE, arg.as_str())));
-        let direct_value = ctx.block().call(DOUBLE, &closure_symbol, &direct_args);
+        let direct_value = crate::expr::body_call::emit_js_body_call(
+            ctx.block(),
+            crate::expr::body_call::JsBody::Symbol(&closure_symbol),
+            &closure_handle,
+            &lowered_args,
+        );
         let direct_end = ctx.block().label.clone();
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);

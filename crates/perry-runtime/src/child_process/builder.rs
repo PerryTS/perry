@@ -1,8 +1,6 @@
 use super::*;
 
-use crate::closure::{
-    js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
-};
+use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr, js_register_closure_arity};
 use crate::object::{js_object_alloc_with_shape, js_object_set_field, ObjectHeader};
 use crate::value::JSValue;
 
@@ -16,24 +14,24 @@ pub(crate) const CP_WRITABLE_SHAPE_ID: u32 = 0x7FFF_FD80;
 
 pub(crate) type CpFn = unsafe extern "C" fn();
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> CpFn {
+pub(crate) fn cp_cast0(f: crate::closure::body_call::js_body_fn_ty!()) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> CpFn {
+pub(crate) fn cp_cast1(f: crate::closure::body_call::js_body_fn_ty!(a)) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> CpFn {
+pub(crate) fn cp_cast2(f: crate::closure::body_call::js_body_fn_ty!(a, a)) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
 /// Erase a three-argument native method to the common child-process method ABI.
-pub(crate) fn cp_cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> CpFn {
+pub(crate) fn cp_cast3(f: crate::closure::body_call::js_body_fn_ty!(a, a, a)) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cp_cast4(f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64) -> CpFn {
+pub(crate) fn cp_cast4(f: crate::closure::body_call::js_body_fn_ty!(a, a, a, a)) -> CpFn {
     unsafe { std::mem::transmute(f) }
 }
 

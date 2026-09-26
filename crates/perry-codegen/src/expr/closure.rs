@@ -232,8 +232,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // size (real_capture_count) but preserves it in the stored
             // `capture_count` field. Used by `clone_closure_rebind_this` at
             // `Object.defineProperty(obj, k, { get(){}, set(){} })` time so
-            // accessor invocation sees `this === obj` per spec, and by
-            // `js_closure_unbind_this` for detached method references.
+            // accessor invocation sees `this === obj` per spec.
             let cap_count_val = if *captures_this {
                 (total_caps as u32) | 0x8000_0000u32
             } else {

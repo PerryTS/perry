@@ -276,101 +276,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE],
     );
-    module.declare_function("js_closure_call0", DOUBLE, &[I64]);
-    module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
+    // `js_closure_call{N}(callee, a0..aN-1)`, generated from the ABI table so
+    // the declarations cannot drift from `perry_abi::JS_BODY_*`.
+    for (argc, name) in crate::runtime_abi::JS_CLOSURE_CALL_ENTRIES
+        .iter()
+        .enumerate()
+    {
+        let mut params = vec![I64];
+        params.extend(std::iter::repeat_n(DOUBLE, argc));
+        module.declare_function(name, DOUBLE, &params);
+    }
     module.declare_function("js_closure_call1_receiverless", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call3", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_closure_resolve_arrow_direct_call", PTR, &[I64, I32]);
-    module.declare_function(
-        "js_closure_call4",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call5",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call6",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call7",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call8",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call9",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call10",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call11",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call12",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call13",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call14",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call15",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call16",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
 
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.

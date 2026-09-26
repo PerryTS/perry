@@ -1293,7 +1293,7 @@ fn script_metadata(script_value: f64) -> Option<ScriptMetadata> {
 fn install_script_method(
     obj: *mut ObjectHeader,
     name: &str,
-    func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a, a),
     arity: u32,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();

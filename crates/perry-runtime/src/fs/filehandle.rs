@@ -470,6 +470,7 @@ pub(crate) extern "C" fn filehandle_readable_web_stream_impl(
         auto_close,
         filehandle_webstream_cancel_impl as *const u8,
     );
+    // NOT-A-JS-BODY: a native Rust helper registered by another crate.
     let factory: ReadableWebStreamFactory = unsafe { std::mem::transmute(raw) };
     unsafe { factory(pull, cancel) }
 }

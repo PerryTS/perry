@@ -473,23 +473,20 @@ pub fn try_lower_closure_typed_local_call(
                 if callback_local_id == *id && callback_arity == lowered_args.len() {
                     let context_bits = ctx.block().ptrtoint(&context, I64);
                     let context_box = ctx.block().bitcast_i64_to_double(&context_bits);
-                    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                        Vec::with_capacity(lowered_args.len() + 1);
-                    direct_args.push((I64, &closure_handle));
-                    direct_args.extend(lowered_args.iter().enumerate().map(|(index, value)| {
-                        if index == 0 {
-                            (DOUBLE, context_box.as_str())
-                        } else {
-                            (DOUBLE, value.as_str())
-                        }
-                    }));
+                    // The versioned-loop clone repurposes JS argument 0 for
+                    // the caller's deopt context (see `codegen/closure.rs`).
+                    let mut direct_args: Vec<String> = lowered_args.to_vec();
+                    direct_args[0] = context_box;
                     // The exact clone marks the caller's counter for an
                     // immediate side exit before any cold arm that can run
                     // user code or collect. Hot returns cannot collect; cold
                     // returns never observe caller-side cached heap handles.
-                    let value = ctx
-                        .block()
-                        .call_indirect_gc_leaf(DOUBLE, &target, &direct_args);
+                    let value = crate::expr::body_call::emit_js_body_call_gc_leaf(
+                        ctx.block(),
+                        &target,
+                        &closure_handle,
+                        &direct_args,
+                    );
                     callee_group.release(ctx);
                     return Ok(Some(value));
                 }
@@ -509,11 +506,12 @@ pub fn try_lower_closure_typed_local_call(
                 ctx.block().cond_br(&fast_ok, &fast_label, &fallback_label);
 
                 ctx.current_block = fast_idx;
-                let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(lowered_args.len() + 1);
-                direct_args.push((I64, &closure_handle));
-                direct_args.extend(lowered_args.iter().map(|value| (DOUBLE, value.as_str())));
-                let fast_value = ctx.block().call_indirect(DOUBLE, &target, &direct_args);
+                let fast_value = crate::expr::body_call::emit_js_body_call(
+                    ctx.block(),
+                    crate::expr::body_call::JsBody::Pointer(&target),
+                    &closure_handle,
+                    &lowered_args,
+                );
                 let after_fast = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);
@@ -800,13 +798,12 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -901,13 +898,12 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1005,13 +1001,12 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1112,13 +1107,12 @@ pub fn try_lower_closure_typed_local_call(
                         }
 
                         ctx.current_block = generic_idx;
-                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            generic_args.push((DOUBLE, v.as_str()));
-                        }
-                        let generic_value =
-                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let generic_value = crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
+                            &closure_handle,
+                            &lowered_args,
+                        );
                         let after_generic = ctx.block().label.clone();
                         if !ctx.block().is_terminated() {
                             ctx.block().br(&typed_merge_label);
@@ -1152,12 +1146,12 @@ pub fn try_lower_closure_typed_local_call(
                         );
                         result
                     } else {
-                        let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
-                            vec![(I64, &closure_handle)];
-                        for v in &lowered_args {
-                            direct_args.push((DOUBLE, v.as_str()));
-                        }
-                        ctx.block().call(DOUBLE, &closure_fn, &direct_args)
+                        crate::expr::body_call::emit_js_body_call(
+                            ctx.block(),
+                            crate::expr::body_call::JsBody::Symbol(&closure_fn),
+                            &closure_handle,
+                            &lowered_args,
+                        )
                     };
                     let after_fast = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {

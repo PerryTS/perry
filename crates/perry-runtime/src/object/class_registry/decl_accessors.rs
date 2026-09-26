@@ -180,7 +180,7 @@ pub(crate) unsafe fn class_chain_getter_value(
         let prev =
             scope.root_nanbox_f64(crate::object::js_implicit_this_set(this.get_nanbox_f64()));
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
         let v = f(this.get_nanbox_f64());
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return Some((crate::JSValue::from_bits(v.to_bits()), acc.raw_get));
@@ -217,7 +217,7 @@ pub(crate) unsafe fn class_chain_setter_apply(
     if acc.raw_set != 0 {
         let prev =
             scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_h.get_nanbox_f64()));
-        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_set as *const u8; value);
         let _ = f(this_h.get_nanbox_f64(), value_h.get_nanbox_f64());
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return Some(true);

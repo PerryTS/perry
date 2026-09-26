@@ -200,7 +200,7 @@ extern "C" fn event_stop_immediate_propagation_thunk(
 fn install_event_method(
     event: *mut ObjectHeader,
     name: &str,
-    func: extern "C" fn(*const crate::closure::ClosureHeader) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(),
 ) {
     let func_ptr = func as *const u8;
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);

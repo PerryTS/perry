@@ -813,25 +813,23 @@ pub(crate) fn get_field_value(obj: *mut ObjectHeader, name: &str) -> f64 {
 }
 
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast0(f: extern "C" fn(*const ClosureHeader) -> f64) -> *const u8 {
+pub(crate) fn cast0(f: crate::closure::body_call::js_body_fn_ty!()) -> *const u8 {
     f as *const u8
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast1(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> *const u8 {
+pub(crate) fn cast1(f: crate::closure::body_call::js_body_fn_ty!(a)) -> *const u8 {
     f as *const u8
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast2(f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64) -> *const u8 {
+pub(crate) fn cast2(f: crate::closure::body_call::js_body_fn_ty!(a, a)) -> *const u8 {
     f as *const u8
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast3(f: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64) -> *const u8 {
+pub(crate) fn cast3(f: crate::closure::body_call::js_body_fn_ty!(a, a, a)) -> *const u8 {
     f as *const u8
 }
 #[allow(clippy::missing_transmute_annotations)]
-pub(crate) fn cast4(
-    f: extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64,
-) -> *const u8 {
+pub(crate) fn cast4(f: crate::closure::body_call::js_body_fn_ty!(a, a, a, a)) -> *const u8 {
     f as *const u8
 }
 pub(crate) fn method_closure(func: *const u8, arity: u32, id: i64) -> f64 {

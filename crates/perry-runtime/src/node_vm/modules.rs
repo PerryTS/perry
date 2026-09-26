@@ -170,7 +170,7 @@ extern "C" fn module_error_getter(closure: *const ClosureHeader) -> f64 {
 fn install_module_accessor(
     module: *mut ObjectHeader,
     name: &str,
-    getter: extern "C" fn(*const ClosureHeader) -> f64,
+    getter: crate::closure::body_call::js_body_fn_ty!(),
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module = scope.root_raw_mut_ptr(module);

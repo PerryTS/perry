@@ -599,7 +599,7 @@ fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
 }
 
 fn readline_bound_method0(
-    func: extern "C" fn(*const ClosureHeader) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(),
     this_value: f64,
 ) -> f64 {
     js_register_closure_arity(func as *const u8, 0);
@@ -609,7 +609,7 @@ fn readline_bound_method0(
 }
 
 fn readline_bound_method1(
-    func: extern "C" fn(*const ClosureHeader, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a),
     this_value: f64,
 ) -> f64 {
     js_register_closure_arity(func as *const u8, 1);
@@ -619,7 +619,7 @@ fn readline_bound_method1(
 }
 
 fn readline_bound_method2(
-    func: extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(a, a),
     this_value: f64,
 ) -> f64 {
     js_register_closure_arity(func as *const u8, 2);

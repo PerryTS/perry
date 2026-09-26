@@ -231,7 +231,7 @@ fn signal_abort_reason(signal: f64) -> f64 {
 fn add_abort_listener(
     signal: f64,
     id: usize,
-    func: extern "C" fn(*const ClosureHeader) -> f64,
+    func: crate::closure::body_call::js_body_fn_ty!(),
 ) -> f64 {
     let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
         return undefined_value();

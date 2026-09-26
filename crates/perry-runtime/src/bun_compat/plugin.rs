@@ -127,7 +127,7 @@ mod tests {
     static SETUP_CALLS: AtomicU32 = AtomicU32::new(0);
     static LOADER_CALLS: AtomicU32 = AtomicU32::new(0);
 
-    fn closure(func: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
+    fn closure(func: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
         js_register_closure_arity(func as *const u8, 1);
         js_nanbox_pointer(js_closure_alloc(func as *const u8, 0) as i64)
     }

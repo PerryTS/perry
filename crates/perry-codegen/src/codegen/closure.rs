@@ -169,12 +169,12 @@ fn emit_public_typed_closure_trampoline(
             emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
         },
         &mut |blk| {
-            let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
-            call_args.push((I64, "%this_closure"));
-            for arg in &arg_names {
-                call_args.push((DOUBLE, arg.as_str()));
-            }
-            blk.call(DOUBLE, generic_body_name, &call_args)
+            crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(generic_body_name),
+                "%this_closure",
+                &arg_names,
+            )
         },
     );
     Ok(())

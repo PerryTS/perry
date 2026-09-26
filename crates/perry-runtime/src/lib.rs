@@ -757,6 +757,7 @@ pub(crate) mod stdlib_pump {
         }
         // SAFETY: `js_register_stdlib_next_wake` only stores callbacks with
         // this exact ABI and signature.
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
         let func: extern "C" fn() -> f64 = unsafe { std::mem::transmute(f) };
         func()
     }

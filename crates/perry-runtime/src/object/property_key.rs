@@ -372,7 +372,9 @@ pub unsafe extern "C" fn js_super_accessor_get(
                             reg.get(&cid).and_then(|m| m.get(key_name)).map(|&(g, _)| g)
                         {
                             if getter_ptr != 0 {
-                                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
+                                // A static getter is a BARE body declaring no parameters; the
+                                // receiver passed below is ignored by it (over-application is safe).
+                                let f = crate::closure::body_call::js_bare_body_fn!(getter_ptr as *const u8; a0);
                                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                                 let prev = this_scope
                                     .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));

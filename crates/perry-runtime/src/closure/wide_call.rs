@@ -56,22 +56,15 @@ pub(crate) unsafe fn dispatch_wide_abi(
         let provided = args.len().min(width);
 
         // `padded!(slots, [0], 1, + + …)` doubles the index list once per `+`
-        // (six doublings = 64 indices) and emits the transmuted call with one
-        // `f64` parameter per index. The indices are constant expressions into a
+        // (six doublings = 64 indices) and emits the body call with one
+        // `f64` argument per index. The indices are constant expressions into a
         // fixed-size array, so the loads carry no bounds checks.
         macro_rules! padded {
-        (@f64 $i:expr) => { f64 };
         ($slots:ident, [$($i:expr),+], $step:expr, + $($more:tt)*) => {
             padded!($slots, [$($i,)+ $($i + $step),+], $step * 2, $($more)*)
         };
         ($slots:ident, [$($i:expr),+], $step:expr,) => {{
-            #[cfg(panic = "abort")]
-            let f: extern "C" fn(*const ClosureHeader $(, padded!(@f64 $i))+) -> f64 =
-                std::mem::transmute(func_ptr);
-            #[cfg(not(panic = "abort"))]
-            let f: extern "C-unwind" fn(*const ClosureHeader $(, padded!(@f64 $i))+) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(closure $(, $slots[$i])+)
+            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure $(, $slots[$i])+)
         }};
     }
         macro_rules! fill {

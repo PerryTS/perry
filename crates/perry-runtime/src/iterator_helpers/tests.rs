@@ -132,13 +132,13 @@ extern "C" fn add(_c: *const crate::closure::ClosureHeader, a: f64, b: f64) -> f
     f64::from_bits(JSValue::number(sum).bits())
 }
 
-unsafe fn closure1(f: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64) -> f64 {
+unsafe fn closure1(f: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
     let p = f as *const u8;
     crate::closure::js_register_closure_arity(p, 1);
     crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(p, 0) as i64)
 }
 
-unsafe fn closure2(f: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64) -> f64) -> f64 {
+unsafe fn closure2(f: crate::closure::body_call::js_body_fn_ty!(a, a)) -> f64 {
     let p = f as *const u8;
     crate::closure::js_register_closure_arity(p, 2);
     crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(p, 0) as i64)

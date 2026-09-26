@@ -977,8 +977,9 @@ pub extern "C" fn js_array_some_captureless(
         return js_array_some(original_arr, callback);
     }
 
-    let callback: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
-        unsafe { std::mem::transmute(callback_func) };
+    // `callback_func` is a captureless compiled closure body.
+    let callback: crate::closure::body_call::js_body_fn_ty!(value, index, array) =
+        unsafe { crate::closure::body_call::js_body_fn!(callback_func; value, index, array) };
     unsafe {
         let length = (*arr).length;
         // SAFETY: `normalize_array_receiver` returned this live plain-array

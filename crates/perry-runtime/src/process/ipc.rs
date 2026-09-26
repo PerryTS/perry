@@ -98,8 +98,8 @@ fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
-type IpcFunction0 = extern "C" fn(*const ClosureHeader) -> f64;
-type IpcFunction4 = extern "C" fn(*const ClosureHeader, f64, f64, f64, f64) -> f64;
+type IpcFunction0 = crate::closure::body_call::js_body_fn_ty!();
+type IpcFunction4 = crate::closure::body_call::js_body_fn_ty!(a, a, a, a);
 
 fn ipc_function0(name: &str, thunk: IpcFunction0, length: u32) -> f64 {
     let func_ptr = thunk as *const u8;

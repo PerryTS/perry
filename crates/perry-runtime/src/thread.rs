@@ -998,7 +998,7 @@ pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -
 /// This matches Perry's closure calling convention where the first parameter
 /// is a pointer to the ClosureHeader (for accessing captures) and the second
 /// is the f64 argument.
-type ClosureCallFn = unsafe extern "C" fn(*const ClosureHeader, f64) -> f64;
+type ClosureCallFn = crate::closure::body_call::js_body_fn_ty!(argument);
 
 /// Process an array in parallel across multiple OS threads.
 ///
@@ -1201,7 +1201,8 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                     None
                 };
 
-                let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
+                let call_fn: ClosureCallFn =
+                    crate::closure::body_call::js_body_fn!(func_usize as *const u8; argument);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
@@ -1281,7 +1282,8 @@ unsafe fn single_thread_map(
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
-    let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
+    let call_fn: ClosureCallFn =
+        crate::closure::body_call::js_body_fn!(func as *const u8; argument);
 
     for i in 0..len {
         // Sparse-safe element read (see `parallel_map_impl`); re-derived from
@@ -1452,7 +1454,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                     None
                 };
 
-                let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
+                let call_fn: ClosureCallFn =
+                    crate::closure::body_call::js_body_fn!(func_usize as *const u8; argument);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
@@ -1526,7 +1529,8 @@ unsafe fn single_thread_filter(
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
-    let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
+    let call_fn: ClosureCallFn =
+        crate::closure::body_call::js_body_fn!(func as *const u8; argument);
     let mut count = 0u32;
 
     for i in 0..len {
@@ -1562,7 +1566,7 @@ static ACTIVE_THREAD_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 /// The compiled closure function signature for zero-argument closures.
 /// Takes only the closure header pointer, returns f64 result.
-type ClosureCall0Fn = unsafe extern "C" fn(*const ClosureHeader) -> f64;
+type ClosureCall0Fn = crate::closure::body_call::js_body_fn_ty!();
 
 /// FFI entry point for `spawn(closure)`.
 ///
@@ -1676,10 +1680,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let call_fn: ClosureCall0Fn = unsafe { std::mem::transmute(func_usize) };
+            let call_fn: ClosureCall0Fn =
+                unsafe { crate::closure::body_call::js_body_fn!(func_usize as *const u8;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
-            unsafe { call_fn(local_closure) }
+            call_fn(local_closure)
         }));
 
         match call_result {
