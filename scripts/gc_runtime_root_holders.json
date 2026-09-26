@@ -691,6 +691,12 @@
       "why": "#[cfg(test)] counter for cached receiver-proof misses; absent from production builds and stores only a tally."
     },
     {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "TO_JSON_RESOLVED_FOR",
+      "verdict": "not_a_gc_pointer",
+      "why": "One-shot address token naming the object whose toJSON lookup its parent just performed (#10696). Only ever compared for equality against the receiver of the next stringify_object_inner and never dereferenced; it is taken (zeroed) at every such entry and cleared by the setter when that dispatch returns. A GC that moves the object turns it into a miss, which is the ordinary probe."
+    },
+    {
       "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
       "name": "REPEATED_OUTPUT",
       "verdict": "not_a_gc_pointer",

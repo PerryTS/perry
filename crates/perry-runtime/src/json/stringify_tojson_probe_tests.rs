@@ -465,3 +465,103 @@ fn class_chain_tojson_memo_holds_every_shape_of_one_nested_literal() {
         "consecutive shape ids of one walk must each keep their own slot"
     );
 }
+
+// ─── plain-record admission for anon shape classes (#10529) ──────────────────
+
+#[test]
+fn only_a_surface_free_anon_shape_is_a_plain_record() {
+    assert!(super::class_is_plain_record(0));
+
+    let never_registered = probe_test_class_id(0x81);
+    assert!(
+        !super::class_is_plain_record(never_registered),
+        "a class id that is not a registered anon shape is a real class"
+    );
+
+    let anon = probe_test_class_id(0x82);
+    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
+    assert!(super::class_is_plain_record(anon));
+
+    // Class ids are per module, so an anon shape id can collide with a declared
+    // class. A registered name is that class's evidence.
+    let named = probe_test_class_id(0x83);
+    unsafe {
+        crate::object::js_register_anon_shape_class_id(named);
+        crate::object::js_register_class_name(named, b"Declared".as_ptr(), 8);
+    }
+    assert!(!super::class_is_plain_record(named));
+
+    let with_proto_object = probe_test_class_id(0x84);
+    unsafe { crate::object::js_register_anon_shape_class_id(with_proto_object) };
+    let proto = crate::object::js_object_alloc(0, 0);
+    crate::object::class_prototype_object_root_store(with_proto_object, proto);
+    assert!(
+        !super::class_is_plain_record(with_proto_object),
+        "a materialized prototype object can carry arbitrary properties"
+    );
+}
+
+#[test]
+fn a_late_prototype_to_json_retires_a_cached_plain_record_verdict() {
+    let anon = probe_test_class_id(0x91);
+    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
+    assert!(super::class_is_plain_record(anon));
+    crate::object::class_prototype_method_root_store(
+        anon,
+        "toJSON".to_string(),
+        probe_test_method_bits(),
+    );
+    assert!(
+        !super::class_is_plain_record(anon),
+        "a cached plain-record verdict must not outlive a prototype `toJSON`"
+    );
+}
+
+#[test]
+fn object_literal_shapes_reach_the_flat_emitter() {
+    fn output(value: JSValue) -> Vec<u8> {
+        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+        let (ptr, len) =
+            crate::string::str_bytes_from_jsvalue(f64::from_bits(value.bits()), &mut scratch)
+                .unwrap();
+        unsafe { std::slice::from_raw_parts(ptr, len as usize).to_vec() }
+    }
+    unsafe {
+        let text = "{\"a\":1,\"b\":\"x\"}";
+        let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = super::super::test_json_parse_direct(source);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_u64(value.bits());
+        let obj = || (value.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        // Warm the default-prototype lookup through the rooted general probe;
+        // the flat emitter declines the allocating first lookup by design.
+        assert!(super::to_json_definitely_absent(obj() as *const u8));
+
+        // What HIR does to a closed-shape literal: an anon shape class.
+        let anon = probe_test_class_id(0xA1);
+        crate::object::js_register_anon_shape_class_id(anon);
+        (*obj()).class_id = anon;
+        let bits = value.get_nanbox_f64().to_bits();
+        let result = super::super::stringify_flat::try_object(bits)
+            .expect("an anon-shape literal is a plain record");
+        assert_eq!(output(result), text.as_bytes());
+
+        // A real class with the same own fields must keep the general walk.
+        let declared = probe_test_class_id(0xA2);
+        (*obj()).class_id = declared;
+        let bits = value.get_nanbox_f64().to_bits();
+        assert!(super::super::stringify_flat::try_object(bits).is_none());
+        assert!(super::super::stringify_record_output::try_object(bits).is_none());
+
+        // And the anon shape stops qualifying once its class grows a `toJSON`.
+        (*obj()).class_id = anon;
+        crate::object::class_prototype_method_root_store(
+            anon,
+            "toJSON".to_string(),
+            probe_test_method_bits(),
+        );
+        let bits = value.get_nanbox_f64().to_bits();
+        assert!(super::super::stringify_flat::try_object(bits).is_none());
+        assert!(super::super::stringify_record_output::try_object(bits).is_none());
+    }
+}

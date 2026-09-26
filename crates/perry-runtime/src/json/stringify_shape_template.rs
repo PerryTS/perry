@@ -150,7 +150,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // array-of-objects fast path is unaffected for them. (#321 — a homogeneous
     // array of `class { toJSON() {…} }` instances must honour the prototype
     // `toJSON`.)
-    if (*obj).class_id != 0 {
+    if !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id) {
         return None;
     }
     // #6519: a URL instance is a class_id-0 object but must serialize as its
@@ -369,10 +369,24 @@ pub(crate) unsafe fn try_emit_shape_element(
         return true;
     }
 
+    // The emit loops below read own fields only. An element can still inherit
+    // a `toJSON` — from `Object.prototype`, its class (the template vetted only
+    // element 0's), or an explicit `Object.setPrototypeOf` — and then it must
+    // take the per-element walk, which probes (#10529). The stringify-wide
+    // half of that proof is the same one the data-record emitter reuses.
+    let global_to_json_absent = *data_record_global_proof
+        || super::stringify_tojson_probe::data_record_global_to_json_absent_without_gc();
+
     // Everything below can recurse into a user callback. A callback can
     // mutate Object.prototype.toJSON, so the next data record must establish
     // a fresh stringify-wide proof before it emits raw fields.
     *data_record_global_proof = false;
+    if !global_to_json_absent
+        || !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id)
+        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+    {
+        return false;
+    }
 
     // The callback-free record path above proves that neither the element nor
     // any child can observe a `toJSON` key. Only publish the array index once a
@@ -450,6 +464,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     // detection.
     if template.primitive_only {
         let save_pos = buf.len();
+        let mut called_out = false;
         for f in 0..shape_fields as usize {
             let fb = field_bits_at(f);
             let field_val = f64::from_bits(fb);
@@ -497,16 +512,21 @@ pub(crate) unsafe fn try_emit_shape_element(
             } else if vtag == POINTER_TAG || is_raw_pointer(fb) {
                 set_to_json_key_for_template_field(cur_keys(), f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
+                called_out = true;
             } else {
                 // A BigInt field reaches `serialize_bigint` via `write_number`,
                 // which reads the pending `toJSON` key — record it first (#5909).
                 if vtag == BIGINT_TAG {
                     set_to_json_key_for_template_field(cur_keys(), f);
+                    called_out = true;
                 }
                 write_number(buf, field_val);
             }
         }
         buf.push('}');
+        // No callback ran, so the stringify-wide proof still holds for the
+        // next element.
+        *data_record_global_proof = !called_out;
         return true;
     }
 

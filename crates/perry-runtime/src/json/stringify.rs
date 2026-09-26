@@ -996,12 +996,28 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     }
     match gc_obj_type(ptr) {
         crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
-        crate::gc::GC_TYPE_OBJECT => object_get_to_json(ptr),
+        crate::gc::GC_TYPE_OBJECT => {
+            let resolved = object_get_to_json(ptr);
+            if resolved.is_none() {
+                // Hand the verdict to the member's own walk (#10696); the
+                // member loop clears it once the dispatch returns.
+                TO_JSON_RESOLVED_FOR.with(|c| c.set(ptr as usize));
+            }
+            resolved
+        }
         _ => None,
     }
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // Taken unconditionally so a verdict for this object can never reach a
+    // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
+    // means this object IS a `toJSON` result, which also settles the question
+    // for it — and it must be consumed here: a walk that never probes (a plain
+    // record) would otherwise leak it into its first child's `toJSON`.
+    let resolved_by_parent = TO_JSON_RESOLVED_FOR.with(|c| c.replace(0)) == ptr as usize;
+    let is_to_json_result = SUPPRESS_NEXT_TO_JSON.with(|c| c.replace(false));
+    let to_json_resolved = resolved_by_parent || is_to_json_result;
     check_stringify_nesting_depth(depth as usize);
     // #6519: a WHATWG `URL` instance is a plain `GC_TYPE_OBJECT` (class_id 0)
     // whose `searchParams` field points back at the URL — walking its fields
@@ -1038,7 +1054,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // must be honoured before falling back to "{}". A plain empty object
         // literal / `Object.fromEntries([])` carries `class_id == 0`, so the
         // probe is skipped for them. (#321)
-        if (*(ptr as *const crate::ObjectHeader)).class_id != 0 {
+        if (*(ptr as *const crate::ObjectHeader)).class_id != 0 && !to_json_resolved {
             if let Some(to_json_val) = object_get_to_json(ptr) {
                 arm_to_json_result_guard(to_json_val);
                 // Thread depth so a `toJSON` returning a cycle trips the
@@ -1090,6 +1106,13 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // emit its first 8 fields. Falling through to the slow path below uses
     // `read_field_bits` which routes overflow reads through
     // `js_object_get_field`'s overflow_get fallback.
+    // Whether a `toJSON` could come from anywhere but an own closure field.
+    // The raw emitters below read own fields only, so they run only when it
+    // cannot; the general walk probes when it can. When the parent already
+    // performed this object's `toJSON` lookup (`TO_JSON_RESOLVED_FOR`) there
+    // is nothing left to ask (#10696).
+    let inherited_to_json_possible = !to_json_resolved
+        && super::stringify_tojson_probe::inherited_to_json_possible_without_gc(ptr);
     let has_overflow_fields = unsafe {
         let keys_arr_view = crate::object::object_keys(obj);
         let keys_arr = keys_arr_view.arr();
@@ -1105,7 +1128,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     if num_fields >= 5
         && !has_overflow_fields
         && !crate::object::descriptors_in_use()
-        && (*obj).class_id == 0
+        && !inherited_to_json_possible
     {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
             let mut data_record_global_proof = false;
@@ -1186,7 +1209,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // or class can reach the borrowed emit interval.
     if (actual_fields == 1 || actual_fields > 32)
         && !has_overflow_fields
-        && (*obj).class_id == 0
+        && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
         && super::stringify_primitive_object::try_emit(obj, keys_view, buf)
     {
@@ -1254,14 +1277,18 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // chain — a `class { toJSON() {…} }` instance stores `toJSON` on the class
     // vtable, and an `Object.create(proto)` result inherits it from `proto`.
     // Neither of those carries an own closure field, so the cheap
-    // `has_closure_field` scan misses them; they DO carry a non-zero
-    // `class_id` linking to the prototype/vtable (a plain data object literal
-    // has `class_id == 0`), so probe `object_get_to_json` (which resolves
-    // own+prototype via `js_object_get_field_by_name`) in that case too. This
-    // is what lets `JSON.stringify` honour a prototype `toJSON` (#321 — Effect
-    // `Inspectable`).
+    // `has_closure_field` scan misses them; `inherited_to_json_possible`
+    // covers them (and `Object.setPrototypeOf` / `Object.prototype.toJSON`),
+    // so probe `object_get_to_json` (which resolves own+prototype via
+    // `js_object_get_field_by_name`) in that case too. This is what lets
+    // `JSON.stringify` honour a prototype `toJSON` (#321 — Effect
+    // `Inspectable`). Object literals are anonymous shape classes, so
+    // `class_id != 0` alone no longer decides it (#10529).
     let has_prototype_chain = (*obj).class_id != 0;
-    if has_closure_field || has_prototype_chain {
+    // An own ACCESSOR `toJSON` (`{ get toJSON() {…} }`) is neither a closure
+    // field nor inherited; every accessor sets the descriptor header flag.
+    let has_own_accessors = crate::object::object_has_descriptors(ptr as usize);
+    if (has_closure_field || inherited_to_json_possible || has_own_accessors) && !to_json_resolved {
         if let Some(to_json_val) = object_get_to_json(ptr) {
             if depth > MAX_FAST_DEPTH {
                 STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -1454,6 +1481,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             if member_probed {
                 SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
             }
+            // `member_to_json`'s verdict is only for this member's own walk.
+            TO_JSON_RESOLVED_FOR.with(|c| c.set(0));
         } else {
             // Number (most common for data objects) — or Date, handled
             // centrally by `write_number` via DATE_REGISTRY lookup. A BigInt

@@ -1890,8 +1890,24 @@ pub unsafe extern "C" fn js_json_stringify_full(
             // No replacer, but has spacer — pretty-print
             stringify_value_pretty(value_after_to_json, TYPE_UNKNOWN, &mut buf, &indent_str, 0);
         } else {
+            // The root's `toJSON` lookup just ran and found nothing callable;
+            // hand that verdict to the root's own walk instead of repeating
+            // it there (#10696). The guard repeats `apply_to_json`'s, so the
+            // token names only an object it really probed.
+            if after_bits == value.to_bits() {
+                if let Some(ptr) = extract_pointer(after_bits) {
+                    if !crate::value::addr_class::is_handle_band(ptr as usize)
+                        && ptr_derefable(ptr as usize)
+                        && gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT
+                        && !crate::buffer::is_registered_buffer(ptr as usize)
+                    {
+                        TO_JSON_RESOLVED_FOR.with(|c| c.set(ptr as usize));
+                    }
+                }
+            }
             // Plain stringify
             stringify_value(value_after_to_json, TYPE_UNKNOWN, &mut buf);
+            TO_JSON_RESOLVED_FOR.with(|c| c.set(0));
         }
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
     }

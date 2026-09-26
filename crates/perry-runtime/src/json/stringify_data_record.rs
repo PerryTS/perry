@@ -58,7 +58,7 @@ unsafe fn inline_fields_with_live<'a>(
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + count * 8
-        || (*obj).class_id != 0
+        || !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id)
         || count > live_inline_slots as usize
     {
         return None;

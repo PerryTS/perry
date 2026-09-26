@@ -33,7 +33,7 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>()
-        || (*obj).class_id != 0
+        || !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id)
         || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
     {
         return None;

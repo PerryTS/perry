@@ -175,7 +175,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES
-        || (*obj).class_id != 0
+        || !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id)
     {
         return None;
     }

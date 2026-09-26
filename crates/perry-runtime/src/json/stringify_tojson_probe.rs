@@ -453,6 +453,9 @@ struct ClassChainToJsonEntry {
     semantic_epoch: u64,
     surface_gen: u64,
     may_have: bool,
+    /// [`class_is_plain_record_uncached`]'s answer, filled under the same
+    /// generations (#10529). Implies `!may_have`.
+    plain_record: bool,
 }
 
 /// Sized for the distinct object-literal SHAPES a serialization walk touches,
@@ -471,6 +474,7 @@ const EMPTY_CLASS_CHAIN_TOJSON: ClassChainToJsonEntry = ClassChainToJsonEntry {
     semantic_epoch: 0,
     surface_gen: 0,
     may_have: false,
+    plain_record: false,
 };
 
 crate::perry_thread_local! {
@@ -496,6 +500,12 @@ fn class_chain_tojson_slot(class_id: u32) -> usize {
 
 #[inline]
 fn class_chain_may_have_to_json(class_id: u32) -> bool {
+    class_chain_to_json_entry(class_id).may_have
+}
+
+/// The memo entry for `class_id`, refilled when any keyed generation moved.
+#[inline]
+fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
     debug_assert_ne!(class_id, 0, "class id 0 is answered by the caller");
     let vtable_gen = crate::object::vtable_generation();
     let semantic_epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
@@ -507,9 +517,50 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
         && entry.semantic_epoch == semantic_epoch
         && entry.surface_gen == surface_gen
     {
-        return entry.may_have;
+        return entry;
     }
     class_chain_to_json_memo_fill(class_id, vtable_gen, semantic_epoch, surface_gen, slot)
+}
+
+/// Is an instance of `class_id` serialized by `JSON.stringify` exactly like a
+/// `class_id == 0` plain object — own enumerable data fields only, nothing
+/// reachable through the class? (#10529, #10696)
+///
+/// HIR lowers closed-shape object literals to synthetic `__AnonShape_<hash>`
+/// classes, so `class_id != 0` is true of essentially every literal. The
+/// plain-data emitters (`stringify_flat`, `stringify_record_output`,
+/// `stringify_nested_records`, `stringify_data_record`, the shape template)
+/// used `class_id != 0` as their "might have a prototype `toJSON` or private
+/// elements" gate, which declined every literal and left them serving only
+/// `JSON.parse` output. This is the precise form of that gate. It rides the
+/// per-class memo above, so it costs one slot compare per object.
+///
+/// Per-instance facts (an own `toJSON` key, `Object.setPrototypeOf`,
+/// descriptors, `Object.prototype.toJSON`) are NOT covered: callers keep
+/// checking those exactly as they do for `class_id == 0`.
+#[inline]
+pub(super) fn class_is_plain_record(class_id: u32) -> bool {
+    class_id == 0 || class_chain_to_json_entry(class_id).plain_record
+}
+
+/// A registered anon shape whose class surface is empty — the same proof the
+/// thenable probe uses (`promise::then_probe::class_registry_inert`: no
+/// vtable, no prototype object of either flavour, no parent edge) — plus no
+/// registered class name, which a declared class whose per-module id collides
+/// with an anon-shape id carries (`declared_class_outranks_anon_shape`). Anon
+/// shapes carry no private elements or runtime-internal keys; those only come
+/// from declared classes.
+///
+/// Staleness is safe in the direction that matters: the anon-shape set is
+/// insert-only, and a vtable entry, prototype object or parent edge appearing
+/// later moves one of the generations this is memoized under. A stale `false`
+/// only keeps the general walk.
+fn class_is_plain_record_uncached(class_id: u32, may_have: bool) -> bool {
+    !may_have
+        && class_id != crate::object::NATIVE_MODULE_CLASS_ID
+        && crate::object::is_anon_shape_class_id(class_id)
+        && crate::promise::then_probe::class_registry_inert(class_id)
+        && crate::object::class_name_for_id(class_id).is_none()
 }
 
 #[cold]
@@ -520,20 +571,20 @@ fn class_chain_to_json_memo_fill(
     semantic_epoch: u64,
     surface_gen: u64,
     slot: usize,
-) -> bool {
+) -> ClassChainToJsonEntry {
     #[cfg(test)]
     CLASS_CHAIN_TOJSON_RECOMPUTES.with(|count| count.set(count.get() + 1));
     let may_have = class_chain_may_have_to_json_uncached(class_id);
-    CLASS_CHAIN_TOJSON_MEMO.with(|table| {
-        table[slot].set(ClassChainToJsonEntry {
-            class_id,
-            vtable_gen,
-            semantic_epoch,
-            surface_gen,
-            may_have,
-        })
-    });
-    may_have
+    let entry = ClassChainToJsonEntry {
+        class_id,
+        vtable_gen,
+        semantic_epoch,
+        surface_gen,
+        may_have,
+        plain_record: class_is_plain_record_uncached(class_id, may_have),
+    };
+    CLASS_CHAIN_TOJSON_MEMO.with(|table| table[slot].set(entry));
+    entry
 }
 
 #[cfg(test)]
@@ -620,13 +671,32 @@ pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) ->
 /// Once its constructor property is cached, even a dirty verdict is recomputed
 /// with direct reads only; class/prototype overrides still decline normally.
 pub(super) unsafe fn to_json_definitely_absent_without_gc(ptr: *const u8) -> bool {
-    if (*(ptr as *const crate::ObjectHeader)).class_id != 0
+    if !class_is_plain_record((*(ptr as *const crate::ObjectHeader)).class_id)
         || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
             && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
     {
         return false;
     }
     to_json_definitely_absent(ptr)
+}
+
+/// Could `ptr` (a validated `GC_TYPE_OBJECT`) resolve a `toJSON` from
+/// anywhere but an own key — its class chain, a recorded
+/// `Object.setPrototypeOf` prototype, or `Object.prototype`? Own keys are the
+/// caller's business: an own callable `toJSON` is a closure-valued field.
+///
+/// Never allocates or collects, so a caller may hold `ptr` unrooted across
+/// it: while the default-prototype cache is still cold (its first lookup can
+/// populate globalThis) it answers `true`, sending the caller to the rooted
+/// probe. Once that cache is warm, even a dirty verdict is recomputed with
+/// direct reads only (see `to_json_definitely_absent_without_gc`).
+#[inline]
+pub(super) unsafe fn inherited_to_json_possible_without_gc(ptr: *const u8) -> bool {
+    !class_is_plain_record((*(ptr as *const crate::ObjectHeader)).class_id)
+        || crate::object::prototype_chain::object_static_prototype(ptr as usize).is_some()
+        || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
+            && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
+        || object_proto_may_have_to_json()
 }
 
 /// Establish the stringify-wide part of the plain-data record proof.
