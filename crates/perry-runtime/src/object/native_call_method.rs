@@ -11,6 +11,7 @@ use super::*;
 mod bare_receiver;
 mod collection_methods;
 mod common_methods;
+mod function_shape;
 mod disposal;
 mod handle_methods;
 mod namespace_override;
@@ -1263,6 +1264,16 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     return result;
                 }
             }
+        }
+    }
+    // A function object on its base Function shape: the key's slot on the
+    // prototype the shape names decides the call (`function_shape`).
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if let Some(result) =
+            function_shape::try_function_shape_method_call(object, name, args_ptr, args_len)
+        {
+            return result;
         }
     }
     // PerformanceObserverEntryList is a native namespace receiver, and typed

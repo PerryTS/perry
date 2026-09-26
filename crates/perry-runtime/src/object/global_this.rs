@@ -49,6 +49,27 @@ mod populate;
 mod proto_methods;
 mod typed_array;
 
+/// Which `Function.prototype` intrinsic (`bind`/`call`/`apply`) has code
+/// pointer `func`, if any: the identity the shape-proven method path compares
+/// the prototype slot's VALUE against.
+#[inline]
+pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'static str> {
+    if func == array_error::function_prototype_bind_thunk as *const u8 {
+        Some("bind")
+    } else if func == array_error::function_prototype_call_thunk as *const u8 {
+        Some("call")
+    } else if func == array_error::function_prototype_apply_thunk as *const u8 {
+        Some("apply")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn function_prototype_bind_thunk_for_test() -> *const u8 {
+    array_error::function_prototype_bind_thunk as *const u8
+}
+
 pub(crate) use array_error::{
     function_apply_proxy, generic_array_like_to_vec, global_this_clear_immediate_thunk,
     global_this_clear_interval_thunk, global_this_clear_timeout_thunk,

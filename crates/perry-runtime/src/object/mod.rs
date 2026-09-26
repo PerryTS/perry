@@ -456,6 +456,7 @@ crate::perry_thread_local! {
     static TYPED_ARRAY_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ASYNC_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static FUNCTION_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
@@ -485,6 +486,10 @@ pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static ASYNC_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&ASYNC_FUNCTION_INTRINSIC_PTR_SLOT);
+/// This agent's `Function.prototype` (the object the base Function ShapeId's
+/// `proto_id` names), published when the global table populates it.
+pub(crate) static FUNCTION_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&FUNCTION_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
@@ -1498,6 +1503,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
         &ASYNC_FUNCTION_INTRINSIC_PTR,
         &ASYNC_FUNCTION_INTRINSIC_PROTO_PTR,
+        &FUNCTION_INTRINSIC_PROTO_PTR,
         &GENERATOR_FUNCTION_INTRINSIC_PTR,
         &GENERATOR_INTRINSIC_PROTO_PTR,
         &GENERATOR_PROTOTYPE_PTR,

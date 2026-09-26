@@ -156,19 +156,11 @@ pub(crate) fn forget_body_classification(func_ptr: *const u8) {
     });
 }
 
-/// The ShapeId in a closure's header word.
-///
-/// # Safety
-/// `closure` is a live, non-forwarded `GC_TYPE_CLOSURE` cell.
-#[inline]
-pub(crate) unsafe fn closure_shape_id(closure: *const ClosureHeader) -> u32 {
-    (*closure).shape_id
-}
-
 /// Is this closure still on its base (intrinsic-only) shape?
 ///
 /// # Safety
-/// As [`closure_shape_id`].
+/// `closure` is a live, non-forwarded `GC_TYPE_CLOSURE` cell.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn closure_has_base_shape(closure: *const ClosureHeader) -> bool {
     shapes::shape_object_kind_by_id((*closure).shape_id) == Some(ShapeObjectKind::Function)
@@ -193,7 +185,13 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
 /// The intrinsic own properties a base Function shape stands for.
 #[inline]
 pub(crate) fn is_intrinsic_function_key(key: &str) -> bool {
-    matches!(key, "name" | "length" | "prototype")
+    is_intrinsic_function_key_bytes(key.as_bytes())
+}
+
+/// [`is_intrinsic_function_key`] over raw key bytes.
+#[inline]
+pub(crate) fn is_intrinsic_function_key_bytes(key: &[u8]) -> bool {
+    matches!(key, b"name" | b"length" | b"prototype")
 }
 
 /// Raw kind probe for a pointer the caller has already range/band-checked
