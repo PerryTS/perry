@@ -165,5 +165,5 @@ fn class_prototype_declares_own_getter(
     guard
         .as_ref()
         .and_then(|registry| registry.get(&class_id))
-        .is_some_and(|vtable| vtable.getters.contains_key(name))
+        .is_some_and(|vtable| vtable.declares_getter(name))
 }

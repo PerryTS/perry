@@ -1832,19 +1832,6 @@ unsafe fn build_value_only_descriptor(value: f64) -> f64 {
 }
 
 fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
-    create_or_update_receiver_property_probed(receiver, key, value, false)
-}
-
-/// `create_or_update_receiver_property` for a `[[Set]]` walk. `probe` is true
-/// when the walk's target IS `receiver`: the final `target_set` is then this
-/// PutValue's whole remaining resolution, and #10498's class-accessor cache
-/// may record the vtable setter it reaches (`class_accessor_cache`).
-fn create_or_update_receiver_property_probed(
-    receiver: f64,
-    key: f64,
-    value: f64,
-    probe: bool,
-) -> bool {
     if !reflect_value_is_object(receiver) {
         return false;
     }
@@ -1915,17 +1902,7 @@ fn create_or_update_receiver_property_probed(
     } else if crate::object::obj_value_no_extend(receiver) {
         return false;
     }
-    if !probe {
-        target_set(receiver, key, value);
-        return true;
-    }
-    // The setter the recording names runs inside `target_set` and can move
-    // the key; the commit wants its address afterwards.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let key_h = scope.root_nanbox_f64(key);
-    let prev = crate::object::class_accessor_cache::arm_setter_probe(receiver, key);
     target_set(receiver, key, value);
-    crate::object::class_accessor_cache::finish_setter_probe(prev, key_h.get_nanbox_f64());
     true
 }
 
@@ -2200,8 +2177,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         }
     }
 
-    // #10498: see `create_or_update_receiver_property_probed`.
-    let same_target = target.to_bits() == receiver.to_bits();
     let mut current = target;
     for _ in 0..64 {
         // A Proxy hop in the prototype chain: `OrdinarySetWithOwnDescriptor`
@@ -2271,7 +2246,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     if !writable {
                         false
                     } else {
-                        create_or_update_receiver_property_probed(receiver, key, value, same_target)
+                        create_or_update_receiver_property(receiver, key, value)
                     }
                 }
                 OwnSetDescriptor::Accessor { setter_bits } => {
@@ -2368,7 +2343,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
             return create_or_update_receiver_property(receiver, key, value);
         }
         let Some(proto) = prototype_of_for_set(current) else {
-            return create_or_update_receiver_property_probed(receiver, key, value, same_target);
+            return create_or_update_receiver_property(receiver, key, value);
         };
         current = proto;
     }
@@ -2410,41 +2385,9 @@ fn class_super_accessor_set(
     receiver: f64,
 ) -> Option<bool> {
     let key_name = property_key_to_rust_string(key)?;
-    let registry = crate::object::CLASS_VTABLE_REGISTRY.read().ok()?;
-    let reg = registry.as_ref()?;
-    let mut cid = parent_class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(vtable) = reg.get(&cid) {
-            let setter_alias = format!("__set_{}", key_name);
-            if let Some(&setter_ptr) = vtable
-                .setters
-                .get(&key_name)
-                .or_else(|| vtable.setters.get(&setter_alias))
-            {
-                let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(setter_ptr) };
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev_this =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let _ = f(receiver, value);
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-                return Some(true);
-            }
-            let getter_alias = format!("__get_{}", key_name);
-            if vtable.getters.contains_key(&key_name) || vtable.getters.contains_key(&getter_alias)
-            {
-                return Some(false);
-            }
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => {
-                cid = parent;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    None
+    // Charter step 3: the accessor is a property of the parent's prototype
+    // chain. `Some(false)`: getter-only, the write is refused.
+    unsafe { crate::object::class_chain_setter_apply(parent_class_id, &key_name, receiver, value) }
 }
 
 fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {

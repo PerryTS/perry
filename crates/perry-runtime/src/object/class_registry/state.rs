@@ -326,11 +326,71 @@ pub struct VTableMethodEntry {
     pub has_rest: bool,
 }
 
-/// Per-class vtable with methods, getters, and setters
+/// The compiled halves of one declared accessor, each 0 when that half is
+/// absent: `get` is `fn(this) -> f64`, `set` is `fn(this, value) -> f64`.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct AccessorDecl {
+    pub get: usize,
+    pub set: usize,
+}
+
+/// Per-class vtable: the method dispatch table plus the class's accessor
+/// DECLARATIONS.
+///
+/// `accessors` is class metadata, not a property store. A public instance
+/// accessor is a real accessor property of the class's decl prototype
+/// (`decl_accessors.rs`); this record says what the ClassBody declared so the
+/// prototype installer can build that property and the "does this class chain
+/// declare an accessor named X" filters can answer without materializing a
+/// prototype. No property read or write resolves through it — they go through
+/// the prototype's real property, which `defineProperty` / `delete` may have
+/// changed since.
+///
+/// `private_accessors` holds `#x` accessors. They are never properties and
+/// are not reachable by name: only the private-name get/set paths of their
+/// lexical class read them.
+#[derive(Default)]
 pub struct ClassVTable {
     pub methods: HashMap<String, VTableMethodEntry>,
-    pub getters: HashMap<String, usize>, // getter func_ptr (signature: fn(this_f64) -> f64)
-    pub setters: HashMap<String, usize>, // setter func_ptr (signature: fn(this_f64, value_f64) -> f64)
+    pub accessors: HashMap<String, AccessorDecl>,
+    pub private_accessors: HashMap<String, AccessorDecl>,
+}
+
+impl ClassVTable {
+    /// Record one compiled half of the accessor `name` (`#x` goes to the
+    /// private record). A zero pointer records nothing.
+    pub(crate) fn declare_accessor_half(&mut self, name: &str, func_ptr: usize, is_setter: bool) {
+        if func_ptr == 0 {
+            return;
+        }
+        let table = if name.starts_with('#') {
+            &mut self.private_accessors
+        } else {
+            &mut self.accessors
+        };
+        let decl = table.entry(name.to_string()).or_default();
+        if is_setter {
+            decl.set = func_ptr;
+        } else {
+            decl.get = func_ptr;
+        }
+    }
+
+    /// The declared public accessor `name`, if any.
+    #[inline]
+    pub(crate) fn accessor_decl(&self, name: &str) -> Option<AccessorDecl> {
+        self.accessors.get(name).copied()
+    }
+
+    #[inline]
+    pub(crate) fn declares_getter(&self, name: &str) -> bool {
+        self.accessor_decl(name).is_some_and(|d| d.get != 0)
+    }
+
+    #[inline]
+    pub(crate) fn declares_setter(&self, name: &str) -> bool {
+        self.accessor_decl(name).is_some_and(|d| d.set != 0)
+    }
 }
 
 /// Vtable registry of the calling thread's image (#8546 — see
@@ -851,7 +911,7 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
 /// (#7632), applied to the third and last identity surface. METHOD DISPATCH is
 /// unaffected: it runs off the per-class-id vtable, not this object, so each
 /// specialization keeps its own monomorphized bodies.
-fn decl_prototype_identity_id(class_id: u32) -> u32 {
+pub(crate) fn decl_prototype_identity_id(class_id: u32) -> u32 {
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
@@ -942,8 +1002,7 @@ pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> V
     } else if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(vtable) = registry.as_ref().and_then(|all| all.get(&class_id)) {
             names.extend(vtable.methods.keys().cloned());
-            names.extend(vtable.getters.keys().cloned());
-            names.extend(vtable.setters.keys().cloned());
+            names.extend(vtable.accessors.keys().cloned());
         }
     }
     names.retain(|name| !name.starts_with('#'));
@@ -986,9 +1045,45 @@ pub(super) fn install_class_decl_prototype_method_field(
     });
 }
 
+/// The class's own string-keyed prototype members in ClassBody order, each
+/// with whether it is an accessor (else a method).
+pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
+    let mut names = Vec::new();
+    let mut accessors = Vec::new();
+    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+        if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
+            names.extend(vtable.methods.keys().cloned());
+            accessors.extend(vtable.accessors.keys().cloned());
+        }
+    }
+    names.extend(accessors.iter().cloned());
+    order_class_string_member_names(class_id, false, &mut names);
+    names
+        .into_iter()
+        // A private `#x` member is never a property of the prototype.
+        .filter(|name| !name.starts_with('#'))
+        .map(|name| {
+            let is_accessor = accessors.contains(&name);
+            (name, is_accessor)
+        })
+        .collect()
+}
+
+/// Install the class's own members on its decl prototype in ClassBody order:
+/// methods as data properties, accessors as accessor properties (S2,
+/// `decl_accessors.rs`).
 fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id: u32) {
-    for name in class_decl_prototype_method_names(class_id) {
-        install_class_decl_prototype_method_field(proto, class_id, &name);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_raw_mut_ptr(proto);
+    for (name, is_accessor) in class_prototype_member_names(class_id) {
+        // Both installers root the prototype across their own allocations.
+        proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
+            if is_accessor {
+                super::decl_accessors::install_decl_prototype_accessor(proto, class_id, &name);
+            } else {
+                install_class_decl_prototype_method_field(proto, class_id, &name);
+            }
+        });
     }
 }
 
@@ -1074,7 +1169,12 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         return crate::value::js_nanbox_pointer(existing as i64);
     }
 
-    let proto = js_object_alloc(class_id, 0);
+    // Inline room for `constructor` and every declared member, so the
+    // members' slots (an accessor's pair included) are inline: an inherited
+    // read of one is then served by the inherited-read cache (spilled slots
+    // never prime there).
+    let members = class_prototype_member_names(class_id).len() as u32;
+    let proto = js_object_alloc(class_id, members + 1);
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

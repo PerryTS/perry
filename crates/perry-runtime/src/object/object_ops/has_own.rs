@@ -460,12 +460,13 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(TAG_TRUE);
         }
 
-        // A class-declaration prototype object: instance accessors (`get x()`)
-        // and methods live in the class vtable, not the object's keys_array, yet
-        // they ARE own properties of `C.prototype` — `getOwnPropertyDescriptor`
-        // already reflects them, so `hasOwnProperty` must agree (test262
-        // class/definition/{getters,setters}-prop-desc, which assert via
-        // `verifyProperty` → `hasOwnProperty`).
+        // A class-declaration prototype object: methods live in the class
+        // vtable, yet they ARE own properties of `C.prototype` —
+        // `getOwnPropertyDescriptor` already reflects them, so
+        // `hasOwnProperty` must agree (test262 class/definition/*-prop-desc,
+        // which assert via `verifyProperty` → `hasOwnProperty`). Accessors are
+        // real accessor properties of the prototype, found by the own-key
+        // check above.
         if let Some(cid) =
             super::super::class_registry::class_id_for_decl_prototype_object(obj as usize)
         {
@@ -473,9 +474,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 if !super::super::class_registry::class_is_key_deleted(cid, key)
                     && (key == "constructor"
                         || (!key.starts_with('#')
-                            && (super::super::class_registry::class_own_accessor_ptrs(cid, key)
-                                .is_some()
-                                || super::super::native_module::class_has_own_method(cid, key))))
+                            && super::super::native_module::class_has_own_method(cid, key)))
                 {
                     return f64::from_bits(TAG_TRUE);
                 }
@@ -604,13 +603,13 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                     // ClassBody default, but a generic descriptor can flip it
                     // (Object.defineProperty(C, "x", { enumerable: true })).
                     let is_enumerable_static_accessor =
-                        super::super::class_registry::class_accessor_attrs_in_use()
-                            && super::super::class_registry::class_declared_accessor_ptrs(
-                                class_id, true, key_name,
+                        super::super::class_registry::static_accessor_attrs_in_use()
+                            && super::super::class_registry::static_declared_accessor_ptrs(
+                                class_id, key_name,
                             )
                             .is_some()
-                            && super::super::class_registry::class_accessor_attrs(
-                                class_id, true, key_name,
+                            && super::super::class_registry::static_accessor_attrs(
+                                class_id, key_name,
                             )
                             .0;
                     return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
@@ -736,12 +735,6 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable like private (`#`) elements.
         if (*obj).class_id != 0 && super::super::field_get_set::is_internal_runtime_key(key_name) {
             return f64::from_bits(TAG_FALSE);
-        }
-        // #10480: a ClassBody accessor is an own property of the prototype with
-        // no physical key; a generic `defineProperty` can make it enumerable.
-        if super::super::class_registry::class_prototype_enumerable_accessor(obj as usize, key_name)
-        {
-            return f64::from_bits(TAG_TRUE);
         }
         if !own_key_present(obj, key_str) {
             return f64::from_bits(TAG_FALSE);

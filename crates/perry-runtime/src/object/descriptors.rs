@@ -512,20 +512,22 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         );
                     }
                 }
-                // Class accessors reflect as accessor descriptors: instance
-                // `get x(){}` is an own property of `C.prototype`, a static
-                // accessor an own property of `C` itself. The raw vtable
-                // func_ptrs are wrapped as callable function values.
-                let accessor = if super::class_prototype_ref_id(obj_value).is_some() {
-                    super::class_registry::class_own_accessor_ptrs(class_id, &method_name)
-                } else {
+                // Class accessors reflect as accessor descriptors. An instance
+                // `get x(){}` is a real accessor property of the declared
+                // prototype object, so a `C.prototype` ref reflects that
+                // object. A static accessor is an own property of `C` itself,
+                // whose raw func_ptrs are wrapped as callable function values.
+                if super::class_prototype_ref_id(obj_value).is_some() {
+                    if let Some(proto) =
+                        super::class_registry::decl_prototype_own_accessor(class_id, &method_name)
+                    {
+                        return js_object_get_own_property_descriptor(proto, key_value);
+                    }
+                } else if let Some((g, s)) =
                     super::class_registry::class_own_static_accessor_ptrs(class_id, &method_name)
-                };
-                if let Some((g, s)) = accessor {
-                    let is_static = super::class_prototype_ref_id(obj_value).is_none();
-                    return super::class_registry::class_accessor_descriptor(
+                {
+                    return super::class_registry::static_accessor_descriptor(
                         class_id,
-                        is_static,
                         &method_name,
                         g,
                         s,
@@ -931,23 +933,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             if let Some(ops) = super::nm_namespace_ops() {
                 if let Some(desc) = (ops.get_own_descriptor)(obj, key_str, key_rust.as_deref()) {
                     return desc;
-                }
-            }
-        }
-
-        // A declared class's materialized `.prototype` object: instance
-        // accessors (`get x(){}`) live in the class vtable, not the object's
-        // fields, but they ARE own properties of the prototype.
-        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
-            if let Some(ref name) = key_rust {
-                if super::class_registry::class_is_key_deleted(cid, name) {
-                    // `delete C.prototype.x` recorded the accessor as removed.
-                } else if let Some((g, s)) =
-                    super::class_registry::class_own_accessor_ptrs(cid, name)
-                {
-                    return super::class_registry::class_accessor_descriptor(
-                        cid, false, name, g, s,
-                    );
                 }
             }
         }
@@ -1380,12 +1365,9 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
 
-        // Declared class prototypes split their own properties between the
-        // ordinary keys array (constructor, methods, later expandos) and the
-        // class vtable (accessors). Rebuild their string half from both stores
-        // in ClassBody order. The physical-key membership check preserves
-        // deletion of mirrored methods/constructor; accessors have no physical
-        // slot, so their class deletion marker is authoritative.
+        // Declared class prototypes: every own member is a physical key
+        // (methods and, since S2, accessors). Order the string half as
+        // `constructor`, then ClassBody order, then later keys.
         if let Some(class_id) =
             super::class_registry::class_id_for_decl_prototype_object(obj as usize)
         {
@@ -1417,9 +1399,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 if super::class_registry::class_is_key_deleted(class_id, &name) {
                     continue;
                 }
-                let is_accessor =
-                    super::class_registry::class_own_accessor_ptrs(class_id, &name).is_some();
-                if is_accessor || physical.contains(&name) {
+                if physical.contains(&name) {
                     push_unique_name(&mut names, name);
                 }
             }

@@ -634,6 +634,12 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let want = std::slice::from_raw_parts(name_ptr, name_len);
+                // An own accessor (`Object.defineProperty(C, k, { get })`)
+                // answers before the pinned parent; the generic tail runs it
+                // with this read's receiver.
+                if crate::object::key_attrs::object_key_is_accessor(obj, want) {
+                    return get_field_by_name_object_tail(obj, key);
+                }
                 if let Some(v) =
                     crate::object::class_registry::class_object_own_field_bytes(obj, want)
                 {
@@ -1382,27 +1388,14 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     return JSValue::from_bits(value.to_bits());
                 }
                 if is_prototype_ref {
-                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                        if let Some(ref reg) = *registry {
-                            let mut cid = class_id;
-                            let mut depth = 0usize;
-                            while depth < 32 {
-                                if let Some(vtable) = reg.get(&cid) {
-                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
-                                        let f: extern "C" fn(f64) -> f64 =
-                                            std::mem::transmute(getter_ptr);
-                                        return JSValue::from_bits(f(class_value).to_bits());
-                                    }
-                                }
-                                match get_parent_class_id(cid) {
-                                    Some(p) if p != 0 && p != cid => {
-                                        cid = p;
-                                        depth += 1;
-                                    }
-                                    _ => break,
-                                }
-                            }
-                        }
+                    // Class accessors are properties of the class prototype
+                    // chain (charter step 3); `this` is the prototype ref.
+                    if let Some((v, _)) = super::super::class_registry::class_chain_getter_value(
+                        class_id,
+                        name,
+                        || class_value,
+                    ) {
+                        return v;
                     }
                     return JSValue::undefined();
                 }

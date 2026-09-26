@@ -89,6 +89,7 @@ pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
+pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
@@ -123,9 +124,6 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 /// INHERITED read an inline-cache hit. See the module docs for the guard and
 /// the GC contract.
 pub(crate) mod chain_store;
-/// #10498: (receiver shape, key) -> class-vtable getter/setter, recorded where
-/// the generic path commits to one. See the module docs.
-pub(crate) mod class_accessor_cache;
 mod global_this;
 pub mod handle_expando;
 pub(crate) mod inherited_read_cache;
@@ -345,8 +343,8 @@ pub(crate) use descriptor_state::{
     plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
     prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
-    DescriptorTables, PropertyAttrs,
+    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs,
+    transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{

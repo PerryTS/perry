@@ -70,9 +70,9 @@ pub extern "C" fn js_object_delete_field(
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
                 if super::class_registry::class_name_for_id(class_id).is_some() {
-                    if super::class_registry::class_declared_accessor_ptrs(class_id, true, name)
+                    if super::class_registry::static_declared_accessor_ptrs(class_id, name)
                         .is_some()
-                        && !super::class_registry::class_accessor_attrs(class_id, true, name).1
+                        && !super::class_registry::static_accessor_attrs(class_id, name).1
                     {
                         return 0;
                     }
@@ -300,10 +300,11 @@ pub extern "C" fn js_object_delete_field(
                 super::class_registry::class_id_for_decl_prototype_object(obj as usize)
             {
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
-                    // #10480: a ClassBody accessor redefined non-configurable.
-                    if super::class_registry::class_declared_accessor_ptrs(cid, false, name)
-                        .is_some()
-                        && !super::class_registry::class_accessor_attrs(cid, false, name).1
+                    // #10480: a ClassBody accessor redefined non-configurable
+                    // (S2: its attributes live with its physical key).
+                    if super::key_attrs::object_key_entry(obj, name.as_bytes())
+                        & super::key_attrs::ENTRY_NON_CONFIGURABLE
+                        != 0
                     {
                         return 0;
                     }
@@ -321,9 +322,8 @@ pub extern "C" fn js_object_delete_field(
                             name,
                         );
                         crate::typed_feedback::invalidate_method_change(cid);
-                        // Accessors have no keys_array entry, so the scan below is a
-                        // vacuous success for them; methods DO, so fall through to
-                        // remove it. Either way, don't early-return.
+                        // Methods and (S2) accessors are physical keys: fall
+                        // through so the scan below removes the key.
                     }
                 }
             }
@@ -794,14 +794,19 @@ fn delete_receiver_is_pointer(obj_value: f64) -> bool {
 }
 
 fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
-    if super::class_registry::class_declared_accessor_ptrs(class_id, false, name).is_some()
-        && !super::class_registry::class_accessor_attrs(class_id, false, name).1
-    {
-        return 0;
+    if let Some(proto) = super::class_registry::decl_prototype_own_accessor(class_id, name) {
+        // S2: the accessor is a real property of the declared prototype
+        // object; delete it there (which also records the class key deleted).
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proto = scope.root_nanbox_f64(proto);
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        return js_object_delete_field(
+            (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+            key,
+        );
     }
     let has_own = name == "constructor"
         || super::native_module::class_has_own_method(class_id, name)
-        || super::class_registry::class_own_accessor_ptrs(class_id, name).is_some()
         || super::class_registry::lookup_own_prototype_method(class_id, name).is_some();
     if !has_own {
         return 1;
@@ -1277,10 +1282,15 @@ pub extern "C" fn js_object_rest(
                 None => continue,
             };
 
-            // Check if field was deleted
+            // Check if field was deleted. An accessor key's slot holds its
+            // accessor pair (`accessor_pair.rs`), not a value: it is copied
+            // below through [[Get]].
+            let is_accessor = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::object::key_attrs::key_is_accessor_at(keys, i as u32)
+            });
             let field_val = src_handle
                 .with_const_ptr::<ObjectHeader, _>(|obj| js_object_get_field(obj, i as u32));
-            if field_val.is_undefined() {
+            if !is_accessor && field_val.is_undefined() {
                 continue;
             }
 
@@ -1322,8 +1332,28 @@ pub extern "C" fn js_object_rest(
                 crate::array::js_array_set(rest_keys, new_idx as u32, key_val)
             });
 
-            let field_val = src_handle
-                .with_const_ptr::<ObjectHeader, _>(|obj| js_object_get_field(obj, src_idx as u32));
+            let is_accessor = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::object::key_attrs::key_is_accessor_at(keys, src_idx as u32)
+            });
+            let field_val = if is_accessor {
+                // CopyDataProperties reads every key with [[Get]]: run the
+                // getter. It is user code; every pointer is re-read after it.
+                let key_ptr =
+                    crate::value::js_get_string_pointer_unified(f64::from_bits(key_val.bits()))
+                        as *const crate::StringHeader;
+                let key_h = scope.root_string_ptr(key_ptr);
+                // A self-rooting entry point: it runs the getter.
+                let value = src_handle.with_const_ptr(|src: *const ObjectHeader| {
+                    key_h.with_const_ptr(|key: *const crate::StringHeader| {
+                        crate::object::js_object_get_field_by_name_f64(src, key)
+                    })
+                });
+                crate::JSValue::from_bits(value.to_bits())
+            } else {
+                src_handle.with_const_ptr::<ObjectHeader, _>(|obj| {
+                    js_object_get_field(obj, src_idx as u32)
+                })
+            };
             rest_handle.with_mut_ptr::<ObjectHeader, _>(|rest| {
                 js_object_set_field(rest, new_idx as u32, field_val)
             });

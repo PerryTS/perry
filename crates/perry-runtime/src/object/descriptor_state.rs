@@ -146,6 +146,8 @@ mod young;
 
 #[cfg(test)]
 mod native_owner_tests;
+
+use super::accessor_pair::{descriptor_from, own_accessor, pair_from, store_own_accessor};
 pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
 pub(crate) use owner_lifecycle::{
     clear_object_descriptors, prune_dead_descriptor_owner_entries,
@@ -617,9 +619,11 @@ pub(crate) fn note_descriptor_target_edits(obj: usize, edits: &[AttrsEdit<'_>]) 
         return;
     }
     unsafe {
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                let header = header as *const crate::gc::GcHeader as *mut crate::gc::GcHeader;
+        // A write: prove the owner is a GC allocation before touching its
+        // header or keys (`attrs_live_in_keys_for_install`).
+        if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(obj) {
+            let header = header.as_ptr();
+            if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
                 (*header)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                 super::key_attrs::apply_edits(obj as *mut crate::object::ObjectHeader, edits);
             }
@@ -1182,7 +1186,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     disable_inline_guards_for_descriptor_target(obj, &key);
     // Charter step 3: an ordinary object's attributes live with its keys
     // (recorded by the funnel above) and nowhere else.
-    if unsafe { super::key_attrs::attrs_live_in_keys(obj) } {
+    if unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) } {
         return;
     }
     note_meta_descriptor_key(obj, &key, false);
@@ -1212,7 +1216,7 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys(obj) };
+    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
     for &(key, attrs) in entries {
         disable_inline_guards_for_descriptor_target(obj, key);
         if in_keys {
@@ -1231,7 +1235,7 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
 /// Remove a customized property descriptor for (obj, key), restoring default
 /// data-property attributes for subsequent writes and reflection.
 pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
-    if unsafe { super::key_attrs::attrs_live_in_keys(obj) } {
+    if unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) } {
         let entry = unsafe {
             super::key_attrs::object_key_entry(obj as *const ObjectHeader, key.as_bytes())
         };
@@ -1257,12 +1261,15 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
 /// Look up the accessor descriptor (get/set) for (obj, key).
 pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorDescriptor> {
     // Charter step 3: an ordinary object's keys say whether `key` is an
-    // accessor; the closures themselves still live in the owner table. One
-    // header read picks the filter.
+    // accessor, and the key's slot holds the pair (`accessor_pair.rs`). One
+    // header read picks the route.
     let may = unsafe {
         match descriptor_route(obj) {
             DescriptorRoute::Keys => {
-                super::key_attrs::object_key_is_accessor(obj as *const ObjectHeader, key.as_bytes())
+                return own_accessor(obj, key.as_bytes()).map(|a| AccessorDescriptor {
+                    get: a.get,
+                    set: a.set,
+                });
             }
             DescriptorRoute::Meta(meta) => meta_may_have(meta, key, true),
             DescriptorRoute::Tables => true,
@@ -1358,6 +1365,11 @@ pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
+    // Charter step 3: an ordinary object's accessors are its keys whose entry
+    // says so.
+    if unsafe { super::key_attrs::attrs_live_in_keys(obj) } {
+        return unsafe { super::key_attrs::object_accessor_key_names(obj as *const ObjectHeader) };
+    }
     // #6759 Phase C2: skip the lookup entirely when the owner's meta summary
     // proves it owns no accessor entries.
     if !owner_may_have_descriptor_entries(obj, true) {
@@ -1403,7 +1415,6 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     if key_str.is_null() {
         return None;
     }
-    let key_string = scope.root_string_ptr(key_str);
     let name = unsafe {
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key_str).byte_len as usize;
@@ -1440,26 +1451,6 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
                 // a field read.
                 Some(0)
             };
-        }
-        // ClassBody accessors live in the declared class's vtable, not the
-        // ordinary descriptor table. A RegExp subclass's `get flags()` must
-        // win before the walk reaches RegExp.prototype's builtin getter.
-        if let Some(cid) = class_registry::class_id_for_decl_prototype_object(obj as usize) {
-            // A later own data definition replaces the ClassBody accessor.
-            if key_string.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
-                own_key_present(obj as *mut ObjectHeader, key)
-            }) {
-                return None;
-            }
-            if let Some((getter, _)) =
-                class_registry::class_declared_accessor_ptrs(cid, false, &name)
-            {
-                return Some(if getter == 0 {
-                    0
-                } else {
-                    class_registry::class_accessor_function_value(getter, false, &name).to_bits()
-                });
-            }
         }
         // An own (data) property at this level shadows any inherited accessor.
         if obj_value_has_own_key(current, key_handle.get_nanbox_f64()) {
@@ -1531,6 +1522,12 @@ fn note_accessor_descriptor_key(key: &str) {
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    let previous = if in_keys {
+        unsafe { own_accessor(obj, key.as_bytes()) }
+    } else {
+        None
+    };
     note_accessor_descriptor_target(obj, &key, &acc);
     let st = state();
     st.descriptors.accessors_in_use.set(true);
@@ -1538,14 +1535,18 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
+    if in_keys {
+        // Charter step 3: the pair lives in the key's slot.
+        unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
+        note_accessor_function_replaced(obj, &key, previous.map(descriptor_from), acc);
+        return;
+    }
     note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
-    let replaced = st
-        .descriptors
+    st.descriptors
         .accessor_descriptors
         .borrow_mut()
-        .insert((obj, key.clone()), acc);
-    note_accessor_function_replaced(obj, &key, replaced, acc);
+        .insert((obj, key), acc);
 }
 
 /// RULE 1 when an accessor's getter or setter is REPLACED under unchanged
@@ -1564,7 +1565,7 @@ fn note_accessor_function_replaced(
         return;
     }
     unsafe {
-        if super::key_attrs::attrs_live_in_keys(obj) {
+        if super::key_attrs::attrs_live_in_keys_for_install(obj) {
             let _no_move = crate::gc::GcSuppressScope::new();
             crate::object::shapes::transition_object_shape_accessor_replaced(
                 obj as *mut ObjectHeader,
@@ -1638,13 +1639,20 @@ pub(crate) fn install_fresh_accessor_property(
             AttrsEdit::Data(key.as_bytes(), attrs.bits),
         ],
     );
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys(obj) };
+    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
     let st = state();
     st.descriptors.accessors_in_use.set(true);
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
+    if in_keys {
+        // Charter step 3: the pair lives in the key's slot; the accessor bit
+        // of the meta summary is kept for its direct readers.
+        note_meta_descriptor_key(obj, &key, true);
+        unsafe { store_own_accessor(obj, &key, Some(pair_from(&acc))) };
+        return;
+    }
     note_young_descriptor_owner(st, obj, Some(&acc));
     match note_meta_descriptor_key_both(obj, &key) {
         Some((accessor_bit_was_set, attr_bit_was_set)) => {
@@ -1653,10 +1661,7 @@ pub(crate) fn install_fresh_accessor_property(
             } else {
                 owner_index_push_proven_new(&st.descriptors.accessor_keys_by_owner, obj, &key);
             }
-            // The data half of an ordinary object's accessor lives with its
-            // keys, not in the attribute tables.
-            if in_keys {
-            } else if attr_bit_was_set {
+            if attr_bit_was_set {
                 owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
             } else {
                 owner_index_push_proven_new(&st.descriptors.attr_keys_by_owner, obj, &key);
@@ -1665,21 +1670,17 @@ pub(crate) fn install_fresh_accessor_property(
         // Non-meta-capable owner: no summary to consult — keep the scans.
         None => {
             owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
-            if !in_keys {
-                owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
-            }
+            owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
         }
     }
     st.descriptors
         .accessor_descriptors
         .borrow_mut()
         .insert((obj, key.clone()), acc);
-    if !in_keys {
-        st.descriptors
-            .property_descriptors
-            .borrow_mut()
-            .insert((obj, key), attrs);
-    }
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
 }
 
 /// [`owner_index_add`] minus the dedupe scan, for a key
@@ -1720,6 +1721,17 @@ fn note_meta_descriptor_key_both(owner: usize, key: &str) -> Option<(bool, bool)
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
+    if unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) } {
+        if !unsafe {
+            super::key_attrs::object_key_is_accessor(obj as *const ObjectHeader, key.as_bytes())
+        } {
+            return;
+        }
+        super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+        note_descriptor_target_edits(obj, &[AttrsEdit::ClearAccessor(key.as_bytes())]);
+        unsafe { store_own_accessor(obj, key, None) };
+        return;
+    }
     let removed = state()
         .descriptors
         .accessor_descriptors
@@ -1755,7 +1767,25 @@ pub(crate) fn set_builtin_accessor_descriptor(
     acc: AccessorDescriptor,
     attrs: PropertyAttrs,
 ) {
+    set_builtin_accessor_pair(obj, key, pair_from(&acc), attrs);
+}
+
+/// [`set_builtin_accessor_descriptor`] with the whole pair, so a class
+/// accessor's compiled entries travel with its closures (S2).
+pub(crate) fn set_builtin_accessor_pair(
+    obj: usize,
+    key: String,
+    pair: super::accessor_pair::Accessor,
+    attrs: PropertyAttrs,
+) {
+    let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
+    let previous = if in_keys {
+        unsafe { own_accessor(obj, key.as_bytes()) }
+    } else {
+        None
+    };
     note_descriptor_target_edits(
         obj,
         &[
@@ -1764,28 +1794,24 @@ pub(crate) fn set_builtin_accessor_descriptor(
         ],
     );
     note_accessor_descriptor_key(&key);
-    let in_keys = unsafe { super::key_attrs::attrs_live_in_keys(obj) };
     // #6759 Phase C2: the meta summary must over-approximate the tables
     // even for gate-neutral builtin installs — the (unconditionally
     // consulted) reflection reads now trust a clear bit.
     note_meta_descriptor_key(obj, &key, true);
-    if !in_keys {
-        note_meta_descriptor_key(obj, &key, false);
+    if in_keys {
+        // Charter step 3: the pair lives in the key's slot.
+        unsafe { store_own_accessor(obj, &key, Some(pair)) };
+        note_accessor_function_replaced(obj, &key, previous.map(descriptor_from), acc);
+        return;
     }
+    note_meta_descriptor_key(obj, &key, false);
     let st = state();
     note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
-    let replaced = st
-        .descriptors
+    st.descriptors
         .accessor_descriptors
         .borrow_mut()
         .insert((obj, key.clone()), acc);
-    note_accessor_function_replaced(obj, &key, replaced, acc);
-    // Charter step 3: the data half of an ordinary object's accessor lives
-    // with its keys (recorded by the funnel above).
-    if in_keys {
-        return;
-    }
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
@@ -1811,7 +1837,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_descriptor_target_edits(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
-    if unsafe { super::key_attrs::attrs_live_in_keys(obj) } {
+    if unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) } {
         return;
     }
     // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
@@ -1843,7 +1869,7 @@ pub(crate) fn define_builtin_data_property(
     attrs: PropertyAttrs,
 ) {
     unsafe {
-        if super::key_attrs::attrs_live_in_keys(obj as usize) {
+        if super::key_attrs::attrs_live_in_keys_for_install(obj as usize) {
             let _no_move = crate::gc::GcSuppressScope::new();
             let entry = super::key_attrs::attr_bits_to_entry(attrs.bits);
             if entry != 0 {
@@ -1867,7 +1893,7 @@ pub(crate) unsafe fn mark_all_keys(
 ) {
     // Charter step 3: an ordinary object's attributes live with its keys, and
     // freeze/seal rebuilds them ONCE, from the first key.
-    if super::key_attrs::attrs_live_in_keys(obj as usize) {
+    if super::key_attrs::attrs_live_in_keys_for_install(obj as usize) {
         super::prop_plan::prop_plan_epoch_bump_for_owner(obj as usize);
         state().descriptors.property_attrs_in_use.set(true);
         GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);

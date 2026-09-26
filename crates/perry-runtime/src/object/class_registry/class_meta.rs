@@ -704,8 +704,7 @@ mod anon_shape_collision_tests {
             class_id,
             ClassVTable {
                 methods,
-                getters: HashMap::new(),
-                setters: HashMap::new(),
+                ..ClassVTable::default()
             },
         );
     }

@@ -128,9 +128,16 @@ fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize
 pub(crate) fn clear_object_descriptors(obj: usize) {
     // Charter step 3: an ordinary object's attributes live with its keys; its
     // accessor closures still live in the tables and are dropped below.
-    if unsafe { super::super::key_attrs::attrs_live_in_keys(obj) }
+    if unsafe { super::super::key_attrs::attrs_live_in_keys_for_install(obj) }
         && unsafe { super::super::key_attrs::object_summary(obj as *const ObjectHeader) } != 0
     {
+        // The accessor pairs live in the keys' slots: clear those first, or
+        // the slots would read as data once the entries say "default".
+        for key in unsafe {
+            super::super::key_attrs::object_accessor_key_names(obj as *const ObjectHeader)
+        } {
+            clear_accessor_descriptor(obj, &key);
+        }
         super::super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
         note_descriptor_target_edits(obj, &[super::AttrsEdit::ClearAll]);
     }

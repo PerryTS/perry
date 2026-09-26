@@ -235,45 +235,51 @@ pub(crate) unsafe fn class_dynamic_static_accessor_setter_apply(
     Some(true)
 }
 
-/// Invoke an instance-private getter on its lexical declaring class. Unlike
-/// ordinary public accessor lookup, private names are not inherited and must
-/// not be shadowed by a public string property with the same spelling.
+/// The `#x` accessor of `class_id`'s own ClassBody. Private accessors are
+/// not properties: they live only in the class's private-accessor record, are
+/// never inherited, and are never shadowed by a public string property with
+/// the same spelling.
+fn class_private_accessor_decl(class_id: u32, name: &str) -> Option<AccessorDecl> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    guard
+        .as_ref()?
+        .get(&class_id)?
+        .private_accessors
+        .get(name)
+        .copied()
+}
+
+/// Invoke an instance-private getter on its lexical declaring class. `None`
+/// when the class declares no `#name` getter.
 pub(crate) unsafe fn class_private_instance_getter_value(
     class_id: u32,
     name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-    let vtable = guard.as_ref()?.get(&class_id)?;
-    let &getter = vtable.getters.get(name)?;
+    let getter = class_private_accessor_decl(class_id, name)?.get;
     if getter == 0 {
-        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        return None;
     }
     let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
     Some(f(receiver))
 }
 
-/// Invoke an instance-private setter on its lexical declaring class.
+/// Invoke an instance-private setter on its lexical declaring class. `false`
+/// when the class declares no `#name` setter.
 pub(crate) unsafe fn class_private_instance_setter_apply(
     class_id: u32,
     name: &str,
     receiver: f64,
     value: f64,
 ) -> bool {
-    let guard = match CLASS_VTABLE_REGISTRY.read() {
-        Ok(guard) => guard,
-        Err(_) => return false,
-    };
-    let Some(vtable) = guard.as_ref().and_then(|registry| registry.get(&class_id)) else {
+    let Some(decl) = class_private_accessor_decl(class_id, name) else {
         return false;
     };
-    let Some(&setter) = vtable.setters.get(name) else {
+    if decl.set == 0 {
         return false;
-    };
-    if setter != 0 {
-        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
-        let _ = f(receiver, value);
     }
+    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(decl.set);
+    let _ = f(receiver, value);
     true
 }
 

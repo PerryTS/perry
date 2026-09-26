@@ -1,9 +1,7 @@
 //! node:stream readable/writable state, split from node_stream.rs for #1987.
 use super::*;
 use crate::closure::{js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr};
-use crate::object::{
-    js_object_get_field, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
-};
+use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
 use crate::value::JSValue;
 
 /// Record that a consumer received a chunk — Node's
@@ -39,7 +37,7 @@ pub(super) unsafe fn own_field_by_key_bytes(obj: *const ObjectHeader, key: &[u8]
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if string_value_eq(f64::from_bits(key_val.bits()), key) {
-            let value = js_object_get_field(obj, i as u32);
+            let value = crate::object::key_attrs::object_slot_data(obj, i as u32);
             return if value.bits() == TAG_UNDEFINED {
                 None
             } else {

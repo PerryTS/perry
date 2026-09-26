@@ -296,6 +296,48 @@ pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
     }
 }
 
+/// Is key position `pos` of `keys` an accessor — does its value slot hold an
+/// accessor PAIR rather than a data value (`accessor_pair.rs`)? Every reader
+/// that walks an object's slots by position must ask before treating a slot
+/// as data. One flag load for a list without attributes.
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline]
+pub(crate) unsafe fn key_is_accessor_at(keys: *const ArrayHeader, pos: u32) -> bool {
+    keys_entry(keys, pos) & ENTRY_ACCESSOR != 0
+}
+
+/// `obj`'s slot `idx` as a DATA value for a reader that walks slots by
+/// position without running user code: `undefined` for an accessor key,
+/// whose slot holds its accessor pair (`accessor_pair.rs`) — the value such
+/// a slot always read as before the pair moved into it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn object_slot_data(
+    obj: *const crate::object::ObjectHeader,
+    idx: u32,
+) -> crate::JSValue {
+    if key_is_accessor_at(crate::object::object_keys(obj).arr(), idx) {
+        return crate::JSValue::undefined();
+    }
+    crate::object::js_object_get_field(obj, idx)
+}
+
+/// [`object_slot_data`] as the raw `f64` word.
+///
+/// # Safety
+/// As [`object_slot_data`].
+#[inline]
+pub(crate) unsafe fn object_slot_data_f64(
+    obj: *const crate::object::ObjectHeader,
+    idx: u32,
+) -> f64 {
+    f64::from_bits(object_slot_data(obj, idx).bits())
+}
+
 /// The summary of the first `count` keys of `keys`: exact for a canonical
 /// list, an over-approximation for an owned list edited in place.
 ///
@@ -549,14 +591,17 @@ pub(crate) unsafe fn copy_entries(
 // ---------------------------------------------------------------------------
 
 /// Is `addr` a heap object whose attributes live with its keys? The ONE
-/// predicate that routes a descriptor operation to the keys instead of the
-/// owner-keyed tables, so installs and reads cannot disagree about where an
-/// owner's attributes are. Every other cell kind (arrays, closures, exotic
-/// cells, typed arrays) keeps the tables for now.
+/// predicate that routes a descriptor LOOKUP to the keys instead of the
+/// owner-keyed tables. Every other cell kind (arrays, closures, exotic cells,
+/// typed arrays) keeps the tables for now.
+///
+/// Reads the header through the same reader the meta summary probe uses.
+/// Handle owners never reach it (they probe the tables through
+/// `get_handle_*`); anything that WRITES must use
+/// [`attrs_live_in_keys_for_install`] instead.
 ///
 /// # Safety
-/// `addr` is any address; it is classified through the ownership-checking
-/// header reader.
+/// `addr` is a descriptor owner.
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
@@ -564,6 +609,25 @@ pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+}
+
+/// [`attrs_live_in_keys`] for a site that WRITES the owner (its keys, slots or
+/// header). Descriptor owners are arbitrary addresses — a native `Box`
+/// backing (an `AsyncResource`'s, #11258) is heap-plausible and the bytes
+/// before it may decode as an object header — so ownership is proved by
+/// allocator metadata (`try_read_tracked_gc_header`) before anything is
+/// written. Installs are rare; the lookup path never pays for this.
+///
+/// # Safety
+/// `addr` is any address.
+pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
+        return false;
+    };
+    let header = header.as_ptr();
+    (*header).obj_type == crate::gc::GC_TYPE_OBJECT
+        && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray::lookup_typed_array_kind(addr).is_none()
 }
 
@@ -651,6 +715,34 @@ pub(crate) unsafe fn object_key_entry_for_string(
         Some(bytes) => object_key_entry_filtered(obj, bytes, false),
         None => ENTRY_ACCESSOR,
     }
+}
+
+/// The names of `obj`'s own accessor keys, sorted (the owner-index contract
+/// of `accessor_descriptor_keys_for_obj`).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn object_accessor_key_names(
+    obj: *const crate::object::ObjectHeader,
+) -> Vec<String> {
+    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+        return Vec::new();
+    }
+    let keys = crate::object::object_keys(obj);
+    let (slots, available) = crate::object::keys_array_dense_slots(keys.arr());
+    let mut out = Vec::new();
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for pos in 0..(keys.count() as usize).min(available) {
+        if keys_entry(keys.arr(), pos as u32) & ENTRY_ACCESSOR == 0 {
+            continue;
+        }
+        let slot = crate::JSValue::from_bits((*slots.add(pos)).to_bits());
+        if let Some(bytes) = crate::string::js_string_key_bytes(slot, &mut sso) {
+            out.push(String::from_utf8_lossy(bytes).into_owned());
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Can a plain data store of `key` be intercepted by `obj` — is the key an

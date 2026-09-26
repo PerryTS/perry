@@ -163,11 +163,7 @@ pub unsafe extern "C" fn js_register_class_method(
         *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
-    let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
-        methods: HashMap::new(),
-        getters: HashMap::new(),
-        setters: HashMap::new(),
-    });
+    let vtable = reg.entry(class_id as u32).or_default();
     vtable.methods.insert(
         name,
         VTableMethodEntry {
@@ -180,20 +176,18 @@ pub unsafe extern "C" fn js_register_class_method(
     VTABLE_GEN.fetch_add(1, Ordering::Release);
 }
 
-/// Own (non-inherited) instance accessor func_ptrs for `class_id` + `name`:
-/// `(getter_ptr, setter_ptr)`, each 0 when that half is absent. Consulted by
-/// `Object.getOwnPropertyDescriptor(C.prototype, name)`.
+/// The ClassBody's own public instance accessor declaration for `class_id` +
+/// `name`: `(getter_ptr, setter_ptr)`, each 0 when that half is absent.
+///
+/// Class metadata: read by the decl-prototype installer (`decl_accessors.rs`)
+/// and by "does this class declare an accessor `name`" filters. A property
+/// read, write or reflection must not answer from it — the prototype's real
+/// accessor property is the truth, and `defineProperty` / `delete` may have
+/// changed it.
 pub(crate) fn class_own_accessor_ptrs(class_id: u32, name: &str) -> Option<(usize, usize)> {
     let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
-    let reg = guard.as_ref()?;
-    let vt = reg.get(&class_id)?;
-    let g = vt.getters.get(name).copied().unwrap_or(0);
-    let s = vt.setters.get(name).copied().unwrap_or(0);
-    if g == 0 && s == 0 {
-        None
-    } else {
-        Some((g, s))
-    }
+    let decl = guard.as_ref()?.get(&class_id)?.accessor_decl(name)?;
+    (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
 /// Own static accessor func_ptrs for the class *constructor*. Mirrors
@@ -332,14 +326,12 @@ pub unsafe extern "C" fn js_register_class_getter(
         *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
-    let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
-        methods: HashMap::new(),
-        getters: HashMap::new(),
-        setters: HashMap::new(),
-    });
-    vtable.getters.insert(name, func_ptr as usize);
+    let vtable = reg.entry(class_id as u32).or_default();
+    vtable.declare_accessor_half(&name, func_ptr as usize, false);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
+    drop(registry);
+    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }
 
 /// Register a class setter in the vtable registry.
@@ -375,14 +367,12 @@ pub unsafe extern "C" fn js_register_class_setter(
         *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
-    let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
-        methods: HashMap::new(),
-        getters: HashMap::new(),
-        setters: HashMap::new(),
-    });
-    vtable.setters.insert(name, func_ptr as usize);
+    let vtable = reg.entry(class_id as u32).or_default();
+    vtable.declare_accessor_half(&name, func_ptr as usize, true);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
+    drop(registry);
+    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }
 
 /// Register a `static get name()` accessor on the class *constructor*

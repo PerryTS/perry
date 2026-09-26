@@ -208,6 +208,10 @@ struct Entry {
     hop_count: u8,
     /// Inline field index on the holder. Spilled fields never prime.
     slot: u32,
+    /// The holder's key at `slot` is an ACCESSOR (charter step 3): its slot
+    /// holds the pair (`accessor_pair.rs`) and a hit calls the getter with the
+    /// receiver as `this` instead of returning the slot's value.
+    accessor: bool,
 }
 
 /// `slot` for a NEGATIVE entry: one that records that a walk from this
@@ -256,6 +260,7 @@ const EMPTY_ENTRY: Entry = Entry {
     hops: [0; MAX_HOPS],
     hop_count: 0,
     slot: 0,
+    accessor: false,
 };
 
 crate::perry_thread_local! {
@@ -424,25 +429,24 @@ pub(crate) unsafe fn inherited_read_cache_hit(
     }
 }
 
-/// The hit, plus the one other thing the table can say: that a walk from this
-/// pair declined and must not be re-run. Only `get_field_ic_miss_impl` cares
-/// about the difference, because it is the only caller that would otherwise
-/// walk.
+/// The entry recorded for `obj.key`, once every per-hit check in the module
+/// header has passed; otherwise what the caller must answer (`Declined` for a
+/// valid negative entry, `Unknown` for anything else). Shared by the read and
+/// the write side, so both prove an entry the same way.
 ///
 /// # Safety
-/// `obj` is a masked, non-null heap pointer the caller has already established
-/// is a plausible heap address; `key` may be null.
-#[inline]
-pub(crate) unsafe fn inherited_read_cache_lookup(
+/// As [`inherited_read_cache_lookup`].
+#[inline(always)]
+unsafe fn proved_entry(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
-) -> Lookup {
+) -> Result<Proved, Lookup> {
     if key.is_null() || !cache_enabled() {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     let addr = obj as usize;
     if !crate::value::addr_class::is_plausible_heap_addr(addr) {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     // The receiver's identity word: class id at +0, ShapeId at +4. One load,
     // taken BEFORE the kind is proved, so it must be safe on any
@@ -479,57 +483,97 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     let recv_class_id = (*obj).class_id;
     let recv_shape = shapes::object_shape_stamp(obj);
     if recv_shape == 0 {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     let index = entry_index(recv_class_id, recv_shape, key as usize);
-    let entry = INHERITED_READ_CACHE.with(|cell| (*cell.get())[index]);
+    // Read in place: an `Entry` is ~100 bytes and a hit needs four words of it.
+    let entry: &Entry = &*INHERITED_READ_CACHE.with(|cell| (*cell.get()).as_ptr().add(index));
     if entry.key_ptr != key as usize
         || entry.recv_shape != recv_shape
         || entry.recv_class_id != recv_class_id
     {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     // One load, one compare, whatever the depth of the chain. See the module
     // header: this word covers both the semantic property epoch and every
     // structural mutation of an object marked as somebody's prototype.
     if entry.validity != crate::object::proto_validity::proto_validity() {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     if entry.slot == NEGATIVE_SLOT {
         if stats_enabled() {
             NEG_SERVED.fetch_add(1, Ordering::Relaxed);
         }
-        return Lookup::Declined;
+        return Err(Lookup::Declined);
     }
     // Only NOW, once the entry has matched on three identities, is it worth
     // proving the receiver really is an object. A non-object cell's word at
     // +4 is a `capacity` or a `func_ptr` half (design doc rule 3), so the
     // ShapeId compare above is not by itself a proof of kind.
-    if crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown {
-        return Lookup::Unknown;
-    }
+    // The header read below proves the kind: `addr` is heap-plausible, and a
+    // word at +4 inside the live ShapeId range is carried only by an object
+    // cell (#10828's rule 3; the three native `Box` allocations reachable
+    // here cannot carry one, see the note above), so `addr` is a cell start
+    // with a real header. The page-generation classification that used to
+    // precede it proved the same thing a second way, at ~35 instructions per
+    // access.
     let Some(header) = crate::value::addr_class::try_read_gc_header_known_plausible(addr) else {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
     let meta = (*obj).meta;
     let recv_proto_bits = if meta.is_null() { 0 } else { (*meta).prototype };
     if recv_proto_bits != entry.recv_proto_bits {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
 
     if !receiver_address_facts_ok(meta) {
-        return Lookup::Unknown;
+        return Err(Lookup::Unknown);
     }
+    Ok(Proved {
+        holder: entry.holder,
+        slot: entry.slot,
+        accessor: entry.accessor,
+    })
+}
+
+/// The part of a proved entry a hit uses.
+#[derive(Clone, Copy)]
+struct Proved {
+    holder: usize,
+    slot: u32,
+    accessor: bool,
+}
+
+/// The hit, plus the one other thing the table can say: that a walk from this
+/// pair declined and must not be re-run. Only `get_field_ic_miss_impl` cares
+/// about the difference, because it is the only caller that would otherwise
+/// walk.
+///
+/// # Safety
+/// `obj` is a masked, non-null heap pointer the caller has already established
+/// is a plausible heap address; `key` may be null.
+#[inline]
+pub(crate) unsafe fn inherited_read_cache_lookup(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Lookup {
+    let entry = match proved_entry(obj, key) {
+        Ok(entry) => entry,
+        Err(answer) => return answer,
+    };
     let holder = entry.holder as *const ObjectHeader;
     let field = (holder as *const u8)
         .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
         as *const u64;
     let bits = *field;
+    if entry.accessor {
+        return accessor_hit(obj, bits);
+    }
     // A deleted holder slot is a `TAG_HOLE`. `delete` bumps the semantic epoch
     // so this is unreachable today; it costs one compare and it is the check
     // that makes the claim not depend on that.
@@ -548,6 +592,46 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
         HITS.fetch_add(1, Ordering::Relaxed);
     }
     Lookup::Hit(value)
+}
+
+/// Serve an accessor entry: the holder's slot holds the pair, and the getter
+/// runs with the receiver as `this` — a compiled class getter directly, a
+/// `defineProperty` getter as a closure, a setter-only accessor reads
+/// `undefined`. The pair's functions are pinned by the holder's ShapeId (an
+/// accessor replaced under unchanged attributes still transitions it,
+/// `transition_object_shape_accessor_replaced`) and the holder is a marked
+/// prototype, so the validity word already covers them.
+///
+/// # Safety
+/// `obj` is the live receiver the entry matched; `pair_bits` is the holder's
+/// slot word for an accessor key.
+#[inline]
+unsafe fn accessor_hit(obj: *const ObjectHeader, pair_bits: u64) -> Lookup {
+    // An inherited-read walk in progress binds `this` to ITS receiver; such a
+    // read is never served here.
+    if crate::object::accessor_receiver_override_armed() {
+        return Lookup::Unknown;
+    }
+    let acc = crate::object::accessor_pair::pair_of_value_unchecked(pair_bits);
+    if stats_enabled() {
+        HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    let this = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+    if acc.raw_get != 0 {
+        // A compiled class getter takes `this` as its parameter (the ABI
+        // `call_class_getter` used); nothing here publishes an implicit `this`.
+        // A read inside an inherited-property resolution is left to the
+        // generic path, which isolates the body from it (#11201).
+        if crate::object::prototype_chain::resolution_stack_savepoint() != 0 {
+            return Lookup::Unknown;
+        }
+        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        return Lookup::Hit(JSValue::from_bits(f(this).to_bits()));
+    }
+    if acc.get != 0 {
+        return Lookup::Hit(crate::object::invoke_accessor_getter(acc.get, this));
+    }
+    Lookup::Hit(JSValue::undefined())
 }
 
 // --- the prime --------------------------------------------------------------
@@ -593,8 +677,18 @@ pub(crate) unsafe fn inherited_read_cache_prime(
         return None;
     }
     let mut note = DeclineNote::default();
-    let result = inherited_read_cache_walk(obj, key, &mut note);
+    let result = inherited_read_cache_walk(obj, key, None, &mut note);
     if result.is_none() {
+        record_decline(&note);
+    }
+    result
+}
+
+/// A declining walk: write the NEGATIVE entry that stops the walk from being
+/// re-run for this (receiver shape, key) — unless the refusal was caused by a
+/// value (see [`DeclineNote`]).
+unsafe fn record_decline(note: &DeclineNote) {
+    {
         if stats_enabled() {
             DECLINES.fetch_add(1, Ordering::Relaxed);
         }
@@ -609,6 +703,7 @@ pub(crate) unsafe fn inherited_read_cache_prime(
                 hops: note.hops,
                 hop_count: note.hop_count,
                 slot: NEGATIVE_SLOT,
+                accessor: false,
             };
             let index = entry_index(note.recv_class_id, note.recv_shape, note.key_ptr);
             INHERITED_READ_CACHE.with(|cell| {
@@ -616,7 +711,99 @@ pub(crate) unsafe fn inherited_read_cache_prime(
             });
         }
     }
-    result
+}
+
+// --- the write side ------------------------------------------------------------
+
+/// Run an inherited accessor's setter for `receiver.key = value`: the holder's
+/// slot holds the pair; a compiled class setter is called directly with the
+/// receiver as `this`, a `defineProperty` setter as a closure. `false` when
+/// the accessor has no setter — the caller's generic `[[Set]]` then refuses
+/// the write with the right strictness.
+///
+/// # Safety
+/// `obj` is the live receiver; `pair_bits` is the holder's slot word for an
+/// accessor key.
+#[inline]
+unsafe fn accessor_set(obj: *const ObjectHeader, pair_bits: u64, value: f64) -> bool {
+    let acc = crate::object::accessor_pair::pair_of_value_unchecked(pair_bits);
+    let this = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+    if acc.raw_set != 0 {
+        // A compiled class setter is called directly with the receiver as its
+        // `this` parameter, exactly as the class-setter arm of the generic
+        // `[[Set]]` calls it (that arm opens no resolution boundary either).
+        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let _ = f(this, value);
+        return true;
+    }
+    if acc.set != 0 {
+        crate::object::invoke_accessor_setter(acc.set, this, value);
+        return true;
+    }
+    false
+}
+
+/// `obj.key = value` where `key` is not an own property of `obj`: when the
+/// table (or one walk, recorded) proves the key resolves on the chain to an
+/// accessor with a setter, run it and answer `true`. `false` leaves the write
+/// to the caller's generic `[[Set]]` — a data holder, a getter-only accessor,
+/// a refusal. The same entries serve reads (`inherited_read_cache_lookup`):
+/// an entry is a fact about `(receiver shape, key)`, not about the access.
+///
+/// # Safety
+/// `obj` is a masked, non-null heap pointer the caller has already established
+/// is a plausible heap address; `key` may be null.
+pub(crate) unsafe fn inherited_write_through(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    match proved_entry(obj, key) {
+        Ok(entry) => {
+            if !entry.accessor {
+                return false;
+            }
+            let field = (entry.holder as *const u8)
+                .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
+                as *const u64;
+            if stats_enabled() {
+                HITS.fetch_add(1, Ordering::Relaxed);
+            }
+            accessor_set(obj, *field, value)
+        }
+        Err(Lookup::Unknown) => {
+            if key.is_null() || !cache_enabled() {
+                return false;
+            }
+            // An entry claims the key is NOT own on this shape (the ShapeId
+            // then keeps that true), so only a receiver without the key walks.
+            if !crate::object::object_is_shaped(obj) {
+                return false;
+            }
+            let keys = crate::object::object_keys(obj);
+            let len = (*key).byte_len as usize;
+            if len > (*key).capacity as usize {
+                return false;
+            }
+            let bytes = std::slice::from_raw_parts(crate::string::string_data(key), len);
+            if !keys.is_null()
+                && crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), bytes).is_some()
+            {
+                return false;
+            }
+            let mut note = DeclineNote::default();
+            let handled = inherited_read_cache_walk(obj, key, Some(value), &mut note).is_some();
+            if !handled && proved_entry(obj, key).is_err() {
+                // The walk recorded nothing (a data holder records a data
+                // entry): record the decline, so a store that adds a key, or
+                // any other refused write, is not walked again for this
+                // receiver shape.
+                record_decline(&note);
+            }
+            handled
+        }
+        Err(_) => false,
+    }
 }
 
 /// The walk itself. Every `None` here is a refusal; `note` is what makes the
@@ -624,9 +811,15 @@ pub(crate) unsafe fn inherited_read_cache_prime(
 ///
 /// # Safety
 /// As [`inherited_read_cache_prime`], whose guards this runs under.
+///
+/// `write`: `Some(value)` walks for a `[[Set]]` of `value` instead of a read.
+/// An accessor holder is recorded either way; a write then runs the setter
+/// and answers `Some(undefined)` ("handled"), and a data holder is recorded
+/// but answers `None` (the generic `[[Set]]` creates the own property).
 unsafe fn inherited_read_cache_walk(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
+    write: Option<f64>,
     note: &mut DeclineNote,
 ) -> Option<JSValue> {
     let key_addr = key as usize;
@@ -731,15 +924,32 @@ unsafe fn inherited_read_cache_walk(
                 && current_class_id
                     < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
             if !synthetic {
-                // A default builtin prototype may still need lazy
-                // construction, and can be replaced through `globalThis`.
-                return None;
+                // Charter step 3: a declared-class instance with no recorded
+                // `[[Prototype]]` inherits from its class's declared prototype
+                // (the class id IS the link). Only from the receiver itself:
+                // a declared prototype carries its class's id too, and its own
+                // parent link is its recorded prototype. Not materialized here
+                // (that allocates and could move the receiver) — the generic
+                // path builds it, and the next read primes. Any other
+                // non-synthetic id is a default builtin prototype, which may
+                // still need lazy construction and can be replaced through
+                // `globalThis`.
+                if hop_count != 0 || current_class_id == 0 {
+                    return None;
+                }
+                let decl = super::class_decl_prototype_object(current_class_id);
+                if decl.is_null() || decl as usize == obj_addr {
+                    note.armed = false;
+                    return None;
+                }
+                decl as *const ObjectHeader
+            } else {
+                if !super::class_decl_prototype_object(current_class_id).is_null() {
+                    // Declared prototype metadata has its own precedence.
+                    return None;
+                }
+                super::class_prototype_object(current_class_id)
             }
-            if !super::class_decl_prototype_object(current_class_id).is_null() {
-                // Declared prototype metadata has its own precedence.
-                return None;
-            }
-            super::class_prototype_object(current_class_id)
         };
         if next.is_null() || next == current || next == obj {
             return None;
@@ -803,12 +1013,9 @@ unsafe fn inherited_read_cache_walk(
         }
         // A clear Bloom bit PROVES no accessor and no customized descriptor
         // for this key on this hop; a collision declines conservatively.
-        if !meta.is_null()
-            && ((*meta).accessor_key_bits & accessor_bit != 0
-                || (*meta).attr_key_bits & accessor_bit != 0)
-        {
-            return None;
-        }
+        // Charter step 3: an ordinary hop's attributes live with its keys, so
+        // the key's own entry (read below) decides; its meta Bloom bits are
+        // not consulted.
 
         hops[hop_count] = next_addr;
         hop_count += 1;
@@ -835,6 +1042,45 @@ unsafe fn inherited_read_cache_walk(
                     .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
                     as *const u64;
                 let bits = *field;
+                let entry_byte = super::key_attrs::keys_entry(keys, slot);
+                if entry_byte & super::key_attrs::ENTRY_ACCESSOR != 0 {
+                    // Only a CLASS accessor (a compiled entry in its pair) is
+                    // served from here. A builtin prototype's accessor (e.g.
+                    // `Map.prototype.size`) is a native closure whose receiver
+                    // handling — a subclass instance resolved to its backing —
+                    // lives on the generic path, so it keeps that path.
+                    match super::accessor_pair::pair_of_value(bits) {
+                        Some(acc) if acc.raw_get != 0 || acc.raw_set != 0 => {}
+                        _ => return None,
+                    }
+                    let entry = Entry {
+                        key_ptr: key_addr,
+                        validity: crate::object::proto_validity::proto_validity(),
+                        recv_proto_bits,
+                        recv_class_id,
+                        recv_shape,
+                        holder: next_addr,
+                        hops,
+                        hop_count: hop_count as u8,
+                        slot,
+                        accessor: true,
+                    };
+                    let index = entry_index(recv_class_id, recv_shape, key_addr);
+                    INHERITED_READ_CACHE.with(|cell| {
+                        (*cell.get())[index] = entry;
+                    });
+                    if stats_enabled() {
+                        PRIMES.fetch_add(1, Ordering::Relaxed);
+                    }
+                    // The prime answers the access too: run the accessor now.
+                    if let Some(value) = write {
+                        return accessor_set(obj, bits, value).then(JSValue::undefined);
+                    }
+                    return match accessor_hit(obj, bits) {
+                        Lookup::Hit(value) => Some(value),
+                        _ => None,
+                    };
+                }
                 if bits == crate::value::TAG_HOLE {
                     note.value_dependent = true;
                     return None;
@@ -858,6 +1104,7 @@ unsafe fn inherited_read_cache_walk(
                     hops,
                     hop_count: hop_count as u8,
                     slot,
+                    accessor: false,
                 };
                 let index = entry_index(recv_class_id, recv_shape, key_addr);
                 INHERITED_READ_CACHE.with(|cell| {
@@ -865,6 +1112,9 @@ unsafe fn inherited_read_cache_walk(
                 });
                 if stats_enabled() {
                     PRIMES.fetch_add(1, Ordering::Relaxed);
+                }
+                if write.is_some() {
+                    return None;
                 }
                 return Some(value);
             }
@@ -961,6 +1211,12 @@ pub extern "C" fn js_inherited_read_cache_stats(which: i32) -> f64 {
 /// pointer plus interned key, NaN-boxed value back, `TAG_HOLE` for a decline
 /// (which no ordinary value can be, so the caller branches on one compare).
 ///
+/// DATA entries only. Codegen lists this call as a GC leaf
+/// (`gc_call_effects.rs`, `root_reload.rs`): nothing is spilled or reloaded
+/// around it, so it must never run user code or collect. An ACCESSOR entry
+/// runs a getter, so here it declines, and the miss handler — a collection
+/// point — serves it through [`inherited_read_cache_lookup`].
+///
 /// # Safety
 /// `obj` is a masked heap pointer whose pointer tag the caller established.
 #[no_mangle]
@@ -968,6 +1224,9 @@ pub unsafe extern "C" fn js_inherited_read_cache_hit_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
+    if matches!(proved_entry(obj, key), Ok(entry) if entry.accessor) {
+        return f64::from_bits(crate::value::TAG_HOLE);
+    }
     match inherited_read_cache_hit(obj, key) {
         Some(value) => f64::from_bits(value.bits()),
         None => f64::from_bits(crate::value::TAG_HOLE),

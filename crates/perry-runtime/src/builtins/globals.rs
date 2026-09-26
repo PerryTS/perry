@@ -946,7 +946,27 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                                     Some(b) => b.to_vec(),
                                     None => continue,
                                 };
-                            let field = crate::object::js_object_get_field(src_now, i as u32);
+                            // An accessor's value is its getter's result; its
+                            // slot holds the accessor pair (`accessor_pair.rs`).
+                            let field =
+                                if crate::object::key_attrs::key_is_accessor_at(keys_now, i as u32)
+                                {
+                                    let key_ptr = crate::string::js_string_from_bytes(
+                                        key_bytes.as_ptr(),
+                                        key_bytes.len() as u32,
+                                    );
+                                    // A self-rooting entry point: it runs the getter.
+                                    let value = src_handle.with_const_ptr(
+                                        |src: *const crate::object::ObjectHeader| {
+                                            crate::object::js_object_get_field_by_name_f64(
+                                                src, key_ptr,
+                                            )
+                                        },
+                                    );
+                                    crate::JSValue::from_bits(value.to_bits())
+                                } else {
+                                    crate::object::js_object_get_field(src_now, i as u32)
+                                };
                             let cloned =
                                 js_structured_clone_inner(f64::from_bits(field.bits()), depth + 1);
                             let key_ptr = crate::string::js_string_from_bytes(

@@ -64,7 +64,6 @@
     "crates/perry-runtime/src/node_submodules/test_once_unit_tests.rs": 2,
     "crates/perry-runtime/src/node_submodules/test_property.rs": 1,
     "crates/perry-runtime/src/node_submodules/trace_events.rs": 8,
-    "crates/perry-runtime/src/object/class_accessor_cache_tests.rs": 2,
     "crates/perry-runtime/src/object/native_module/callable_exports.rs": 1,
     "crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs": 2,
     "crates/perry-runtime/src/object/spill.rs": 1,

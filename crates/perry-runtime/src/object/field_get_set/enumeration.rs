@@ -172,7 +172,7 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             // Static accessors are defined before static fields, so an
             // enumerable one (#10480) precedes them.
             let mut names =
-                super::super::class_registry::class_enumerable_accessor_names(class_id, true);
+                super::super::class_registry::static_enumerable_accessor_names(class_id);
             names.extend(super::super::class_registry::class_own_enumerable_field_names(class_id));
             super::super::descriptors::sort_property_names_ecma(&mut names);
             let arr = crate::array::js_array_alloc(names.len().max(1) as u32);
@@ -1291,22 +1291,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
         return shape_keys;
     }
-    // #10480: a declared-class prototype's enumerable ClassBody accessors have
-    // no physical key. Resolve the class before the walk can move `obj`.
-    let decl_class = super::super::class_registry::class_accessor_attrs_in_use()
-        .then(|| {
-            super::super::class_registry::class_id_for_decl_prototype_object(strip_nanbox_addr(obj))
-        })
-        .flatten();
-    let keys = js_object_keys_shape(obj);
-    match decl_class {
-        Some(class_id) => unsafe {
-            super::super::class_registry::decl_prototype_keys_with_enumerable_accessors(
-                class_id, keys,
-            )
-        },
-        None => keys,
-    }
+    js_object_keys_shape(obj)
 }
 
 /// [`js_object_keys`] over the shape alone.
@@ -1866,15 +1851,6 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         //     read time, not cached up front: an earlier getter can create a
         //     descriptor or flip a future key's enumerability, so we defer the
         //     `descriptor_marks_non_enumerable` check to the read phase.
-        // #10480: a declared-class prototype's enumerable ClassBody accessors
-        // have no physical key, so the keys-array walk cannot see them. The
-        // probe runs `Object.keys`, which allocates, so the receiver is rooted
-        // across it and re-read.
-        let accessor_scope = crate::gc::RuntimeHandleScope::new();
-        let obj_handle = accessor_scope.root_raw_const_ptr(obj);
-        let (class_accessor_keys, obj) = obj_handle.across_const::<ObjectHeader, _>(|| {
-            super::super::class_registry::decl_prototype_enumerable_key_snapshot(obj)
-        });
         let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
@@ -1890,9 +1866,6 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 snapshot_keys.push(bytes.to_vec());
             }
         }
-        if let Some(merged) = class_accessor_keys {
-            snapshot_keys = merged;
-        }
         for key_bytes in snapshot_keys {
             let key_str =
                 crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
@@ -1902,19 +1875,11 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             // Re-check own + enumerable at read time (a prior getter may have
             // removed/hidden the key, or created a descriptor) — see
             // `js_object_entries`.
-            let class_accessor = std::str::from_utf8(&key_bytes).is_ok_and(|name| {
-                super::super::class_registry::class_prototype_enumerable_accessor(
-                    obj as usize,
-                    name,
-                )
-            });
-            if !class_accessor {
-                if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
-                    continue;
-                }
-                if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
-                    continue;
-                }
+            if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
+                continue;
+            }
+            if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
+                continue;
             }
             let value = js_object_get_field_by_name(obj as *const ObjectHeader, key_str);
             crate::array::js_array_push_f64(result, f64::from_bits(value.bits()));
