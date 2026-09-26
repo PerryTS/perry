@@ -146,7 +146,7 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     // `to_uint32_bits` for EVERY finite value (NaN/±Inf/±0 → 0, else
     // trunc-toward-zero mod 2^32); the unwrapped `toint32` is poison for
     // |v| >= 2^63, so `u32[i] = 1e300` stored garbage instead of 0.
-    let val_i32 = ctx.block().toint32_wrap(val_double);
+    let val_i32 = ctx.toint32_wrap(val_double);
 
     let b_i8 = ctx.new_block("tav.s.i8");
     let b_u8 = ctx.new_block("tav.s.u8");

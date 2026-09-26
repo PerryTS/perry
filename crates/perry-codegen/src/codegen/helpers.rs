@@ -726,9 +726,9 @@ thread_local! {
 /// while iOS/tvOS device targets can still cover A7–A11 chips (ARMv8.0–8.2,
 /// no JSCVT — `fjcvtzs` would be an illegal instruction) and generic aarch64
 /// (Graviton2/Neoverse-N1) lacks it too. `PERRY_JSCVT=0/off/false` reverts
-/// `toint32_wrap` to the branchless shift/select tower (A/B bisection; keyed
-/// into the object cache). Same thread-local per-module discipline as
-/// `FULL_OUTLINE_IC` above.
+/// `toint32_wrap` to the portable guarded `fptosi` + shift/select tower (A/B
+/// bisection; keyed into the object cache). Same thread-local per-module
+/// discipline as `FULL_OUTLINE_IC` above.
 pub(crate) fn jscvt_enabled() -> bool {
     JSCVT.with(|c| c.get())
 }

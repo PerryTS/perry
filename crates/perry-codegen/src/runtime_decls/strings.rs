@@ -160,9 +160,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.bswap.i32", I32, &[I32]);
     module.declare_function("llvm.bswap.i64", I64, &[I64]);
     // ARMv8.3 FEAT_JSCVT: spec-exact single-instruction ECMAScript ToInt32,
-    // emitted by `LlBlock::toint32_wrap` on apple-arm64 targets only (the
-    // declare is target-conditional — an aarch64 intrinsic in an x86 module
-    // would be rejected by the backend).
+    // emitted by `LlBlock::toint32_wrap_branchless` on apple-arm64 targets
+    // only (the declare is target-conditional — an aarch64 intrinsic in an
+    // x86 module would be rejected by the backend).
     if crate::codegen::helpers::jscvt_enabled() {
         module.declare_function("llvm.aarch64.fjcvtzs", I32, &[DOUBLE]);
     }

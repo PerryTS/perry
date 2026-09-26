@@ -982,7 +982,7 @@ impl LlBlock {
     /// paths reject huge keys before element access (they route to the
     /// by-name/dynamic fallbacks) and these sites sit in structurally-gated
     /// hot loops that must stay lean. User-visible ToInt32 (`x | 0`,
-    /// bitwise operands) must use [`Self::toint32_wrap`] instead.
+    /// bitwise operands) must use `FnCtx::toint32_wrap` instead.
     pub fn toint32(&mut self, val: &str) -> String {
         use crate::types::{DOUBLE, I1, I32, I64};
         let is_nan = self.fcmp("uno", val, "0.0");
@@ -1010,7 +1010,12 @@ impl LlBlock {
     /// on Linux (`unsupported_instruction` vectorization diagnostics) even
     /// though it was semantically right. Over-wide shifts are clamped
     /// (poison otherwise); every clamped case is mathematically 0 anyway.
-    pub fn toint32_wrap(&mut self, val: &str) -> String {
+    ///
+    /// Branchless and single-block, so it costs the whole tower on every
+    /// evaluation. Expression lowering wants `FnCtx::toint32_wrap`, which
+    /// takes a guarded `fptosi` for `|v| < 2^63` and keeps this as its cold
+    /// exact arm (#10897).
+    pub fn toint32_wrap_branchless(&mut self, val: &str) -> String {
         use crate::types::{I1, I32, I64};
         // ARMv8.3 FEAT_JSCVT: `fjcvtzs` IS ECMAScript ToInt32 in one
         // instruction — truncate toward zero, wrap modulo 2^32, NaN/±Inf/-0
@@ -1057,6 +1062,25 @@ impl LlBlock {
         let zero_all = self.or(I1, &zero_bad, &lsh_huge);
         let wrapped = self.select(I1, &zero_all, I64, "0", &signed);
         self.trunc(I64, &wrapped, I32)
+    }
+
+    /// The `i32` that `val` was widened from, when this block defines `val`
+    /// as `sitofp`/`uitofp i32 -> double`. ToInt32 of such a double is that
+    /// i32 exactly (the same bits, for `uitofp`), so a conversion of a value
+    /// that just left the int32 domain — a `| 0` result entering an i32 slot
+    /// — needs no instructions at all.
+    pub fn widened_i32_source(&self, val: &str) -> Option<String> {
+        use crate::types::{DOUBLE, I32};
+        self.instructions.iter().rev().find_map(|inst| match inst {
+            crate::inst::LlInst::Cast {
+                dst,
+                op: "sitofp" | "uitofp",
+                from,
+                v,
+                to,
+            } if dst == val && *from == I32 && *to == DOUBLE => Some(v.clone()),
+            _ => None,
+        })
     }
 
     /// Fast ToInt32 — skip NaN/Infinity guards. Use ONLY when the input

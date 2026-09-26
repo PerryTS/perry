@@ -1117,8 +1117,11 @@ pub(crate) fn lower(
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
+                // A byte store is ToInt32 mod 2^8. A bare `fptosi -> i32` is
+                // poison outside int32 range (x86 yields 0x80000000), so
+                // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.block().fptosi(DOUBLE, &v, I32)
+                ctx.toint32_wrap(&v)
             };
             // Slow path accepts either BufferHeader-backed Uint8Arrays or
             // NativeArena typed views.
@@ -1209,8 +1212,11 @@ pub(crate) fn lower(
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
+                // A byte store is ToInt32 mod 2^8. A bare `fptosi -> i32` is
+                // poison outside int32 range (x86 yields 0x80000000), so
+                // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.block().fptosi(DOUBLE, &v, I32)
+                ctx.toint32_wrap(&v)
             };
             let a = lower_expr(ctx, buffer)?;
             let blk = ctx.block();

@@ -3040,6 +3040,9 @@ pub(crate) mod suffix_cursor;
 mod bigint_bitwise_tests;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
+mod toint32;
+#[cfg(test)]
+mod toint32_tests;
 mod u8_buffer_read;
 #[cfg(test)]
 mod unary_bigint_tests;
@@ -3834,7 +3837,7 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
             return Ok(Some(if is_known_i32_range(ctx, expr) {
                 ctx.block().toint32_fast(&value)
             } else {
-                ctx.block().toint32_wrap(&value)
+                ctx.toint32_wrap(&value)
             }));
         }
         None => return Ok(None),
@@ -3865,12 +3868,12 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
             if is_known_i32_range(ctx, expr) {
                 ctx.block().toint32_fast(&lowered.value)
             } else {
-                ctx.block().toint32_wrap(&lowered.value)
+                ctx.toint32_wrap(&lowered.value)
             }
         }
         NativeRep::F32 => {
             let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
-            ctx.block().toint32_wrap(&widened)
+            ctx.toint32_wrap(&widened)
         }
         _ => return Ok(None),
     };

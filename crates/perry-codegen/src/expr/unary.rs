@@ -135,8 +135,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let i = if bitnot_known_i32 {
                             blk.toint32_fast(&v)
                         } else {
-                            blk.toint32_wrap(&v)
+                            ctx.toint32_wrap(&v)
                         };
+                        let blk = ctx.block();
                         let flipped = blk.xor(I32, &i, "-1");
                         Ok(blk.sitofp(I32, &flipped, DOUBLE))
                     } else {

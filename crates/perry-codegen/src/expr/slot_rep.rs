@@ -674,7 +674,7 @@ pub(crate) fn store_canonical_local_from_double(
         let v_i64 = ctx.block().fptosi(DOUBLE, value, I64);
         ctx.block().trunc(I64, &v_i64, I32)
     } else {
-        ctx.block().toint32_wrap(value)
+        ctx.toint32_wrap(value)
     };
     ctx.block().store(I32, &v_i32, &slot);
     true

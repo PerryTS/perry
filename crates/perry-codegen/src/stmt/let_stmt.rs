@@ -1641,7 +1641,7 @@ pub(crate) fn lower_let(
                     let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
                     ctx.block().trunc(crate::types::I64, &v_i64, I32)
                 } else {
-                    ctx.block().toint32_wrap(&v)
+                    ctx.toint32_wrap(&v)
                 };
                 ctx.block().store(I32, &v_i32, &i32_slot);
             }

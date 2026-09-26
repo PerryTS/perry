@@ -323,15 +323,17 @@ fn lower_guarded_numeric_arith(
             BinaryOp::Mul => ctx.block().fmul(l, r),
             BinaryOp::Div => ctx.block().fdiv(l, r),
             _ => {
-                let blk = ctx.block();
                 // Under the range guard both operands are Numbers with
                 // |v| < 2^63, where truncating to i64 and keeping the low 32
-                // bits IS ToInt32.
+                // bits IS ToInt32 (#11384). Otherwise take the guarded
+                // hardware fast path with its exact cold arm (#10897).
                 let (li, ri) = if range_guard {
+                    let blk = ctx.block();
                     (blk.toint32_fast(l), blk.toint32_fast(r))
                 } else {
-                    (blk.toint32_wrap(l), blk.toint32_wrap(r))
+                    (ctx.toint32_wrap(l), ctx.toint32_wrap(r))
                 };
+                let blk = ctx.block();
                 let v = match op {
                     BinaryOp::BitAnd => blk.and(I32, &li, &ri),
                     BinaryOp::BitOr => blk.or(I32, &li, &ri),
@@ -1556,17 +1558,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 | BinaryOp::Shr => {
                     let l_safe = is_known_i32_range(ctx, left);
                     let r_safe = is_known_i32_range(ctx, right);
-                    let blk = ctx.block();
                     let li = if l_safe {
-                        blk.toint32_fast(&l)
+                        ctx.block().toint32_fast(&l)
                     } else {
-                        blk.toint32_wrap(&l)
+                        ctx.toint32_wrap(&l)
                     };
                     let ri = if r_safe {
-                        blk.toint32_fast(&r)
+                        ctx.block().toint32_fast(&r)
                     } else {
-                        blk.toint32_wrap(&r)
+                        ctx.toint32_wrap(&r)
                     };
+                    let blk = ctx.block();
                     let v = match op {
                         BinaryOp::BitAnd => blk.and(I32, &li, &ri),
                         BinaryOp::BitOr => blk.or(I32, &li, &ri),
@@ -1588,17 +1590,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 BinaryOp::UShr => {
                     let l_safe = is_known_i32_range(ctx, left);
                     let r_safe = is_known_i32_range(ctx, right);
-                    let blk = ctx.block();
                     let li = if l_safe {
-                        blk.toint32_fast(&l)
+                        ctx.block().toint32_fast(&l)
                     } else {
-                        blk.toint32_wrap(&l)
+                        ctx.toint32_wrap(&l)
                     };
                     let ri = if r_safe {
-                        blk.toint32_fast(&r)
+                        ctx.block().toint32_fast(&r)
                     } else {
-                        blk.toint32_wrap(&r)
+                        ctx.toint32_wrap(&r)
                     };
+                    let blk = ctx.block();
                     let v = blk.lshr(I32, &li, &ri);
                     blk.uitofp(I32, &v, DOUBLE)
                 }
