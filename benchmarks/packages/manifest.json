@@ -35,6 +35,7 @@
   },
   "workloads": [
     { "id": "control/bare_loop", "n1": 2000000, "n2": 8000000, "warm": 1000 },
+    { "id": "control/prop_read", "n1": 500000, "n2": 2000000, "warm": 1000 },
 
     { "id": "jsonwebtoken/hs256", "n1": 500, "n2": 2000, "warm": 200 },
     { "id": "jsonwebtoken/rs256", "n1": 50, "n2": 200, "warm": 20 },

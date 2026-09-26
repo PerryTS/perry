@@ -860,6 +860,18 @@ def geomean(xs):
     return math.exp(sum(math.log(x) for x in xs) / len(xs))
 
 
+def instr_spread(ins):
+    """(max - min) / median of the instruction samples, worst of the two Ns."""
+    if not ins:
+        return None
+    out = 0.0
+    for k in ("n1", "n2"):
+        xs = ins.get(k) or []
+        if len(xs) >= 2 and statistics.median(xs) > 0:
+            out = max(out, (max(xs) - min(xs)) / statistics.median(xs))
+    return round(out, 4)
+
+
 def short_sym(name: str) -> str:
     """Trim a demangled Rust/LLVM symbol to something that fits a table cell."""
     n = re.sub(r"::h[0-9a-f]{16}$", "", name)
@@ -903,7 +915,8 @@ def cmd_report(args) -> None:
                 "cold_s": wa.get("cold_s"), "peak_rss_kb": wa.get("peak_rss_kb") or ia.get("peak_rss_kb"),
                 "peak_rss_kb_instr_host": ia.get("peak_rss_kb"),
                 "load_flagged_instr_host": ia.get("load_flagged"), "load_flagged_wall_host": wa.get("load_flagged"),
-                "load_max_wall_host": wa.get("load_max"),
+                "load_max_wall_host": wa.get("load_max"), "load_max_instr_host": ia.get("load_max"),
+                "instr_spread": instr_spread(ia.get("instr")),
             }
             if arm == "perry":
                 r.update(size_bytes=ce.get("size_bytes"), compile_s=ce.get("compile_s"),
@@ -1017,11 +1030,37 @@ def cmd_report(args) -> None:
     L.append("\n† this compile was the first with its auto-optimize feature set, so it includes a one-time "
              "runtime+stdlib archive rebuild (cached for later compiles). Compile times were taken on a shared, "
              "loaded host and are indicative only.")
-    ctl = merged["workloads"].get("control/bare_loop", {}).get("arms", {})
-    if ctl:
-        L.append("\nBare-loop control (per iteration): " + ", ".join(
-            f"{arm} {fmt_instr(v.get('instr_per_iter'))} instr / {fmt_us(v.get('wall_per_iter_s'))} µs"
-            for arm, v in ctl.items()) + ".\n")
+    L.append("\n## Controls (per iteration)\n")
+    L.append("| control | node instr | bun instr | perry instr | node µs | bun µs | perry µs |")
+    L.append("|---|---|---|---|---|---|---|")
+    for wid, r in rows:
+        if not wid.startswith("control/"):
+            continue
+        a = r["arms"]
+        L.append(f"| `{wid}` | " + " | ".join(fmt_instr(a.get(x, {}).get("instr_per_iter")) for x in ("node", "bun", "perry"))
+                 + " | " + " | ".join(fmt_us(a.get(x, {}).get("wall_per_iter_s")) for x in ("node", "bun", "perry")) + " |")
+    L.append("")
+    flagged = []
+    for wid, r in rows:
+        for arm, a in r["arms"].items():
+            if a.get("load_flagged_instr_host"):
+                flagged.append((wid, arm, a.get("instr_spread"), a.get("load_max_instr_host")))
+    if flagged:
+        thr = (instr or {}).get("load_threshold")
+        worst = max((f[2] or 0) for f in flagged)
+        L.append("## Load during the instruction runs\n")
+        L.append(f"{len(flagged)} workload×arm instruction measurements ran while the host's 1-minute load exceeded "
+                 f"the flag threshold ({thr}); the shared build host was never below it for long. "
+                 "`instructions:u` counts only the measured process's user-mode instructions, so load changes "
+                 "them far less than wall time — the evidence is the spread of the 3 samples per N, reported "
+                 f"per arm in the JSON (`instr_spread` = (max−min)/median over both N). Worst spread among flagged "
+                 f"arms: {worst * 100:.1f}%. Arms with spread > 5%:\n")
+        big = [f for f in flagged if (f[2] or 0) > 0.05]
+        for wid, arm, sp, lm in sorted(big, key=lambda t: -(t[2] or 0)):
+            L.append(f"- `{wid}` [{arm}]: spread {sp * 100:.1f}%, load max {lm}")
+        if not big:
+            L.append("None.")
+        L.append("")
 
     if liv:
         L.append("## Liveness (compiled from source, no removed binding)\n")

@@ -1,4 +1,4 @@
-// Bare-loop control: the same harness shape as every workload with a
+// Bare-loop control (minimal): the same harness shape as every workload with a
 // trivial hot operation (one FNV multiply step, the same helper every
 // workload's checksum uses). Its per-iteration cost is the floor the two-N
 // method measures when the operation itself costs ~nothing.
