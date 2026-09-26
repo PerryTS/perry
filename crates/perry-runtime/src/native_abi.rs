@@ -266,6 +266,10 @@ static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
 #[used(compiler)]
 static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
     crate::array::js_short_packed_spread_values;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ARRAY_DESTRUCTURE_NEEDS_ITERATOR: extern "C" fn(f64) -> i32 =
+    crate::array::js_array_destructure_needs_iterator;
 
 /// Validate and lower a manifest `f32` parameter.
 #[no_mangle]

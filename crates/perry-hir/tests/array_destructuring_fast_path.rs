@@ -1,6 +1,8 @@
 //! #10086: array destructuring over a spread-free array literal or a
-//! statically-proven array must lower to the guarded non-iterator arm, and
-//! everything else must keep the plain spec iterator protocol.
+//! statically-proven array must lower to the guarded non-iterator arm; #10524:
+//! a source with no static proof lowers to the same arm behind a runtime
+//! receiver check; a rest pattern or a statically non-array source keeps the
+//! plain spec iterator protocol.
 //!
 //! These assert the LOWERING DECISION, which is what the perf fix is; the
 //! behavioural half (evaluation order, defaults, holes, rest, nested patterns,
@@ -98,21 +100,58 @@ fn assignment_from_a_proven_array_is_guarded() {
     );
 }
 
-/// A source with no static array proof — a custom iterable, a generator, an
-/// `any` — keeps the plain iterator protocol, unguarded. Emitting the fast arm
-/// here would read `.length` / `[0]` off something that has neither.
+/// #10524: the runtime guard of a source with no static array proof.
+const RUNTIME_GUARD: &str = "arrayDestructureNeedsIterator";
+
+/// A source with no static array proof — an `any`, an untyped call result —
+/// takes the index arm behind a RUNTIME receiver check, not the static
+/// prototype guard, and keeps the full iterator protocol as the other arm for
+/// the custom iterables, generators, strings and subclasses that fail it.
 #[test]
-fn an_unproven_source_keeps_the_plain_iterator_protocol() {
-    let dump =
-        hir("declare const it: any;\nlet a = 0; let b = 0;\n[a, b] = it;\nconsole.log(a, b);");
-    assert!(
-        !dump.contains(GUARD),
-        "an unproven source must not take the non-iterator arm"
-    );
-    assert!(
-        dump.contains("GetIterator("),
-        "an unproven source must still drive the iterator protocol"
-    );
+fn an_unproven_source_is_guarded_by_a_runtime_receiver_check() {
+    for src in [
+        "declare const it: any;\nlet a = 0; let b = 0;\n[a, b] = it;\nconsole.log(a, b);",
+        "declare const it: any;\nconst [a, b] = it;\nconsole.log(a, b);",
+        "function f(): any { return [1, 2]; }\nconst [a, b] = f();\nconsole.log(a, b);",
+    ] {
+        let dump = hir(src);
+        assert!(
+            !dump.contains(GUARD),
+            "an unproven source must not trust the static prototype guard alone:\n{src}"
+        );
+        let guard = dump
+            .find(RUNTIME_GUARD)
+            .unwrap_or_else(|| panic!("an unproven source must read the runtime guard:\n{src}"));
+        let get_iterator = dump
+            .find("GetIterator(")
+            .unwrap_or_else(|| panic!("an unproven source must keep the protocol arm:\n{src}"));
+        assert!(
+            guard < get_iterator,
+            "the runtime guard must dominate GetIterator:\n{src}"
+        );
+        assert!(
+            dump.contains("IndexGet"),
+            "the fast arm of an unproven source must read elements by index:\n{src}"
+        );
+    }
+}
+
+/// A source whose static type rules out an array keeps the plain protocol:
+/// the runtime guard would always decline, so the fast arm would be dead code.
+#[test]
+fn a_statically_non_array_source_keeps_the_plain_iterator_protocol() {
+    for src in [
+        "const s: string = String(12);\nconst [a, b] = s;\nconsole.log(a, b);",
+        "const m = new Map<string, number>();\nconst [a] = m;\nconsole.log(a);",
+        "const st = new Set<number>([1]);\nconst [a] = st;\nconsole.log(a);",
+    ] {
+        let dump = hir(src);
+        assert!(
+            !dump.contains(GUARD) && !dump.contains(RUNTIME_GUARD),
+            "a statically non-array source must keep the unguarded protocol:\n{src}"
+        );
+        assert!(dump.contains("GetIterator("), "{src}");
+    }
 }
 
 /// A generator call is not a proven array either.
@@ -121,7 +160,7 @@ fn a_generator_source_keeps_the_plain_iterator_protocol() {
     let dump = hir("function* g() { yield 1; yield 2; }\nconst [a, b] = g();\nconsole.log(a, b);");
     assert!(
         !dump.contains(GUARD),
-        "a generator source must not take the non-iterator arm"
+        "a generator source must not take the statically-guarded arm"
     );
 }
 
@@ -130,12 +169,16 @@ fn a_generator_source_keeps_the_plain_iterator_protocol() {
 /// disagree on a sparse source.
 #[test]
 fn a_rest_element_keeps_the_iterator_drain() {
-    let dump =
-        hir("const src: number[] = [1, 2, 3];\nconst [a, ...rest] = src;\nconsole.log(a, rest);");
-    assert!(
-        !dump.contains(GUARD),
-        "a rest pattern must keep the unguarded iterator lowering"
-    );
+    for src in [
+        "const src: number[] = [1, 2, 3];\nconst [a, ...rest] = src;\nconsole.log(a, rest);",
+        "declare const src: any;\nconst [a, ...rest] = src;\nconsole.log(a, rest);",
+    ] {
+        let dump = hir(src);
+        assert!(
+            !dump.contains(GUARD) && !dump.contains(RUNTIME_GUARD),
+            "a rest pattern must keep the unguarded iterator lowering:\n{src}"
+        );
+    }
 }
 
 /// A spread inside the literal makes the element count dynamic, so the literal

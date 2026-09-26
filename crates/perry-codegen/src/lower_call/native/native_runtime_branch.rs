@@ -26,6 +26,22 @@
                     .block()
                     .call(DOUBLE, "js_iterator_next_result", &[(DOUBLE, &iter)]));
             }
+            // #10524: the runtime guard of array destructuring over a source
+            // with no static array proof — a NaN-boxed boolean, the same shape
+            // `Expr::ArrayIterationPatched` produces for the proven arm.
+            "arrayDestructureNeedsIterator" => {
+                let source = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let blk = ctx.block();
+                let needs = blk.call(
+                    I32,
+                    "js_array_destructure_needs_iterator",
+                    &[(DOUBLE, &source)],
+                );
+                return Ok(crate::expr::i32_bool_to_nanbox(blk, &needs));
+            }
             "iteratorCloseIfNotDone" => {
                 let iter = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),

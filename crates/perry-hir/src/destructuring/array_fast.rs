@@ -47,15 +47,25 @@
 //! spread-free array literal written in place — the literal's already-spilled
 //! element temps, which removes the array ALLOCATION as well (the swap's one GC
 //! allocation per iteration).
+//!
+//! #10524 extends the index-read shape to sources with NO static proof. In
+//! compiled JavaScript almost nothing is typed, so `const [a, b] = f()` stayed
+//! on the protocol (~35 k instructions per destructure against ~2 k for
+//! `r[0]`, `r[1]`). There the guard is a per-destructure runtime call,
+//! `js_array_destructure_needs_iterator`, which proves the VALUE is an ordinary
+//! Array whose iteration nobody can observe (the same proof `[...value]` uses,
+//! and it folds in the pristine byte above). A string, Map, generator, Proxy,
+//! Array subclass, or an array with its own `[Symbol.iterator]` fails it and
+//! takes the unchanged protocol arm.
 
 use super::*;
 
 /// How one array pattern reaches its elements.
 pub(crate) enum ArraySource {
-    /// No proof that the source is a plain array — drive the spec iterator
-    /// protocol on this expression, unguarded. What every array pattern did
-    /// before #10086, and what a nested pattern, a rest element or an unproven
-    /// source still does.
+    /// Drive the spec iterator protocol on this expression, unguarded. What
+    /// every array pattern did before #10086, and what a nested pattern, a
+    /// rest element or a source statically known not to be an array still
+    /// does.
     Iterator(Expr),
     /// The source admits the non-iterator arm: [`FastPlan`] carries both the
     /// runtime guard and the fast element source.
@@ -108,7 +118,9 @@ pub(crate) enum FastElements {
 
 /// The guarded-pull plan for one array pattern.
 pub(crate) struct FastPlan {
-    /// Boolean local holding the once-evaluated [`Expr::ArrayIterationPatched`].
+    /// Boolean local holding the once-evaluated guard — [`Expr::ArrayIterationPatched`]
+    /// for a statically-proven source, the runtime receiver check for an
+    /// unproven one ([`plan_for_unproven_source`]). True selects the protocol.
     /// Read once per element; the branch is loop-invariant and perfectly
     /// predicted.
     use_iter: LocalId,
@@ -259,6 +271,56 @@ pub(crate) fn plan_for_proven_array(
     }
 }
 
+/// #10524: plan for a source with no static array proof. The source is spilled
+/// into an `Any` local that the guard and the protocol arm read — so a string,
+/// Map or generator reaches `GetIterator` exactly as it did before — and
+/// re-bound into an `Array(Any)` local that ONLY the fast arm reads, for the
+/// same element-read reason as [`plan_for_proven_array`]'s temp. The guard is
+/// `js_array_destructure_needs_iterator(src)`, true for anything that is not an
+/// ordinary Array with pristine iteration.
+pub(crate) fn plan_for_unproven_source(
+    ctx: &mut LoweringContext,
+    source: Expr,
+    out: &mut Vec<Stmt>,
+) -> FastPlan {
+    let (any_id, any_name) = fresh(ctx, Type::Any);
+    out.push(Stmt::Let {
+        id: any_id,
+        name: any_name,
+        ty: Type::Any,
+        mutable: false,
+        init: Some(source),
+    });
+    let (use_iter, use_name) = fresh(ctx, Type::Boolean);
+    out.push(Stmt::Let {
+        id: use_iter,
+        name: use_name,
+        ty: Type::Boolean,
+        mutable: false,
+        init: Some(Expr::NativeMethodCall {
+            module: "__perry_runtime".to_string(),
+            class_name: None,
+            object: None,
+            method: "arrayDestructureNeedsIterator".to_string(),
+            args: vec![Expr::LocalGet(any_id)],
+        }),
+    });
+    let arr_ty = Type::Array(Box::new(Type::Any));
+    let (arr_id, arr_name) = fresh(ctx, arr_ty.clone());
+    out.push(Stmt::Let {
+        id: arr_id,
+        name: arr_name,
+        ty: arr_ty,
+        mutable: false,
+        init: Some(Expr::LocalGet(any_id)),
+    });
+    FastPlan {
+        use_iter,
+        iter_source: Expr::LocalGet(any_id),
+        elements: FastElements::Indexed(arr_id),
+    }
+}
+
 /// A spread-free array literal's element expressions, or `None` for anything
 /// else. Holes are rejected: a hole is a genuinely ABSENT index whose read walks
 /// the prototype chain, which substituting `undefined` would not do.
@@ -288,6 +350,29 @@ pub(crate) fn proven_array(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     }
 }
 
+/// #10524: is `expr`'s static type one whose runtime value can still be an
+/// Array? Types that provably cannot (a primitive, a `Map`/`Set`/generator
+/// instantiation, …) keep the plain protocol: the runtime guard would always
+/// decline for them, so the fast arm would be dead code.
+pub(crate) fn may_be_array_at_runtime(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match infer_type_from_expr(expr, ctx) {
+        Type::Void
+        | Type::Null
+        | Type::Boolean
+        | Type::Number
+        | Type::Int32
+        | Type::BigInt
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Symbol
+        | Type::Never
+        | Type::Function(_)
+        | Type::Promise(_) => false,
+        Type::Generic { base, .. } => base == "Array" || base == "ReadonlyArray",
+        _ => true,
+    }
+}
+
 /// Can every element of this pattern be produced by index?
 ///
 /// A rest element cannot: draining the remainder through the iterator builds a
@@ -299,7 +384,9 @@ pub(crate) fn pattern_admits_index_reads(elems: &[Option<ast::Pat>]) -> bool {
 }
 
 /// #10086: build the guarded non-iterator plan for a destructuring source, or
-/// `None` when this pattern/source pair keeps the plain iterator lowering.
+/// `None` when this pattern/source pair keeps the plain iterator lowering
+/// (a rest element, an empty pattern, or a source statically known not to be
+/// an array). An unproven source gets the #10524 runtime-checked plan.
 /// Returns the setup statements the plan depends on (the literal's element
 /// spills or the source spill, plus the guard read) alongside it.
 ///
@@ -324,6 +411,11 @@ pub(crate) fn plan_for_source(
     if proven_array(ctx, source) {
         let lowered = lower_expr(ctx, source)?;
         let plan = plan_for_proven_array(ctx, lowered, &mut setup);
+        return Ok(Some((setup, plan)));
+    }
+    if may_be_array_at_runtime(ctx, source) {
+        let lowered = lower_expr(ctx, source)?;
+        let plan = plan_for_unproven_source(ctx, lowered, &mut setup);
         return Ok(Some((setup, plan)));
     }
     Ok(None)

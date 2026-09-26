@@ -114,6 +114,29 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     Some(arr)
 }
 
+/// #10524: must `const [a, b] = value` drive the spec iterator protocol, or may
+/// it read `value[0]`, `value[1]` directly?
+///
+/// Returns `0` exactly when `value` is an ordinary Array whose iteration nobody
+/// can observe — [`dense_spread_source`]'s proof, which already folds in the
+/// sticky `PERRY_ARRAY_ITERATION_NOT_PRISTINE` byte that #10086's
+/// statically-proven arm reads on its own — and `1` for everything else: a
+/// string, Map, Set, generator, typed array, Proxy, `class X extends Array`
+/// instance, an array with its own or a re-parented `[Symbol.iterator]`, an
+/// array whose indices hit accessors or prototype-inherited elements, or any
+/// array once iteration has been patched. On `0` the generated code reads
+/// `i < length ? value[i] : undefined` per element, which for such an array is
+/// the value the iterator would have produced (holes read `undefined` because
+/// no prototype index property can shadow them — `array_iteration_is_exotic`).
+///
+/// Non-allocating and never invokes user code (an own `[Symbol.iterator]` is
+/// probed for existence, not read), so the decision itself is unobservable and
+/// the protocol arm still performs `GetIterator` exactly once.
+#[no_mangle]
+pub extern "C" fn js_array_destructure_needs_iterator(value: f64) -> i32 {
+    i32::from(dense_spread_source(value).is_none())
+}
+
 /// Copy a short, exact packed-array spread tail into caller-owned storage.
 ///
 /// Returns the element count (`0..=4`) on success and `-1` when spread must use

@@ -282,3 +282,31 @@ fn short_packed_call_guard_rejects_holes_and_oversized_arrays() {
         "only arities 0 through 4 are specialized"
     );
 }
+
+#[test]
+fn destructure_guard_is_the_negation_of_the_dense_proof() {
+    // #10524: `const [a, b] = <untyped>` reads by index exactly when the value
+    // is an ordinary array, and keeps the protocol for everything else —
+    // including an array that stops being ordinary after the fact.
+    let src = dense(&[1.0, 2.0]);
+    let value = boxed(src);
+    assert_eq!(js_array_destructure_needs_iterator(value), 0);
+    let s = crate::string::js_string_from_bytes(b"ab".as_ptr(), 2);
+    let string = f64::from_bits(JSValue::string_ptr(s).bits());
+    for other in [
+        string,
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_NULL),
+        42.0,
+    ] {
+        assert_eq!(js_array_destructure_needs_iterator(other), 1);
+    }
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(value, iterator_symbol_value(), 1.0);
+    }
+    assert_eq!(
+        js_array_destructure_needs_iterator(value),
+        1,
+        "an own [Symbol.iterator] must send destructuring back to the protocol"
+    );
+}
