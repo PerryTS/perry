@@ -1630,6 +1630,7 @@ pub(crate) fn install_fresh_accessor_property(
     attrs: PropertyAttrs,
 ) {
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    crate::closure::shape::note_function_own_state_changed(obj);
     // One edit covers the pair: the keys record both halves, and a key that
     // is not yet own arrives WITH them (one trie edge; an in-place append on
     // the tip of an attribute backing).
@@ -1781,6 +1782,7 @@ pub(crate) fn set_builtin_accessor_pair(
 ) {
     let acc = descriptor_from(pair);
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    crate::closure::shape::note_function_own_state_changed(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
     let previous = if in_keys {
         unsafe { own_accessor(obj, key.as_bytes()) }

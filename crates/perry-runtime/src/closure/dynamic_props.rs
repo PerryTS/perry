@@ -967,7 +967,13 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         }
     }
 
-    if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
+    // A closure on its base Function shape has no accessor and no deleted
+    // key: every funnel that installs either moves it to FunctionDictionary
+    // (`closure::shape`). So the shape answers those two side-table probes.
+    let on_base = unsafe { super::shape::closure_on_base_shape(ptr as *const ClosureHeader) };
+    if on_base {
+        // fall through to the data lookups below
+    } else if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
         if acc.get == 0 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
@@ -1000,7 +1006,7 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         return unsafe { crate::closure::reify_function_method_value(receiver, method) };
     }
     // Function length is an own intrinsic property.
-    if prop == "length" && !closure_is_key_deleted(ptr, "length") {
+    if prop == "length" && (on_base || !closure_is_key_deleted(ptr, "length")) {
         let value = crate::value::js_nanbox_pointer(ptr as i64);
         if let Some(arity) = unsafe { crate::object::bound_native_callable_value_arity(value) } {
             return arity as f64;
@@ -1019,7 +1025,7 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     // already-bound target) gets it for free through this one seam. Once
     // cached, the `closure_props` lookup above intercepts before this runs
     // again.
-    if prop == "name" && !closure_is_key_deleted(ptr, "name") {
+    if prop == "name" && (on_base || !closure_is_key_deleted(ptr, "name")) {
         let func_ptr = unsafe { (*(ptr as *const ClosureHeader)).func_ptr };
         if func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR {
             return unsafe { crate::closure::bound_function_lazy_name(ptr) };

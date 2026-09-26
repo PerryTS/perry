@@ -575,9 +575,12 @@ pub(crate) const BOUND_FUNCTION_CAPTURES: u32 = 5;
 /// property (a non-u32 length).
 ///
 /// # Safety
-/// Any word: ownership is proven (`is_closure_ptr`) before a field is read.
+/// `closure` is a closure address its caller already proved
+/// (`is_closure_ptr`) — every `.length` reader reaches this from inside its
+/// closure arm — or that address after the cell moved: the header byte (an
+/// evacuated stub reads FORWARDED) is the only re-check.
 pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
-    if !is_closure_ptr(closure) {
+    if !crate::closure::closure_kind_probe(closure) {
         return None;
     }
     let c = closure as *const ClosureHeader;

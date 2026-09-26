@@ -184,13 +184,13 @@ pub(crate) fn forget_body_classification(func_ptr: *const u8) {
     });
 }
 
-/// Is this closure still on its base (intrinsic-only) shape?
+/// Is `closure` on a base Function shape (any body kind)? One cached kind
+/// lookup of its +4 word.
 ///
 /// # Safety
-/// `closure` is a live, non-forwarded `GC_TYPE_CLOSURE` cell.
-#[cfg(test)]
+/// `closure` is a proven, live closure cell.
 #[inline]
-pub(crate) unsafe fn closure_has_base_shape(closure: *const ClosureHeader) -> bool {
+pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> bool {
     shapes::shape_object_kind_by_id((*closure).shape_id) == Some(ShapeObjectKind::Function)
 }
 
@@ -289,7 +289,7 @@ mod tests {
             shapes::shape_proto_id(word),
             Some(INTRINSIC_SERIAL_FUNCTION)
         );
-        assert!(unsafe { closure_has_base_shape(c) });
+        assert!(unsafe { closure_on_base_shape(c) });
         assert!(crate::closure::is_closure_ptr(c as usize));
     }
 
@@ -417,5 +417,32 @@ mod tests {
         // The bound call still sees target + partial args + call args.
         let r = unsafe { crate::closure::js_closure_call2(b as *const ClosureHeader, 2.0, 3.0) };
         assert_eq!(r, 6.0);
+    }
+
+    /// Every accessor installer leaves the base shape, so the base-shape read
+    /// shortcut in `closure_get_dynamic_prop` (which skips the accessor table)
+    /// can never skip a real getter.
+    #[test]
+    fn every_accessor_installer_leaves_the_base_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let acc = crate::object::descriptor_state::AccessorDescriptor { get: 0, set: 0 };
+        let attrs = crate::object::PropertyAttrs::new(false, false, true);
+        let a = fresh(plain_body);
+        crate::object::descriptor_state::install_fresh_accessor_property(
+            a as usize,
+            "length".into(),
+            acc,
+            attrs,
+        );
+        assert_eq!(kind_of(a), Some(ShapeObjectKind::FunctionDictionary));
+        let b = fresh(plain_body);
+        crate::object::descriptor_state::set_builtin_accessor_descriptor(
+            b as usize,
+            "name".into(),
+            acc,
+            attrs,
+        );
+        assert_eq!(kind_of(b), Some(ShapeObjectKind::FunctionDictionary));
     }
 }

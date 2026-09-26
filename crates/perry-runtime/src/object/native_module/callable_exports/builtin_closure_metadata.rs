@@ -39,6 +39,9 @@ pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
     });
 }
 
+/// The recorded spec `.length` of the closure at `closure` — an address the
+/// caller has already proven is a closure (every reader asks from inside its
+/// closure arm; the bind-capture fallback re-checks only the header byte).
 pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
     if let Some(len) = BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied()) {
         return Some(len);
