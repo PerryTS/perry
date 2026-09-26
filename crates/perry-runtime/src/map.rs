@@ -312,6 +312,7 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
 }
 
 mod store;
+mod string_probe;
 use store::*;
 pub(crate) use store::{
     drop_map_store_at_thread_exit, finalize_dead_copied_minor_from_space_maps,
@@ -1446,6 +1447,14 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     if let Some(index) = find_key_index_hot(map, key) {
         return index;
     }
+    // #10697: a tag-proven string key decodes once and compares by tag, length
+    // and bytes instead of running the generic `jsvalue_eq` per entry.
+    let upper = key.to_bits() >> 48;
+    if upper == 0x7FFF || upper == crate::value::SHORT_STRING_TAG >> 48 {
+        if let Some(index) = string_probe::find_string_key(map, key) {
+            return index;
+        }
+    }
     find_key_index_cold(map, key)
 }
 
@@ -1557,54 +1566,11 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
 }
 
 unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader) -> i32 {
-    let used = (*map).used;
     let key_value = boxed_heap_string_key(key);
-    let key_bits = key_value.to_bits();
-
-    if used <= SIDE_TABLE_THRESHOLD {
-        let entries = entries_ptr(map);
-        for i in 0..used {
-            let entry_key = ptr::read(entries.add((i as usize) * 2));
-            if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
-                continue;
-            }
-            if jsvalue_eq(entry_key, key_value) {
-                return i as i32;
-            }
-        }
-        return -1;
-    }
-
-    if let Some(h) = string_content_hash(key_bits) {
-        let entries = entries_ptr(map);
-        if let Some(slot) = (*map).store.as_ref().map(|store| &store.strings) {
-            {
-                for cand_idx in slot.candidates(h) {
-                    if cand_idx >= used {
-                        continue;
-                    }
-                    let cand_key = ptr::read(entries.add((cand_idx as usize) * 2));
-                    if jsvalue_eq(cand_key, key_value) {
-                        return cand_idx as i32;
-                    }
-                }
-            }
-            return -1;
-        }
-    }
-
-    let entries = entries_ptr(map);
-    for i in 0..used {
-        let entry_key = ptr::read(entries.add((i as usize) * 2));
-        if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
-            continue;
-        }
-        if jsvalue_eq(entry_key, key_value) {
-            return i as i32;
-        }
-    }
-
-    -1
+    // A pointee that fails string validation gets no probe; the generic
+    // path gives it the same bit-identity-only answer it always had.
+    string_probe::find_string_key(map, key_value)
+        .unwrap_or_else(|| find_key_index_cold(map, key_value))
 }
 
 /// Grow the entries array if needed (header stays at same address)
