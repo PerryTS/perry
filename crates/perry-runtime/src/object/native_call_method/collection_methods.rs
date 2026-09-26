@@ -468,7 +468,7 @@ pub(super) unsafe fn dispatch_raw_pointer(
             let class_id = (*obj).class_id;
             if class_id != 0 {
                 if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                    vtable_ic_lookup(class_id, method_name_ptr as usize)
+                    vtable_ic_lookup(class_id, method_name_ptr as usize, method_name.as_bytes())
                 {
                     let this_i64 = raw_bits as i64;
                     return Some(call_vtable_method(
@@ -493,6 +493,7 @@ pub(super) unsafe fn dispatch_raw_pointer(
                                     vtable_ic_insert(
                                         class_id,
                                         method_name_ptr as usize,
+                                        method_name.as_bytes(),
                                         entry.func_ptr,
                                         entry.param_count,
                                         entry.has_synthetic_arguments,

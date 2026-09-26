@@ -103,14 +103,28 @@ pub(crate) fn class_lookup_surface_gen_bump() {
 
 const VTABLE_IC_SIZE: usize = 4096;
 const VTABLE_IC_MASK: usize = VTABLE_IC_SIZE - 1;
+/// Longest method name `VTABLE_IC` stores (and therefore caches). Longer names
+/// take the uncached registry walk.
+const VTABLE_IC_NAME_MAX: usize = 24;
 
+// #11341: the slot is chosen by the name's ADDRESS (cheap, and exact for the
+// rodata strings codegen passes), but a hit also requires the name BYTES to
+// match. Not every caller's name lives in rodata: the `new Function` / eval
+// interpreter passes a transient Rust `String` (`dyn_eval::bridge::call_method`)
+// and `js_native_call_method_value` passes the bytes of a GC string. Once such
+// a buffer is freed, another method name can be allocated at the same address,
+// and an address-only hit then dispatched the call to the FIRST name's method.
+// mysql2's generated row parser — `result.two = packet.parseLengthCodedInt()`
+// then `result.s = packet.readLengthCodedString()`, run by the interpreter —
+// read `'hi'` back as the number 617 that way.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct VTableICEntry {
     gen: u64,
     class_id: u32,
-    _pad: u32,
+    name_len: u32,
     method_name_ptr: usize,
+    name: [u8; VTABLE_IC_NAME_MAX],
     func_ptr: usize,
     param_count: u32,
     has_synthetic_arguments: u32,
@@ -120,8 +134,9 @@ struct VTableICEntry {
 const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
     gen: 0,
     class_id: 0,
-    _pad: 0,
+    name_len: 0,
     method_name_ptr: 0,
+    name: [0; VTABLE_IC_NAME_MAX],
     func_ptr: 0,
     param_count: 0,
     has_synthetic_arguments: 0,
@@ -152,8 +167,9 @@ fn vtable_ic_slot(class_id: u32, method_name_ptr: usize) -> usize {
 pub(crate) unsafe fn vtable_ic_lookup(
     class_id: u32,
     method_name_ptr: usize,
+    name: &[u8],
 ) -> Option<(usize, u32, bool, bool)> {
-    if method_name_ptr == 0 {
+    if method_name_ptr == 0 || name.len() > VTABLE_IC_NAME_MAX {
         return None;
     }
     let cur_gen = VTABLE_GEN.load(Ordering::Relaxed);
@@ -164,6 +180,8 @@ pub(crate) unsafe fn vtable_ic_lookup(
         if entry.gen == cur_gen
             && entry.class_id == class_id
             && entry.method_name_ptr == method_name_ptr
+            && entry.name_len as usize == name.len()
+            && entry.name[..name.len()] == *name
         {
             Some((
                 entry.func_ptr,
@@ -181,23 +199,27 @@ pub(crate) unsafe fn vtable_ic_lookup(
 pub(crate) unsafe fn vtable_ic_insert(
     class_id: u32,
     method_name_ptr: usize,
+    name: &[u8],
     func_ptr: usize,
     param_count: u32,
     has_synthetic_arguments: bool,
     has_rest: bool,
 ) {
-    if method_name_ptr == 0 {
+    if method_name_ptr == 0 || name.len() > VTABLE_IC_NAME_MAX {
         return;
     }
     let cur_gen = VTABLE_GEN.load(Ordering::Relaxed);
     let slot = vtable_ic_slot(class_id, method_name_ptr);
+    let mut stored = [0u8; VTABLE_IC_NAME_MAX];
+    stored[..name.len()].copy_from_slice(name);
     VTABLE_IC.with(|cell| {
         let cache = &mut **cell.get();
         cache[slot] = VTableICEntry {
             gen: cur_gen,
             class_id,
-            _pad: 0,
+            name_len: name.len() as u32,
             method_name_ptr,
+            name: stored,
             func_ptr,
             param_count,
             has_synthetic_arguments: if has_synthetic_arguments { 1 } else { 0 },
@@ -237,11 +259,12 @@ pub(crate) unsafe fn vtable_ic_insert(
 // substitutes for an object-specific check.
 //
 // Deliberately SEPARATE from `VTABLE_IC` above: that one is also written from
-// the collection dispatcher, and it is keyed on the name's ADDRESS.
+// the collection dispatcher, and it picks its slot by the name's ADDRESS (a hit
+// there also compares the bytes since #11341).
 // ============================================================================
 
 // The key is the method-name BYTES, never its address. `VTABLE_IC` above keys
-// on the rodata pointer codegen passes, which is stable — but
+// its slot on the name pointer codegen passes — but
 // `js_native_call_method_str_key` reaches the same tower with a name
 // materialised into a CALLER-STACK scratch buffer (`str_bytes_from_jsvalue`
 // with a `[u8; SHORT_STRING_MAX_LEN]`), and two different short names can land
@@ -722,6 +745,32 @@ mod obj_dispatch_ic_tests {
             scratch[..4].copy_from_slice(b"perim"[..4].try_into().unwrap());
             assert_eq!(
                 obj_dispatch_ic_lookup(CID, &scratch[..4]),
+                None,
+                "a different name at the same address must MISS"
+            );
+            true
+        });
+    }
+
+    #[test]
+    fn vtable_ic_hit_requires_matching_name_bytes_not_only_the_address() {
+        // #11341: the interpreter (`dyn_eval::bridge::call_method`) and
+        // `js_native_call_method_value` pass method names that are NOT
+        // rodata, so a freed name buffer can come back holding a different
+        // name at the same address. Sabotage it the same way here: one
+        // backing buffer, two names.
+        with_stable_gen(&|| {
+            let mut scratch = *b"parseInt\0\0\0\0\0\0\0";
+            let addr = scratch.as_ptr() as usize;
+            unsafe { vtable_ic_insert(CID, addr, &scratch[..8], 0xEEEE, 1, false, false) };
+            if unsafe { vtable_ic_lookup(CID, addr, &scratch[..8]) }
+                != Some((0xEEEE, 1, false, false))
+            {
+                return false;
+            }
+            scratch[..10].copy_from_slice(b"readString");
+            assert_eq!(
+                unsafe { vtable_ic_lookup(CID, addr, &scratch[..10]) },
                 None,
                 "a different name at the same address must MISS"
             );
