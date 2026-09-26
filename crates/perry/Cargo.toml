@@ -155,6 +155,8 @@ native-cli = []
 # links LLVM 22 statically and ships self-contained. See that crate's manifest
 # for why this is load-bearing rather than an optimization.
 llvm-inprocess = ["perry-codegen/llvm-inprocess"]
+# Standalone WASI target (#11375). Off by default; see perry-codegen's manifest.
+target-wasi = ["perry-codegen/target-wasi"]
 
 # Codegen backends for non-native targets. Each enables one backend crate;
 # `all-codegen-backends` (in full-cli) turns them all on so the default build is

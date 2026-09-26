@@ -36,6 +36,12 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
 /// makes those target-derived. The only ILP32 triple the driver produces is
 /// watchOS `arm64_32`, which is opt-in (`PERRY_WATCHOS_ARM64_32`).
 pub fn ilp32_codegen_refusal(target_triple: &str) -> Option<String> {
+    // The one ILP32 target with a real lowering: wasm32 WASI, behind the
+    // off-by-default `target-wasi` feature (runtime ABI adapters in
+    // `crate::wasm32`, ILP32 shadow-stack/inline-path layouts).
+    if wasm32_lowering(target_triple) {
+        return None;
+    }
     target_is_ilp32(target_triple).then(|| {
         format!(
             "target `{target_triple}` has 32-bit pointers, and Perry's LLVM backend \
@@ -44,6 +50,15 @@ pub fn ilp32_codegen_refusal(target_triple: &str) -> Option<String> {
              https://github.com/PerryTS/perry/issues/11378"
         )
     })
+}
+
+/// True when this compile targets wasm32 WASI AND the compiler was built with
+/// the `target-wasi` feature — the only condition under which any wasm32
+/// lowering runs. Always false in a default build.
+pub fn wasm32_lowering(target_triple: &str) -> bool {
+    cfg!(feature = "target-wasi")
+        && target_triple.starts_with("wasm32")
+        && target_triple.contains("wasi")
 }
 
 /// Exclusive upper bound accepted by the runtime's `is_valid_obj_ptr` for a
@@ -300,7 +315,7 @@ mod tests {
     fn ilp32_targets_are_refused_and_lp64_targets_are_not() {
         for triple in [
             "arm64_32-apple-watchos",
-            "wasm32-wasip2",
+            "wasm32-unknown-unknown",
             "i686-unknown-linux-gnu",
         ] {
             let refusal = ilp32_codegen_refusal(triple).unwrap_or_else(|| {
@@ -318,6 +333,55 @@ mod tests {
         ] {
             assert_eq!(ilp32_codegen_refusal(triple), None, "{triple}");
         }
+        // wasm32 WASI has a real lowering, but only in a `target-wasi` build.
+        assert_eq!(
+            ilp32_codegen_refusal("wasm32-unknown-wasip2").is_none(),
+            cfg!(feature = "target-wasi"),
+            "wasm32 WASI is refused exactly when the feature is off"
+        );
+    }
+
+    #[test]
+    fn wasm32_lowering_needs_the_feature_and_a_wasi_triple() {
+        assert_eq!(
+            wasm32_lowering("wasm32-unknown-wasip2"),
+            cfg!(feature = "target-wasi")
+        );
+        assert_eq!(
+            wasm32_lowering("wasm32-wasip1"),
+            cfg!(feature = "target-wasi")
+        );
+        // Browser wasm has its own backend and never reaches this one.
+        assert!(!wasm32_lowering("wasm32-unknown-unknown"));
+        assert!(!wasm32_lowering("x86_64-unknown-linux-gnu"));
+        assert!(!wasm32_lowering("arm64_32-apple-watchos"));
+    }
+
+    /// With the feature, a wasm32 WASI module compiles end to end and its
+    /// runtime calls come out adapted (the i64-handle call below would be a
+    /// link-time signature mismatch without the pass).
+    #[cfg(feature = "target-wasi")]
+    #[test]
+    fn compile_module_lowers_a_wasm32_wasi_module() {
+        let module = perry_hir::Module::new("wasi_smoke");
+        let opts = crate::CompileOptions {
+            target: Some("wasm32-unknown-wasip2".into()),
+            emit_ir_only: true,
+            is_entry_module: true,
+            output_type: "executable".into(),
+            ..Default::default()
+        };
+        let ir = String::from_utf8(crate::compile_module(&module, opts).expect("wasm32 compiles"))
+            .expect("IR is UTF-8");
+        assert!(
+            ir.contains("target triple = \"wasm32-unknown-wasip2\""),
+            "{ir}"
+        );
+        // Every runtime declaration is the runtime's real signature.
+        assert!(
+            ir.contains("declare ptr @js_string_from_bytes(ptr, i32)"),
+            "{ir}"
+        );
     }
 
     /// The refusal must be reached by the real entry point, not just exist.

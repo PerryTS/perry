@@ -454,6 +454,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Native roots are the default lowering wherever the runtime can walk the
     // frames, and the shadow stack elsewhere. Same per-module discipline.
     helpers::set_native_roots_for_target(&triple);
+    // ILP32 (wasm32 WASI only): inline paths that bake in LP64 layouts take
+    // their runtime-call arms or ILP32 offsets. Same per-module discipline.
+    helpers::set_ilp32_for_target(&triple);
 
     // `--opt-report` (#6952): mark the closures that are iterating-builtin
     // callbacks before any region is lowered, so their denials carry the
@@ -3779,7 +3782,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // behavior). `emit_ir_only` wants the whole-module text, so it takes the
     // single-text path; the split path avoids materializing the full ~1GB IR
     // string at all (which would defeat the memory win).
-    let n_units = if opts.emit_ir_only {
+    // wasm32 WASI (#11378) takes the single-text path: its runtime-ABI pass
+    // rewrites the whole module text before object emission.
+    let wasm32 = crate::target_layout::wasm32_lowering(&triple);
+    let n_units = if opts.emit_ir_only || wasm32 {
         1
     } else {
         decide_codegen_units(
@@ -3834,14 +3840,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // textual); `=diff` builds both arms and diffs them. Unit-split and
     // emit_ir_only paths above stay textual (they fall into the in-process
     // *transport* under these values, so no clang subprocess either way).
-    if let Some(result) =
-        try_native_construction(&mut llmod, opts.target.as_deref(), &module_prefix)
-    {
-        return result;
+    if !wasm32 {
+        if let Some(result) =
+            try_native_construction(&mut llmod, opts.target.as_deref(), &module_prefix)
+        {
+            return result;
+        }
     }
 
     loop {
         let ll_text = llmod.to_ir();
+        #[cfg(feature = "target-wasi")]
+        let ll_text = if wasm32 {
+            crate::wasm32::adapt_runtime_abi(&ll_text)
+        } else {
+            ll_text
+        };
         log::debug!(
             "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
             ll_text.len(),

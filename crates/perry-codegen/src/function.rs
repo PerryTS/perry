@@ -219,6 +219,26 @@ fn shadow_frame_handle_lines(
     handle_reg: &str,
 ) -> Vec<String> {
     use crate::expr::shadow_inline::{SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET};
+    if crate::codegen::helpers::ilp32_target() {
+        // ILP32 (wasm32 WASI, #11378): `ShadowStackState`'s words are 4
+        // bytes, so `frame_top` is the fourth-byte-aligned word at 3 * 4 and
+        // is widened to the i64 handle every other use expects.
+        let top32 = format!("{top_reg}.w");
+        return vec![
+            format!("  store ptr {}, ptr {}", state_reg, state_slot),
+            format!(
+                "  {} = getelementptr inbounds i8, ptr {}, i64 12",
+                top_ptr_reg, state_reg
+            ),
+            format!("  {} = load i32, ptr {}", top32, top_ptr_reg),
+            format!("  {} = zext i32 {} to i64", top_reg, top32),
+            format!(
+                "  {} = sub i64 {}, {}",
+                handle_reg, top_reg, SHADOW_STACK_HEADER_SLOTS
+            ),
+            format!("  store i64 {}, ptr {}", handle_reg, handle_slot),
+        ];
+    }
     vec![
         format!("  store ptr {}, ptr {}", state_reg, state_slot),
         format!(

@@ -27,6 +27,11 @@ workspace = true
 # `--no-default-features` still builds the text path for bisection.
 default = ["llvm-inprocess"]
 llvm-inprocess = ["dep:inkwell", "dep:llvm-sys"]
+# Standalone WASI target (wasm32-wasip2, #11375/#11378). OFF BY DEFAULT: it
+# links LLVM's WebAssembly backend into the compiler and enables the wasm32
+# lowering (runtime ABI adapters, ILP32 layouts). With it off, nothing about
+# any other target's output changes — and every wasm32 path below is behind it.
+target-wasi = ["llvm-inprocess", "inkwell?/target-webassembly"]
 
 # Test-support only (#7493): exposes `perry_codegen::testing`, whose
 # `NativeRootsPin` lets a test declare WHICH root lowering it asserts on. It is
