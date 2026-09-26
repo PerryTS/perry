@@ -28,6 +28,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
+    // #9856: under `--debug-symbols`, record this expression's source line
+    // for the DWARF line table (`crate::debug_info`). No-op otherwise.
+    crate::debug_info::mark_expr_location(ctx, expr);
     // #10943: a receiver the call-site guard already materialised is RE-READ,
     // never re-evaluated. The guard needs the receiver's value before it
     // branches, and the lowering below it is handed the same expression — so

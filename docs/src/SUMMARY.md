@@ -166,6 +166,7 @@
 
 - [Commands](cli/commands.md)
 - [Compiler Flags](cli/flags.md)
+- [Source-level Debugging](cli/debugging.md)
 - [Cache Directory](cli/cache-dir.md)
 - [Fast-math (`--fast-math`)](cli/fast-math.md)
 - [Dynamic Stdlib Dispatch](cli/dynamic-dispatch.md)

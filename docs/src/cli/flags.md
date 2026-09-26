@@ -296,7 +296,7 @@ the generating asset module where applicable.
 | `--no-link` | Produce `.o` object file(s) only, skip linking. The objects are written to `-o` — verbatim for a single-module program, otherwise into `-o`'s directory under module-derived names, since one `-o` cannot name several files. With no `-o` they land in the current directory. Each path is printed as `Wrote object file: <path>` |
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
-| `--debug-symbols` | Retain symbols/DWARF (and emit a Windows PDB) instead of stripping the result. |
+| `--debug-symbols` | Retain symbols/DWARF (and emit a Windows PDB) instead of stripping the result, and emit a DWARF **line table** mapping machine code back to your `.ts` lines so debuggers can set breakpoints. See [Source-level debugging](debugging.md). |
 | `--function-source <full\|header>` | How much `Function.prototype.toString` source to keep. `full` (default) stores interned original source (nested functions share one module blob). `header` stores `function name(params) { /* source elided */ }` instead — enough for name/parameter extraction, much smaller. Also `PERRY_FUNCTION_SOURCE`. |
 | `--no-cache` | Disable the per-module object cache for this build; also `PERRY_NO_CACHE=1`. |
 | `--cache-dir <PATH>` | Override the machine-local cache root; see [Cache Directory](cache-dir.md). |

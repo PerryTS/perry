@@ -63,7 +63,13 @@ pub fn native_units_mode() -> NativeMode {
     match std::env::var("PERRY_LLVM_INPROCESS").as_deref() {
         Ok("0" | "off" | "false" | "1" | "on" | "true") => NativeMode::Off,
         Ok("diff") => NativeMode::Diff,
-        Ok("native") | Err(_) => NativeMode::Native,
+        Ok("native") => NativeMode::Native,
+        // #9856: `--debug-symbols` line markers are turned into DWARF by a
+        // pass over module TEXT (`crate::debug_info`), which native
+        // construction never materializes — keep debug builds on the text
+        // transport.
+        Err(_) if std::env::var_os("PERRY_DEBUG_SYMBOLS").is_some() => NativeMode::Off,
+        Err(_) => NativeMode::Native,
         Ok(_) => NativeMode::Off,
     }
 }

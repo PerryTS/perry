@@ -34,6 +34,7 @@ pub(super) fn strip_final_binary(
     is_watchos: bool,
     is_harmonyos: bool,
 ) {
+    emit_macos_dsym(exe_path, target);
     if is_dylib
         || is_ios
         || is_visionos
@@ -68,6 +69,31 @@ pub(super) fn strip_final_binary(
             .status();
     } else {
         let _ = std::process::Command::new("strip").arg(exe_path).status();
+    }
+}
+
+/// #9856: under `--debug-symbols` on a macOS host building a macOS binary,
+/// gather the DWARF into `<exe>.dSYM`.
+///
+/// Apple's linker does not copy DWARF into the executable; it records a debug
+/// map pointing at the input `.o` files, and Perry deletes those right after
+/// linking (`cleanup_intermediates`). Without a dSYM, lldb — and so Xcode and
+/// VS Code's CodeLLDB — finds no line table and cannot bind a breakpoint.
+/// Runs before the strip decision and the cleanup, while the objects exist.
+fn emit_macos_dsym(exe_path: &Path, target: Option<&str>) {
+    if !cfg!(target_os = "macos") || std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
+        return;
+    }
+    if target.is_some_and(|t| !(t.contains("macos") || t.contains("darwin"))) {
+        return;
+    }
+    match std::process::Command::new("dsymutil")
+        .arg(exe_path)
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("warning: dsymutil exited with {status}; no .dSYM emitted"),
+        Err(e) => eprintln!("warning: could not run dsymutil ({e}); no .dSYM emitted"),
     }
 }
 

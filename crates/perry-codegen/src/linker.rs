@@ -622,6 +622,10 @@ fn compile_ll_to_object_with_native_roots(
 ) -> Result<Vec<u8>> {
     let tmp_dir = env::temp_dir();
     reap_stale_llvm_scratch_once(&tmp_dir);
+    // #9856: turn codegen's `; perrydbg` line markers into DWARF line-table
+    // metadata. Only markers present means `--debug-symbols` emitted them.
+    let debug_ll = crate::debug_info::attach_line_tables(ll_text);
+    let ll_text: &str = debug_ll.as_deref().unwrap_or(ll_text);
     let rs4gc_ll = maybe_rs4gc_preprocess(ll_text, native_roots)?;
     let ll_text: &str = rs4gc_ll.as_deref().unwrap_or(ll_text);
     compile_ll_to_object_in_with_retention(
