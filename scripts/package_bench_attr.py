@@ -886,7 +886,8 @@ def fmt_n(x):
 
 
 def short_rt(sym: str) -> str:
-    s = re.sub(r"<[^<>]*>", "", sym).replace("perry_runtime::", "").replace("perry_stdlib::", "")
+    s = sym if sym.startswith("<") and sym.endswith(">") else re.sub(r"<[^<>]*>", "", sym)
+    s = s.replace("perry_runtime::", "").replace("perry_stdlib::", "")
     return (s if len(s) <= 70 else "…" + s[-69:]).replace("|", "/")
 
 
@@ -955,14 +956,87 @@ def write_markdown(doc: dict, path: Path) -> None:
     path.write_text("\n".join(L) + "\n")
 
 
+def cmd_floor(a) -> None:
+    """Compile and measure the call-shape floor probes (benchmarks/packages/
+    _callfloor/f*.ts): Perry vs Node instructions per call by the two-N
+    method, outputs checked equal, plus the top runtime entries of each Perry
+    probe from one DWARF-call-graph profile at n2."""
+    root = Path(__file__).resolve().parent.parent
+    src_dir = root / "benchmarks" / "packages" / "_callfloor"
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, TZ="UTC")
+    env.pop("NODE_OPTIONS", None)
+    res = {}
+    for f in sorted(src_dir.glob("f*.ts")):
+        name = f.stem
+        if a.filter and not any(x in name for x in a.filter):
+            continue
+        binary = (out / name).resolve()
+        if not a.no_compile:
+            p = subprocess.run([a.perry, "compile", str(f), "-o", str(binary)] + a.perry_flags.split(),
+                               cwd=src_dir, env=env, capture_output=True, text=True)
+            if p.returncode:
+                res[name] = {"status": "COMPILE_FAIL", "reason": (p.stdout + p.stderr)[-400:]}
+                continue
+        rec = {}
+        for arm, cmd in (("perry", [str(binary)]), ("node", [a.node, "--no-warnings", str(f)])):
+            ins = {}
+            for n in (a.n1, a.n2):
+                rc, o, e, i, _w = perf_stat(cmd + [str(n)], env, src_dir, 600)
+                ins[n] = i
+                rec.setdefault("out", {})[f"{arm}@{n}"] = o.strip()
+            rec[arm] = (ins[a.n2] - ins[a.n1]) / (a.n2 - a.n1) if None not in ins.values() else None
+        rec["status"] = "OK" if all(rec["out"][f"perry@{n}"] == rec["out"][f"node@{n}"] for n in (a.n1, a.n2)) \
+            else "MISMATCH"
+        rec["ratio"] = rec["perry"] / rec["node"] if rec.get("node") and rec["node"] > 0 else None
+        data = out / f"{name}.data"
+        perf_record([str(binary), str(a.n2)], env, src_dir, 600, 2000, 16384, data, "dwarf")
+        agg = aggregate(data, binary, nm_addrs(binary))
+        data.unlink(missing_ok=True)
+        dv = derive(agg["stacks"])
+        tot = agg["total"] or 1
+        rec["entries"] = [[k, round(100 * v / tot, 1)] for k, v in dv["entry"].most_common(4)]
+        rec["buckets"] = [[k, round(100 * v / tot, 1)] for k, v in dv["bucket"].most_common(4)]
+        del rec["out"]
+        res[name] = rec
+        print(f"{name}: perry {rec['perry'] or 0:.0f} node {rec['node'] or 0:.0f} {rec['status']} "
+              + "; ".join(f"{k} {p}%" for k, p in rec["entries"][:3]), flush=True)
+    (out / "floor.json").write_text(json.dumps(res, indent=1, sort_keys=True))
+    L = ["| probe | Perry instr/call | Node | ratio | top runtime entries (share of the Perry profile) |",
+         "|---|---:|---:|---:|---|"]
+    for name, r in res.items():
+        if r.get("status") != "OK":
+            L.append(f"| `{name}` | {r.get('status')} | | | |")
+            continue
+        L.append(f"| `{name}` | {r['perry']:.0f} | {r['node']:.0f} | {(r['ratio'] or 0):.1f}× | "
+                 + "; ".join(f"`{short_rt(k)}` {p}%" for k, p in r["entries"][:3]) + " |")
+    (out / "floor.md").write_text("\n".join(L) + "\n")
+    print("\n".join(L))
+
+
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="re-render the Markdown from a --callgraph JSON")
-    ap.add_argument("json")
-    ap.add_argument("--md")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("render", help="re-render the Markdown from a --callgraph JSON")
+    r.add_argument("json")
+    r.add_argument("--md")
+    fl = sub.add_parser("floor", help="measure the call-shape floor probes in benchmarks/packages/_callfloor")
+    fl.add_argument("--perry", default=str(Path(__file__).resolve().parent.parent / "target" / "release" / "perry"))
+    fl.add_argument("--perry-flags", default="")
+    fl.add_argument("--node", default=shutil.which("node") or "node")
+    fl.add_argument("--out-dir", required=True)
+    fl.add_argument("--n1", type=int, default=200000)
+    fl.add_argument("--n2", type=int, default=1000000)
+    fl.add_argument("--filter", action="append")
+    fl.add_argument("--no-compile", action="store_true")
     a = ap.parse_args()
-    doc = json.loads(Path(a.json).read_text())
-    write_markdown(doc, Path(a.md) if a.md else Path(a.json).with_suffix(".md"))
+    if a.cmd == "render":
+        doc = json.loads(Path(a.json).read_text())
+        write_markdown(doc, Path(a.md) if a.md else Path(a.json).with_suffix(".md"))
+    else:
+        cmd_floor(a)
 
 
 if __name__ == "__main__":
