@@ -790,6 +790,12 @@ def cmd_profile(args) -> None:
     compiled with PERRY_KEEP_SYMBOLS=1 (default binaries are stripped)."""
     if not IS_LINUX:
         sys.exit("profile needs Linux perf")
+    if args.callgraph:
+        # Phase 3: inclusive / call-chain attribution + root-cause buckets.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import package_bench_attr
+        package_bench_attr.run(args, sys.modules[__name__])
+        return
     manifest = load_manifest()
     wls = [w for w in select_workloads(manifest, args.filter) if not w["id"].startswith("control/")
            or args.include_control]
@@ -1134,6 +1140,19 @@ def main() -> None:
     pf.add_argument("--top", type=int, default=5)
     pf.add_argument("--timeout", type=float, default=600)
     pf.add_argument("--include-control", action="store_true")
+    pf.add_argument("--callgraph", action="store_true",
+                    help="call-chain attribution (scripts/package_bench_attr.py): two-N per-iteration self/"
+                         "inclusive/bucket/runtime-entry/JS-site tables; writes --out (JSON) and its .md")
+    pf.add_argument("--callgraph-mode", default="dwarf", help="perf --call-graph mode: dwarf (default) or fp")
+    pf.add_argument("--dwarf-stack", type=int, default=16384, help="bytes of stack copied per DWARF sample")
+    pf.add_argument("--target-samples", type=int, default=12000, help="samples at n2 (sets the fixed period)")
+    pf.add_argument("--top-chains", type=int, default=25)
+    pf.add_argument("--node-instr", help="reuse Node per-iteration counts from a `run` JSON instead of measuring")
+    pf.add_argument("--node-verify", action="store_true", help="with --node-instr: still run node for stdout checks")
+    pf.add_argument("--lock", action="store_true", help="hold the measurement mutex for the whole --callgraph run")
+    pf.add_argument("--owner", default=os.environ.get("USER", "unknown") + ":package_bench profile")
+    pf.add_argument("--lock-timeout", type=float, default=4 * 3600)
+    pf.add_argument("--tmp-dir", help="where perf.data files go (default $TMPDIR)")
     for a in pr._actions:
         if a.dest in ("server_root", "pg_bin_dir", "pg_user", "pg_port", "mysqld", "mysql_port", "mongod",
                       "mongo_port", "redis_server", "redis_port", "node"):
