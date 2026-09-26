@@ -385,23 +385,23 @@ enum Codec {
 #[cfg(feature = "compression-zstd")]
 const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
-fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
+fn run_one_shot_codec(codec: Codec, input: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     match codec {
         Codec::Gzip => {
-            GzEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+            GzEncoder::new(input, level).read_to_end(&mut out)?;
         }
         Codec::Gunzip => {
             MultiGzDecoder::new(input).read_to_end(&mut out)?;
         }
         Codec::Deflate => {
-            ZlibEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+            ZlibEncoder::new(input, level).read_to_end(&mut out)?;
         }
         Codec::Inflate => {
             ZlibDecoder::new(input).read_to_end(&mut out)?;
         }
         Codec::DeflateRaw => {
-            DeflateEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+            DeflateEncoder::new(input, level).read_to_end(&mut out)?;
         }
         Codec::InflateRaw => {
             DeflateDecoder::new(input).read_to_end(&mut out)?;
@@ -433,9 +433,34 @@ fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64) {
-    let callback = validate_callback_arg(callback_value) as i64;
-    let data = codec_bytes(data_value);
+unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, options: f64, callback_value: f64) {
+    // Normalize both overloads before reading options. A callable second argument
+    // wins even when a third argument was supplied, as in Node's wrapper.
+    let second = JSValue::from_bits(options.to_bits());
+    let (options, callback_value) =
+        if second.is_pointer() && is_closure_ptr(raw_addr_from_value(options)) {
+            (f64::from_bits(JSValue::undefined().bits()), options)
+        } else {
+            (options, callback_value)
+        };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let data_value = scope.root_nanbox_f64(data_value);
+    let callback_value = scope.root_nanbox_f64(callback_value);
+    let options = scope.root_nanbox_f64(options);
+    let level = match codec {
+        Codec::Gzip | Codec::Deflate | Codec::DeflateRaw => {
+            perry_runtime::js_zlib_validate_options(
+                options.get_nanbox_f64(),
+                if codec == Codec::Gzip { 9 } else { 8 },
+            );
+            Compression::new(perry_runtime::js_zlib_resolve_level(options.get_nanbox_f64()) as u32)
+        }
+        // Match the synchronous codecs' existing option support. Brotli and
+        // Zstd do not use the zlib `level` property; decoders need no level.
+        _ => Compression::default(),
+    };
+    validate_callback_arg(callback_value.get_nanbox_f64());
+    let data = codec_bytes(data_value.get_nanbox_f64());
     crate::common::async_bridge::ensure_pump_registered();
     ensure_zlib_gc_scanner();
     let resource = perry_runtime::js_object_alloc_null_proto(0, 0);
@@ -454,10 +479,10 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64
     // event is queued, so it is parked in the job's root set and comes back
     // rewritten: `ZLIB_PENDING_EVENTS`' own scanner covers it only once the
     // event exists, which is now after the compression rather than before it.
-    let parked = perry_runtime::js_nanbox_pointer(callback).to_bits();
+    let parked = callback_value.get_nanbox_f64().to_bits();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
         vec![parked],
-        move || run_one_shot_codec(codec, &data).map_err(|e| e.to_string()),
+        move || run_one_shot_codec(codec, &data, level).map_err(|e| e.to_string()),
         move |delivery, roots| {
             use perry_runtime::turnloop_pool::Delivery;
             let callback = roots
@@ -478,46 +503,46 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64
     );
 }
 
-/// `zlib.gzip(data, callback)` -> undefined
+/// `zlib.gzip(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gzip(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::Gzip, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_gzip(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::Gzip, data_value, options, callback_value);
 }
 
-/// `zlib.gunzip(data, callback)` -> undefined
+/// `zlib.gunzip(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_gunzip(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::Gunzip, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_gunzip(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::Gunzip, data_value, options, callback_value);
 }
 
-/// `zlib.deflate(data, callback)` -> undefined
+/// `zlib.deflate(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::Deflate, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_deflate(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::Deflate, data_value, options, callback_value);
 }
 
-/// `zlib.inflate(data, callback)` -> undefined
+/// `zlib.inflate(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::Inflate, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_inflate(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::Inflate, data_value, options, callback_value);
 }
 
-/// `zlib.deflateRaw(data, callback)` -> undefined
+/// `zlib.deflateRaw(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_raw(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::DeflateRaw, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_deflate_raw(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::DeflateRaw, data_value, options, callback_value);
 }
 
-/// `zlib.inflateRaw(data, callback)` -> undefined
+/// `zlib.inflateRaw(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_inflate_raw(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::InflateRaw, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_inflate_raw(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::InflateRaw, data_value, options, callback_value);
 }
 
-/// `zlib.unzip(data, callback)` -> undefined
+/// `zlib.unzip(data, options?, callback)` -> undefined
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_unzip(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::Unzip, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_unzip(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::Unzip, data_value, options, callback_value);
 }
 
 // ============================================================================
@@ -566,18 +591,26 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut 
     }
 }
 
-/// `zlib.brotliCompress(data, callback)` -> undefined
+/// `zlib.brotliCompress(data, options?, callback)` -> undefined
 #[cfg(feature = "compression-brotli")]
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::BrotliCompress, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_brotli_compress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_zlib_callback(Codec::BrotliCompress, data_value, options, callback_value);
 }
 
-/// `zlib.brotliDecompress(data, callback)` -> undefined
+/// `zlib.brotliDecompress(data, options?, callback)` -> undefined
 #[cfg(feature = "compression-brotli")]
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::BrotliDecompress, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_brotli_decompress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_zlib_callback(Codec::BrotliDecompress, data_value, options, callback_value);
 }
 
 // ============================================================================
@@ -622,18 +655,22 @@ pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(
     }
 }
 
-/// `zlib.zstdCompress(data, callback)` -> undefined
+/// `zlib.zstdCompress(data, options?, callback)` -> undefined
 #[cfg(feature = "compression-zstd")]
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::ZstdCompress, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, options: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::ZstdCompress, data_value, options, callback_value);
 }
 
-/// `zlib.zstdDecompress(data, callback)` -> undefined
+/// `zlib.zstdDecompress(data, options?, callback)` -> undefined
 #[cfg(feature = "compression-zstd")]
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value: f64) {
-    queue_zlib_callback(Codec::ZstdDecompress, data_value, callback_value);
+pub unsafe extern "C" fn js_zlib_zstd_decompress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_zlib_callback(Codec::ZstdDecompress, data_value, options, callback_value);
 }
 
 // ============================================================================
@@ -1642,51 +1679,51 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
         }
         // Callback-form one-shot codecs — validate the trailing callback and return undefined.
         "gzip" => {
-            js_zlib_gzip(arg(0), arg(1));
+            js_zlib_gzip(arg(0), arg(1), arg(2));
             undefined
         }
         "gunzip" => {
-            js_zlib_gunzip(arg(0), arg(1));
+            js_zlib_gunzip(arg(0), arg(1), arg(2));
             undefined
         }
         "deflate" => {
-            js_zlib_deflate(arg(0), arg(1));
+            js_zlib_deflate(arg(0), arg(1), arg(2));
             undefined
         }
         "inflate" => {
-            js_zlib_inflate(arg(0), arg(1));
+            js_zlib_inflate(arg(0), arg(1), arg(2));
             undefined
         }
         "deflateRaw" => {
-            js_zlib_deflate_raw(arg(0), arg(1));
+            js_zlib_deflate_raw(arg(0), arg(1), arg(2));
             undefined
         }
         "inflateRaw" => {
-            js_zlib_inflate_raw(arg(0), arg(1));
+            js_zlib_inflate_raw(arg(0), arg(1), arg(2));
             undefined
         }
         "unzip" => {
-            js_zlib_unzip(arg(0), arg(1));
+            js_zlib_unzip(arg(0), arg(1), arg(2));
             undefined
         }
         #[cfg(feature = "compression-brotli")]
         "brotliCompress" => {
-            js_zlib_brotli_compress(arg(0), arg(1));
+            js_zlib_brotli_compress(arg(0), arg(1), arg(2));
             undefined
         }
         #[cfg(feature = "compression-brotli")]
         "brotliDecompress" => {
-            js_zlib_brotli_decompress(arg(0), arg(1));
+            js_zlib_brotli_decompress(arg(0), arg(1), arg(2));
             undefined
         }
         #[cfg(feature = "compression-zstd")]
         "zstdCompress" => {
-            js_zlib_zstd_compress(arg(0), arg(1));
+            js_zlib_zstd_compress(arg(0), arg(1), arg(2));
             undefined
         }
         #[cfg(feature = "compression-zstd")]
         "zstdDecompress" => {
-            js_zlib_zstd_decompress(arg(0), arg(1));
+            js_zlib_zstd_decompress(arg(0), arg(1), arg(2));
             undefined
         }
         #[cfg(feature = "compression-zstd")]
@@ -1700,6 +1737,30 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
 #[cfg(test)]
 mod stream_tests {
     use super::*;
+
+    #[test]
+    fn one_shot_worker_honors_compression_level() {
+        let input = b"worker compression options ".repeat(1000);
+        for (encode, decode) in [
+            (Codec::Gzip, Codec::Gunzip),
+            (Codec::Deflate, Codec::Inflate),
+            (Codec::DeflateRaw, Codec::InflateRaw),
+        ] {
+            let stored = run_one_shot_codec(encode, &input, Compression::none()).unwrap();
+            let packed = run_one_shot_codec(encode, &input, Compression::best()).unwrap();
+            assert!(
+                stored.len() > input.len(),
+                "level zero must use stored blocks"
+            );
+            assert!(packed.len() < stored.len(), "level must reach the worker");
+            for bytes in [stored, packed] {
+                assert_eq!(
+                    run_one_shot_codec(decode, &bytes, Compression::default()).unwrap(),
+                    input
+                );
+            }
+        }
+    }
 
     #[test]
     fn zlib_stream_ids_live_in_dedicated_small_handle_band() {
@@ -1755,10 +1816,15 @@ mod stream_tests {
     #[cfg(feature = "compression-zstd")]
     #[test]
     fn zstd_one_shot_roundtrips() {
-        let c = run_one_shot_codec(Codec::ZstdCompress, b"zstd one-shot test").unwrap();
+        let c = run_one_shot_codec(
+            Codec::ZstdCompress,
+            b"zstd one-shot test",
+            Compression::default(),
+        )
+        .unwrap();
         assert!(!c.is_empty());
         assert_eq!(
-            run_one_shot_codec(Codec::ZstdDecompress, &c).unwrap(),
+            run_one_shot_codec(Codec::ZstdDecompress, &c, Compression::default()).unwrap(),
             b"zstd one-shot test"
         );
     }
