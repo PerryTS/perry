@@ -1387,6 +1387,25 @@ pub(crate) unsafe fn prototype_value_has_property(
 
 /// Get a field by its string key name
 /// Returns the field value or undefined if the key is not found
+/// A class function object read with the caller's own key header (no key
+/// string is built): its class lookup. `None` for any other receiver — one
+/// ShapeId-word pre-filter; the class shape is sticky and implies the class
+/// code pointer.
+#[inline]
+pub(crate) unsafe fn class_closure_read_by_key(
+    obj: usize,
+    key: *const crate::StringHeader,
+) -> Option<f64> {
+    let class_id = crate::object::class_value::class_closure_id(obj)?;
+    let value = super::get_field_by_name::class_value_get_field(
+        obj as *const crate::object::ObjectHeader,
+        key,
+        obj as u64,
+        class_id,
+    );
+    Some(f64::from_bits(value.bits()))
+}
+
 pub(crate) unsafe fn closure_dynamic_prop_by_key(
     obj: usize,
     key: *const crate::StringHeader,
@@ -1395,7 +1414,7 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
         return None;
     }
     let name = crate::string::header_str_checked(key)?;
-    let val = crate::closure::closure_get_dynamic_prop(obj, name);
+    let val = crate::closure::closure_get_dynamic_prop_keyed(obj, name, key);
     // Function methods were already resolved, including a getter or own
     // slot returning undefined. Do not repeat that read or synthesize a
     // fallback method over an explicit undefined value (#11175).

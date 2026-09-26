@@ -63,6 +63,12 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
     if !crate::object::shapes::is_exotic_shape_id(shape) {
         return None;
     }
+    // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
+    // at least 16 bytes; +8 is the code pointer of a closure.
+    let code = unsafe { *((ptr as *const u8).add(8) as *const *const u8) };
+    if code != js_class_constructor_called as *const u8 {
+        return None;
+    }
     class_closure_id_exotic(ptr)
 }
 
@@ -71,10 +77,7 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
 /// many gates that inline the pre-filter stay small.
 #[inline(never)]
 fn class_closure_id_exotic(ptr: usize) -> Option<u32> {
-    // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
-    // at least 16 bytes; +8 is the code pointer of a closure.
-    let code = unsafe { *((ptr as *const u8).add(8) as *const *const u8) };
-    if code != js_class_constructor_called as *const u8 || !crate::closure::is_closure_ptr(ptr) {
+    if !crate::closure::is_closure_ptr(ptr) {
         return None;
     }
     // SAFETY: `is_closure_ptr` proved a live, non-forwarded closure cell.
@@ -300,14 +303,18 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
 /// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
 #[cold]
 #[inline(never)]
-pub(crate) fn class_static_read(ptr: usize, prop: &str) -> f64 {
+pub(crate) fn class_static_read(ptr: usize, prop: &str, key: *const crate::StringHeader) -> f64 {
     // SAFETY: the caller proved a live class closure (its ShapeId).
     let Some(class_id) = (unsafe { class_closure_id_unchecked(ptr as *const ClosureHeader) })
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     // The class object is pinned: `ptr` survives the key allocation.
-    let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    let key = if key.is_null() {
+        crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32)
+    } else {
+        key as *mut crate::StringHeader
+    };
     let value = crate::object::field_get_set::class_value_get_field(
         ptr as *const crate::object::ObjectHeader,
         key,
