@@ -619,12 +619,9 @@ pub unsafe extern "C" fn js_function_bind(
         let err = crate::error::js_typeerror_new(msg);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
-    let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        crate::object::class_prototype_ref_id(target_value)
-            .is_none()
-            .then(|| crate::object::class_value::legacy_class_value_word(target_value.to_bits()))
-            .flatten()
-    });
+    // A pointer target is a closure (a class function object is one) or a
+    // callable native handle; only a non-pointer target can be the legacy
+    // INT32 class form, so only it pays the class probe.
     let target_is_closure = if target_jv.is_pointer() {
         let ptr = target_jv.as_pointer::<ClosureHeader>();
         if ptr.is_null() || !is_closure_ptr(ptr as usize) {
@@ -633,7 +630,17 @@ pub unsafe extern "C" fn js_function_bind(
             return target_value;
         }
         true
-    } else if target_class_id.is_some() {
+    } else if crate::object::class_ref_id(target_value)
+        .or_else(|| {
+            crate::object::class_prototype_ref_id(target_value)
+                .is_none()
+                .then(|| {
+                    crate::object::class_value::legacy_class_value_word(target_value.to_bits())
+                })
+                .flatten()
+        })
+        .is_some()
+    {
         // ClassRefs are callable/constructable INT32-tagged values rather
         // than heap closures. They still need a real BoundFunction wrapper
         // so `new C.bind(_, ...args)()` prepends its captured arguments.

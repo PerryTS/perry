@@ -28,6 +28,7 @@ pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
     )
 }
 
+#[inline]
 pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits >> 48) == 0x7FFE && (bits & CLASS_PROTOTYPE_REF_FLAG) != 0 {
@@ -42,6 +43,7 @@ pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
 /// A class constructor OR its `C.prototype` reference -> the class id. The
 /// constructor half is [`super::class_value::class_value_id`] (both forms);
 /// callers that mean only the constructor ask that directly.
+#[inline]
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
     super::class_value::class_value_id(value).or_else(|| class_prototype_ref_id(value))
 }
