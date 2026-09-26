@@ -483,6 +483,10 @@ pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
 /// lazily here instead of at bind time is observationally identical.
 unsafe fn bound_target_declared_name(target_value: f64) -> String {
     use crate::value::JSValue;
+    // A class function object's declared name is its class's.
+    if let Some(class_id) = crate::object::class_value::class_value_id(target_value) {
+        return crate::object::class_name_for_id(class_id).unwrap_or_default();
+    }
     let target_jv = JSValue::from_bits(target_value.to_bits());
     if target_jv.is_pointer() {
         let target_closure = target_jv.as_pointer::<ClosureHeader>();

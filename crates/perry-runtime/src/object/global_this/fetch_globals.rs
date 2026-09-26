@@ -1037,8 +1037,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             // base constructor would never run — parent `this.<field> = …`
             // writes (e.g. `this.nextConfig = opts`) would be lost. Invoke the
             // class constructor directly on `this` instead.
-            if bits & TAG_MASK == INT32_TAG {
-                let parent_cid = bits as u32;
+            if let Some(parent_cid) = crate::object::class_value::class_value_id(parent_val) {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     return super::super::class_constructors::run_class_constructor_on_this_flat(
                         parent_cid, obj as i64, args_ptr, args_len,
