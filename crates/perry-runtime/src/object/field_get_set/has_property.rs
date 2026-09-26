@@ -1188,26 +1188,6 @@ unsafe fn ordinary_has_property(
                 return true;
             }
         }
-        // #11112: ClassBody accessors are virtual own properties of the
-        // declared/evaluated prototype, not entries in its physical key array.
-        // Inspect each actual chain node, so a replaced prototype cannot
-        // resurrect members from the receiver's original class. The own-only
-        // accessor lookup respects deletion and never invokes a getter.
-        if !cur_is_array {
-            if let Some(name) = key_name {
-                if let Some(class_id) =
-                    super::super::class_registry::class_id_for_decl_prototype_object(cur as usize)
-                {
-                    if super::super::class_registry::class_declared_accessor_ptrs(
-                        class_id, false, name,
-                    )
-                    .is_some()
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
         // Advance to the recorded `[[Prototype]]`.
         let cur_addr = cur as usize;
         match super::super::prototype_chain::object_static_prototype(cur_addr) {
@@ -1308,16 +1288,16 @@ unsafe fn ordinary_has_property(
             }
         }
     }
-    // Wall 10 — a class instance's prototype METHODS / GETTERS / SETTERS live in
-    // `CLASS_VTABLE_REGISTRY`, not as a recorded `[[Prototype]]` object with a
-    // `keys_array`, so the own-key + recorded-prototype walk above misses them.
-    // Check the class chain so `'method' in instance` is `true` (e.g. NestJS's
-    // app Proxy gating on `'listen' in receiver`).
+    // Wall 10 — a class instance's prototype METHODS live in
+    // `CLASS_VTABLE_REGISTRY` and may have no physical key the walk above can
+    // see. Check the class chain so `'method' in instance` is `true` (e.g.
+    // NestJS's app Proxy gating on `'listen' in receiver`). Accessors are real
+    // properties of the class prototype, which the walk visits.
     if super::super::prototype_chain::object_static_prototype(obj_ptr as usize).is_none() {
         if let Some(name) = key_name {
             let class_id = unsafe { (*obj_ptr).class_id };
             if class_id != 0
-                && super::super::native_module::class_instance_has_member(class_id, name)
+                && super::super::native_module::class_instance_has_method(class_id, name)
             {
                 return true;
             }

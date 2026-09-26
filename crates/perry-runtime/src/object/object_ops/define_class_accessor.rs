@@ -1,23 +1,28 @@
-//! `Object.defineProperty` onto a DECLARED class accessor (#10480).
+//! `Object.defineProperty` onto a DECLARED class accessor (#10480) reached
+//! through a class REF value: `C` (static accessors) or a `C.prototype` ref.
 //!
-//! A ClassBody accessor is an own property of `C.prototype` (or of `C` for
-//! `static`) whose get/set live in the class vtable, so the ordinary define
-//! path — which only consults the address-keyed descriptor tables — took it for
-//! a brand-new key. See `class_registry/accessor_attrs.rs` for what that broke.
+//! An instance accessor is a real accessor property of the class's decl
+//! prototype, so a define through the prototype ref is the ordinary define on
+//! that object. A static accessor is an own property of the constructor `C`,
+//! which is a ClassRef value, not an object: its get/set live in
+//! `CLASS_STATIC_ACCESSORS` and its attributes in `static_accessor_attrs.rs`.
 use super::*;
 
 /// ValidateAndApplyPropertyDescriptor for the declared accessor `name` of
 /// `class_id` (`is_static` selects `C` over `C.prototype`).
 ///
-/// * Not a live declared accessor → `false`, the caller's path decides.
-/// * Current accessor non-configurable → the spec's rejections throw
+/// * Instance: when the prototype ref reflects `name` through the decl
+///   prototype (`decl_prototype_own_accessor`), the define applies to that
+///   object — attributes, replacement and conversion alike. Returns `true`.
+/// * Static, not a live declared accessor → `false`, the caller's path decides.
+/// * Static, current accessor non-configurable → the spec's rejections throw
 ///   `Cannot redefine property: <name>` exactly as for any other property.
-/// * Generic descriptor (none of `get`/`set`/`value`/`writable`) → only the
-///   attributes change: an omitted field keeps its current value and the
-///   getter/setter stay in place. Returns `true`.
-/// * Anything else → `false`: replacing a vtable accessor half or converting it
-///   to a data property is not modelled here (compiled receivers call the
-///   declared get/set directly), so the caller's existing path is unchanged.
+/// * Static, generic descriptor (none of `get`/`set`/`value`/`writable`) →
+///   only the attributes change: an omitted field keeps its current value and
+///   the getter/setter stay in place. Returns `true`.
+/// * Static, anything else → `false`: replacing a static accessor half or
+///   converting it to a data property is not modelled here, so the caller's
+///   existing path is unchanged.
 pub(super) unsafe fn define_declared_class_accessor(
     class_id: u32,
     is_static: bool,
@@ -25,30 +30,26 @@ pub(super) unsafe fn define_declared_class_accessor(
     descriptor_value: f64,
     desc_view: Option<&super::descriptor_helpers::DescView<'_>>,
 ) -> bool {
-    let Some((getter, setter)) =
-        super::super::class_registry::class_declared_accessor_ptrs(class_id, is_static, name)
-    else {
-        return false;
-    };
     if !is_static {
-        // S2: an instance accessor is a real accessor property of the declared
-        // prototype object, so the ordinary define applies to that object —
-        // attributes, replacement and conversion alike.
         let scope = crate::gc::RuntimeHandleScope::new();
         let desc = scope.root_nanbox_f64(descriptor_value);
-        let proto = scope.root_nanbox_f64(
-            super::super::class_registry::class_decl_prototype_value(class_id),
-        );
-        if !crate::value::JSValue::from_bits(proto.get_nanbox_f64().to_bits()).is_pointer() {
+        let Some(proto) = super::super::class_registry::decl_prototype_own_accessor(class_id, name)
+        else {
             return false;
-        }
+        };
+        let proto = scope.root_nanbox_f64(proto);
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
         super::js_object_define_property(proto.get_nanbox_f64(), key, desc.get_nanbox_f64());
         return true;
     }
+    let Some((getter, setter)) =
+        super::super::class_registry::static_declared_accessor_ptrs(class_id, name)
+    else {
+        return false;
+    };
     let (enumerable, configurable) =
-        super::super::class_registry::class_accessor_attrs(class_id, is_static, name);
+        super::super::class_registry::static_accessor_attrs(class_id, name);
     // The per-field reads below allocate a field-name string (and may run a
     // user getter on a non-plain descriptor), so the descriptor is re-read from
     // its root at every use.
@@ -101,9 +102,8 @@ pub(super) unsafe fn define_declared_class_accessor(
     };
     let enumerable = flag(DESC_ENUMERABLE, b"enumerable").unwrap_or(enumerable);
     let configurable = flag(DESC_CONFIGURABLE, b"configurable").unwrap_or(configurable);
-    super::super::class_registry::class_set_accessor_attrs(
+    super::super::class_registry::set_static_accessor_attrs(
         class_id,
-        is_static,
         name,
         enumerable,
         configurable,

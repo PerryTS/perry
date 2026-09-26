@@ -25,7 +25,7 @@ use super::*;
 ///    vtable miss.
 unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits: u64) {
     use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR, CLOSURE_MAGIC};
-    use crate::object::class_registry::{ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY};
+    use crate::object::class_registry::{VTableMethodEntry, CLASS_VTABLE_REGISTRY};
 
     // Reject undefined / null / numeric values up front — those aren't
     // methods and shouldn't make it onto the prototype side tables.
@@ -64,11 +64,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
                         *guard = Some(crate::fast_hash::new_ptr_hash_map());
                     }
                     let reg = guard.as_mut().unwrap();
-                    let vtable = reg.entry(target_cid).or_insert_with(|| ClassVTable {
-                        methods: std::collections::HashMap::new(),
-                        getters: std::collections::HashMap::new(),
-                        setters: std::collections::HashMap::new(),
-                    });
+                    let vtable = reg.entry(target_cid).or_default();
                     vtable.methods.insert(
                         name.to_string(),
                         VTableMethodEntry {
@@ -1421,23 +1417,6 @@ pub extern "C" fn js_object_define_property(
             super::super::class_registry::class_id_for_decl_prototype_object(obj as usize)
         {
             if let Some(ref name) = key_rust {
-                // #10480: the prototype's ClassBody accessors have no physical
-                // key, so the ordinary arm below would define a NEW property
-                // over them. A physical key (an expando that shadows the class
-                // member) keeps the ordinary arm.
-                if !own_key_present(obj, key_str)
-                    && across!(
-                        super::define_class_accessor::define_declared_class_accessor(
-                            target_cid,
-                            false,
-                            name,
-                            descriptor_value,
-                            desc_view.as_ref(),
-                        )
-                    )
-                {
-                    return obj_value;
-                }
                 if across!(desc_has_field(descriptor_value, b"value")) {
                     let value_bits = across!(desc_read_field(descriptor_value, b"value").bits());
                     if !crate::value::JSValue::from_bits(value_bits).is_undefined() {

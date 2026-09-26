@@ -634,6 +634,12 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let want = std::slice::from_raw_parts(name_ptr, name_len);
+                // An own accessor (`Object.defineProperty(C, k, { get })`)
+                // answers before the pinned parent; the generic tail runs it
+                // with this read's receiver.
+                if crate::object::key_attrs::object_key_is_accessor(obj, want) {
+                    return get_field_by_name_object_tail(obj, key);
+                }
                 if let Some(v) =
                     crate::object::class_registry::class_object_own_field_bytes(obj, want)
                 {
