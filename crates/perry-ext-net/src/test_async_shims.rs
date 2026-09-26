@@ -48,14 +48,6 @@ pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" 
     invoke(ctx);
 }
 
-#[no_mangle]
-pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
-    ctx: *mut c_void,
-    invoke: extern "C" fn(*mut c_void),
-) {
-    invoke(ctx);
-}
-
 // The native-completion ABI is linked into perry-ffi even though ext-net's
 // tests do not exercise it. Keep inert definitions here so the standalone
 // crate test binary does not need the full Perry host archive.

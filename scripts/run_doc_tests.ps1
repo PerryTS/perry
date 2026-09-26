@@ -13,7 +13,7 @@ Set-Location $RepoRoot
 
 # Build perry + UI backend + harness in release mode. Skipped transparently
 # if already built. Keep the async database/mail wrappers in this same Cargo
-# graph as perry-stdlib so they share one tokio runtime compilation.
+# graph as perry-stdlib so they share its feature unification.
 cargo build --release `
     -p perry `
     -p perry-runtime `

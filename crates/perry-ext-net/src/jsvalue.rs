@@ -402,17 +402,6 @@ mod tests {
     use super::*;
     use perry_ffi::alloc_string;
 
-    // The net lib references `perry_ffi_spawn_async` (declared extern in
-    // `perry-ffi`'s async runtime, normally provided by `perry-stdlib` /
-    // the prebuilt static archive at the final link). A bare
-    // `cargo test -p perry-ext-net` in a fresh checkout has no
-    // perry-stdlib edge, so the unit-test binary fails to link on this
-    // one symbol. None of these conversion tests touch the async runtime,
-    // so a no-op stub lets the test binary link without pulling in the
-    // staticlib. (Test-only; never compiled into the shipping crate.)
-    #[no_mangle]
-    extern "C" fn perry_ffi_spawn_async(_ctx: *mut std::ffi::c_void) {}
-
     /// Encode `bytes` (len ≤ 5) as an inline SSO `SHORT_STRING_TAG`
     /// NaN-box, mirroring the runtime's `JSValue::try_short_string`:
     /// tag 0x7FF9, length in bits 40..=47, data little-endian in bits

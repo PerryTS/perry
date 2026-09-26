@@ -48,13 +48,22 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 # Duplicate major versions are debt, not an error (rand 0.8/0.9 coexist
 # until the 0.9 migration). Warn keeps them visible in CI logs.
 multiple-versions = "warn"
-# ring is the single rustls crypto provider (reqwest/mongodb/turnloop-tls all
-# require it). aws-lc-rs arrives only via rustls/tokio-rustls default
-# features; linking both costs ~1.3 MB and made the process-default
-# CryptoProvider depend on which subsystem installed first.
+# ring is the single rustls crypto provider (turnloop-tls requires it).
+# aws-lc-rs arrives only via rustls's default features; linking both costs
+# ~1.3 MB and made the process-default CryptoProvider depend on which
+# subsystem installed first.
+#
+# tokio was removed from the workspace (final tokio lane): turnloop is the only
+# event loop, in every crate and every test. `scripts/tokio_inventory.py`
+# (a `lint` step) fails on a tokio package in Cargo.lock; this ban is the
+# same rule for cargo-deny.
 deny = [
     { crate = "aws-lc-rs", reason = "ring is the single rustls crypto provider" },
     { crate = "aws-lc-sys", reason = "ring is the single rustls crypto provider" },
+    { crate = "tokio", reason = "turnloop is the only event loop; tokio was removed from the workspace" },
+    { crate = "tokio-rustls", reason = "turnloop is the only event loop; tokio was removed from the workspace" },
+    { crate = "tokio-tungstenite", reason = "turnloop is the only event loop; tokio was removed from the workspace" },
+    { crate = "tokio-util", reason = "turnloop is the only event loop; tokio was removed from the workspace" },
 ]
 
 [sources]

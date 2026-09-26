@@ -23,7 +23,7 @@ pub(crate) fn auto_optimized_archives_are_fresh(
     workspace_root: &Path,
     runtime_path: &Path,
     stdlib_path: &Path,
-    tokio_using_bindings: &[(String, String, Option<String>)],
+    cobuilt_bindings: &[(String, String, Option<String>)],
     build_stamp_path: &Path,
     expected_build_stamp: &str,
 ) -> bool {
@@ -46,7 +46,7 @@ pub(crate) fn auto_optimized_archives_are_fresh(
         workspace_root.join("crates/perry-runtime"),
         workspace_root.join("crates/perry-stdlib"),
     ];
-    for (krate, _lib, _tracking) in tokio_using_bindings {
+    for (krate, _lib, _tracking) in cobuilt_bindings {
         inputs.push(workspace_root.join("crates").join(krate));
     }
 
@@ -101,7 +101,7 @@ pub(crate) fn size_lto_fat() -> bool {
 
 /// Cache key for the auto-optimize target dir + build stamp. Hashed into the
 /// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
-/// runtime-gate, shared-tokio-wrapper set, version) combination gets its own
+/// runtime-gate, co-built wrapper set, version) combination gets its own
 /// incremental cache. Kept in one place so `build_optimized_libs` and its
 /// freshness tests can never drift.
 /// Run-time knobs served only by perry-runtime's `gc-instruments` feature.
@@ -133,13 +133,12 @@ pub(crate) fn auto_optimized_cache_key(
     panic_immediate: bool,
     target: Option<&str>,
     ctx: &CompilationContext,
-    tokio_using_bindings: &[(String, String, Option<String>)],
+    cobuilt_bindings: &[(String, String, Option<String>)],
 ) -> String {
     let target_str = target.unwrap_or("host");
     // The stripped stdlib feature set is not enough to identify this Cargo
-    // graph. For example, two programs whose wrappers both reduce to
-    // `async-runtime` can still select different wrapper crates, and so
-    // different Cargo graphs.
+    // graph: two programs with the same stdlib features can still co-build
+    // different wrapper crates, and so different Cargo graphs.
     // Sharing a target dir lets the second invocation replace stdlib after
     // the first invocation releases its build lock but before it links. The
     // first process then sees an ext archive and stdlib archive from different
@@ -149,14 +148,14 @@ pub(crate) fn auto_optimized_cache_key(
     // `http` + `https` name the same wrapper and must
     // describe the same graph regardless of discovery order or alias
     // multiplicity.
-    let mut tokio_bindings: Vec<String> = tokio_using_bindings
+    let mut cobuilt: Vec<String> = cobuilt_bindings
         .iter()
         .map(|(krate, lib, _tracking)| format!("{krate}:{lib}"))
         .collect();
-    tokio_bindings.sort_unstable();
-    tokio_bindings.dedup();
+    cobuilt.sort_unstable();
+    cobuilt.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|tokio={}|sizeopt={}|anchors={}|instr={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|cobuild={}|sizeopt={}|anchors={}|instr={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -195,7 +194,7 @@ pub(crate) fn auto_optimized_cache_key(
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
         ctx.uses_dynamic_import_options,
-        tokio_bindings.join(","),
+        cobuilt.join(","),
         format!(
             "{}{}{}",
             size_opt_level().unwrap_or("off"),
@@ -474,7 +473,7 @@ pub(crate) fn retain_workspace_declared_features(
 
 /// Content fingerprint of every workspace source tree that lands in the
 /// auto-optimized archives: the crates this build compiles (the runtime/stdlib
-/// static wrappers and the tokio-using ext crates) plus their transitive
+/// static wrappers and the co-built ext crates) plus their transitive
 /// workspace path-deps, plus the workspace manifests. Embedded in the build
 /// stamp so a `target/perry-auto-<hash>` dir whose archives were built from
 /// DIFFERENT sources can never pass the freshness gate. The mtime check alone
@@ -485,7 +484,7 @@ pub(crate) fn retain_workspace_declared_features(
 /// ignores perry-ext-http edits" trap.
 pub(crate) fn auto_optimized_source_fingerprint(
     workspace_root: &Path,
-    tokio_using_bindings: &[(String, String, Option<String>)],
+    cobuilt_bindings: &[(String, String, Option<String>)],
 ) -> String {
     use sha2::{Digest, Sha256};
 
@@ -512,7 +511,7 @@ pub(crate) fn auto_optimized_source_fingerprint(
     .into_iter()
     .map(str::to_string)
     .collect();
-    for (krate, _lib, _tracking) in tokio_using_bindings {
+    for (krate, _lib, _tracking) in cobuilt_bindings {
         crates.insert(krate.clone());
     }
 
@@ -627,7 +626,7 @@ pub(crate) fn auto_optimized_build_stamp(
     key_input: &str,
     target: Option<&str>,
     cross_features: &[String],
-    tokio_using_bindings: &[(String, String, Option<String>)],
+    cobuilt_bindings: &[(String, String, Option<String>)],
     source_fingerprint: &str,
 ) -> String {
     let mut stamp = String::new();
@@ -644,8 +643,8 @@ pub(crate) fn auto_optimized_build_stamp(
     stamp.push_str("features=");
     stamp.push_str(&cross_features.join(","));
     stamp.push('\n');
-    stamp.push_str("tokio=");
-    for (index, (krate, lib, tracking)) in tokio_using_bindings.iter().enumerate() {
+    stamp.push_str("cobuild=");
+    for (index, (krate, lib, tracking)) in cobuilt_bindings.iter().enumerate() {
         if index > 0 {
             stamp.push(',');
         }
@@ -703,12 +702,12 @@ fn file_modified(path: &Path) -> std::io::Result<SystemTime> {
 pub(crate) fn resolve_auto_well_known_libs(
     workspace_root: &Path,
     release_dir: &Path,
-    tokio_using_bindings: &[(String, String, Option<String>)],
+    cobuilt_bindings: &[(String, String, Option<String>)],
     target: Option<&str>,
     format: OutputFormat,
 ) -> Vec<PathBuf> {
     let mut well_known_libs = Vec::new();
-    for (krate, lib, _tracking) in tokio_using_bindings {
+    for (krate, lib, _tracking) in cobuilt_bindings {
         let lib_filename =
             super::super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
         let lib_path = release_dir.join(&lib_filename);
@@ -741,7 +740,7 @@ pub(crate) fn resolve_auto_well_known_libs(
             if matches!(format, OutputFormat::Text) {
                 eprintln!(
                     "  well-known: rebuild produced no `{}` in {} — \
-                     using workspace fallback (CONTEXT panic risk on tokio I/O)",
+                     using the workspace-built copy instead",
                     lib_filename,
                     release_dir.display()
                 );
@@ -758,28 +757,30 @@ pub(crate) fn resolve_auto_well_known_libs(
     well_known_libs
 }
 
-/// True if this binding's wrapper crate has its own tokio dependency
-/// for I/O (TcpStream, hyper, reqwest, sqlx, redis,
-/// tokio-tungstenite, lettre, …) and must therefore share a single
-/// tokio compilation with perry-stdlib's runtime.
+/// True if this binding's wrapper crate is rebuilt IN the auto-optimize cargo
+/// invocation, next to perry-runtime-static / perry-stdlib-static, instead of
+/// being linked from its workspace-built archive.
 ///
-/// Closes #507 — when these wrappers are built in a different
-/// target-dir than perry-stdlib, each gets its own private copy of
-/// tokio's `CONTEXT` thread-local. perry-stdlib's runtime sets one;
-/// the wrapper's `Handle::current()` reads the other (empty) one
-/// and panics with "there is no reactor running".
+/// This was the #507 "shared tokio" set: those wrappers bundled their own
+/// tokio, and only a single cargo invocation gave them and perry-stdlib ONE
+/// tokio compilation (two meant two `CONTEXT` thread-locals and a "no reactor
+/// running" abort). tokio is gone from the workspace, so that reason is too.
+/// What the co-build still buys is that these wrappers are compiled from the
+/// same sources, profile and cargo feature unification as the specialized
+/// runtime and stdlib they link against, keyed by the same cache key and
+/// source fingerprint — which is why the set was kept (and renamed from
+/// `binding_needs_shared_tokio`) rather than emptied.
 ///
-/// Wrappers that only use perry-ffi's `spawn_blocking` shim (bcrypt,
-/// argon2, sharp, …) route their async work through perry-stdlib's
-/// tokio and don't need this — their own crate has no tokio dep.
-pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
+/// CPU-only wrappers (bcrypt, argon2, sharp, …) are not in it: their
+/// workspace-built `.a` links as-is.
+pub(crate) fn binding_cobuilds_with_stdlib(module: &str) -> bool {
     matches!(
         module,
         // Raw TCP / TLS sockets
         "net"
         // WebSocket client/server
         | "ws"
-        // HTTP / HTTPS via reqwest/hyper
+        // HTTP / HTTPS / HTTP2 (perry-ext-http, on turnloop)
         | "http"
         | "https"
         | "http2"
@@ -789,46 +790,13 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         // on handle encoding, which segfaulted), and main's npm-binding strip
         // dropped axios's — so this predicate is never asked about them.
         // undici — glue over the native fetch stack (network I/O family).
-        // The wrapper itself has no tokio dep today, but it rides the
-        // shared build so the driver auto-builds its archive alongside
-        // the runtime, and so a future `request()` implementation that
-        // pulls tokio/reqwest can't silently hit the CONTEXT collision.
+        // It rides the co-build so the driver auto-builds its archive
+        // alongside the runtime.
         | "undici"
-        // HTTP server (hyper)
+        // HTTP server
         | "fastify"
-        // Mail (lettre)
+        // Mail (turnloop-smtp)
         | "nodemailer"
     )
 }
 
-/// True if this binding's wrapper archive still BUNDLES tokio — its own
-/// `Cargo.toml` depends on tokio and it hands tokio futures to perry-stdlib's
-/// runtime (`perry_ffi_spawn_async` / `_with_reactor`) or calls
-/// `Handle::current()`. Only these need perry-stdlib's `async-runtime`, and
-/// only their archives are compared by the #7629 link check.
-///
-/// A strict subset of [`binding_needs_shared_tokio`], which is the set the
-/// auto-optimize driver co-builds in the stdlib's cargo invocation. The two
-/// diverged in turnloop P8 lane L: perry-ext-net (#11105) and perry-ext-ws run
-/// on turnloop and carry no tokio, perry-ext-nodemailer dropped lettre's tokio
-/// transport (P6), and perry-ext-undici never had one — so a program that
-/// imports only those links no tokio at all. They stay in the co-build set
-/// (it still gives them the stdlib's own perry-runtime / perry-ffi
-/// compilation), but asking for `async-runtime` on their behalf would put
-/// tokio back into every net / ws program for nothing.
-///
-/// The set is EMPTY. `pg` / `mysql2` left with their wrappers (#10677 /
-/// #10680); perry-ext-http left when tokio lane D dropped its last tokio edge
-/// (#11265) — its servers (#11144), client (#11205) and `createConnection`
-/// all run on turnloop; and mongodb, the last member, left when
-/// perry-ext-mongodb was deleted (#11337) — its npm package now compiles from
-/// source over `net` / `tls`. So on the auto-optimize path no well-known
-/// wrapper selects `async-runtime` any more.
-///
-/// The predicate is kept, not deleted, because it is the single source the
-/// driver, the no-auto warning and the #7629 link check (`shared_tokio_lib_stems`)
-/// all key on: a future wrapper that bundles tokio goes back in here and
-/// those three pick it up together.
-pub(crate) fn binding_bundles_tokio(_module: &str) -> bool {
-    false
-}

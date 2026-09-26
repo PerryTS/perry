@@ -24,12 +24,11 @@ default = ["full"]
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
 #
-# `async-runtime` is listed explicitly since tokio lane L4: `full` used to get
-# it through bundled `net` / `ws`, and the prebuilt full archive is what the
-# no-auto and out-of-tree links resolve the tokio-backed `perry_ffi_*` shims
-# from (perry-ext-http's and the db wrappers' decline paths). Dropping it is
-# the final tokio-deletion step's call, not this one's.
-full = ["async-runtime", "http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
+# No tokio anywhere: the `async-runtime` feature (tokio's current-thread
+# runtime, `common::tokio_bridge`) was deleted by the final tokio lane, and
+# `full` lost it with it. `scripts/tokio_inventory.py` gates that tokio never
+# comes back into this crate or `Cargo.lock`.
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -266,9 +265,11 @@ turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:perry-tls-
 
 # Image processing (sharp) — `image` umbrella stays for
 # backwards-compat; v0.5.551's well-known flip toggles
-# `bundled-sharp` instead.
+# `bundled-sharp` instead. `async-bridge` because the async half
+# (`toFile` / `toBuffer` / `metadata`) runs on turnloop's pool and settles
+# through the bridge; it used to lean on `full`'s tokio (`async-runtime`).
 image = ["bundled-sharp"]
-bundled-sharp = ["dep:image"]
+bundled-sharp = ["dep:image", "dep:perry-base64", "async-bridge"]
 
 # HTML parsing (cheerio) — `html-parser` umbrella stays for
 # backwards-compat; v0.5.550's well-known flip toggles
@@ -296,12 +297,11 @@ ids = []
 # program, where it used to force-enable `async-runtime`.
 async-bridge = []
 
-# Async runtime (tokio) - internal feature. The bridge plus the tokio
-# current-thread runtime (`common::tokio_bridge`), for what still hands it
-# tokio futures: the `perry_ffi_spawn_async` / `_with_reactor` ABI that
-# perry-ext-http / the db wrappers' decline paths use. (Bundled net / tls / ws
-# sockets were the last in-crate users; tokio lane L4 deleted them.)
-async-runtime = ["async-bridge", "dep:tokio"]
+# `async-runtime` (tokio) is gone: it was the bridge plus tokio's
+# current-thread runtime, kept for the `perry_ffi_spawn_async` /
+# `_with_reactor` C ABI after every in-crate user left. The final tokio lane
+# retired that ABI and deleted the feature; `async-bridge` above is the only
+# async bridge.
 
 # OCI container subsystem (perry/container, perry/compose, perry/workloads).
 # Pulls in perry-container-compose and exposes the `js_container_*` and
@@ -349,9 +349,6 @@ rand = "0.10"  # Required by lodash (core module)
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 
 # === OPTIONAL DEPENDENCIES ===
-
-# Async runtime
-tokio = { version = "1", features = ["full"], optional = true }
 
 # HTTP Server
 perry-http-server = { workspace = true, optional = true }

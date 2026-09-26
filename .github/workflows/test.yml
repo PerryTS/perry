@@ -412,16 +412,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/subsystem_slots.py
 
-      # turnloop migration (docs/turnloop/): Perry is moving off tokio, and the
-      # only record of what is left used to be eight lane reports written at
-      # eight different commits — which had already gone stale in both
-      # directions by the time P8 read them. This re-derives the remaining
-      # surface from the tree: every (workspace crate -> tokio-family crate)
-      # manifest edge and every tokio-family package in Cargo.lock, compared
-      # strictly against scripts/tokio_inventory.json. A NEW edge fails, and so
-      # does a STALE entry, so a lane that removes an edge must delete its own
-      # line and the file can never describe a tree that is gone.
-      - name: tokio dependency inventory
+      # tokio was removed from the workspace (final tokio lane; turnloop is the
+      # only event loop, including in tests). This fails on ANY tokio manifest
+      # edge (normal/dev/build, any target), ANY tokio package in Cargo.lock
+      # and ANY non-comment `tokio::` in crates/* — no allowlist. The self-test
+      # plants each of those and proves the gate still goes red.
+      - name: tokio ban (no tokio in the workspace)
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/tokio_inventory.py --self-test

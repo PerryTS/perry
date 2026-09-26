@@ -4,9 +4,9 @@ use perry_runtime::{string::str_bytes_from_jsvalue, value::JSValue, StringHeader
 
 pub mod handle;
 pub(crate) mod thread_config;
-// The promise bridge — the main-thread settle queue and pump. Tokio-free
-// since turnloop P8 lane L, and gated on `async-bridge` (which
-// `async-runtime` implies). Always-on code that references it must also be
+// The promise bridge — the main-thread settle queue and pump, and the only
+// async bridge perry-stdlib has (tokio was removed from the workspace).
+// Gated on `async-bridge`; always-on code that references it must also be
 // `#[cfg(feature = "async-bridge")]`-gated.
 #[cfg(feature = "async-bridge")]
 pub mod async_bridge;
@@ -14,10 +14,6 @@ pub mod dispatch;
 pub(crate) mod dispatch_http;
 pub mod net_method_values;
 mod net_socket_bridge;
-// The tokio current-thread runtime, for the features that still hand it tokio
-// futures. Its public names are re-exported through `async_bridge`.
-#[cfg(feature = "async-runtime")]
-mod tokio_bridge;
 
 #[cfg(feature = "async-bridge")]
 pub use async_bridge::*;

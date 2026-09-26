@@ -75,14 +75,6 @@ pub extern "C" fn perry_ffi_pool_cancel(_job: u64) -> i32 {
 pub extern "C" fn perry_ffi_pool_turn(_budget_ms: u64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
-    ctx: *mut c_void,
-    invoke: extern "C" fn(*mut c_void),
-) {
-    invoke(ctx);
-}
-
-#[no_mangle]
 pub extern "C" fn perry_ffi_native_async_new(_flags: u32) -> *mut NativeAsyncCompletion {
     std::ptr::null_mut()
 }

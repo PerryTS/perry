@@ -66,8 +66,9 @@
 #   command above does NOT produce. perry auto-built each wrapper in its own
 #   cargo invocation, cargo unified features per invocation, and the wrapper
 #   ended up bundling a different tokio compilation than the prebuilt
-#   `libperry_stdlib.a`. `compile/shared_tokio.rs` refuses that pair at link
-#   time (#507/#7629) -- correctly. perry then exited non-zero AFTER writing
+#   `libperry_stdlib.a`. `compile/shared_tokio.rs` (deleted with tokio in the
+#   final tokio lane) refused that pair at link time (#507/#7629) -- correctly
+#   then. perry then exited non-zero AFTER writing
 #   perfectly good IR, the loop counted a skip, and the two sources whose
 #   names say they cover GC CALLBACK ROOTING contributed nothing to a gate
 #   that exists to check exactly that.

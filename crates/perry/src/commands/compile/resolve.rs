@@ -97,7 +97,7 @@ pub fn find_perry_workspace_root() -> Option<PathBuf> {
     // outside the workspace, so neither the exe walk nor the cwd walk
     // below can ever find the source tree — auto-optimize then silently
     // falls back to the prebuilt full-feature runtime/stdlib and every
-    // binary ships the whole stdlib (sqlite, crypto, tokio, …). Users
+    // binary ships the whole stdlib (sqlite, crypto, tls, …). Users
     // who keep a workspace checkout can point at it explicitly.
     if let Ok(root) = std::env::var("PERRY_WORKSPACE_ROOT") {
         let path = PathBuf::from(root);

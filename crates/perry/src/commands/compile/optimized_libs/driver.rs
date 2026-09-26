@@ -130,29 +130,18 @@ pub(crate) fn build_optimized_libs(
     // (logged with `well-known: skipping` when verbose), so a
     // partially-built workspace still produces a working binary.
     let mut well_known_libs: Vec<PathBuf> = Vec::new();
-    // #507 — wrappers whose own crate-level `[dependencies]` pull tokio
-    // (TcpStream, hyper, reqwest, sqlx, tokio-tungstenite,
-    // lettre, …) need to share a single tokio compilation with
-    // perry-stdlib's runtime. If they're built in a different
-    // target-dir than perry-stdlib (the workspace `target/release/`
-    // vs. the auto-optimize `target/perry-auto-<hash>/release/`), the
-    // mangled hash on `tokio::runtime::context::CONTEXT` differs
-    // between the two staticlibs — both end up in the final binary as
-    // distinct TLS variables. perry-stdlib's runtime sets one;
-    // `Handle::current()` from inside the wrapper reads the other
-    // (empty) one and panics with "there is no reactor running".
-    //
-    // Fix is to rebuild these crates IN the auto-optimize cargo
-    // invocation (`-p <crate>`), which forces a single tokio
-    // compilation. Both staticlibs then reference the same mangled
-    // CONTEXT symbol; the linker dedups; one TLS variable in the
-    // final binary; `Handle::current()` works.
+    // #507 — network wrappers (`binding_cobuilds_with_stdlib`) are rebuilt
+    // IN the auto-optimize cargo invocation (`-p <crate>`), next to
+    // perry-runtime-static / perry-stdlib-static, so they are compiled from
+    // the same sources, profile and feature unification as the archives
+    // they link against. This began as the "shared tokio" fix (two tokio
+    // compilations meant two `CONTEXT` thread-locals and a "no reactor
+    // running" abort); tokio is gone from the workspace, the co-build stays.
     //
     // CPU-only wrappers (bcrypt, argon2, sharp, …) don't need this —
-    // they only use perry-ffi's `spawn_blocking` / pool shims, which
-    // perry-stdlib serves without tokio when the program selects none
-    // (turnloop P8 lane L). Their workspace-built .a stays fine.
-    let mut tokio_using_bindings: Vec<(String, String, Option<String>)> = Vec::new();
+    // they only use perry-ffi's `spawn_blocking` / pool shims. Their
+    // workspace-built .a stays fine.
+    let mut cobuilt_bindings: Vec<(String, String, Option<String>)> = Vec::new();
     let mut external_net_transport = false;
     // Web Fetch is selected independently from the external node:http
     // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
@@ -172,23 +161,12 @@ pub(crate) fn build_optimized_libs(
             let Some(workspace_root) = workspace_root_opt.as_ref() else {
                 continue;
             };
-            let needs_shared_tokio = binding_needs_shared_tokio(module_normalized);
-            // turnloop P8 lane L: a wrapper that shares perry-stdlib's tokio
-            // needs perry-stdlib to HAVE one. Since the promise bridge stopped
-            // implying tokio (`async-bridge`), `async-runtime` is selected per
-            // program, and this is where every tokio-using wrapper selects it
-            // — the same predicate the #7629 coherence check keys on, so the
-            // two cannot disagree. It is narrower than the co-build set above:
-            // perry-ext-net / -ws / -undici / -nodemailer are co-built but
-            // carry no tokio, so a program importing only those links none.
-            if binding_bundles_tokio(module_normalized) {
-                features.insert("async-runtime");
-            }
+            let cobuilds_with_stdlib = binding_cobuilds_with_stdlib(module_normalized);
             // For CPU-only wrappers we can use the workspace-built
             // copy directly. Skip the binding entirely if no .a
             // exists on disk (partial build / release tarball
             // missing the wrapper).
-            if !needs_shared_tokio {
+            if !cobuilds_with_stdlib {
                 // CPU-only wrapper: prefer the workspace-built copy on disk.
                 // When it's missing (fresh checkout, or a `compilePackages`
                 // binding that a human never prebuilt — the measured
@@ -200,7 +178,7 @@ pub(crate) fn build_optimized_libs(
                 // prebuilt_ext_lib` is the same plain-build mechanism the
                 // no-auto path already uses (a leaf `cargo build --release -p
                 // <crate>` into `target/release`) — CPU-only wrappers don't
-                // need the shared-tokio invocation, so this stays isolated
+                // need the co-build invocation, so this stays isolated
                 // from the specialized runtime/stdlib rebuild.
                 let lib_path = super::super::well_known::bundled_staticlib_path_for_target(
                     workspace_root,
@@ -249,7 +227,7 @@ pub(crate) fn build_optimized_libs(
                 }
                 well_known_libs.push(lib_path);
             } else {
-                // Tokio-using: defer path resolution until after the
+                // Co-built: defer path resolution until after the
                 // auto-optimize cargo build. Verify the source crate
                 // exists on disk first (so we can actually build it).
                 let crate_dir = workspace_root.join("crates").join(&binding.krate);
@@ -279,7 +257,7 @@ pub(crate) fn build_optimized_libs(
                 }
                 if matches!(format, OutputFormat::Text) {
                     println!(
-                        "  well-known: routing `{}` → rebuilding `{}` with shared tokio (#507) ({})",
+                        "  well-known: routing `{}` → rebuilding `{}` with the specialized stdlib (#507) ({})",
                         module,
                         binding.krate,
                         binding.tracking.as_deref().unwrap_or("no tracking issue")
@@ -289,11 +267,11 @@ pub(crate) fn build_optimized_libs(
                 // (`http` + `https` + `http2`). Keep the
                 // Cargo package set and link line unique; alias multiplicity
                 // is not a different build graph.
-                if !tokio_using_bindings
+                if !cobuilt_bindings
                     .iter()
                     .any(|(krate, lib, _tracking)| krate == &binding.krate && lib == &binding.lib)
                 {
-                    tokio_using_bindings.push((
+                    cobuilt_bindings.push((
                         binding.krate.clone(),
                         binding.lib.clone(),
                         binding.tracking.clone(),
@@ -340,15 +318,10 @@ pub(crate) fn build_optimized_libs(
             // whether the original feature list contained an
             // async feature; if it did, ensure it stays.
             //
-            // turnloop P8 lane L split the tokio runtime out of the
-            // bridge. Every wrapper that replaces a bundled binding needs
-            // the bridge; the few that still hand perry-stdlib tokio
-            // futures select `async-runtime` above
-            // (`binding_bundles_tokio`). The rule that used to add
-            // `async-runtime` here for the `bundled-ws` / `bundled-net` /
-            // `http-client` wrappers is gone: perry-ext-ws and
-            // perry-ext-net run on turnloop and carry no tokio, and
-            // `http-client` (`node-fetch`) has no wrapper at all.
+            // Every wrapper that replaces a bundled binding needs the
+            // bridge, and nothing more: the tokio runtime that used to sit
+            // behind `async-runtime` was deleted with tokio, and no wrapper
+            // hands perry-stdlib a tokio future any more.
             let original_features =
                 crate::commands::stdlib_features::module_to_features(module_normalized);
             if original_features.iter().any(|f| {
@@ -372,8 +345,7 @@ pub(crate) fn build_optimized_libs(
             // loop — which `continue`s at `lookup_well_known` for any module
             // without a row — never reaches them: those imports compile the
             // real npm package, whose sockets are `net` / `tls` and select
-            // whatever those select. No module-name `async-runtime` rule is
-            // left here.
+            // whatever those select.
             // `undici` (#466): perry-ext-undici is thin glue over the
             // native Web Fetch stack. Its `setGlobalDispatcher` writes
             // the proxy config through `js_fetch_set_global_proxy`,
@@ -382,8 +354,7 @@ pub(crate) fn build_optimized_libs(
             // `fetch()` in a way `uses_fetch` detects, so re-assert
             // `web-fetch` here or the wrapper's extern reference dangles
             // at link time. (`web-fetch` implies `async-bridge`, which the
-            // wrapper's JsPromise surface needs anyway; since turnloop P8
-            // lane L it no longer implies tokio.)
+            // wrapper's JsPromise surface needs anyway.)
             if module_normalized == "undici" {
                 features.insert("web-fetch");
             }
@@ -505,9 +476,8 @@ pub(crate) fn build_optimized_libs(
     // returns an empty set and the auto-optimized stdlib is built with
     // --no-default-features — no bridge, no async_bridge module, no
     // symbol. Force `async-bridge` whenever the program pulls in a UI
-    // backend so the trampolines resolve at link time. (The bridge is
-    // tokio-free since turnloop P8 lane L, so a UI app no longer links tokio
-    // for it.)
+    // backend so the trampolines resolve at link time. (The bridge has no
+    // tokio; nothing in the workspace does.)
     if ctx.needs_ui {
         features.insert("async-bridge");
     }
@@ -546,7 +516,7 @@ pub(crate) fn build_optimized_libs(
     // verifies in-crate via ed25519-dalek, and the remaining crypto entry
     // points are covered by three detection layers, so the force is gone
     // (stdlib cherry-pick — non-crypto programs save the whole crypto
-    // surface: RSA/EC/Ed25519/Ed448/ML-KEM/x509/JWT/bcrypt/argon2 + tokio):
+    // surface: RSA/EC/Ed25519/Ed448/ML-KEM/x509/JWT/bcrypt/argon2):
     //   1. `import 'node:crypto'` / bcrypt / jsonwebtoken / … →
     //      `module_to_features` (compute_required_features above);
     //   2. bare `crypto.*` builtins and the WebCrypto namespace →
@@ -563,14 +533,10 @@ pub(crate) fn build_optimized_libs(
     // force used to satisfy the gate transitively.
     //
     // turnloop P8 lane L: this force used to be `async-runtime`, i.e. tokio,
-    // so tokio was in every stdlib-linking binary. The bridge is tokio-free
-    // now, and `async-runtime` is selected only by a feature that hands tokio
-    // a future (Cargo implies it: bundled net / ws) or by a wrapper that
-    // bundles tokio (`binding_bundles_tokio`, above — empty since
-    // perry-ext-mongodb was deleted, #11337). A program that needs none of those links
-    // no tokio — which, since lane L's second slice, includes one whose only
-    // network imports are `fetch`, `net`, `tls`, `ws` and `http` / `https` /
-    // `http2`.
+    // so tokio was in every stdlib-linking binary. The final tokio lane
+    // deleted `async-runtime` and tokio with it: no feature and no wrapper
+    // can select a tokio runtime any more (`no_feature_selection_reaches_tokio`
+    // in optimized_libs/tests.rs pins that).
     features.insert("async-bridge");
     let feature_arg = features_to_cargo_arg(&features);
 
@@ -618,7 +584,7 @@ pub(crate) fn build_optimized_libs(
                 }
             }
             // Not verbose-gated: the fallback links the full-feature
-            // prebuilt stdlib (sqlite/crypto/tokio/…), which typically
+            // prebuilt stdlib (sqlite/crypto/tls/…), which typically
             // adds 5MB+ of code the linker cannot dead-strip (the
             // dynamic dispatch table pins every module). Users should
             // know why the binary is big and how to opt back in.
@@ -683,7 +649,7 @@ pub(crate) fn build_optimized_libs(
     };
     let workspace_root = cargo_target_dir_path(workspace_root);
 
-    // Hash the (features, panic_mode, target, wasm-host, shared-tokio wrapper
+    // Hash the (features, panic_mode, target, wasm-host, co-built wrapper
     // set) tuple into the target dir name so cargo treats each combination as
     // its own incremental cache. `wasm-host` lives on `perry-runtime` (not
     // perry-stdlib), so it isn't part of `feature_arg`; the selected ext
@@ -707,7 +673,7 @@ pub(crate) fn build_optimized_libs(
         panic_immediate,
         target,
         ctx,
-        &tokio_using_bindings,
+        &cobuilt_bindings,
     );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
@@ -765,12 +731,12 @@ pub(crate) fn build_optimized_libs(
     // stamp (and therefore the freshness gate) immune to mtime scrambling from
     // cache restores / fresh checkouts (#5892 layer 2, #5778 warm-cache trap).
     let source_fingerprint =
-        auto_optimized_source_fingerprint(&workspace_root, &tokio_using_bindings);
+        auto_optimized_source_fingerprint(&workspace_root, &cobuilt_bindings);
     let build_stamp = auto_optimized_build_stamp(
         &key_input,
         target,
         &cross_features,
-        &tokio_using_bindings,
+        &cobuilt_bindings,
         &source_fingerprint,
     );
     let build_stamp_path = target_dir.join(".perry-auto-build.stamp");
@@ -810,24 +776,24 @@ pub(crate) fn build_optimized_libs(
             &workspace_root,
             &runtime_path,
             &stdlib_path,
-            &tokio_using_bindings,
+            &cobuilt_bindings,
             &build_stamp_path,
             &build_stamp,
         )
     {
-        // The "archives fresh" fast-path must still carry the NON-tokio
+        // The "archives fresh" fast-path must still carry the NON-co-built
         // routed well-known libs collected by the routing loop above (e.g.
         // perry-ext-zlib for `node:zlib`, perry-ext-events, …). They live in
         // the outer `well_known_libs`; `resolve_auto_well_known_libs` only
-        // resolves the tokio-using bindings. Without merging them, the routed
+        // resolves the co-built bindings. Without merging them, the routed
         // CPU-only ext staticlibs are dropped here and the link fails with
-        // undefined `js_ext_zlib_*` / `js_zlib_*` (and other non-tokio
+        // undefined `js_ext_zlib_*` / `js_zlib_*` (and other CPU-only
         // well-known) symbols — even though the archive is on disk.
         let mut well_known_libs = well_known_libs;
         well_known_libs.extend(resolve_auto_well_known_libs(
             &workspace_root,
             &release_dir,
-            &tokio_using_bindings,
+            &cobuilt_bindings,
             target,
             format,
         ));
@@ -891,13 +857,11 @@ pub(crate) fn build_optimized_libs(
         .arg("-p")
         .arg("perry-stdlib-static")
         .arg("--no-default-features");
-    // #507 — rebuild tokio-using ext crates in the same cargo
-    // invocation as perry-stdlib so cargo unifies tokio across them.
-    // Without this, each crate's tokio.rlib lives in a different
-    // target-dir with a different mangled hash, and perry-ext-*'s
-    // `Handle::current()` reads a different CONTEXT TLS variable
-    // than the one perry-stdlib's runtime entered.
-    for (krate, _lib, _tracking) in &tokio_using_bindings {
+    // #507 — rebuild the co-built ext crates in the same cargo
+    // invocation as perry-stdlib, so cargo unifies their dependency
+    // graph with the specialized runtime/stdlib (see
+    // `binding_cobuilds_with_stdlib`).
+    for (krate, _lib, _tracking) in &cobuilt_bindings {
         cargo_cmd.arg("-p").arg(krate);
     }
     if is_tier3 {
@@ -1096,12 +1060,10 @@ pub(crate) fn build_optimized_libs(
         }
     }
 
-    // #507 — resolve the `.a` paths for each tokio-using ext crate
+    // #507 — resolve the `.a` paths for each co-built ext crate
     // we rebuilt above. They live next to perry-stdlib.a in the
-    // auto-optimize target-dir, with the SAME tokio compilation
-    // bundled in. The linker will dedup duplicate tokio symbols
-    // across the staticlibs because the mangled hashes match.
-    for (krate, lib, _tracking) in &tokio_using_bindings {
+    // auto-optimize target-dir.
+    for (krate, lib, _tracking) in &cobuilt_bindings {
         // Cargo emits `lib<lib>.a` on Unix but `<lib>.lib` on Windows/MSVC.
         // Hardcoding the Unix name here meant a Windows build never found
         // the rebuilt ext staticlib (e.g. perry-ext-ws), silently skipped
@@ -1110,10 +1072,8 @@ pub(crate) fn build_optimized_libs(
             super::super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
         let lib_path = release_dir.join(&lib_filename);
         if !lib_path.exists() {
-            // Fall back to the workspace target copy. The linker will
-            // still produce a working binary for this wrapper if the
-            // user code path doesn't actually exercise the tokio
-            // CONTEXT — useful as a safety net rather than hard-failing.
+            // Fall back to the workspace target copy — a safety net
+            // rather than hard-failing.
             // Prefer the target-specific dir when cross-compiling so we
             // don't link host-platform Mach-O into a Linux ELF.
             let fallback = if let Some(triple) = rust_target_triple(target) {
@@ -1140,7 +1100,7 @@ pub(crate) fn build_optimized_libs(
                 if matches!(format, OutputFormat::Text) {
                     eprintln!(
                         "  well-known: rebuild produced no `{}` in {} — \
-                         using workspace fallback (CONTEXT panic risk on tokio I/O)",
+                         using the workspace-built copy instead",
                         lib_filename,
                         release_dir.display()
                     );

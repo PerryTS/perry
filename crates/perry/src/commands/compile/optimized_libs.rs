@@ -26,8 +26,8 @@ mod prebuilt_core;
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use freshness::{
     auto_optimized_archives_are_fresh, auto_optimized_build_stamp, auto_optimized_cache_key,
-    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_bundles_tokio,
-    binding_needs_shared_tokio, effective_size_panic_immediate_abort, resolve_auto_well_known_libs,
+    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_cobuilds_with_stdlib,
+    effective_size_panic_immediate_abort, resolve_auto_well_known_libs,
     retain_workspace_declared_features, size_lto_fat, size_opt_level,
 };
 pub(crate) use no_auto::{resolve_no_auto_optimized_libs, resolve_prebuilt_ext_libs};
@@ -166,13 +166,13 @@ pub(crate) fn missing_ext_archive_diagnostics(
         missing.entry(filename).or_insert((
             symbol,
             &binding.krate,
-            binding_needs_shared_tokio(owner),
+            binding_cobuilds_with_stdlib(owner),
         ));
     }
     missing
         .into_iter()
-        .map(|(filename, (symbol, krate, shared_tokio))| {
-            let build = if shared_tokio {
+        .map(|(filename, (symbol, krate, cobuilt))| {
+            let build = if cobuilt {
                 format!(
                     "cargo build --release -p perry -p perry-runtime-static \
                      -p perry-stdlib-static -p {krate}"

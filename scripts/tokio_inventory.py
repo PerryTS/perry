@@ -1,79 +1,62 @@
 #!/usr/bin/env python3
-"""The tokio dependency inventory, as a gate instead of as prose (turnloop P8).
+"""The tokio gate: tokio is GONE from Perry's workspace, and this keeps it gone.
 
-Perry is migrating off tokio onto turnloop (`docs/turnloop/`). Eight lanes have
-now landed, and each one ended with a prose list of the paths it did *not*
-move. Those lists are the only record of what is left — and by the time P8 read
-them they had already gone stale in both directions: paths named as remaining
-had been migrated by a later lane, and edges nobody named had appeared. A
-migration whose remaining surface is measured by reading eight reports written
-at eight different commits cannot be finished, because no one can say when it
-is done.
+Perry migrated off tokio onto turnloop (`docs/turnloop/`). From turnloop P8 to
+the final tokio lane this script was a *ratchet*: every remaining manifest edge
+to a tokio-family crate, and every tokio-family package in `Cargo.lock`, was
+recorded in `scripts/tokio_inventory.json` with the JS surface that reached it
+and what blocked its removal, compared strictly in both directions. The final
+lane deleted the last edge (perry-stdlib's `async-runtime` feature) and with it
+every tokio package in the lock, so the ratchet reached zero.
 
-This script is that measurement, re-derived from the tree every time it runs.
+At zero it is no longer a ratchet — it is a ban, and the baseline can no longer
+grant anything. Owner rule: turnloop for everything, including tests; no tokio
+dependency anywhere (normal, dev or build), and no `#[tokio::test]`.
 
-WHAT IS GATED (and what is not)
--------------------------------
+WHAT FAILS
+----------
 
-**Gated, exactly:** the set of *manifest edges* from a workspace crate to a
-tokio-family crate, and the set of tokio-family packages in `Cargo.lock`. Both
-are exact, machine-derived facts, and both are the thing the migration's goal
-is stated in terms of ("tokio no longer appears in Perry's dependency graph,
-with the Cargo.lock to prove it").
+Each of these, absolutely (there is no allowlist to add an entry to):
 
-The comparison is strict equality against `scripts/tokio_inventory.json`, in
-BOTH directions, which is deliberate and matches the rule
-`scripts/gc_root_dominance_allowlist.json` already follows:
+  * a **manifest edge** from any workspace crate to a crate in `TOKIO` — normal,
+    dev or build, optional or not, under any target cfg. Read from
+    `cargo metadata --no-deps`, so a target-gated edge that `cargo tree` on the
+    host would hide still counts;
+  * a package in `TOKIO` appearing in **`Cargo.lock`** (whatever pulled it in,
+    including a third-party crate turning a `tokio` feature on);
+  * a **source line** (not a comment) in `crates/*/src`, `crates/*/tests`,
+    `crates/*/benches` or `crates/*/examples` that names a tokio path
+    (`tokio::`, `tokio_rustls::`, …) or a `#[tokio::main]` / `#[tokio::test]`
+    attribute;
+  * a non-empty `edges` or `lockfile` in `scripts/tokio_inventory.json` — the
+    fields are kept (empty) so an old tree's reader finds them, but an entry
+    there would be a permission this gate no longer honours;
+  * a `not_tokio` entry (below) whose package's `Cargo.lock` dependency list
+    names a `TOKIO` package, or a `not_tokio` package that has left the lock
+    (a stale note fails, so the file cannot describe a tree that is gone).
 
-  * a **new** edge fails — tokio cannot creep back in behind a green build;
-  * a **stale** entry (in the baseline, gone from the tree) also fails — so a
-    lane that removes an edge must delete its own entry, and the file can never
-    describe a tree that no longer exists.
+NOT TOKIO: `tungstenite`, `lettre`
+----------------------------------
 
-**Not gated:** the per-crate count of tokio-shaped *source sites*. It is
-recorded and printed because it is the only number that says how much code
-sits behind an edge, but a comment mentioning `tokio::spawn` moves it, so
-gating it would produce failures that carry no information. Saying so here is
-the point: an ungated number in a gate file is a number someone will
-eventually trust, and this one must not be.
+The old inventory tracked the whole "tokio family" by name, which included two
+crates that are not tokio at all. They are listed under `not_tokio` in the JSON
+with the reason, and the gate CHECKS that reason against the lock rather than
+trusting it:
 
-WHAT AN ENTRY CARRIES
----------------------
-
-Each edge in the JSON carries the four things a reader of
-`docs/turnloop/p8-report.md` needs and cannot get from `cargo tree`:
-
-  * `surface`      — what JS reaches this, or "none" if no JS surface does.
-  * `reached_when` — the condition under which a program actually takes it.
-                     "linked but unreachable" is a different problem from
-                     "every worker_threads agent hits it".
-  * `blocker`      — what has to exist before it can move.
-  * `issue`        — where that is tracked.
-  * `plan`         — which group of the costed removal plan in
-                     `docs/turnloop/p8-report.md` this edge belongs to. Every
-                     edge is in exactly one group, and `--list` prints the
-                     per-group totals, so the plan's arithmetic is checked
-                     rather than asserted: a plan whose parts do not add up to
-                     the whole is a plan that discovers a late item.
-
-`--table` prints those as the markdown inventory table, so the report is
-generated from the gate rather than transcribed beside it.
-
-RELATIONSHIP TO `scripts/rust_dependency_inventory.py`
------------------------------------------------------
-
-That script is a whole-graph census with no baseline and no exit code: it
-answers "what does Perry depend on". This one answers "what still depends on
-tokio, why, and has that got worse" — one family, with a ratchet. They do not
-overlap and neither replaces the other.
+  * `tungstenite` 0.30 — synchronous WebSocket protocol. perry-ui-android uses
+    it over a blocking `std::net::TcpStream` on one std thread per connection,
+    and turnloop-websocket uses it as a codec. Its lock entry has no tokio
+    dependency.
+  * `lettre` — perry-ext-nodemailer uses its `message` builder only; the
+    `tokio1` / `tokio1-rustls-tls` / `pool` transport features are off.
 
 USAGE
 -----
 
-    python3 scripts/tokio_inventory.py            # --check (the gate)
-    python3 scripts/tokio_inventory.py --list     # every edge + source sites
-    python3 scripts/tokio_inventory.py --table    # the markdown table
-    python3 scripts/tokio_inventory.py --update   # re-record, keeping annotations
+    python3 scripts/tokio_inventory.py            # the gate
+    python3 scripts/tokio_inventory.py --list     # what was checked, and the not-tokio notes
+    python3 scripts/tokio_inventory.py --table    # the not-tokio notes as markdown
+    python3 scripts/tokio_inventory.py --update   # re-record not_tokio versions (refuses if tokio is back)
     python3 scripts/tokio_inventory.py --self-test
 """
 
@@ -86,97 +69,56 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The tokio family: tokio itself, the crates that exist only to run on it, and
-# the third-party clients/servers Perry reaches it through. An edge to any of
-# these is an edge to tokio — `hyper` without tokio is not a configuration
-# Perry has, and `sqlx` is resolved with `runtime-tokio`.
-#
-# Membership is deliberately by NAME rather than by walking the resolved graph:
-# a name list is stable under feature unification, and the whole reason the
-# `--workspace` view of `cargo tree -i tokio` overstates the problem is that
-# unification pulls `tokio` into crates (perry-runtime through
-# `timezone_provider -> combine`) that have no edge of their own.
-FAMILY = (
+# Crates that ARE tokio, or exist only to run on it. An edge to, or a lock entry
+# for, any of these is tokio in the graph. Membership is by NAME so it is stable
+# under feature unification and target cfgs.
+TOKIO = (
     "tokio",
+    "tokio-macros",
     "tokio-util",
     "tokio-stream",
     "tokio-rustls",
+    "tokio-native-tls",
     "tokio-tungstenite",
-    "tungstenite",
-    "hyper",
+    "tokio-io-timeout",
     "hyper-util",
     "hyper-rustls",
+    "hyper-tls",
     "h2",
     "reqwest",
-    "lettre",
+    "tower",
+    "tower-http",
     "sqlx",
     "sqlx-core",
     "sqlx-mysql",
     "sqlx-postgres",
     "redis",
     "mongodb",
-    "tower",
-    "tower-http",
+    "async-compat",
 )
 
-# Source shapes that mean "this file runs on tokio". Counted per crate and
-# reported, never gated — see the module docstring.
-SOURCE_SITE_RE = re.compile(
-    r"\b(?:tokio|tokio_rustls|tokio_tungstenite|tokio_util|tokio_stream)::"
-    r"|#\[tokio::(?:main|test)\]"
-    r"|\bHandle::current\b"
-    r"|\bRuntime::new\b"
-    r"|\bspawn_blocking\b"
-    r"|\bblock_on\b"
-    r"|\bnew_current_thread\b"
-    r"|\bnew_multi_thread\b"
+# A code line naming a tokio path or attribute. Comment lines are skipped by the
+# caller: history in a doc comment ("the tokio path used to …") is not a use.
+SOURCE_RE = re.compile(
+    r"\b(?:tokio|tokio_rustls|tokio_tungstenite|tokio_util|tokio_stream|tokio_macros)::"
 )
+
+SOURCE_DIRS = ("src", "tests", "benches", "examples")
 
 BASELINE = Path("scripts/tokio_inventory.json")
 
-DEFAULT_README = [
-    "The turnloop migration's remaining tokio surface (docs/turnloop/p8-report.md).",
-    "",
-    "`edges` and `lockfile` are GATED by scripts/tokio_inventory.py, strictly and in",
-    "both directions: a NEW edge fails, and a STALE entry fails too — so a lane that",
-    "removes an edge must delete its own line, and this file can never describe a tree",
-    "that is gone. Regenerate with `python3 scripts/tokio_inventory.py --update`, which",
-    "preserves every surviving entry's annotations.",
-    "",
-    "Per edge, the four hand-written fields are the ones `cargo tree` cannot give:",
-    "  surface       what JS reaches it, or 'none' if no JS surface does",
-    "  reached_when  the condition under which a program actually takes it",
-    "  blocker       what has to exist before it can move",
-    "  issue         where that is tracked",
-    "  plan          its group in the report's costed removal plan; every edge is in",
-    "                exactly one group, and `--list` prints the totals",
-    "",
-    "`source_sites` is NOT gated: a comment naming tokio::spawn moves it, so a failure",
-    "there would carry no information. It is recorded because it is the only number",
-    "that says how much code sits behind an edge.",
-]
-
 
 # ---------------------------------------------------------------------------
-# Fact extraction. Every function here is pure given its input, so --self-test
-# can drive them with a synthetic tree and no cargo.
+# Fact extraction. Pure given its input, so --self-test needs no cargo.
 # ---------------------------------------------------------------------------
 
 
 def edges_from_metadata(metadata: dict) -> list[dict]:
-    """Every (workspace crate -> tokio-family crate) manifest edge.
-
-    `cargo metadata --no-deps` reports each member's declared dependencies
-    with their kind, optionality and target cfg, which is exactly the edge set
-    a `Cargo.lock` entry is derived from — and, unlike `cargo tree`, it is not
-    affected by which features happened to unify on the host that ran it. A
-    target-gated edge (`perry-ui-gtk4`'s tokio, Linux only) is invisible to
-    `cargo tree` on macOS and is reported here.
-    """
+    """Every (workspace crate -> TOKIO crate) manifest edge, any kind/target."""
     edges = []
     for pkg in metadata.get("packages", []):
         for dep in pkg.get("dependencies", []):
-            if dep["name"] not in FAMILY:
+            if dep["name"] not in TOKIO:
                 continue
             edges.append(
                 {
@@ -187,196 +129,117 @@ def edges_from_metadata(metadata: dict) -> list[dict]:
                     "target": dep.get("target"),
                 }
             )
-    return sorted(edges, key=edge_key)
+    return sorted(edges, key=lambda e: (e["crate"], e["dep"], e["kind"], e["target"] or ""))
 
 
-def edge_key(edge: dict) -> tuple:
-    return (
-        edge["crate"],
-        edge["dep"],
-        edge.get("kind") or "normal",
-        bool(edge.get("optional", False)),
-        edge.get("target") or "",
-    )
-
-
-def lock_packages(lock_text: str) -> dict[str, list[str]]:
-    """Which tokio-family packages `Cargo.lock` holds, and at which versions.
+def lock_entries(lock_text: str) -> dict[str, list[tuple[str, list[str]]]]:
+    """Every `[[package]]` in `Cargo.lock` as name -> [(version, dependency names)].
 
     Parsed lexically rather than with a TOML reader so the gate still runs on a
-    lockfile cargo would refuse, which is the state a half-finished dependency
-    removal leaves behind.
+    lockfile cargo would refuse — the state a half-finished edit leaves behind.
     """
-    found: dict[str, list[str]] = {}
-    name = None
-    for line in lock_text.splitlines():
-        if line.startswith('name = "'):
-            name = line[8:].rstrip('"')
-        elif line.startswith('version = "') and name is not None:
-            if name in FAMILY:
-                found.setdefault(name, []).append(line[11:].rstrip('"'))
-            name = None
-    return {k: sorted(v) for k, v in sorted(found.items())}
+    out: dict[str, list[tuple[str, list[str]]]] = {}
+    for block in lock_text.split("[[package]]")[1:]:
+        name = version = None
+        deps: list[str] = []
+        in_deps = False
+        for line in block.splitlines():
+            if line.startswith('name = "'):
+                name = line[8:].rstrip('"')
+            elif line.startswith('version = "'):
+                version = line[11:].rstrip('"')
+            elif line.startswith("dependencies = ["):
+                in_deps = True
+            elif in_deps:
+                if line.startswith("]"):
+                    in_deps = False
+                else:
+                    item = line.strip().strip(",").strip('"')
+                    if item:
+                        deps.append(item.split(" ")[0])
+        if name and version:
+            out.setdefault(name, []).append((version, deps))
+    return out
 
 
-def source_sites(root: Path, crates: list[str]) -> dict[str, int]:
-    """Lines per crate that name a tokio idiom, comments excluded.
+def tokio_in_lock(entries: dict) -> dict[str, list[str]]:
+    return {
+        name: sorted(v for v, _ in entries[name]) for name in sorted(entries) if name in TOKIO
+    }
 
-    Informational. Comment lines are dropped because `//! runs on tokio` in a
-    module header is not a call site, and P8's own report is full of them.
-    """
-    counts: dict[str, int] = {}
-    for crate in crates:
-        src = root / "crates" / crate / "src"
-        if not src.is_dir():
-            continue
-        total = 0
-        for path in sorted(src.rglob("*.rs")):
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+
+def source_hits(root: Path) -> list[str]:
+    hits = []
+    crates_dir = root / "crates"
+    if not crates_dir.is_dir():
+        return hits
+    for crate in sorted(p for p in crates_dir.iterdir() if p.is_dir()):
+        for sub in SOURCE_DIRS:
+            base = crate / sub
+            if not base.is_dir():
                 continue
-            for line in text.splitlines():
-                stripped = line.lstrip()
-                if stripped.startswith("//"):
+            for path in sorted(base.rglob("*.rs")):
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
                     continue
-                if SOURCE_SITE_RE.search(line):
-                    total += 1
-        if total:
-            counts[crate] = total
-    return dict(sorted(counts.items()))
+                for n, line in enumerate(text.splitlines(), 1):
+                    stripped = line.lstrip()
+                    if stripped.startswith("//") or stripped.startswith("*"):
+                        continue
+                    if SOURCE_RE.search(line):
+                        hits.append(f"{path.relative_to(root)}:{n}: {stripped[:120]}")
+    return hits
 
 
 # ---------------------------------------------------------------------------
-# Comparison
+# The check
 # ---------------------------------------------------------------------------
 
 
-def compare(baseline: dict, edges: list[dict], lock: dict[str, list[str]]) -> list[str]:
-    """Problems, one string each. Empty means the gate passes."""
+def check(baseline: dict, edges: list[dict], entries: dict, hits: list[str]) -> list[str]:
     problems: list[str] = []
-
-    recorded = {edge_key(e): e for e in baseline.get("edges", [])}
-    current = {edge_key(e): e for e in edges}
-
-    for key in sorted(current.keys() - recorded.keys()):
-        e = current[key]
-        problems.append(
-            f"NEW tokio edge: {e['crate']} -> {e['dep']} "
-            f"(kind={e['kind']}, optional={e['optional']}, target={e['target']}). "
-            "Perry is migrating OFF tokio; adding an edge needs an entry in "
-            f"{BASELINE} saying which JS surface reaches it and what blocks its removal."
-        )
-
-    for key in sorted(recorded.keys() - current.keys()):
-        e = recorded[key]
-        problems.append(
-            f"STALE entry: {e['crate']} -> {e['dep']} is recorded in {BASELINE} "
-            "but no longer exists in the tree. Delete the entry in the same commit "
-            "that removed the edge — an inventory that describes a tree that is gone "
-            "is how the lane reports went stale in the first place."
-        )
-
-    recorded_lock = baseline.get("lockfile", {})
-    for name in sorted(set(recorded_lock) | set(lock)):
-        was = recorded_lock.get(name)
-        now = lock.get(name)
-        if was == now:
-            continue
-        if was is None:
-            problems.append(
-                f"NEW tokio-family package in Cargo.lock: {name} {now}. "
-                "Nothing may add one while the migration is open."
-            )
-        elif now is None:
-            problems.append(
-                f"GONE from Cargo.lock: {name} (was {was}) — this is the goal, so "
-                f"record it: python3 {Path(__file__).name} --update"
-            )
-        else:
-            problems.append(
-                f"Cargo.lock version change: {name} {was} -> {now}. Re-record with --update."
-            )
-
-    return problems
-
-
-# ---------------------------------------------------------------------------
-# Rendering
-# ---------------------------------------------------------------------------
-
-
-def render_table(baseline: dict) -> str:
-    """The inventory, as markdown.
-
-    One block per edge rather than one row: the `blocker` column is a
-    paragraph, and a table cell that wide is unreadable in every renderer.
-    """
-    out: list[str] = []
-    crate = None
-    for e in sorted(baseline.get("edges", []), key=edge_key):
-        if e["crate"] != crate:
-            crate = e["crate"]
-            out.append("")
-            out.append(f"### `{crate}`")
-        qual = []
-        if e.get("optional"):
-            qual.append("optional")
-        if (e.get("kind") or "normal") != "normal":
-            qual.append(e["kind"])
-        if e.get("target"):
-            qual.append(e["target"])
-        suffix = f" ({', '.join(qual)})" if qual else ""
-        out.append("")
-        out.append(f"**`{e['dep']}`{suffix}** — {e.get('surface', '?')}")
-        out.append("")
-        out.append(f"* *reached when:* {e.get('reached_when', '?')}")
-        out.append(f"* *blocker:* {e.get('blocker', '?')}")
-        out.append(f"* *tracked:* {e.get('issue', '?')}")
-    return "\n".join(out).lstrip("\n")
-
-
-def render_list(baseline: dict, edges: list[dict], lock: dict, sites: dict) -> str:
-    out = []
-    out.append(f"tokio-family packages in Cargo.lock: {len(lock)}")
-    for name, versions in lock.items():
-        out.append(f"  {name:<20} {', '.join(versions)}")
-    out.append("")
-    by_crate: dict[str, list[str]] = {}
     for e in edges:
-        by_crate.setdefault(e["crate"], []).append(e["dep"])
-    out.append(f"workspace crates with a tokio-family manifest edge: {len(by_crate)}")
-    for crate, deps in sorted(by_crate.items()):
-        n = sites.get(crate)
-        suffix = f"   [{n} source sites]" if n else "   [no source sites — edge only]"
-        out.append(f"  {crate:<26} {', '.join(sorted(set(deps)))}{suffix}")
-    out.append("")
-    orphan = {c: n for c, n in sites.items() if c not in by_crate}
-    if orphan:
-        out.append(
-            "crates with tokio-shaped source but NO manifest edge "
-            "(they call the perry-ffi C seam, or the hit is a false positive):"
+        problems.append(
+            f"tokio edge: {e['crate']} -> {e['dep']} (kind={e['kind']}, "
+            f"optional={e['optional']}, target={e['target']}). tokio was removed "
+            "from the workspace; use turnloop (perry_ffi::turnloop_net, the pool, "
+            "turnloop-http/-tls/-websocket). There is no allowlist."
         )
-        for crate, n in sorted(orphan.items()):
-            out.append(f"  {crate:<26} {n}")
-        out.append("")
-    recorded = {edge_key(e): e for e in baseline.get("edges", [])}
-    unannotated = [e for e in edges if edge_key(e) in recorded
-                   and not recorded[edge_key(e)].get("blocker")]
-    if unannotated:
-        out.append(f"edges with no recorded blocker: {len(unannotated)}")
-    groups: dict[str, int] = {}
-    for e in baseline.get("edges", []):
-        groups[e.get("plan", "?")] = groups.get(e.get("plan", "?"), 0) + 1
-    if groups:
-        out.append("")
-        out.append(
-            "removal-plan groups (docs/turnloop/p8-report.md), "
-            f"{sum(groups.values())} edges in {len(groups)} groups:"
+    for name, versions in tokio_in_lock(entries).items():
+        problems.append(
+            f"tokio package in Cargo.lock: {name} {', '.join(versions)}. Find what pulls "
+            f"it in with `cargo tree --workspace --all-features --target all -i {name}`."
         )
-        for g, n in sorted(groups.items()):
-            out.append(f"  {g:<4} {n}")
-    return "\n".join(out)
+    for hit in hits:
+        problems.append(f"tokio in source: {hit}")
+    if baseline.get("edges") or baseline.get("lockfile"):
+        problems.append(
+            f"{BASELINE} records tokio edges or lock packages; both must stay empty — "
+            "an entry there would be a permission this gate no longer grants."
+        )
+    for note in baseline.get("not_tokio", []):
+        name = note.get("name")
+        found = entries.get(name)
+        if not found:
+            problems.append(
+                f"STALE not_tokio note: {name} is no longer in Cargo.lock; delete its entry."
+            )
+            continue
+        versions = sorted(v for v, _ in found)
+        if versions != sorted(note.get("versions", [])):
+            problems.append(
+                f"not_tokio {name}: Cargo.lock has {versions}, the note says "
+                f"{note.get('versions')}. Re-check the reason, then --update."
+            )
+        for version, deps in found:
+            bad = sorted(d for d in deps if d in TOKIO)
+            if bad:
+                problems.append(
+                    f"not_tokio {name} {version} now depends on {', '.join(bad)} in "
+                    "Cargo.lock — the note's reason no longer holds."
+                )
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -389,90 +252,67 @@ def self_test() -> int:
 
     metadata = {
         "packages": [
-            {
-                "name": "crate-a",
-                "dependencies": [
-                    {"name": "tokio", "kind": None, "optional": False, "target": None},
-                    {"name": "serde", "kind": None, "optional": False, "target": None},
-                ],
-            },
-            {
-                "name": "crate-b",
-                "dependencies": [
-                    {"name": "hyper", "kind": None, "optional": True, "target": None},
-                    {
-                        "name": "tokio",
-                        "kind": "dev",
-                        "optional": False,
-                        "target": 'cfg(target_os = "linux")',
-                    },
-                ],
-            },
-            {"name": "crate-c", "dependencies": [{"name": "anyhow", "kind": None}]},
+            {"name": "crate-a", "dependencies": [
+                {"name": "serde", "kind": None, "optional": False, "target": None}]},
+            {"name": "crate-b", "dependencies": [
+                {"name": "tokio", "kind": "dev", "optional": False,
+                 "target": 'cfg(target_os = "linux")'}]},
+            {"name": "crate-c", "dependencies": [
+                {"name": "tungstenite", "kind": None, "optional": False, "target": None}]},
         ]
     }
-
     edges = edges_from_metadata(metadata)
-    if len(edges) != 3:
-        failures.append(f"expected 3 family edges from the synthetic metadata, got {len(edges)}")
-    if any(e["dep"] in ("serde", "anyhow") for e in edges):
-        failures.append("a non-family dependency was reported as a tokio edge")
-    if not any(e["target"] == 'cfg(target_os = "linux")' for e in edges):
-        failures.append("a target-gated edge was dropped; that is the one cargo tree hides")
-    if not any(e["kind"] == "dev" for e in edges):
-        failures.append("a dev-dependency edge was dropped")
+    if [e["dep"] for e in edges] != ["tokio"]:
+        failures.append(f"expected exactly the planted tokio edge, got {edges}")
+    elif edges[0]["kind"] != "dev" or not edges[0]["target"]:
+        failures.append("a target-gated dev-dependency edge lost its kind or target")
 
-    lock = lock_packages(
-        '[[package]]\nname = "tokio"\nversion = "1.53.1"\n\n'
+    clean_lock = (
         '[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
-        '[[package]]\nname = "hyper"\nversion = "1.11.1"\n'
+        '[[package]]\nname = "tungstenite"\nversion = "0.30.0"\n'
+        'dependencies = [\n "bytes",\n "http",\n]\n'
     )
-    if lock != {"hyper": ["1.11.1"], "tokio": ["1.53.1"]}:
-        failures.append(f"lockfile parse wrong: {lock}")
+    entries = lock_entries(clean_lock)
+    baseline = {"edges": [], "lockfile": {},
+                "not_tokio": [{"name": "tungstenite", "versions": ["0.30.0"]}]}
+    if check(baseline, [], entries, []):
+        failures.append("a clean tree must pass, and did not")
 
-    baseline = {"edges": edges, "lockfile": lock}
-    if compare(baseline, edges, lock):
-        failures.append("a baseline that matches the tree must pass, and did not")
-
-    # 1. A new edge must fail.
-    grown = edges + [
-        {"crate": "crate-c", "dep": "reqwest", "kind": "normal", "optional": False, "target": None}
-    ]
-    problems = compare(baseline, grown, lock)
-    if not any("NEW tokio edge" in p for p in problems):
-        failures.append("a NEW tokio edge did not fail the gate")
-
-    # 2. A stale entry must fail — otherwise the file rots exactly the way the
-    #    lane reports did.
-    shrunk = [e for e in edges if e["dep"] != "hyper"]
-    problems = compare(baseline, shrunk, lock)
-    if not any("STALE entry" in p for p in problems):
-        failures.append("a STALE baseline entry did not fail the gate")
-
-    # 3. A lockfile change in either direction must be recorded.
-    problems = compare(baseline, edges, {"tokio": ["1.53.1"]})
-    if not any("GONE from Cargo.lock" in p for p in problems):
-        failures.append("a package leaving Cargo.lock did not have to be recorded")
-    problems = compare(baseline, edges, dict(lock, **{"h2": ["0.4.19"]}))
-    if not any("NEW tokio-family package" in p for p in problems):
-        failures.append("a package entering Cargo.lock did not fail the gate")
-    problems = compare(baseline, edges, dict(lock, tokio=["1.54.0"]))
-    if not any("version change" in p for p in problems):
-        failures.append("a version change did not have to be recorded")
-
-    # 4. An edge that differs only in optionality is a DIFFERENT edge: flipping
-    #    `optional = true` to `false` changes which builds link it.
-    flipped = [dict(e, optional=not e["optional"]) for e in edges]
-    problems = compare(baseline, flipped, lock)
-    if not any("NEW tokio edge" in p for p in problems):
-        failures.append("flipping `optional` was not treated as a changed edge")
+    # 1. Any tokio edge fails, dev/target-gated included.
+    if not any("tokio edge" in p for p in check(baseline, edges, entries, [])):
+        failures.append("a tokio dev-dependency edge did not fail the gate")
+    # 2. tokio in the lock fails, even with no workspace edge.
+    dirty = lock_entries(clean_lock + '\n[[package]]\nname = "tokio"\nversion = "1.53.1"\n')
+    if not any("tokio package in Cargo.lock" in p for p in check(baseline, [], dirty, [])):
+        failures.append("tokio in Cargo.lock did not fail the gate")
+    # 3. A not-tokio crate that grows a tokio dependency fails.
+    grown = lock_entries(clean_lock.replace(' "http",\n', ' "http",\n "tokio",\n'))
+    if not any("reason no longer holds" in p for p in check(baseline, [], grown, [])):
+        failures.append("a not_tokio package depending on tokio did not fail the gate")
+    # 4. A stale not-tokio note fails.
+    stale = dict(baseline, not_tokio=[{"name": "lettre", "versions": ["0.11.23"]}])
+    if not any("STALE" in p for p in check(stale, [], entries, [])):
+        failures.append("a stale not_tokio note did not fail the gate")
+    # 5. A baseline trying to grant an edge fails.
+    granted = dict(baseline, edges=[{"crate": "x", "dep": "tokio"}])
+    if not any("must stay empty" in p for p in check(granted, [], entries, [])):
+        failures.append("a non-empty baseline did not fail the gate")
+    # 6. A tokio source line fails; a comment naming tokio does not.
+    if not any("tokio in source" in p for p in check(baseline, [], entries, ["x.rs:1: tokio::spawn"])):
+        failures.append("a tokio source hit did not fail the gate")
+    if not SOURCE_RE.search("#[tokio::test]") or SOURCE_RE.search("let tokio_free = 1;"):
+        failures.append("the source pattern misclassifies an attribute or an identifier")
+    # 7. A not-tokio version change must be re-checked.
+    bumped = lock_entries(clean_lock.replace("0.30.0", "0.31.0"))
+    if not any("Re-check the reason" in p for p in check(baseline, [], bumped, [])):
+        failures.append("a not_tokio version change did not have to be re-recorded")
 
     if failures:
         print("tokio_inventory self-test FAILED:", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
         return 1
-    print("tokio_inventory self-test: OK (7 planted changes, all caught)")
+    print("tokio_inventory self-test: OK (8 planted changes, all caught)")
     return 0
 
 
@@ -489,14 +329,23 @@ def load_metadata(root: Path) -> dict:
     return json.loads(out)
 
 
+def render_table(baseline: dict) -> str:
+    out = ["| crate | versions | why it is not tokio |", "| --- | --- | --- |"]
+    for note in baseline.get("not_tokio", []):
+        out.append(
+            f"| `{note['name']}` | {', '.join(note.get('versions', []))} | {note.get('why', '?')} |"
+        )
+    return "\n".join(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--self-test", action="store_true", help="check the checker")
-    parser.add_argument("--list", action="store_true", help="print the census")
-    parser.add_argument("--table", action="store_true", help="print the markdown table")
+    parser.add_argument("--list", action="store_true", help="print what was checked")
+    parser.add_argument("--table", action="store_true", help="the not-tokio notes as markdown")
     parser.add_argument("--update", action="store_true",
-                        help="re-record, preserving every surviving entry's annotations")
+                        help="re-record not_tokio versions (refuses while tokio is present)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -506,65 +355,49 @@ def main() -> int:
         subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
     )
     baseline_path = root / BASELINE
-    baseline = json.loads(baseline_path.read_text(encoding="utf-8")) if baseline_path.exists() else {}
-
-    edges = edges_from_metadata(load_metadata(root))
-    lock = lock_packages((root / "Cargo.lock").read_text(encoding="utf-8"))
-    crates = sorted({p.name for p in (root / "crates").iterdir() if p.is_dir()})
-    sites = source_sites(root, crates)
-
-    if args.update:
-        recorded = {edge_key(e): e for e in baseline.get("edges", [])}
-        merged = []
-        for e in edges:
-            old = recorded.get(edge_key(e), {})
-            merged.append(
-                {
-                    **e,
-                    "surface": old.get("surface", "TODO: what JS reaches this"),
-                    "reached_when": old.get("reached_when", "TODO"),
-                    "blocker": old.get("blocker", "TODO"),
-                    "issue": old.get("issue", "TODO"),
-                    "plan": old.get("plan", "TODO"),
-                }
-            )
-        baseline["edges"] = merged
-        baseline["lockfile"] = lock
-        baseline["source_sites"] = sites
-        baseline.pop("_comment", None)
-        baseline.setdefault("_README", DEFAULT_README)
-        baseline = {
-            "_README": baseline["_README"],
-            **{k: v for k, v in baseline.items() if k != "_README"},
-        }
-        baseline_path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
-        print(f"recorded {len(merged)} edges and {len(lock)} lockfile packages to {BASELINE}")
-        return 0
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
 
     if args.table:
         print(render_table(baseline))
         return 0
 
-    if args.list:
-        print(render_list(baseline, edges, lock, sites))
-        return 0
+    edges = edges_from_metadata(load_metadata(root))
+    entries = lock_entries((root / "Cargo.lock").read_text(encoding="utf-8"))
+    hits = source_hits(root)
 
-    problems = compare(baseline, edges, lock)
+    if args.update:
+        if edges or tokio_in_lock(entries) or hits:
+            print("refusing --update: tokio is in the tree; the gate below says where.",
+                  file=sys.stderr)
+        else:
+            for note in baseline.get("not_tokio", []):
+                note["versions"] = sorted(v for v, _ in entries.get(note["name"], []))
+            baseline["edges"] = []
+            baseline["lockfile"] = {}
+            baseline_path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+            print(f"re-recorded not_tokio versions in {BASELINE}")
+            return 0
+
+    if args.list:
+        print(f"manifest edges to a tokio crate: {len(edges)}")
+        print(f"tokio packages in Cargo.lock:    {len(tokio_in_lock(entries))}")
+        print(f"tokio source lines:              {len(hits)}")
+        print(f"banned names ({len(TOKIO)}): {', '.join(TOKIO)}")
+        print("not tokio (checked against Cargo.lock):")
+        for note in baseline.get("not_tokio", []):
+            print(f"  {note['name']:<14} {', '.join(sorted(v for v, _ in entries.get(note['name'], [])))}")
+
+    problems = check(baseline, edges, entries, hits)
     if problems:
-        print("tokio inventory gate FAILED:", file=sys.stderr)
+        print("tokio gate FAILED — tokio was removed from the workspace:", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
-        print(
-            f"\nIf the change is intended, re-record with: "
-            f"python3 {BASELINE.parent}/{Path(__file__).name} --update",
-            file=sys.stderr,
-        )
         return 1
-    print(
-        f"tokio inventory: {len(edges)} manifest edges across "
-        f"{len({e['crate'] for e in edges})} workspace crates, "
-        f"{len(lock)} tokio-family packages in Cargo.lock — unchanged."
-    )
+    if not args.list:
+        print(
+            f"tokio gate: 0 manifest edges, 0 tokio packages in Cargo.lock, 0 source lines; "
+            f"{len(baseline.get('not_tokio', []))} not-tokio notes verified."
+        )
     return 0
 
 

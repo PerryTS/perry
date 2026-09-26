@@ -1,72 +1,32 @@
 {
   "_README": [
-    "The turnloop migration's remaining tokio surface (docs/turnloop/p8-report.md).",
+    "tokio is GONE from Perry's workspace (final tokio lane; docs/turnloop/p8-report.md).",
     "",
-    "`edges` and `lockfile` are GATED by scripts/tokio_inventory.py, strictly and in",
-    "both directions: a NEW edge fails, and a STALE entry fails too \u2014 so a lane that",
-    "removes an edge must delete its own line, and this file can never describe a tree",
-    "that is gone. Regenerate with `python3 scripts/tokio_inventory.py --update`, which",
-    "preserves every surviving entry's annotations.",
+    "scripts/tokio_inventory.py (a `lint` step) fails on ANY tokio manifest edge (normal,",
+    "dev or build, any target), ANY tokio package in Cargo.lock, and ANY non-comment",
+    "`tokio::` / `#[tokio::test]` in crates/*. There is no allowlist: `edges` and",
+    "`lockfile` are kept only so an old reader finds them, and must stay empty.",
     "",
-    "Per edge, the four hand-written fields are the ones `cargo tree` cannot give:",
-    "  surface       what JS reaches it, or 'none' if no JS surface does",
-    "  reached_when  the condition under which a program actually takes it",
-    "  blocker       what has to exist before it can move",
-    "  issue         where that is tracked",
-    "  plan          its group in the report's costed removal plan; every edge is in",
-    "                exactly one group, and `--list` prints the totals",
-    "",
-    "Group J is not in the costed plan: it is the four database wrappers, which are",
-    "being DELETED rather than migrated because each wraps a pure-JS npm package that",
-    "Perry can now compile from source. Their edges leave with the crates.",
-    "",
-    "`source_sites` is NOT gated: a comment naming tokio::spawn moves it, so a failure",
-    "there would carry no information. It is recorded because it is the only number",
-    "that says how much code sits behind an edge."
+    "`not_tokio` lists the crates the old ratchet tracked as 'tokio family' that are not",
+    "tokio. Each note's reason is CHECKED against Cargo.lock (no tokio dependency), and",
+    "a note whose package left the lock fails as stale."
   ],
-  "edges": [
+  "edges": [],
+  "lockfile": {},
+  "not_tokio": [
     {
-      "crate": "perry-stdlib",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "the tokio HALF of the async bridge only (turnloop P8 lane L split it out): `common::tokio_bridge` \u2014 the current-thread `RUNTIME`, its wait-driver tick, `spawn` / `spawn_for_promise*` \u2014 plus the `perry_ffi_spawn_async` / `perry_ffi_spawn_blocking_with_reactor` C ABI and `perry_ffi_spawn_blocking`'s tokio-pool arm. The promise bridge itself (`common::async_bridge`'s settle queue and pump, and the promise / pool / blocking `perry_ffi_*` shims) is tokio-free under the `async-bridge` feature, which is what the auto-optimize driver now force-enables. `web-fetch`, the `node:tls` server (`tls-runtime`, on turnloop handles since lane L part 2) and the external net / ws adapters compile against that bridge only. The bundled `net` / `ws` sockets that were the last in-crate tokio users (with `tls_stream.rs`, their TLS stream) were deleted in lane L4.",
-      "reached_when": "the `async-runtime` feature, which is selected only by (1) `full`, which lists it explicitly since lane L4 deleted bundled `net` / `ws` (the tokio-socket features it used to come through); or (2) the auto-optimize driver, for every wrapper that still bundles tokio (`binding_bundles_tokio`) \u2014 an empty set since #11337 deleted perry-ext-mongodb, the last member, together with its module-name rule. pg / mysql2 have had no wrapper since #10677 / #10680, lane L3 deleted their unreachable module-name rule, and mongodb followed in #11337; all three npm packages compile from source over `net` / `tls`, so an auto-optimized pg-, mysql2- or mongodb-only program links no tokio either. So every PERRY_NO_AUTO_OPTIMIZE / prebuilt-archive build still links tokio, and nothing else does: lane L4 routes `net` / `ws` / `tls` to perry-ext-net / perry-ext-ws even with PERRY_DISABLE_WELL_KNOWN=1, so that mode no longer links tokio for them. Lane L part 2 took `web-fetch`, `tls-runtime`, `external-tls-server`, `external-net-tls`, `external-net-pump`, `external-ws-pump` and (after lane D, #11265) `external-http-server-pump` / `external-http-client-pump` off it (the `node:tls` server's sockets are turnloop handles, and perry-ext-net / perry-ext-ws carry no tokio), so an auto-optimized program whose network imports are only `fetch`, `net`, `tls` (both route to perry-ext-net, with the TLS server here), `ws` and `http` / `https` / `http2` links no tokio \u2014 on top of part 1's crypto, bcrypt, argon2, zlib, readline, worker_threads, timers and UI programs, and lane K's `container`.",
-      "blocker": "each selector in `reached_when` has to go; then `tokio_bridge.rs` and the three `cfg(feature = \"async-runtime\")` shims in `perry_ffi_async.rs` delete whole and `async-runtime` collapses into `async-bridge` \u2014 nothing in `async_bridge.rs` has to move. In order: (1) B is DONE: no db decline path is left \u2014 pg's and mysql2's went with their wrappers (#10677 / #10680), and perry-ext-mongodb's (`Handle::current().block_on` inside `perry_ffi_spawn_blocking`) went when #11337 deleted that wrapper. (2) is DONE too: lane L4 deleted the two bundled socket modules (`net/`, `ws.rs`) instead of porting them \u2014 perry-ext-net / perry-ext-ws were strict supersets of their C surface. What is left is dropping `async-runtime` from `full`, then the deletions above. K took `container` off tokio (`perry_container_compose::rt`). PerryTS/turnloop#42 is NOT a blocker: `Occupancy::Long` shipped in turnloop 0.1.0-alpha.5, and the tokio-free `perry_ffi_spawn_blocking` runs on it through `turnloop_pool::submit_long`.",
-      "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 closed (Occupancy::Long, turnloop 0.1.0-alpha.5+); lane L split the bridge from the runtime (#11115) and moved fetch / the TLS server / the net+ws adapters off tokio (part 2); lane L4 deleted bundled net / ws",
-      "plan": "L"
+      "name": "lettre",
+      "versions": [
+        "0.11.23"
+      ],
+      "why": "perry-ext-nodemailer uses lettre's `message` builder only; the `tokio1` / `tokio1-rustls-tls` / `pool` transport features are off and the SMTP transport is turnloop-smtp. Its Cargo.lock entry has no tokio dependency."
     },
     {
-      "crate": "perry-ui-android",
-      "dep": "tungstenite",
-      "kind": "normal",
-      "optional": false,
-      "target": "cfg(target_os = \"android\")",
-      "surface": "`perry/ui` WebSocket on Android (`crates/perry-ui-android/src/ws.rs`) \u2014 synchronous tungstenite 0.30 (`tungstenite::connect` over a blocking `std::net::TcpStream`), one std background thread per connection. No tokio: `cargo tree -p perry-ui-android -i tokio --target aarch64-linux-android` finds no tokio package in its graph.",
-      "reached_when": "an Android target build only",
-      "blocker": "Nothing tokio-shaped: this is not a tokio edge at all, it is listed only because tungstenite is in the tokio family this inventory tracks. #11065 bumped this crate's pin from 0.24 to 0.30, so the tree-wide tungstenite major-version split is gone: this edge now resolves to the same 0.30.0 as turnloop-websocket. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration off tungstenite entirely is still mechanical \u2014 but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "N"
+      "name": "tungstenite",
+      "versions": [
+        "0.30.0"
+      ],
+      "why": "Synchronous WebSocket protocol crate. perry-ui-android (`src/ws.rs`, Android targets only) drives it over a blocking std::net::TcpStream on one std thread per connection, and turnloop-websocket uses it as a codec. Its Cargo.lock entry has no tokio dependency. Migrating the Android client onto turnloop-websocket is mechanical but cannot be built or run from the shared Linux host, so it is not done blind here."
     }
-  ],
-  "lockfile": {
-    "lettre": [
-      "0.11.23"
-    ],
-    "tokio": [
-      "1.53.1"
-    ],
-    "tungstenite": [
-      "0.30.0"
-    ]
-  },
-  "source_sites": {
-    "perry": 3,
-    "perry-container-compose": 27,
-    "perry-ext-ads": 5,
-    "perry-ffi": 2,
-    "perry-stdlib": 21,
-    "perry-ui-gtk4": 6
-  }
+  ]
 }

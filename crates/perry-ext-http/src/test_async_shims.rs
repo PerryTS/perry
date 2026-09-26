@@ -52,24 +52,10 @@ pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" 
     invoke(ctx);
 }
 
-#[no_mangle]
-pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
-    ctx: *mut c_void,
-    invoke: extern "C" fn(*mut c_void),
-) {
-    invoke(ctx);
-}
-
-// Pulled in transitively through perry-ext-net but normally supplied by the
-// host stdlib archive, which unit-test binaries do not link.
-#[no_mangle]
-pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}
-
 // Linking the ws dispatch extension also retains its synchronous polling
-// helper. These unit tests use the no-op task shim above; real networking is
-// exercised by the compiled HTTP/WebSocket integration tests.
-// Same story: `js_bun_tcp_listen` drives the shared runtime from its bind-poll
-// loop (`perry_ffi::run_pending`), so linking perry-ext-net's object code into
+// helper; real networking is exercised by the compiled HTTP/WebSocket
+// integration tests. Likewise `js_bun_tcp_listen` turns the loop from its
+// bind-poll loop (`perry_ffi::run_pending`), so linking perry-ext-net's object code into
 // this crate's test binaries pulls the extern in with it.
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {}

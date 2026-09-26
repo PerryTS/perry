@@ -355,7 +355,7 @@ mod tests {
         ] {
             fs::write(root.join(name), bytes).unwrap();
         }
-        let features = vec!["crypto".to_string(), "async-runtime".to_string()];
+        let features = vec!["crypto".to_string(), "async-bridge".to_string()];
         let archives = vec![root.join("wrapper.a")];
         let baseline = key(root, &features, &archives, "macos");
 

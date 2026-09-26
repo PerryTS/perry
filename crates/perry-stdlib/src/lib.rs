@@ -24,11 +24,9 @@ pub use perry_updater;
 
 // `extern "C"` shims that perry-ffi declares for use by external
 // native binding crates (#466 Phase 1 + 5 — async surface). Gated
-// on `async-bridge` because the underlying async_bridge is; the
-// three shims that drive tokio futures (`perry_ffi_spawn_async`,
-// `perry_ffi_spawn_blocking_with_reactor`, and `perry_ffi_spawn_blocking`'s
-// tokio-pool arm) additionally need `async-runtime`, which every
-// wrapper that calls them selects through the auto-optimize driver.
+// on `async-bridge` because the underlying async_bridge is. None of
+// them uses tokio: the tokio-driving shims (`perry_ffi_spawn_async`,
+// `perry_ffi_spawn_blocking_with_reactor`) were retired with tokio.
 #[cfg(feature = "async-bridge")]
 pub mod perry_ffi_async;
 

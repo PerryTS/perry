@@ -2,7 +2,7 @@
 //!
 //! The final-link driver retains and exports the exact Perry ABI symbols the
 //! compiled app leaves undefined. These anchors ensure Cargo places the stdlib
-//! and HTTP wrapper rlibs on that final link in one coherent tokio build.
+//! and HTTP wrapper rlibs on that final link in one coherent build.
 
 extern crate perry_ext_http;
 extern crate perry_stdlib;

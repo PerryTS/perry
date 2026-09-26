@@ -1,11 +1,10 @@
 //! Async bridge: settles Perry Promises from native work, on the thread that
 //! owns the JS heap.
 //!
-//! Native work — a turnloop pool job, a plain OS thread, or, in a build with
-//! the `async-runtime` feature, a tokio task — never builds a JSValue. It
-//! queues either finished bits (`queue_promise_resolution`) or a converter
-//! (`queue_deferred_resolution`), and `js_stdlib_process_pending` settles the
-//! promise on the main thread.
+//! Native work — a turnloop pool job or a plain OS thread — never builds a
+//! JSValue. It queues either finished bits (`queue_promise_resolution`) or a
+//! converter (`queue_deferred_resolution`), and `js_stdlib_process_pending`
+//! settles the promise on the main thread.
 //!
 //! IMPORTANT: perry-runtime uses thread-local arenas for memory allocation.
 //! This means JSValue objects created on worker threads will be allocated
@@ -16,39 +15,29 @@
 //! 2. Store raw Rust data and use deferred conversion callbacks
 //! 3. The conversion callbacks run on the main thread during js_stdlib_process_pending
 //!
-//! # No tokio here (turnloop P8 lane L)
+//! # No tokio
 //!
-//! This module is compiled under `async-bridge` and contains no tokio. The
-//! tokio current-thread runtime and everything that drives it live in
-//! `super::tokio_bridge`, which only `async-runtime` compiles — the features
-//! whose code hands it tokio futures (bundled net/tls/ws sockets, reqwest
-//! fetch, the container engine) and the `perry_ffi_spawn_async` /
-//! `_with_reactor` C ABI that perry-ext-net / perry-ext-http still use. A
-//! program that needs none of those (crypto, bcrypt, argon2, zlib, readline,
-//! nodemailer, worker_threads, a UI app) links no tokio at all. The tokio
-//! half's public names are re-exported below so no caller's path changed.
+//! This is the only async bridge perry-stdlib has. Turnloop P8 lane L split
+//! the tokio current-thread runtime out of this module into a sibling
+//! `tokio_bridge` behind an `async-runtime` feature; the final tokio lane
+//! deleted both, together with the `perry_ffi_spawn_async` /
+//! `_with_reactor` C ABI that was their last user. Every program links no
+//! tokio: CPU work goes to turnloop's pool (`pool_for_promise_deferred`),
+//! I/O to the owning agent's turnloop loop.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use std::sync::LazyLock as Lazy;
 
-#[cfg(feature = "async-runtime")]
-pub(crate) use super::tokio_bridge::spawn_native;
-#[cfg(feature = "async-runtime")]
-pub use super::tokio_bridge::{
-    block_on, drive_pending, run_one_tick, runtime, spawn, spawn_for_promise,
-    spawn_for_promise_deferred, spawn_for_promise_deferred_with_error, RUNTIME,
-};
-
-/// Issue #859: pin a Promise so the GC can't sweep it while a tokio
-/// worker is computing its eventual resolution.
+/// Issue #859: pin a Promise so the GC can't sweep it while a pool
+/// job or native thread is computing its eventual resolution.
 ///
 /// Without pinning, the await chain has no path back to the Promise:
 /// `P.next = N` is a forward edge, and after the user code yields, all
-/// JS-side roots reach only `N`. The tokio future holds `promise_ptr`
+/// JS-side roots reach only `N`. The native job holds `promise_ptr`
 /// as `usize`, invisible to the GC. So `js_promise_new()` in a native
-/// binding + `spawn_for_promise(...)` opens a window where `P` is
+/// binding + a pool submission opens a window where `P` is
 /// unreachable; if GC fires during that window, `P` is swept, and
 /// when the worker finally calls `js_promise_resolve(P, ...)` it
 /// dereferences freed (and possibly OS-reclaimed) memory → SIGBUS.
@@ -126,7 +115,7 @@ pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Prom
     perry_runtime::js_promise_new_cross_thread()
 }
 
-/// Count of in-flight `perry_ffi_spawn_blocking[_with_reactor]` tasks
+/// Count of in-flight `perry_ffi_spawn_blocking` tasks
 /// dispatched by external native bindings (perry-ext-argon2 /
 /// -bcrypt / etc. via perry-ffi). Each spawn `fetch_add(1)`s before
 /// the closure runs; the closure-trampoline `fetch_sub(1)`s after it
@@ -136,7 +125,7 @@ pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Prom
 /// queued its result.
 ///
 /// Issue #591: without this counter, `await argon2.hash(pw)` returns
-/// a Promise whose resolution is queued from a tokio worker AFTER
+/// a Promise whose resolution is queued from a worker thread AFTER
 /// `main()` returns. The runtime saw zero active handles (no WS,
 /// net, readline) and exited before the resolution drained, so the
 /// `.then` / `await` never fired and the program ran past the await
@@ -146,8 +135,8 @@ pub static EXT_BLOCKING_TASKS_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 /// Owns exactly one `EXT_BLOCKING_TASKS_INFLIGHT` increment, released on drop.
 ///
 /// Create it BEFORE spawning and move it into the task: the decrement then runs
-/// on completion, on error, when the task panics (tokio drops the future while
-/// unwinding) and when the task is dropped before its first poll (runtime
+/// on completion, on error, when the task panics (the job is dropped while
+/// unwinding) and when the task is dropped before it runs (pool
 /// shutdown). The hand-written `fetch_add` / `fetch_sub` pairs it replaces
 /// leaked an increment on the last two paths, which pinned the event loop alive
 /// forever. Drop also notifies the main thread so the loop re-evaluates its
@@ -325,13 +314,8 @@ pub fn ensure_pump_registered() {
             fn js_stdlib_init_dispatch();
         }
         ensure_gc_scanner_registered();
-        // The tokio half (turnloop P8 lane L): a build that carries the
-        // runtime installs its wait-driver here, before any async work spawns,
-        // so the first `js_wait_for_event` after a spawn already drives it. A
-        // build without `async-runtime` installs nothing: the primary agent
-        // parks in its own turnloop loop, which `js_notify_main_thread` wakes.
-        #[cfg(feature = "async-runtime")]
-        super::tokio_bridge::install_wait_driver();
+        // No wait-driver is installed: the primary agent parks in its own
+        // turnloop loop, which `js_notify_main_thread` wakes.
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
@@ -567,8 +551,8 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
 /// turnloop P4: run `work` on turnloop's shared blocking pool and settle
 /// `promise_ptr` from its result, on the thread that owns the JS heap.
 ///
-/// This is `spawn_for_promise_deferred`'s contract with the tokio runtime
-/// taken out of the middle. The two halves are the same as before — owned Rust
+/// This is the retired tokio `spawn_for_promise_deferred`'s contract with the
+/// tokio runtime taken out of the middle. The two halves are the same as before — owned Rust
 /// data on the worker, JSValue construction on the main thread — but now the
 /// split is a trait bound rather than a convention: `work` is `Send` and
 /// returns `Result<T, String>`, and `converter` runs inside the completion
@@ -715,12 +699,7 @@ mod tests {
 
     #[test]
     fn stdlib_bridge_does_not_hard_reference_extension_pumps() {
-        // Both halves: the tokio one is its own file since lane L.
-        let source = [
-            include_str!("async_bridge.rs"),
-            include_str!("tokio_bridge.rs"),
-        ]
-        .concat();
+        let source = include_str!("async_bridge.rs");
         let extension_symbols = [
             "js_ws_process_pending",
             "js_ws_has_pending",

@@ -58,8 +58,7 @@ extern "C" {
 /// transfers it to the awaiter.
 ///
 /// Every documented use of `perry_ffi_promise_new` ships the pointer
-/// to a worker future (via `perry_ffi_spawn_blocking*` /
-/// `perry_ffi_spawn_async`) and later resolves it from the worker, so
+/// to a worker (via `perry_ffi_spawn_blocking` / the v2 pool) and later resolves it from the worker, so
 /// the promise must survive — and keep its address — for as long as
 /// that raw pointer is out there. The await chain has no path back to
 /// the promise (`P.next = N` is a forward edge; #859), so the native
@@ -166,7 +165,7 @@ pub extern "C" fn perry_ffi_native_async_attach_handle(
 /// promise by running `invoke(ctx)` on the MAIN thread during the resolution
 /// pump (`js_stdlib_process_pending`), using its return value as the result
 /// bits. This is the safe path for native bindings that need to *construct*
-/// JSValues (objects/arrays/strings) for the result: doing that on a tokio
+/// JSValues (objects/arrays/strings) for the result: doing that on a
 /// blocking-pool thread allocates from a worker thread-local arena that is
 /// freed when the pooled thread idles out, leaving dangling objects on the
 /// main thread (issue #1824). The worker keeps the JS-building closure boxed
@@ -204,70 +203,25 @@ pub extern "C" fn perry_ffi_promise_reject_deferred(
     });
 }
 
-/// `perry_ffi_spawn_blocking(ctx, invoke)` — run `invoke(ctx)` on
-/// the global tokio runtime's blocking pool. The caller is expected
-/// to box a closure into `ctx` before calling, and write a thin
-/// trampoline that decodes the closure inside `invoke`. perry-ffi's
-/// safe `spawn_blocking` does exactly that.
+/// `perry_ffi_spawn_blocking(ctx, invoke)` — run `invoke(ctx)` off the
+/// calling thread. The caller boxes a closure into `ctx` and writes a thin
+/// trampoline that decodes it inside `invoke`; perry-ffi's safe
+/// `spawn_blocking` does exactly that. `invoke` takes ownership of `ctx`
+/// (drops the box inside) — this function does not free it.
 ///
-/// `invoke` must take ownership of `ctx` (drop the box inside) —
-/// this function does not free `ctx` itself.
+/// It runs on turnloop's `Occupancy::Long` worker set (PerryTS/turnloop#42) —
+/// not the bounded set, because nothing in this ABI says the closure is short,
+/// and a closure that holds its thread must not starve bcrypt/argon2/zlib's
+/// bounded jobs. A thread with no event loop (a `worker_threads` agent before
+/// its loop exists), or a refusal at the long set's ceiling, falls back to one
+/// plain OS thread. (Until the final tokio lane this had a second arm on
+/// tokio's blocking pool, compiled under the retired `async-runtime` feature;
+/// this was the tokio-free arm since turnloop P8 lane L and is now the only
+/// one.)
 ///
-/// Why blocking-pool: most native bindings that need async (bcrypt,
-/// argon2, fs, http) are CPU-bound or make synchronous I/O calls
-/// that would stall a tokio worker. The blocking pool is the
-/// recommended pattern; pure-async tasks can use this same shim
-/// (the closure can run an `async {}` block via
-/// `tokio::runtime::Handle::current().block_on`).
-#[cfg(feature = "async-runtime")]
-#[no_mangle]
-pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void)) {
-    // v0.5.579: ensure perry-stdlib's pump is registered with the
-    // runtime so events queued by external wrappers (perry-ext-*)
-    // get drained on the main thread. Without this, the runtime's
-    // `js_run_stdlib_pump` sees a null function pointer and never
-    // calls `js_stdlib_process_pending` → tokio events queued by
-    // perry-ext-net / -ws / -http stay forever in their pending
-    // queues and listener callbacks never fire.
-    async_bridge::ensure_pump_registered();
-    // SAFETY of the raw `ctx` pointer is the caller's; we only
-    // forward it across the spawn boundary to `invoke`. Wrapping
-    // pointers in a `usize` lets us cross the closure boundary
-    // because raw pointers are not `Send`.
-    let ctx_addr = ctx as usize;
-    // #591: keep the event loop alive until the spawned closure has
-    // queued its Promise resolution. See `EXT_BLOCKING_TASKS_INFLIGHT`.
-    let inflight = async_bridge::InflightGuard::new();
-    async_bridge::runtime().spawn_blocking(move || {
-        invoke(ctx_addr as *mut c_void);
-        // Dropping the guard wakes the main thread: well-formed wrappers
-        // will have queued a Promise resolution from inside `invoke`,
-        // which already notified — but a wrapper that resolves without
-        // going through queue_* still needs the active-handle gate
-        // to flip and re-evaluate.
-        drop(inflight);
-    });
-    perry_runtime::event_pump::js_native_work_submitted();
-}
-
-/// `perry_ffi_spawn_blocking(ctx, invoke)` in a build WITHOUT tokio (turnloop
-/// P8 lane L) — same contract, no tokio blocking pool to run on.
-///
-/// Every caller that reaches this arm is a CPU-only wrapper (perry-ads,
-/// perry-ext-sharp, …): the auto-optimize driver selects `async-runtime` for
-/// every binding whose closure enters tokio (`Handle::current()` from inside
-/// the closure is only legal on tokio's own blocking pool), so this arm never
-/// sees one. It runs `invoke(ctx)` on turnloop's `Occupancy::Long` worker set
-/// (PerryTS/turnloop#42) — not the bounded set, because nothing in this ABI
-/// says the closure is short, and a closure that holds its thread must not
-/// starve bcrypt/argon2/zlib's bounded jobs. A thread with no event loop (a
-/// `worker_threads` agent before its loop exists), or a refusal at the long
-/// set's ceiling, falls back to one plain OS thread, which is what tokio's
-/// blocking pool would have spawned in the same position.
-///
-/// The in-flight counter is held for exactly the closure's run, as in the
-/// tokio arm, and released even when the job is cancelled or dropped unrun.
-#[cfg(not(feature = "async-runtime"))]
+/// The in-flight counter (#591) is held for exactly the closure's run and
+/// released even when the job is cancelled or dropped unrun, so the event loop
+/// stays alive until the closure has queued its Promise resolution.
 #[no_mangle]
 pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void)) {
     async_bridge::ensure_pump_registered();
@@ -311,11 +265,11 @@ pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" 
     run();
 }
 
-/// The no-loop fallback of the tokio-free `perry_ffi_spawn_blocking`: one OS
-/// thread with the same stack reservation tokio's blocking pool used (#10399).
+/// The no-loop fallback of `perry_ffi_spawn_blocking`: one OS thread with the
+/// same stack reservation tokio's blocking pool used to give it (#10399).
 /// If even the thread cannot be created the closure runs inline — the one
 /// outcome that must not happen is an awaited promise never settling.
-#[cfg(all(not(feature = "async-runtime"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_blocking_thread<F: FnOnce() + Send + 'static>(run: F) {
     let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(run)));
     let thread_slot = slot.clone();
@@ -343,134 +297,32 @@ fn spawn_blocking_thread<F: FnOnce() + Send + 'static>(run: F) {
     perry_runtime::event_pump::js_native_work_submitted();
 }
 
-/// `perry_ffi_spawn_blocking_with_reactor(ctx, invoke)` — like
-/// `perry_ffi_spawn_blocking` but the wrapped closure is dispatched
-/// through `RUNTIME.spawn(async { spawn_blocking(closure).await })`
-/// instead of straight `RUNTIME.spawn_blocking(closure)`.
-///
-/// **Why both exist:** the plain `spawn_blocking` shim runs the
-/// closure on a tokio blocking-pool thread that does NOT carry the
-/// runtime's I/O reactor context. `tokio::runtime::Handle::current()
-/// .block_on(fut)` from inside the closure spins up a fresh
-/// current_thread runtime to drive the future, and that runtime has
-/// no reactor — so any `TcpStream::connect` / `TcpListener::bind` /
-/// `tokio::time::sleep` inside `fut` panics with "there is no
-/// reactor running, must be called from the context of a Tokio 1.x
-/// runtime".
-///
-/// This shim wraps the call so the blocking task inherits the
-/// runtime context properly (reactor + handle accessible). The
-/// wrapper detaches — the caller should not assume the closure
-/// runs synchronously.
-///
-/// Used by perry-ext-net / perry-ext-ws / perry-ext-http (any
-/// wrapper whose async work is pure I/O — TcpStream / hyper /
-/// tokio-tungstenite). Closes the v0.5.571 net regression batch
-/// (test_issue_422_socket_connect / test_net_min / test_net_socket /
-/// test_net_upgrade_tls / test_sock_write_map all panicked with
-/// "there is no reactor running" without this shim).
-///
-/// Compiled only with `async-runtime`: a closure that needs tokio's reactor
-/// has nothing to run on without it, and a link error names the missing
-/// feature where a stub would abort at runtime.
-#[cfg(feature = "async-runtime")]
-#[no_mangle]
-pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
-    ctx: *mut c_void,
-    invoke: extern "C" fn(*mut c_void),
-) {
-    // v0.5.579: see `perry_ffi_spawn_blocking` above for why this
-    // call is mandatory.
-    async_bridge::ensure_pump_registered();
-    let ctx_addr = ctx as usize;
-    // #591: same active-handle gate as the plain variant.
-    let inflight = async_bridge::InflightGuard::new();
-    // Spawn directly on the multi-thread runtime so the closure
-    // body runs on a worker thread that has full I/O reactor +
-    // handle access. Inside the spawned task, `tokio::spawn(fut)`
-    // and `Handle::current().spawn(fut)` both work for fan-out
-    // I/O work.
-    async_bridge::spawn_native(async move {
-        invoke(ctx_addr as *mut c_void);
-        drop(inflight);
-    });
-}
+// `perry_ffi_spawn_blocking_with_reactor` and `perry_ffi_spawn_async` are
+// RETIRED (final tokio lane). Both existed to hand work to tokio: the first ran
+// a closure on a tokio blocking thread that carried the runtime's I/O reactor,
+// the second drove a boxed tokio future on the shared runtime. Their contract
+// is "tokio's reactor is ambient", which nothing can honour once tokio is gone,
+// so they are deleted rather than stubbed — a wrapper still calling them fails
+// at link time naming the symbol, instead of aborting at its first socket.
+// No in-tree caller was left (perry-ext-net / -ws / -http moved to turnloop in
+// lanes #11105 / #11265). Socket work belongs on turnloop
+// (`perry_ffi::turnloop_net`, `perry_ffi::agent_post`); CPU work on
+// `perry_ffi::spawn_blocking` or the v2 pool (`perry_ffi::pool`).
 
-/// `perry_ffi_spawn_async(ctx)` — drive a future cooperatively on the
-/// shared multi-thread runtime's worker pool. Used by wrappers whose
-/// work is pure async I/O (TcpStream / WebSocket / hyper) and
-/// shouldn't tie up a blocking-pool thread for the whole
-/// connection's lifetime, unlike `perry_ffi_spawn_blocking*`.
+/// `perry_ffi_run_pending(budget_ms)` — one bounded event-loop turn (see
+/// `perry-ffi::run_pending`). A synchronous native API that blocks the main
+/// thread waiting for data another thread delivers (e.g.
+/// `js_ws_wait_for_message`) calls this in its poll loop so the delivery is
+/// actually collected: whatever such a caller waits for is either a turnloop
+/// completion or a pump entry a pool/OS thread queues, and a bounded turn is
+/// what observes both. Safe on the main thread between ticks.
 ///
-/// `ctx` is a thin pointer to the `Pin<Box<dyn Future<Output = ()> +
-/// Send>>` that perry-ffi's safe `spawn_async` boxed (the same
-/// double-box trick `spawn_blocking` uses for `FnOnce`). perry-ffi has
-/// no tokio dependency, so the spawn happens here on the perry-stdlib
-/// side. The shared runtime carries the I/O reactor, so the future's
-/// `TcpStream` / TLS / hyper work needs no ambient `Handle`.
-///
-/// Unlike the blocking shims, this does NOT bump
-/// `EXT_BLOCKING_TASKS_INFLIGHT`: a cooperative task can outlive any
-/// single resolution, so its caller must own an active-handle gate
-/// (e.g. perry-ext-net's `js_ext_net_has_active_handles`) to keep the
-/// event loop alive. The pump registration is preserved so events the
-/// future queues still drain on the main thread.
-///
-/// # Safety
-/// `ctx` must be a pointer produced by perry-ffi's `spawn_async` (i.e.
-/// `Box::into_raw` of a `Box<Pin<Box<dyn Future<Output = ()> +
-/// Send>>>`) and not already consumed.
-///
-/// Compiled only with `async-runtime`, for the reason
-/// `perry_ffi_spawn_blocking_with_reactor` is: the future is a tokio future.
-#[cfg(feature = "async-runtime")]
-#[no_mangle]
-pub unsafe extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void) {
-    // Register the main-thread pump exactly like the blocking variants
-    // do (see `perry_ffi_spawn_blocking`), so resolutions the spawned
-    // future queues get drained.
-    async_bridge::ensure_pump_registered();
-    type BoxFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
-    // SAFETY: `ctx` came from perry-ffi's `spawn_async` (Box::into_raw
-    // of `Box<BoxFuture>`); reconstruct + own it once.
-    let future: BoxFuture = *unsafe { Box::from_raw(ctx as *mut BoxFuture) };
-    async_bridge::spawn_native(future);
-}
-
-/// `perry_ffi_run_pending(budget_ms)` — drive the shared current-thread runtime
-/// for one bounded tick (see `perry-ffi::run_pending`). A synchronous native API
-/// that blocks the main thread waiting for data a spawned task delivers (e.g.
-/// `js_ws_wait_for_message`) calls this in its poll loop so the delivering task
-/// actually runs; in the unified single-thread model the runtime only advances
-/// while the main thread drives it. Safe on the main thread between ticks; must
-/// not be called from inside a spawned runtime task.
-///
-/// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): this is
-/// now a **v1 shim over v2**. It takes a turnloop turn *first*, so a caller
-/// polling for a blocking-pool result actually collects it — a turn is the only
-/// thing that does — and then drives whatever tokio work is left. The tokio
-/// half goes away with tokio in P8; the signature does not change.
-///
-/// The turn is deliberately **non-blocking** rather than given the caller's
-/// budget: this shim's callers are waiting for something *tokio* will deliver
-/// (`js_ws_wait_for_message`), and spending their budget parked in turnloop
-/// would add a poll's worth of latency to every one of them. A caller that is
-/// waiting for a pool result specifically asks for a blocking turn through the
-/// v2 [`perry_ffi_pool_turn`].
-///
-/// Without tokio (turnloop P8 lane L) there is no tokio half to drive, so the
-/// whole budget goes to the turn: whatever a caller is waiting for is either a
-/// turnloop completion or a pump entry a pool/OS thread queues, and a bounded
-/// turn is what observes both.
+/// turnloop P4 made this a v1 shim over the v2 [`perry_ffi_pool_turn`]; until
+/// the final tokio lane it also drove a tokio half after the turn. The
+/// signature never changed.
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(budget_ms: u64) {
     async_bridge::ensure_pump_registered();
-    #[cfg(feature = "async-runtime")]
-    {
-        pool_turn(0);
-        async_bridge::drive_pending(budget_ms);
-    }
-    #[cfg(not(feature = "async-runtime"))]
     pool_turn(budget_ms);
 }
 
@@ -575,14 +427,13 @@ fn pool_turn(budget_ms: u64) {
     let _ = budget_ms;
 }
 
-/// The tokio-free `perry_ffi_spawn_blocking` arm only compiles without
-/// `async-runtime`, which the default (`full`) test build always has, so these
-/// run under e.g. `cargo test -p perry-stdlib --no-default-features --features
-/// crypto`. The unit-test thread has no agent loop, so this exercises the
-/// plain-thread fallback; the `Occupancy::Long` path is
+/// `perry_ffi_spawn_blocking` has one arm since the final tokio lane, so these
+/// run in the default (`full`) test build. The unit-test thread has no agent
+/// loop, so this exercises the plain-thread fallback; the `Occupancy::Long`
+/// path is
 /// `turnloop_pool::tests::a_long_job_runs_while_every_bounded_worker_is_held`.
-#[cfg(all(test, not(feature = "async-runtime"), not(target_arch = "wasm32")))]
-mod tokio_free_tests {
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod spawn_blocking_tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
@@ -601,7 +452,7 @@ mod tokio_free_tests {
     }
 
     #[test]
-    fn spawn_blocking_without_tokio_runs_off_thread_and_releases_its_inflight() {
+    fn spawn_blocking_runs_off_thread_and_releases_its_inflight() {
         let baseline = async_bridge::EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire);
         let ran_before = RAN.load(Ordering::Acquire);
         let ctx = Box::into_raw(Box::new(std::thread::current().id())) as *mut c_void;

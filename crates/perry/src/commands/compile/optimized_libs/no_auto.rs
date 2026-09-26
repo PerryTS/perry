@@ -91,11 +91,11 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     // added on top of `full`, the same on-demand-rebuild shape
     // `build_optional_runtime` uses for `wasm-host` — AND, in the SAME cargo
     // invocation, `perry-ext-http` itself: two archives built in separate
-    // cargo invocations can bundle different tokio compilations even from an
-    // identical Cargo.lock (`runtime_compat.rs`'s link-time guard exists
-    // exactly for this), so a stdlib-only rebuild would leave the fresh
-    // stdlib archive unlinkable against whatever `libperry_ext_http.a`
-    // `resolve_prebuilt_ext_libs` found on disk. A prior wasm
+    // cargo invocations can bundle different compilations of their shared
+    // dependencies even from an identical Cargo.lock (`runtime_compat.rs`'s
+    // link-time guard exists exactly for this), so a stdlib-only rebuild would
+    // leave the fresh stdlib archive unlinkable against whatever
+    // `libperry_ext_http.a` `resolve_prebuilt_ext_libs` found on disk. A prior wasm
     // rebuild above already producing a stdlib archive (Windows) takes
     // precedence; this only fills the common case where `stdlib` is `None`.
     let stdlib = stdlib.or_else(|| {
@@ -240,7 +240,7 @@ pub(super) struct CoherentLibraryBuild {
 /// somewhere to link against without forcing every other no-auto program to
 /// carry `libperry_ext_http.a`. `perry-ext-http` is rebuilt **in the same
 /// cargo invocation** — two archives from separate invocations can bundle
-/// different tokio compilations even off an identical `Cargo.lock`
+/// different compilations of shared dependencies even off an identical `Cargo.lock`
 /// (`runtime_compat.rs`'s link-time guard exists exactly for this pair), so
 /// a stdlib-only rebuild would leave the fresh stdlib unlinkable against
 /// whatever `libperry_ext_http.a` `resolve_prebuilt_ext_libs` found on disk.
@@ -641,43 +641,11 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 libs.push(path);
             }
             None => {
-                // #7629 — a tokio-using wrapper cannot be repaired from here.
-                // Building it alone gives it its own tokio compilation (cargo
-                // unifies features per invocation); building it *with*
-                // perry-stdlib-static would fix tokio but silently overwrite
-                // the prebuilt stdlib with this invocation's feature set,
-                // dropping the `external-*-pump` features the no-auto flow
-                // depends on — trading an abort for a hang.
-                //
-                // So warn, build anyway, and let the link-time check in
-                // `compile/shared_tokio.rs` decide: it compares the tokio
-                // compilation ids in the actual archives, which is evidence
-                // rather than a prediction. Refusing here instead would also
-                // fail the cases where the two invocations happen to unify to
-                // the same tokio, and those link and run correctly.
-                if binding_bundles_tokio(module.strip_prefix("node:").unwrap_or(module)) {
-                    eprintln!(
-                        "warning: `{}` needs {}, which is not on disk. \
-                         PERRY_NO_AUTO_OPTIMIZE=1 forbids the specialized rebuild, so the \
-                         wrapper can only be built in its OWN cargo invocation — and cargo \
-                         resolves feature unification per invocation, so its bundled tokio \
-                         is very likely a different compilation than the prebuilt \
-                         libperry_stdlib.a's. Two tokio compilations means two \
-                         `tokio::runtime::context::CONTEXT` thread-locals and the program \
-                         aborts at its first socket with \"there is no reactor running\" \
-                         (#507, #7629).\n  \
-                         The link refuses that pair once the archives can be compared, so \
-                         this build may fail after the wrapper finishes. To get it right \
-                         the first time, build the wrapper in the SAME cargo invocation as \
-                         the stdlib archive:\n    \
-                         cargo build --release -p perry -p perry-runtime-static \
-                         -p perry-stdlib-static -p {}\n  \
-                         (plus the `--features perry-stdlib/external-*-pump` this module \
-                         needs), or unset PERRY_NO_AUTO_OPTIMIZE and let auto-optimize \
-                         build a coherent set itself.",
-                        module, filename, binding.krate
-                    );
-                }
+                // A missing wrapper is built on its own. Until the final
+                // tokio lane a wrapper that bundled tokio got a warning here
+                // (#7629): built alone it carried a different tokio
+                // compilation than the prebuilt stdlib. No wrapper bundles
+                // tokio any more, so that hazard — and the warning — is gone.
                 if let Some(workspace_root) = find_perry_workspace_root() {
                     if let Some(path) = build_missing_prebuilt_ext_lib(
                         &workspace_root,

@@ -3,14 +3,39 @@
 //! Native implementation of the 'sharp' npm package using the image crate.
 //! Provides image processing functionality.
 
+use crate::common::async_bridge::{pool_for_promise_deferred, reject_promise_later};
 use crate::common::{
-    bytes_from_header, get_handle, register_handle, spawn_for_promise,
-    string_from_header_lossy as string_from_header, Handle,
+    bytes_from_header, get_handle, register_handle, string_from_header_lossy as string_from_header,
+    Handle,
 };
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
 use perry_runtime::{
     js_promise_new_cross_thread, js_string_from_bytes, JSValue, Promise, StringHeader,
 };
+
+/// Settle `promise` with a JS string built from `work`'s output on the main
+/// thread. The image work runs on turnloop's shared pool; until the final
+/// tokio lane it ran as a tokio task that also built the result string on
+/// the worker thread, which is the #1824 arena hazard.
+unsafe fn settle_with_string<W>(promise: *mut Promise, work: W)
+where
+    W: FnOnce() -> Result<String, String> + Send + 'static,
+{
+    pool_for_promise_deferred(promise as *mut u8, work, |text: String| {
+        let ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        JSValue::string_ptr(ptr).bits()
+    });
+}
+
+fn format_name(format: ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Jpeg => "jpeg",
+        ImageFormat::Png => "png",
+        ImageFormat::WebP => "webp",
+        ImageFormat::Gif => "gif",
+        _ => "unknown",
+    }
+}
 use std::io::Cursor;
 
 /// Sharp image handle with pending operations
@@ -276,39 +301,25 @@ pub unsafe extern "C" fn js_sharp_to_file(
     let path = match string_from_header(path_ptr) {
         Some(p) => p,
         None => {
-            spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, _>("Invalid path".to_string())
-            });
+            reject_promise_later(promise as *mut u8, "Invalid path".to_string());
             return promise;
         }
     };
 
-    spawn_for_promise(promise as *mut u8, async move {
-        if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-            match sharp.image.save(&path) {
-                Ok(_) => {
-                    let (width, height) = sharp.image.dimensions();
-                    // Return info as JSON string
-                    let info = format!(
-                        r#"{{"width":{},"height":{},"format":"{}"}}"#,
-                        width,
-                        height,
-                        match sharp.format {
-                            ImageFormat::Jpeg => "jpeg",
-                            ImageFormat::Png => "png",
-                            ImageFormat::WebP => "webp",
-                            ImageFormat::Gif => "gif",
-                            _ => "unknown",
-                        }
-                    );
-                    let ptr = js_string_from_bytes(info.as_ptr(), info.len() as u32);
-                    Ok(JSValue::string_ptr(ptr).bits())
-                }
-                Err(e) => Err(format!("Failed to save image: {}", e)),
-            }
-        } else {
-            Err("Invalid sharp handle".to_string())
-        }
+    settle_with_string(promise, move || {
+        let sharp = get_handle::<SharpHandle>(handle).ok_or("Invalid sharp handle")?;
+        sharp
+            .image
+            .save(&path)
+            .map_err(|e| format!("Failed to save image: {}", e))?;
+        let (width, height) = sharp.image.dimensions();
+        // Return info as JSON string
+        Ok(format!(
+            r#"{{"width":{},"height":{},"format":"{}"}}"#,
+            width,
+            height,
+            format_name(sharp.format)
+        ))
     });
 
     promise
@@ -321,25 +332,18 @@ pub unsafe extern "C" fn js_sharp_to_file(
 pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
-    spawn_for_promise(promise as *mut u8, async move {
-        if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-            let mut buffer = Cursor::new(Vec::new());
-            match sharp.image.write_to(&mut buffer, sharp.format) {
-                Ok(_) => {
-                    let bytes = buffer.into_inner();
-                    // Return as hex string for now (or base64)
-                    let encoded = perry_base64::Engine::encode(
-                        &perry_base64::engine::general_purpose::STANDARD,
-                        &bytes,
-                    );
-                    let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
-                    Ok(JSValue::string_ptr(ptr).bits())
-                }
-                Err(e) => Err(format!("Failed to encode image: {}", e)),
-            }
-        } else {
-            Err("Invalid sharp handle".to_string())
-        }
+    settle_with_string(promise, move || {
+        let sharp = get_handle::<SharpHandle>(handle).ok_or("Invalid sharp handle")?;
+        let mut buffer = Cursor::new(Vec::new());
+        sharp
+            .image
+            .write_to(&mut buffer, sharp.format)
+            .map_err(|e| format!("Failed to encode image: {}", e))?;
+        // Return as base64 for now
+        Ok(perry_base64::Engine::encode(
+            &perry_base64::engine::general_purpose::STANDARD,
+            buffer.into_inner(),
+        ))
     });
 
     promise
@@ -352,29 +356,17 @@ pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
 pub unsafe extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
-    spawn_for_promise(promise as *mut u8, async move {
-        if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-            let (width, height) = sharp.image.dimensions();
-            let channels = sharp.image.color().channel_count();
-
-            let info = format!(
-                r#"{{"width":{},"height":{},"channels":{},"format":"{}"}}"#,
-                width,
-                height,
-                channels,
-                match sharp.format {
-                    ImageFormat::Jpeg => "jpeg",
-                    ImageFormat::Png => "png",
-                    ImageFormat::WebP => "webp",
-                    ImageFormat::Gif => "gif",
-                    _ => "unknown",
-                }
-            );
-            let ptr = js_string_from_bytes(info.as_ptr(), info.len() as u32);
-            Ok(JSValue::string_ptr(ptr).bits())
-        } else {
-            Err("Invalid sharp handle".to_string())
-        }
+    settle_with_string(promise, move || {
+        let sharp = get_handle::<SharpHandle>(handle).ok_or("Invalid sharp handle")?;
+        let (width, height) = sharp.image.dimensions();
+        let channels = sharp.image.color().channel_count();
+        Ok(format!(
+            r#"{{"width":{},"height":{},"channels":{},"format":"{}"}}"#,
+            width,
+            height,
+            channels,
+            format_name(sharp.format)
+        ))
     });
 
     promise

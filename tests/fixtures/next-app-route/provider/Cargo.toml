@@ -10,7 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 perry-stdlib = { path = "../../../../crates/perry-stdlib", default-features = false, features = [
-  "async-runtime",
   "bundled-events",
   "bundled-streams",
   "compression",

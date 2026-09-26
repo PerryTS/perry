@@ -1,13 +1,19 @@
 //! Async-runtime bridge for native bindings (added in v0.5.1 of
 //! the perry-ffi v0.5 surface — non-breaking; pure additions).
 //!
-//! Many wrappers (bcrypt, argon2, ws, mysql2, …) need to do CPU-
-//! bound or blocking work without stalling Perry's main thread.
-//! perry-stdlib already runs a global tokio runtime + a
-//! main-thread-pumped resolution queue for its own modules; this
-//! module exposes that surface through a stable C ABI so external
-//! wrappers can use the same runtime instead of spawning their
-//! own (which would deadlock under contention).
+//! Many wrappers (bcrypt, argon2, sharp, …) need to do CPU-bound or
+//! blocking work without stalling Perry's main thread. perry-stdlib
+//! owns a main-thread-pumped resolution queue and routes blocking work
+//! to turnloop's shared worker sets; this module exposes that surface
+//! through a stable C ABI so external wrappers use the same machinery
+//! instead of spawning their own.
+//!
+//! There is no tokio behind any of it. `spawn_async` and
+//! `spawn_blocking_with_reactor`, whose contract was "tokio's reactor is
+//! ambient", were retired together with tokio (see the ABI page's
+//! "Retired" section); socket work belongs on [`crate::turnloop_net`] /
+//! [`crate::agent_post`], CPU work on [`spawn_blocking`] or the v2
+//! [`crate::pool`].
 //!
 //! # Layered design
 //!
@@ -66,19 +72,16 @@ extern "C" {
         cleanup_flags: u32,
     ) -> i32;
     fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
-    fn perry_ffi_spawn_blocking_with_reactor(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
-    fn perry_ffi_spawn_async(ctx: *mut c_void);
     fn perry_ffi_run_pending(budget_ms: u64);
 }
 
-/// Drive the shared async runtime for up to `budget_ms` (or until a producer
-/// signals work). In the unified single-thread runtime model the runtime only
-/// makes progress while the main thread drives it, so a *synchronous* native
-/// API that blocks the main thread waiting for data delivered by a spawned task
-/// (e.g. `js_ws_wait_for_message`) must call this in its poll loop instead of
-/// `std::thread::sleep` — otherwise the delivering task never runs and the wait
-/// always times out. Safe to call from the main thread outside any other
-/// `block_on`; must NOT be called from inside a spawned runtime task.
+/// Take one bounded event-loop turn of up to `budget_ms` (or until a producer
+/// signals work). The loop only collects completions while the main thread
+/// turns it, so a *synchronous* native API that blocks the main thread waiting
+/// for data another thread delivers (e.g. `js_ws_wait_for_message`) must call
+/// this in its poll loop instead of `std::thread::sleep` — otherwise the
+/// delivery is never collected and the wait always times out. Safe to call
+/// from the main thread between ticks.
 pub fn run_pending(budget_ms: u64) {
     // SAFETY: thin call into the perry-stdlib-provided runtime driver.
     unsafe { perry_ffi_run_pending(budget_ms) };
@@ -193,7 +196,7 @@ impl JsPromise {
 
     /// Resolve by building the result JSValue on the **main thread**.
     ///
-    /// `spawn_blocking` closures run on a tokio blocking-pool thread, where
+    /// `spawn_blocking` closures run on a worker thread, where
     /// perry-runtime's thread-local arena makes constructing JSValues
     /// (objects / arrays / hand-built strings) undefined behaviour — the
     /// objects land in a worker arena that is freed when the pooled thread
@@ -363,11 +366,12 @@ fn bool_resolution_bits(value: bool) -> u64 {
     crate::JsValue::from_bool(value).bits()
 }
 
-/// Spawn `f` on Perry's shared tokio runtime (the blocking pool).
+/// Run `f` off the calling thread, on turnloop's long-occupancy worker set
+/// (or one plain OS thread when the calling thread has no event loop).
 ///
 /// `f` typically does CPU-bound work (hashing, compression, …) and
 /// resolves a `JsPromise` from inside. The closure runs on a
-/// blocking-pool thread, so it must NOT touch perry-runtime's
+/// worker thread, so it must NOT touch perry-runtime's
 /// thread-local arena directly — string allocation through
 /// [`alloc_string`] is safe (it round-trips through the runtime),
 /// but constructing JSValues by hand on the blocking thread will
@@ -375,11 +379,10 @@ fn bool_resolution_bits(value: bool) -> u64 {
 /// rule and rely on `JsPromise::resolve_*` to do the allocation
 /// at resolution time.
 ///
-/// The future itself doesn't need to be async — `f: FnOnce() ->
-/// () + Send + 'static` covers the common "do work, resolve"
-/// shape. For tasks that need actual `await`, run the
-/// `tokio::runtime::Handle::current().block_on(async { … })`
-/// pattern inside the closure.
+/// `f: FnOnce() + Send + 'static` covers the common "do work,
+/// resolve" shape. There is no ambient async runtime on the worker:
+/// a task that needs socket I/O belongs on [`crate::turnloop_net`],
+/// not here.
 pub fn spawn_blocking<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
@@ -403,84 +406,6 @@ where
     }
 
     unsafe { perry_ffi_spawn_blocking(ctx, invoke) };
-}
-
-/// Like [`spawn_blocking`] but the dispatched task carries the
-/// runtime's I/O reactor context — required for any closure that
-/// drives `TcpStream` / `TcpListener` / WebSocket / hyper / similar
-/// async I/O via `tokio::runtime::Handle::current().block_on(fut)`
-/// from inside.
-///
-/// **Why two variants:** the plain `spawn_blocking` puts the closure
-/// on a tokio blocking-pool thread. From there, `Handle::current()
-/// .block_on(fut)` spins up a fresh current_thread runtime that
-/// has no I/O reactor — so any async I/O inside the future panics
-/// with "there is no reactor running, must be called from the
-/// context of a Tokio 1.x runtime". Pure-CPU work (bcrypt / argon2
-/// hashing, SQL serialization, JSON parsing) doesn't notice; pure-
-/// async-I/O work (TcpStream::connect, hyper request, WebSocket
-/// handshake) hits this hard.
-///
-/// This variant routes through `RUNTIME.spawn(async {
-/// spawn_blocking(closure).await })` so the blocking task inherits
-/// the runtime's reactor + handle. Use this when your closure does
-/// `Handle::current().block_on(async { ... I/O work ... })`.
-///
-/// Like the plain variant, this detaches — the caller does not
-/// observe completion.
-pub fn spawn_blocking_with_reactor<F>(f: F)
-where
-    F: FnOnce() + Send + 'static,
-{
-    let boxed: Box<dyn FnOnce() + Send> = Box::new(f);
-    let thin: Box<Box<dyn FnOnce() + Send>> = Box::new(boxed);
-    let ctx = Box::into_raw(thin) as *mut c_void;
-
-    extern "C" fn invoke(ctx: *mut c_void) {
-        let thin: Box<Box<dyn FnOnce() + Send>> =
-            unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() + Send>) };
-        let f: Box<dyn FnOnce() + Send> = *thin;
-        f();
-    }
-
-    unsafe { perry_ffi_spawn_blocking_with_reactor(ctx, invoke) };
-}
-
-/// Spawn a future cooperatively on Perry's shared multi-thread tokio
-/// runtime (the same runtime + I/O reactor perry-stdlib drives),
-/// instead of tying up a blocking-pool thread for the task's whole
-/// lifetime.
-///
-/// Use this for long-lived async I/O — a `net.Socket` reader loop, a
-/// `server.listen` accept loop, a WebSocket connection — where the
-/// future spends almost all its time awaiting I/O. The shared runtime
-/// owns the reactor, so `TcpStream::connect` / `TcpListener::bind` /
-/// TLS handshakes work without the throwaway `current_thread` runtime
-/// the blocking-pool pattern needed (and without depending on an
-/// ambient `Handle`, which proved brittle under release/LTO builds).
-///
-/// Unlike [`spawn_blocking`], this does NOT bump the event-loop
-/// active-handle counter — a cooperative task can outlive any single
-/// resolution. Callers must own an active-handle gate of their own
-/// (e.g. perry-ext-net's `js_ext_net_has_active_handles`) so the
-/// runtime's event loop stays alive while the task runs.
-///
-/// Detaches — the caller does not observe completion.
-pub fn spawn_async<F>(future: F)
-where
-    F: std::future::Future<Output = ()> + Send + 'static,
-{
-    // Box the future to a thin pointer so it crosses the FFI boundary,
-    // mirroring `spawn_blocking`'s double-box of `FnOnce`. The inner
-    // `Pin<Box<dyn Future>>` is a fat pointer; the outer `Box` makes a
-    // thin `*mut c_void`. perry-stdlib's `perry_ffi_spawn_async`
-    // reconstructs the same type and drives it on the shared runtime.
-    let boxed: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(future);
-    let thin: Box<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
-        Box::new(boxed);
-    let ctx = Box::into_raw(thin) as *mut c_void;
-
-    unsafe { perry_ffi_spawn_async(ctx) };
 }
 
 #[cfg(test)]

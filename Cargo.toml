@@ -171,7 +171,7 @@ opt-level = "s"       # Optimize for size in stdlib
 # perry-ext-events exports #[no_mangle] EventEmitter FFI symbols
 # (js_event_emitter_*) that generated native code calls directly when a program
 # constructs a native EventEmitter by name (e.g. eventemitter3's default
-# export). It is a non-tokio wrapper, so the auto-optimize linker uses its
+# export). It is not a co-built wrapper, so the auto-optimize linker uses its
 # prebuilt standalone staticlib rather than rebuilding it alongside a crate that
 # references those symbols. Thin-LTO then internalizes and drops the whole C API
 # from that staticlib, so the program fails to link with undefined
@@ -195,9 +195,9 @@ codegen-units = 1
 strip = false
 codegen-units = 1
 
-# Issue #5928: well-known "shared tokio" wrapper crates (#507) are built in
-# the SAME cargo invocation as perry-stdlib-static so cargo unifies their
-# shared dependency graph (tokio, hyper_util, rustls, and even core/std
+# Issue #5928: well-known co-built wrapper crates (#507, the former "shared
+# tokio" set) are built in the SAME cargo invocation as perry-stdlib-static so
+# cargo unifies their shared dependency graph (rustls, turnloop, and even core/std
 # monomorphizations) into identical compilation units. That unification only
 # holds if EVERY crate in that invocation uses the SAME `codegen-units`
 # setting — rustc partitions a crate's monomorphized code into N codegen
@@ -306,7 +306,7 @@ codegen-units = 1
 
 # Issue #5928: mirrors the [profile.release.package.perry-ext-*] block above
 # — see its comment for why matching `codegen-units` across every crate in
-# the "shared tokio" (#507) cargo invocation is required.
+# the co-built (#507, formerly "shared tokio") cargo invocation is required.
 [profile.dist.package.perry-ext-http]
 codegen-units = 1
 [profile.dist.package.perry-ext-net]
@@ -475,21 +475,19 @@ dialoguer = "0.12"
 walkdir = "2.4"
 notify = "6.1"
 
-# HTTP / WebSocket (for publish command)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "blocking"] }
-tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-hyper = "1.4"
-hyper-util = "0.1"
+# HTTP. No tokio-ecosystem crate is declared here any more: `tokio`,
+# `tokio-tungstenite`, `tokio-rustls`, `reqwest`, `hyper` and `hyper-util` were
+# removed with tokio (final tokio lane) — every socket, TLS session and HTTP
+# exchange runs on turnloop. `python3 scripts/tokio_inventory.py` fails if any
+# tokio package reappears in Cargo.lock.
 http-body-util = "0.1"
 # The `http` types crate. Already in the graph via hyper/reqwest/turnloop-http;
 # named here so perry-stdlib can reach `StatusCode::canonical_reason` directly.
 http = "1"
-# ONE crypto provider: ring. reqwest, turnloop-tls and perry-ext-http
-# all hard-require ring; rustls/tokio-rustls DEFAULT features would add
-# aws-lc-rs (+aws-lc-sys) as a second provider (~1.3 MB stripped, ~1 MB RSS).
-# Keep default-features off; deny.toml bans aws-lc-rs so it can't creep back.
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# ONE crypto provider: ring. turnloop-tls and perry-ext-http hard-require
+# ring; rustls's DEFAULT features would add aws-lc-rs (+aws-lc-sys) as a second
+# provider (~1.3 MB stripped, ~1 MB RSS). Keep default-features off; deny.toml
+# bans aws-lc-rs so it can't creep back.
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
 rustls-pemfile = "2"
 socket2 = "0.6"

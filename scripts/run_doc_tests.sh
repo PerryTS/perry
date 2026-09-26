@@ -20,10 +20,10 @@ cd "$REPO_ROOT"
 # The runtime + stdlib are built with `--features full` so the prebuilt
 # `target/release/libperry_*.a` covers every doc-test's import surface,
 # letting PERRY_NO_AUTO_OPTIMIZE=1 below short-circuit the per-test
-# specialized rebuild (~30-200s saved per test). Async wrappers used by the
-# database/mail examples must be in THIS invocation too: building one later
-# gives it a different tokio compilation from libperry_stdlib.a, and the
-# no-auto linker correctly refuses that unsafe archive pair.
+# specialized rebuild (~30-200s saved per test). The mail wrapper used by the
+# examples is built in THIS invocation too, so it shares the stdlib's feature
+# unification. (It used to be required for tokio coherence — two invocations
+# meant two tokio compilations — but tokio is gone from the workspace.)
 cargo build --release \
     -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests \
     -p perry-ext-nodemailer

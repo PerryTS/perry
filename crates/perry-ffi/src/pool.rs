@@ -3,11 +3,11 @@
 //!
 //! # What v1 was, and why v2 exists
 //!
-//! v1 is [`crate::spawn_blocking`] / [`crate::spawn_blocking_with_reactor`] /
-//! [`crate::spawn_async`] / [`crate::run_pending`]. All four assume an ambient
-//! tokio runtime: the closure lands on tokio's blocking pool, and a binding
-//! that needs to `await` runs `Handle::current().block_on` inside it. That
-//! model has three problems Perry actually paid for:
+//! v1 was [`crate::spawn_blocking`] / `spawn_blocking_with_reactor` /
+//! `spawn_async` / [`crate::run_pending`]. All four assumed an ambient
+//! tokio runtime: the closure landed on tokio's blocking pool, and a binding
+//! that needed to `await` ran `Handle::current().block_on` inside it. That
+//! model had three problems Perry actually paid for:
 //!
 //! 1. **The result comes back on the wrong thread.** A v1 closure resolves its
 //!    own promise, so every binding has to remember that building a JSValue on
@@ -17,7 +17,7 @@
 //! 2. **There is no completion.** v1 detaches. The caller cannot cancel, cannot
 //!    tell "refused" from "running", and the event loop needs a separate
 //!    in-flight counter (#591) to know the work exists at all.
-//! 3. **It needs tokio**, which is what the turnloop migration removes.
+//! 3. **It needed tokio**, which the turnloop migration removed.
 //!
 //! v2 is one call, [`submit`], and it fixes all three by splitting the job in
 //! two:
@@ -51,26 +51,22 @@
 //! );
 //! ```
 //!
-//! # Which v1 entry points remain, and why
+//! # What became of v1
 //!
-//! - [`crate::run_pending`] stays, and is now a **shim over v2**: it takes one
-//!   bounded turnloop turn (so a pool completion is actually collected) before
-//!   driving whatever tokio work is left. A synchronous binding's poll loop
-//!   needs no change.
-//! - [`crate::spawn_blocking`] and [`crate::spawn_blocking_with_reactor`] stay
-//!   on tokio. They are **not** shimmed onto this pool, and that is a decision
-//!   rather than an omission: their remaining callers (the `node:http2` accept
-//!   loop, the HTTP/2 client and request runtimes, and every database binding
-//!   that runs `Handle::current().block_on`) hold their thread for the lifetime
-//!   of a *connection*, not of a job. turnloop's pool is bounded and fixed-size
-//!   by design (DESIGN D8: four threads by default), so hosting an unbounded
-//!   number of connection-lifetime occupants on it would deadlock under load.
-//!   Those callers are rewritten by P5–P7, which replace the tokio I/O inside
-//!   them; the shims go with tokio in P8.
-//! - [`crate::spawn_async`] stays on tokio for the same reason: every current
-//!   caller's future is tokio I/O (hyper, tokio-tungstenite, `TcpStream`), so a
-//!   loop-executor v2 would today be an API with no caller — the kind of
-//!   untested mode Perry's own kill-policy says not to ship.
+//! - [`crate::run_pending`] stays, as a **shim over v2**: one bounded turnloop
+//!   turn, so a pool completion is actually collected. A synchronous binding's
+//!   poll loop needs no change.
+//! - [`crate::spawn_blocking`] stays, off tokio: since turnloop P8 lane L it
+//!   runs on turnloop's `Occupancy::Long` worker set (one plain OS thread when
+//!   the caller has no loop), because a v1 closure may hold its thread for as
+//!   long as it likes and this module's bounded pool (DESIGN D8: four threads
+//!   by default) must not host such occupants.
+//! - `spawn_blocking_with_reactor` and `spawn_async` are **retired**. Their
+//!   contract was "tokio's reactor is ambient"; their callers (the HTTP/2 and
+//!   database runtimes, the net / ws / http accept loops) were rewritten onto
+//!   turnloop I/O in P5–P7 and the tokio lanes, and the final tokio lane
+//!   deleted both together with tokio. Socket work belongs on
+//!   [`crate::turnloop_net`] and [`crate::agent_post`].
 
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -297,13 +293,14 @@ where
 /// This is v1 [`crate::spawn_blocking`]'s *shape* on v2's transport, for the
 /// bindings whose closure already settles its own promise through a deferred
 /// resolution (`JsPromise::resolve_with` / `reject_with`), which queues the JS
-/// construction onto the owning thread by itself. Those callers get the tokio
+/// construction onto the owning thread by itself. Those callers got the tokio
 /// removal without a rewrite.
 ///
 /// The contract v1 did not state and this one does: **the job must be
 /// bounded**. It occupies one of a small, fixed number of pool threads
 /// (turnloop DESIGN D8) until it returns, so a closure that parks for the
-/// lifetime of a connection belongs on [`crate::spawn_async`], not here.
+/// lifetime of a connection belongs on turnloop I/O ([`crate::turnloop_net`]),
+/// or at least on [`crate::spawn_blocking`]'s long-occupancy set, not here.
 ///
 /// Returns true when the pool took the job; on false the work has already run
 /// inline on the calling thread.

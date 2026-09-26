@@ -38,16 +38,15 @@
 //! over-design up front.
 //!
 //! Followups will add: array read/alloc, object read/alloc, closure
-//! call helpers, NaN-box constants, async-runtime sharing
-//! (`spawn_async` / `block_on`). Tracked in #466 Phase 1's "Open
+//! call helpers, NaN-box constants, async work (`spawn_blocking`,
+//! the v2 `pool`, `turnloop_net`). Tracked in #466 Phase 1's "Open
 //! questions" section.
 
 #![deny(missing_docs)]
 
 mod async_runtime;
 pub use async_runtime::{
-    nanbox_string_bits, run_pending, spawn_async, spawn_blocking, spawn_blocking_with_reactor,
-    JsNativeAsyncCompletion, JsPromise, PERRY_NATIVE_ASYNC_ALREADY_COMPLETED,
+    nanbox_string_bits, run_pending, spawn_blocking, JsNativeAsyncCompletion, JsPromise, PERRY_NATIVE_ASYNC_ALREADY_COMPLETED,
     PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL, PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
     PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS, PERRY_NATIVE_ASYNC_INVALID, PERRY_NATIVE_ASYNC_OK,
     PERRY_NATIVE_ASYNC_THREAD_MAIN, PERRY_NATIVE_ASYNC_WRONG_THREAD,

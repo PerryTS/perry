@@ -63,7 +63,6 @@ pub(crate) mod resolve;
 mod resources;
 mod runtime_compat;
 mod sandbox_buildrs;
-mod shared_tokio;
 mod strip_dedup;
 mod targets;
 mod tool_output;

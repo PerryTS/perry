@@ -378,13 +378,12 @@ mod tests {
 
     #[test]
     fn pg_and_mysql2_have_no_well_known_row() {
-        // optimized_libs/driver.rs no longer selects perry-stdlib's
-        // tokio `async-runtime` for `pg` / `mysql2` by module name: the flip
-        // loop only reaches modules with a row here, and their wrappers were
-        // removed (#10677 / #10680), so the npm packages compile from source.
-        // mongodb joined them when perry-ext-mongodb was deleted (#11337).
-        // If a wrapper ever comes back, whether it needs tokio is
-        // `binding_needs_shared_tokio`'s call, not a module-name rule.
+        // optimized_libs/driver.rs used to select perry-stdlib's tokio
+        // `async-runtime` for `pg` / `mysql2` by module name (the feature
+        // and tokio are gone now): the flip loop only reaches modules with a
+        // row here, and their wrappers were removed (#10677 / #10680), so the
+        // npm packages compile from source. mongodb joined them when
+        // perry-ext-mongodb was deleted (#11337).
         for module in [
             "pg",
             "mysql2",
@@ -559,7 +558,7 @@ mod tests {
     ///   (`js_stdlib_init_dispatch`, `js_stdlib_process_pending`, the fetch/ws/
     ///   readline no-ops). Without it the bundled no-op wins the link over
     ///   perry-stdlib's real dispatch, so a `node:http` server never registers
-    ///   its tokio reactor and dies on the first accept. The link-time strip that
+    ///   its event pump and dies on the first accept. The link-time strip that
     ///   should drop those members silently no-ops when perry can't find LLVM
     ///   `nm`/`objcopy` (e.g. a stock macOS host), so the copy must not emit them.
     ///
@@ -630,7 +629,7 @@ mod tests {
             "#6314: these perry-ext-* crates bundle a perry-runtime that still exports \
              the no-op `stdlib_stubs`. They are linked BEFORE stdlib, so the bundled \
              no-op `js_stdlib_init_dispatch` wins the link and perry-stdlib's real \
-             dispatch never runs — a node:http server never registers its tokio reactor \
+             dispatch never runs — a node:http server never registers its event pump \
              and dies on the first accept. The link-time strip that should drop those \
              members silently no-ops when perry can't find LLVM nm/objcopy (e.g. a stock \
              macOS host), so the copy must not emit the stubs.\n\
