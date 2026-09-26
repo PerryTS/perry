@@ -265,7 +265,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     if closure_ptr.is_null() {
         return "[Function (anonymous)]".to_string();
     }
-    if let Some(class_id) = crate::object::class_closure_id(closure_ptr as usize) {
+    if let Some(class_id) = crate::object::class_value::class_closure_id(closure_ptr as usize) {
         return format_class_for_console(class_id, closure_ptr);
     }
 

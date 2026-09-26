@@ -700,7 +700,7 @@ fn lower_new_impl_inner<'a>(
         // rewrites — so it goes in a temp root, not a bare register.
         let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
             ctx.class_ids.get(class_name).copied().map(|cid| {
-                let class_ref = crate::expr::emit_class_value(ctx.block(), cid);
+                let class_ref = crate::expr::emit_class_value_cached(ctx, cid);
                 crate::rooting::new_target_save(ctx, &class_ref)
             })
         } else {
@@ -1004,7 +1004,7 @@ fn lower_new_impl_inner<'a>(
     // `new.target === C`, `new.target.name`, and `new.target.prototype` all
     // work. Falls back to `undefined` if the class id is somehow unresolved.
     let new_target_value = match ctx.class_ids.get(class_name).copied() {
-        Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+        Some(cid) => crate::expr::emit_class_value_cached(ctx, cid),
         None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
     };
     let new_target_slot = ctx.func.alloca_entry(DOUBLE);
@@ -1714,7 +1714,7 @@ fn lower_new_impl_inner<'a>(
                 // was mis-categorized and the login redirect fell back to
                 // `?error=Configuration`.
                 let nt_ref = match ctx.class_ids.get(class_name).copied() {
-                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    Some(cid) => crate::expr::emit_class_value_cached(ctx, cid),
                     None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                 };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
@@ -1752,7 +1752,7 @@ fn lower_new_impl_inner<'a>(
                 // class ref around the imported ctor call (see the ANCESTOR arm
                 // above for why). This is the direct `new ImportedClass()` case.
                 let nt_ref = match ctx.class_ids.get(class_name).copied() {
-                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    Some(cid) => crate::expr::emit_class_value_cached(ctx, cid),
                     None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                 };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);

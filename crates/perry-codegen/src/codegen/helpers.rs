@@ -1550,7 +1550,7 @@ pub(super) fn emit_namespace_populator(
                 }
                 NamespaceEntryKind::LocalClass { class_id } => {
                     // The class's function object, as `Expr::ClassRef` lowers.
-                    crate::expr::emit_class_value(ctx.block(), *class_id)
+                    crate::expr::emit_class_value_cached(ctx, *class_id)
                 }
                 NamespaceEntryKind::ForeignFunction {
                     source_prefix,

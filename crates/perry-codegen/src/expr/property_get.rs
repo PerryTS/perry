@@ -1140,7 +1140,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .get(&crate::namespace_member_class_key(name, property))
                         .copied();
                     if let Some(cid) = class_cid {
-                        return Ok(super::emit_class_value(ctx.block(), cid));
+                        return Ok(super::emit_class_value_cached(ctx, cid));
                     }
                     // Issue #680: prefer the per-namespace map so
                     // `random.make` and `tracer.make` resolve to their

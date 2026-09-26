@@ -46,7 +46,7 @@ pub(in crate::codegen) fn compile_static_method(
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
     // method bodies were equally invisible to the exact-roots copying minor.
     // One extra slot roots the resolved receiver: static `this` is usually
-    // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
+    // the class's pinned function object, but `js_static_this_resolve_class` returns a
     // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
     // dynamic dispatch, and that object may be reachable only from this slot.
     // #10663: decided before any statement is lowered.
@@ -90,7 +90,6 @@ pub(in crate::codegen) fn compile_static_method(
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
-        let class_ref_lit = crate::expr::emit_class_value(blk, class_ref_cid);
         let this_slot = blk.alloca(DOUBLE);
         // Receiver-sensitive `this`: dynamic dispatch paths (inherited
         // `D.m()`, `C.m.call(x)` / `.apply(x)`) arm a one-shot override that
@@ -100,8 +99,8 @@ pub(in crate::codegen) fn compile_static_method(
         // real receiver (test262 class/elements static-private-*).
         let resolved_this = blk.call(
             DOUBLE,
-            "js_static_this_resolve",
-            &[(DOUBLE, &class_ref_lit)],
+            "js_static_this_resolve_class",
+            &[(I32, &(class_ref_cid as i32).to_string())],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
         if crate::codegen::helpers::precise_root_analysis_enabled() {

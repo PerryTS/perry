@@ -1449,7 +1449,7 @@ pub(crate) fn lower(
         // class_ids (legacy callers checking truthiness). Refs #420.
         Expr::ClassRef(name) => {
             if let Some(&cid) = ctx.class_ids.get(name) {
-                Ok(super::emit_class_value(ctx.block(), cid))
+                Ok(super::emit_class_value_cached(ctx, cid))
             } else {
                 Ok(double_literal(0.0))
             }

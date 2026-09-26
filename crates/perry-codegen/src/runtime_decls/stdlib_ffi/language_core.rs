@@ -398,6 +398,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // armed by dynamic static dispatch / call/apply, else returns the
     // lexical class-ref argument.
     module.declare_function("js_static_this_resolve", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_static_this_resolve_class", DOUBLE, &[I32]);
     module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
     module.declare_function("js_static_this_arm_value", VOID, &[DOUBLE]);
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);

@@ -888,7 +888,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(&cid) = ctx.class_ids.get(name).filter(|_| {
                 !ctx.imported_vars.contains(name) && !ctx.namespace_imports.contains(name)
             }) {
-                return Ok(super::emit_class_value(ctx.block(), cid));
+                return Ok(super::emit_class_value_cached(ctx, cid));
             }
             // Issue #841: named imports from Node submodules Perry recognizes
             // as runtime-backed values must win over the generic native-module

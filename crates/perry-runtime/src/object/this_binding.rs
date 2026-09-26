@@ -172,6 +172,29 @@ pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
     })
 }
 
+/// [`js_static_this_resolve`] for a static method of class `class_id`: the
+/// armed override if any, else the class's function object — without the
+/// caller materializing the default on every call.
+// #1561-style force-keep: only generated IR calls this.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_STATIC_THIS_RESOLVE_CLASS: extern "C" fn(i32) -> f64 = js_static_this_resolve_class;
+
+#[no_mangle]
+pub extern "C" fn js_static_this_resolve_class(class_id: i32) -> f64 {
+    let armed = STATIC_THIS_OVERRIDE.with(|c| {
+        let (armed, bits) = c.get();
+        if armed {
+            c.set((false, crate::value::TAG_UNDEFINED));
+        }
+        armed.then_some(bits)
+    });
+    match armed {
+        Some(bits) => f64::from_bits(bits),
+        None => super::class_value::class_value(class_id as u32),
+    }
+}
+
 /// Read the current implicit `this` (issue #519).
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get() -> f64 {

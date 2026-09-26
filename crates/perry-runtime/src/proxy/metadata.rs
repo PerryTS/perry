@@ -124,7 +124,7 @@ fn normalize_target_bits(target: f64) -> u64 {
     }
     // A class constructor (either form) -> its stable key: the function object
     // is a heap cell whose address is not a durable key.
-    if let Some(cid) = crate::object::class_value_id(target) {
+    if let Some(cid) = crate::object::class_value::class_value_id(target) {
         return crate::object::class_constructor_key_bits(cid);
     }
     // Live decl-prototype heap object → fold onto the class constructor key.
@@ -308,13 +308,14 @@ mod tests {
     fn synthetic_prototype_ref_folds_onto_constructor_key() {
         let cid = 0x4242;
         register_test_class(cid);
-        let ctor_key = crate::object::class_constructor_ref_value(cid).to_bits();
+        let ctor_key = crate::object::class_constructor_key_bits(cid);
 
         let proto_ref = crate::object::class_prototype_ref_value(cid);
         assert_eq!(normalize_target_bits(proto_ref), ctor_key);
 
-        // The constructor ref already IS the key — must pass through unchanged.
+        // The constructor VALUE (its function object) folds onto the same key.
         let ctor_ref = crate::object::class_constructor_ref_value(cid);
+        assert_ne!(ctor_ref.to_bits(), ctor_key, "the value is not the key");
         assert_eq!(normalize_target_bits(ctor_ref), ctor_key);
     }
 
@@ -333,7 +334,7 @@ mod tests {
         let target = f64::from_bits(POINTER_TAG | (fake_proto_ptr as u64 & POINTER_MASK));
         assert_eq!(
             normalize_target_bits(target),
-            crate::object::class_constructor_ref_value(cid).to_bits()
+            crate::object::class_constructor_key_bits(cid)
         );
     }
 

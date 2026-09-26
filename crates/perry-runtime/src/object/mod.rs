@@ -95,8 +95,6 @@ pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_tar
 pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
-pub(crate) use class_value::class_value_id;
-pub use class_value::{class_closure_id, js_class_constructor_called, js_class_value};
 pub(crate) mod canonical_keys;
 mod census;
 pub(crate) mod key_attrs;
@@ -375,7 +373,7 @@ pub(crate) use this_binding::{
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
     js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve, ImplicitThisScope,
+    js_static_this_resolve, js_static_this_resolve_class, ImplicitThisScope,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -1557,7 +1555,6 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // holding it is a real GC root that a moving collection must rewrite.
     null_stub::scan_null_stub_roots_mut(visitor);
     crate::closure::shape::scan_function_prototype_roots_mut(visitor);
-    class_value::scan_class_value_roots_mut(visitor);
     #[cfg(feature = "regex-engine")]
     regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }

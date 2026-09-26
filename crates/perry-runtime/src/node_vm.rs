@@ -230,7 +230,7 @@ pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<Str
 
 pub(crate) fn function_source_for_closure(closure: usize) -> String {
     // A class function object renders its class's retained source.
-    if let Some(class_id) = crate::object::class_closure_id(closure) {
+    if let Some(class_id) = crate::object::class_value::class_closure_id(closure) {
         return crate::object::class_ref_to_string(class_id).into_owned();
     }
     compiled_function_source_for_closure(closure).unwrap_or_else(|| {

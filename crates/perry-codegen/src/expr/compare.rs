@@ -71,6 +71,12 @@ fn typeof_literal_pair<'a>(
 /// storage (reclaimable but non-moving), while `Symbol.for()` values are
 /// process-lifetime `Box` allocations. Therefore a proven Symbol can equal
 /// another JS value iff their NaN-boxed pointer bits are identical.
+/// A declared class named as a value (`Expr::ClassRef`): its pinned function
+/// object (`js_class_value`).
+fn is_class_value_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    matches!(expr, Expr::ClassRef(name) if ctx.class_ids.contains_key(name))
+}
+
 pub(crate) fn is_proven_symbol_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::SymbolNew(_) | Expr::SymbolFor(_) => true,
@@ -1252,7 +1258,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // STRICT only: loose equality still has coercion/throw rules.
                 let either_proven_symbol =
                     is_proven_symbol_expr(ctx, left) || is_proven_symbol_expr(ctx, right);
-                if either_proven_symbol && matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                // A class value is its class's pinned function object — one
+                // per class, never moved or forwarded — so strict identity
+                // against one is bit identity too.
+                let either_class_value =
+                    is_class_value_expr(ctx, left) || is_class_value_expr(ctx, right);
+                if (either_proven_symbol || either_class_value)
+                    && matches!(op, CompareOp::Eq | CompareOp::Ne)
+                {
                     let blk = ctx.block();
                     let l_bits = blk.bitcast_double_to_i64(&l);
                     let r_bits = blk.bitcast_double_to_i64(&r);

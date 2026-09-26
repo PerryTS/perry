@@ -175,9 +175,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // Born old AND pinned: the address is the class's identity for the
         // agent's life (compiled code keeps it in registers and allocas, the
         // metadata and weak tables compare it), so no collector may move it.
-        crate::gc::pin_object_non_young(
-            (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
-        );
+        crate::gc::pin_user_ptr_non_young(ptr as *mut u8);
     }
     let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
     let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
@@ -218,8 +216,8 @@ pub extern "C" fn js_class_value(class_id: i32) -> f64 {
     class_value(class_id as u32)
 }
 
-/// GC root scan for [`CLASS_VALUES`]; registered from
-/// `object::scan_object_cache_roots_mut`.
+/// GC root scan for [`CLASS_VALUES`]; registered in `gc::mod`'s runtime
+/// scanner list.
 pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     CLASS_VALUES.with(|t| {
         let mut t = t.borrow_mut();
@@ -231,4 +229,86 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn register(cid: u32) {
+        let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
+        guard
+            .get_or_insert_with(crate::fast_hash::new_ptr_hash_set)
+            .insert(cid);
+    }
+
+    /// #11414: a class value is ONE function object per class — never an
+    /// INT32 word a number can equal — pinned and old, so its address is its
+    /// identity across collections.
+    #[test]
+    fn class_value_is_one_pinned_function_object_per_class() {
+        let cid = 0x6A01;
+        register(cid);
+        let a = class_value(cid);
+        let b = class_value(cid);
+        assert_eq!(a.to_bits(), b.to_bits(), "one function object per class");
+        let v = crate::value::JSValue::from_bits(a.to_bits());
+        assert!(
+            !v.is_int32() && !v.is_number(),
+            "a class value is not a number"
+        );
+        assert!(v.is_pointer());
+        let ptr = (a.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert!(
+            crate::closure::is_closure_ptr(ptr),
+            "a GC_TYPE_CLOSURE cell"
+        );
+        assert_eq!(class_value_id(a), Some(cid));
+        assert_eq!(class_closure_id(ptr), Some(cid));
+        // The number equal to the class id is not the class.
+        assert_ne!(
+            f64::from_bits(crate::value::INT32_TAG | cid as u64).to_bits(),
+            a.to_bits()
+        );
+        let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }.expect("header");
+        assert_ne!(header.gc_flags & crate::gc::GC_FLAG_PINNED, 0, "pinned");
+        assert_ne!(header.gc_flags & crate::gc::GC_FLAG_TENURED, 0, "born old");
+        crate::gc::js_gc_collect();
+        assert_eq!(class_value(cid).to_bits(), a.to_bits(), "never moves");
+        assert_eq!(class_value_id(a), Some(cid), "survives a full collection");
+        let other = class_value(0x6A02);
+        assert_ne!(other.to_bits(), a.to_bits());
+        assert_eq!(class_value_id(other), Some(0x6A02));
+    }
+
+    /// The table is a root: the scan visits every minted class value.
+    #[test]
+    fn class_value_table_is_scanned() {
+        let cid = 0x6B01;
+        register(cid);
+        let ptr = class_value_ptr(cid) as usize;
+        let mut seen = false;
+        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
+            &mut |v: f64| {
+                let bits = v.to_bits();
+                if bits as usize == ptr || (bits & crate::value::POINTER_MASK) as usize == ptr {
+                    seen = true;
+                }
+            },
+        ));
+        assert!(seen, "the class-value table must be a GC root");
+    }
+
+    /// Only the function object's own code pointer names a class.
+    #[test]
+    fn ordinary_closures_and_numbers_are_not_class_values() {
+        extern "C" fn body() {}
+        let c = crate::closure::js_closure_alloc(body as *const u8, 0);
+        assert_eq!(class_closure_id(c as usize), None);
+        assert_eq!(class_value_id(42.0), None);
+        assert_eq!(
+            class_value_id(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            None
+        );
+    }
 }

@@ -172,7 +172,7 @@ pub(super) fn try_lower_scalar_replaced_new(
                 // the ctor (notably `const t = new.target`) fell through to the
                 // runtime cell, which this path never sets, yielding undefined.
                 let new_target_value = match ctx.class_ids.get(class_name).copied() {
-                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    Some(cid) => crate::expr::emit_class_value_cached(ctx, cid),
                     None => {
                         crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     }

@@ -135,9 +135,7 @@ pub(crate) fn try_lower_static_dispatch(
                     _ => {
                         // Synthesize a ClassRef NaN-box from the resolved class.
                         match ctx.class_ids.get(&cls_name).copied() {
-                            Some(cid) if cid != 0 => {
-                                crate::expr::emit_class_value(ctx.block(), cid)
-                            }
+                            Some(cid) if cid != 0 => crate::expr::emit_class_value_cached(ctx, cid),
                             _ => crate::nanbox::double_literal(f64::from_bits(
                                 crate::nanbox::TAG_UNDEFINED,
                             )),
