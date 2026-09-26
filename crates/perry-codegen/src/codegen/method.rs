@@ -355,6 +355,8 @@ pub(super) fn compile_method(
     // exact-roots liveness hole as closures (see compile_closure). One extra
     // slot roots the receiver (`this` is a pointer value reachable from
     // nothing else when the caller holds it only in a register temp).
+    // #10663: decided before any statement is lowered.
+    crate::codegen::helpers::decide_straight_line_store_outline(lf, method_body);
     let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();

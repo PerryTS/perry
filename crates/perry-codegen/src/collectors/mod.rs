@@ -57,6 +57,7 @@ pub mod segview;
 mod segview_tests;
 mod shadow_slots;
 pub(crate) mod spec_abi_sites;
+mod straight_line_stores;
 pub(crate) mod suffix_strings;
 mod this_as_value;
 mod uppercase_strings;
@@ -139,6 +140,7 @@ pub(crate) use spec_abi_sites::{
     collect_spec_abi_facts, guarded_number_array_param_eligible, reassigned_locals,
     reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
 };
+pub(crate) use straight_line_stores::count_straight_line_store_sites;
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,
 };

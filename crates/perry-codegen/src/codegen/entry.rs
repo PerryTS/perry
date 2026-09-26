@@ -564,6 +564,8 @@ pub(super) fn compile_module_entry(
             cross_module.flat_const_arrays.keys().copied().collect();
         let (mut main_shadow_slot_map, _) =
             enable_module_init_shadow_frame(main, &hir.init, &flat_const_ids);
+        // #10663: module init is the textbook run-once body.
+        super::helpers::decide_straight_line_store_outline(main, &hir.init);
 
         let main_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
@@ -1425,6 +1427,8 @@ pub(super) fn compile_module_entry(
             cross_module.flat_const_arrays.keys().copied().collect();
         let (mut init_shadow_slot_map, _) =
             enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
+        // #10663: module init is the textbook run-once body.
+        super::helpers::decide_straight_line_store_outline(init_fn, &hir.init);
 
         let init_boxed_vars = module_boxed_vars.clone();
         let clamp_fn_ids: std::collections::HashSet<u32> = cross_module

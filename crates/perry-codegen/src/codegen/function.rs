@@ -710,6 +710,8 @@ pub(super) fn compile_function(
     // populate the frame with live values; today the slots stay
     // zero (the tracer doesn't consume them yet — Phase A ship
     // criterion is "shadow stack is built but not yet consumed").
+    // #10663: decided before any statement is lowered.
+    crate::codegen::helpers::decide_straight_line_store_outline(lf, &f.body);
     let mut shadow_slot_map = if precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();

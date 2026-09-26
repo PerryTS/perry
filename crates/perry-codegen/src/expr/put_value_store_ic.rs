@@ -164,6 +164,25 @@ fn add_header_refuse_mask() -> i32 {
 /// (`barrier_stem_census_tests::VERIFIED_BARRIER_STEMS`).
 pub(crate) const STORE_IC_STEM: &str = "put.pic";
 
+/// #10663: this site takes the outlined call because its function has too many
+/// once-per-call stores for their inline caches to pay off
+/// ([`crate::codegen::helpers::decide_straight_line_store_outline`]).
+///
+/// A site under a loop keeps its cache: `loop_targets` holds one frame per
+/// enclosing loop, plus `switch` frames with an EMPTY continue label, which do
+/// not repeat anything (the `new_site_is_in_loop` discriminator,
+/// `lower_call/new_alloc.rs`). So does every site of a function the hot-loop
+/// pre-passes marked, which is called from a loop one frame out.
+fn straight_line_site_outlined(ctx: &FnCtx<'_>) -> bool {
+    ctx.func.outlines_straight_line_store_ics()
+        && !ctx.func.hot_loop_callee
+        && !ctx.func.alloc_hot
+        && !ctx
+            .loop_targets
+            .iter()
+            .any(|(continue_label, _, _)| !continue_label.is_empty())
+}
+
 /// Emit the static-key store. `obj_box` is the receiver RE-READ after the
 /// RHS; `value_double` is the stored value and `value_bits` the same value as
 /// the caller lowered it to i64 (used only to recognise an SSA constant).
@@ -195,7 +214,7 @@ pub(crate) fn emit_static_store_ic(
     let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
     let strict_i32 = if strict { "1" } else { "0" };
 
-    if crate::codegen::full_outline_ic_enabled() {
+    if crate::codegen::full_outline_ic_enabled() || straight_line_site_outlined(ctx) {
         super::store_census::bump(ctx, super::store_census::PIC_MISS);
         let key_handle = emit_key_handle(ctx, &key_handle_global);
         return ctx.block().call(

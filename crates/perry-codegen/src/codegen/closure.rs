@@ -595,6 +595,8 @@ pub(super) fn compile_closure(
     // evacuating GC fired mid-body swept values reachable only from the
     // closure's own frame — the referrer then read freed-and-reused memory.
     // Emit the same frame the top-level function path gets (function.rs).
+    // #10663: decided before any statement is lowered.
+    crate::codegen::helpers::decide_straight_line_store_outline(lf, body);
     let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();

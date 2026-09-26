@@ -645,6 +645,34 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
     );
 }
 
+/// #10663: a function body with at least this many property stores outside
+/// any loop outlines those stores' inline caches.
+///
+/// Each inline store cache is ~20 basic blocks and 4 non-leaf calls, which
+/// earns its keep only on a site that runs repeatedly. A site outside every
+/// loop runs once per call, so a body that is mostly such sites — a generated
+/// constant table, `mysql2/lib/constants/errors.js`'s 3,942 `exports.X = N`
+/// lines in one CommonJS factory — is dominated by cache code it never
+/// benefits from: that factory emitted ~886k IR lines and spent 217 s in one
+/// LLVM unit (26 s total for the whole build once outlined). Hand-written
+/// functions sit far below this count; a hot one that somehow exceeds it
+/// still keeps its in-loop sites inline, and its outlined sites still hit the
+/// runtime's per-site cache through the miss entry.
+pub(crate) const STRAIGHT_LINE_STORE_OUTLINE_MIN_SITES: usize = 512;
+
+/// Decide whether `func` outlines its straight-line store caches (#10663).
+/// Called with the HIR body before any statement is lowered.
+pub(crate) fn decide_straight_line_store_outline(
+    func: &mut crate::function::LlFunction,
+    body: &[perry_hir::Stmt],
+) {
+    if crate::collectors::count_straight_line_store_sites(body)
+        >= STRAIGHT_LINE_STORE_OUTLINE_MIN_SITES
+    {
+        func.request_straight_line_store_outline();
+    }
+}
+
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],

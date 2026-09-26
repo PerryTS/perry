@@ -49,6 +49,8 @@ pub(in crate::codegen) fn compile_static_method(
     // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
     // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
     // dynamic dispatch, and that object may be reachable only from this slot.
+    // #10663: decided before any statement is lowered.
+    crate::codegen::helpers::decide_straight_line_store_outline(lf, &f.body);
     let shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();

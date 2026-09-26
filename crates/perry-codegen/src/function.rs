@@ -174,6 +174,11 @@ pub struct LlFunction {
     /// FP-chain walker steps over the spilled frame exactly as it does the
     /// runtime's own.
     force_shadow_frame: bool,
+    /// #10663: outline this function's static-key store inline caches at
+    /// sites outside any loop (`expr/put_value_store_ic.rs`). Set for a body
+    /// with so many once-per-call stores that the inline caches' code
+    /// dominates it (`codegen/helpers::decide_straight_line_store_outline`).
+    outline_straight_line_store_ics: bool,
     /// Runtime hooks emitted immediately before each non-pointer `ret`.
     /// Entry/module-init functions use this for process-level diagnostics
     /// that must run regardless of which block reaches the normal epilogue.
@@ -289,6 +294,7 @@ impl LlFunction {
             stack_map_requested: false,
             stack_map_slot_count: 0,
             force_shadow_frame: false,
+            outline_straight_line_store_ics: false,
             pre_return_void_calls: Vec::new(),
             pre_return_box_releases: Vec::new(),
             withheld_box_release_slots: Vec::new(),
@@ -350,6 +356,18 @@ impl LlFunction {
     /// Whether this function spills its roots to the shadow frame (#8583).
     pub fn spills_roots_to_shadow_frame(&self) -> bool {
         self.force_shadow_frame
+    }
+
+    /// #10663: see [`Self::outlines_straight_line_store_ics`].
+    pub fn request_straight_line_store_outline(&mut self) {
+        self.outline_straight_line_store_ics = true;
+    }
+
+    /// Whether this function's static-key store sites outside every loop take
+    /// the outlined `js_put_value_set_packed_miss` call instead of the inline
+    /// cache (#10663).
+    pub fn outlines_straight_line_store_ics(&self) -> bool {
+        self.outline_straight_line_store_ics
     }
 
     pub fn enable_shadow_frame(&mut self, slot_count: u32) {
