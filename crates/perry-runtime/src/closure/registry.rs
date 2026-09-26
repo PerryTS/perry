@@ -442,7 +442,7 @@ pub(crate) fn wasi_body_params(func_ptr: *const u8) -> Option<u32> {
     }
     // Keyed by the function-table index a wasm function pointer is, never a
     // heap address.
-    std::thread_local! {
+    crate::perry_thread_local! {
         static PARAMS: std::cell::RefCell<std::collections::HashMap<u32, i32>> =
             std::cell::RefCell::new(std::collections::HashMap::new());
     }
