@@ -1,0 +1,7 @@
+**fix(codegen): writing past the end of an array held in a captured `var` no longer corrupts the variable, so compiled mysql2 no longer segfaults (#11335).** An index store `arr[i] = v` that grew the array wrote the new array pointer into the local's stack slot. When the `var` is captured by a closure, that slot holds a pointer to a box, not the array. Every CommonJS module-level `var` that a function captures is such a boxed local, because the module body runs inside the CJS factory closure. The first store past the array's initial capacity (16) overwrote the box pointer, so every later read of the variable returned `undefined` or crashed.
+
+iconv-lite's `encodings/utf7.js` builds its 256-entry tables this way when it loads. mysql2 loads it during the connection handshake, so every compiled mysql2 program segfaulted in `createConnection`.
+
+Boxed locals no longer take `lower_index_set_fast`. Both that path and the runtime-key store now write the grown array back through the box with `emit_push_writeback`, the same code `push` / `unshift` use. A new gap test, `test_gap_11335_boxed_array_index_growth`, covers this.
+
+Verified against a live MySQL 8.0.46 with mysql2 3.24.4 (`caching_sha2_password` and `mysql_native_password` users): connect, query, parameters, transactions, pool, and the existing mysql2 issue fixtures. One difference from Node remains and also happens on main: with the `mysql_native_password` user, a text column intermittently reads back as a wrong value (#11341).
