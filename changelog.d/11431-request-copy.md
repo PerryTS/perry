@@ -17,3 +17,4 @@ and consume body content-type metadata before nested construction or stream
 pulls can replace it. URL-based construction now applies inferred content types
 without overwriting an explicit header. Extend regression coverage for these
 paths and stream-body overrides.
+Nested Requests preserve an outer Response's pending content type while consuming their own conversion metadata.

@@ -89,3 +89,19 @@ const overrideStream = new ReadableStream({
 });
 const streamCopy = new Request(source(), { body: overrideStream, duplex: "half" });
 console.log("stream override", await streamCopy.text());
+
+let calls = 0;
+function nestedResponseInit(kind: string): ResponseInit {
+  return { get status() {
+    calls++;
+    if (kind === "empty") new Request("https://example.test/inner", {});
+    if (kind === "text") new Request("https://example.test/inner", { method: "POST", body: "inner" });
+    if (kind === "binary") new Request("https://example.test/inner", { method: "POST", body: new Uint8Array([65]) });
+    if (kind === "copy") new Request(source(), { body: "inner" });
+    return 201;
+  } };
+}
+for (const kind of ["empty", "text", "binary", "copy"]) {
+  const outer = new Response("outer", nestedResponseInit(kind));
+  console.log("nested metadata", kind, calls, outer.status, outer.headers.get("content-type"));
+}

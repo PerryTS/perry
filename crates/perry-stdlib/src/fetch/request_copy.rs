@@ -127,9 +127,11 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             request.body = Some(bytes);
             Some(content_type)
         } else {
+            let outer_content_type = take_pending_fetch_body_content_type();
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
             let stream = take_pending_fetch_body_stream_id();
             let content_type = take_pending_fetch_body_content_type().map(str::to_owned);
+            set_pending_fetch_body_content_type(outer_content_type);
             // Non-body handles (e.g. Headers) are synthetic addresses, not
             // StringHeaders. Match the URL constructor's guarded fallback.
             // Copy real bytes before draining: a stream pull may allocate.

@@ -60,6 +60,10 @@ fn request_input_inherits_fields_and_applies_init_overrides() {
             "empty content type null\n",
             "handle body constructed POST\n",
             "stream override CD\n",
+            "nested metadata empty 1 201 text/plain;charset=UTF-8\n",
+            "nested metadata text 2 201 text/plain;charset=UTF-8\n",
+            "nested metadata binary 3 201 text/plain;charset=UTF-8\n",
+            "nested metadata copy 4 201 text/plain;charset=UTF-8\n",
         )
     );
 }

@@ -217,15 +217,19 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
     // Keep its BodyInit conversion: a ReadableStream is a handle whose
     // bytes must be drained, rather than interpreted as a string pointer.
     let body_value = field(b"body");
-    let body_ptr = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
-        reset_pending_fetch_body_init();
-        std::ptr::null()
+    let (body_ptr, content_type) = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+        // No conversion happened here: pending metadata can belong to an
+        // outer Response whose init getter is constructing this Request.
+        (std::ptr::null(), None)
     } else {
-        js_response_body_init_ptr(body_value) as *const StringHeader
+        let outer_content_type = take_pending_fetch_body_content_type();
+        let ptr = js_response_body_init_ptr(body_value) as *const StringHeader;
+        // Consume our metadata while restoring any enclosing constructor's.
+        // Later getters and stream pulls can perform more nested conversions.
+        let content_type = take_pending_fetch_body_content_type();
+        set_pending_fetch_body_content_type(outer_content_type);
+        (ptr, content_type)
     };
-    // Consume conversion metadata before later field getters or a stream
-    // pull can perform another body conversion and replace this thread-local.
-    let content_type = take_pending_fetch_body_content_type();
     let result = js_request_new(
         url_ptr,
         str_field(b"method"),
