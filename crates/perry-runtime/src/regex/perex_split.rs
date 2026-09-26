@@ -359,6 +359,12 @@ fn separator_is_plain(
 }
 
 pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<f64, EngineError> {
+    // A string separator on a string receiver has no `@@split` and no
+    // coercion that can run user code or throw: answer it before any of the
+    // setup below, which is most of the cost of a short split (#10519).
+    if let Some(parts) = crate::string::split_string_by_string(receiver, separator, limit_value) {
+        return Ok(parts);
+    }
     if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
         return Err(EngineError::Type(
             "String.split requires a non-null receiver",

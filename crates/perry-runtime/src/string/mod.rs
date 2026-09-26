@@ -132,6 +132,8 @@ mod number_to_string_box_tests;
 #[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
+mod split_fast_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod trim_tests;
@@ -256,6 +258,8 @@ pub use split::js_string_split;
 /// once it has ruled out `@@split`.
 #[cfg(feature = "regex-engine")]
 pub(crate) use split::js_string_split_js as js_string_split_plain;
+#[cfg(feature = "regex-engine")]
+pub(crate) use split::split_string_by_string;
 #[cfg(not(feature = "regex-engine"))]
 pub use split::{js_string_split_js, js_string_split_n};
 

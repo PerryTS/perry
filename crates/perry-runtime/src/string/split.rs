@@ -332,43 +332,25 @@ pub extern "C" fn js_string_split_n(
         return crate::array::js_array_alloc(0);
     }
 
-    // The result-array and per-part string allocations below can evacuate the
-    // source. Root it before deriving offsets into its payload, then refresh
-    // its address after every allocation that precedes a read.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let s_handle = scope.root_string_ptr(s);
-
-    let str_data = string_as_str(s);
     let delim = if !is_valid_string_ptr(delimiter) {
         ""
     } else {
         string_as_str(delimiter)
     };
+    if !delim.is_empty() {
+        return split_by_delimiter(s, delim, limit);
+    }
 
-    // Per-part metadata inputs, derived ONCE from the source payload.
-    //
-    // NOT `is_ascii_string(s)`: that compares `byte_len == utf16_len` over the
-    // WHOLE source, which malformed bytes can satisfy while the individual
-    // parts do not. For `[0x80, b'|', 0xF0]` the source is 3 == 3 (so the old
-    // check said "ASCII"), but the parts need utf16_len 0 and 2 — the fast path
-    // stamped 1 and 1 onto them, corrupting `.length` and every downstream
-    // index operation. Scan the bytes instead: a genuinely all-ASCII source has
-    // all-ASCII parts, which IS sound per-part.
-    //
-    // Both of these are plain `bool`s, so they stay valid even if a later
-    // allocation moves the source string.
-    let (src_all_ascii, src_has_lone_surrogates) = unsafe {
-        let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
-        (
-            // `is_ascii` is the same predicate as `all(|b| b < 0x80)`, but std
-            // tests a word at a time. The byte-at-a-time form was ~74% of this
-            // function's own time splitting a 211-byte JWT on "." (#10519).
-            bytes.is_ascii(),
-            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
-        )
-    };
+    // The result-array and per-part string allocations below can evacuate the
+    // source. Root it before deriving offsets into its payload, then refresh
+    // its address after every allocation that precedes a read.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    // A plain `bool`, so it stays valid even if a later allocation moves the
+    // source string.
+    let src_has_lone_surrogates = unsafe { (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0 };
 
-    if delim.is_empty() {
+    {
         // Empty delimiter: split into individual characters (single pass).
         //
         // #6085: `str_data.chars()` decodes through std's UTF-8-validity
@@ -481,49 +463,151 @@ pub extern "C" fn js_string_split_n(
                 store_split_string(arr_now, idx, sh);
             }
         }
-        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+    }
+}
+
+/// Parts a split keeps on the stack before spilling to the heap.
+const INLINE_PARTS: usize = 16;
+
+/// Byte ranges `(offset, len)` of a split's parts: inline for the handful a
+/// typical split produces, spilling to a `Vec` past that. Collecting straight
+/// into a `Vec` cost a malloc/free pair per call, ~10% of a three-part split
+/// (#10519).
+struct PartRanges {
+    inline: [(u32, u32); INLINE_PARTS],
+    len: usize,
+    spill: Vec<(u32, u32)>,
+}
+
+impl PartRanges {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            inline: [(0, 0); INLINE_PARTS],
+            len: 0,
+            spill: Vec::new(),
+        }
     }
 
-    // Non-empty delimiter: record the parts as BYTE RANGES into the source
-    // payload, not as `&str` slices. `string_storage_alloc` below allocates, and
-    // a collection can move the source string — borrowed slices (and the raw
-    // pointers inside them) would dangle, and `ptr::copy_nonoverlapping` from a
-    // stale address is the #5062 class. Offsets stay valid across a move; the
-    // source address is re-read from a rooted handle on every iteration.
-    let src_base = str_data.as_ptr() as usize;
-    let range = |part: &str| (part.as_ptr() as usize - src_base, part.len());
-    // A one-byte delimiter is ASCII (WTF-8 spells every non-ASCII unit, lone
-    // surrogates included, in two or more bytes), so a `char` pattern names
-    // exactly the same occurrences as the `&str` one. It takes std's
-    // memchr-based searcher instead of the two-way `StrSearcher`, whose
-    // per-call setup is paid in full for a single-character needle -- the
-    // common `split(".")`, `split(",")`, `split(" ")` shape (#10519).
-    let mut part_ranges: Vec<(usize, usize)> = match delim.as_bytes() {
-        // `byte < 0x80` is not implied: storage can hold malformed bytes, and
-        // `0x80 as char` is U+0080, which is two bytes wide.
-        &[byte] if byte < 0x80 => str_data.split(byte as char).map(range).collect(),
-        _ => str_data.split(delim).map(range).collect(),
-    };
-    if limit > 0 && (part_ranges.len() as i64) > (limit as i64) {
-        part_ranges.truncate(limit as usize);
+    #[inline]
+    fn push(&mut self, range: (u32, u32)) {
+        if self.len < INLINE_PARTS {
+            self.inline[self.len] = range;
+        } else {
+            if self.len == INLINE_PARTS {
+                self.spill.reserve(INLINE_PARTS * 2);
+                self.spill.extend_from_slice(&self.inline);
+            }
+            self.spill.push(range);
+        }
+        self.len += 1;
     }
+
+    #[inline]
+    fn as_slice(&self) -> &[(u32, u32)] {
+        if self.len <= INLINE_PARTS {
+            &self.inline[..self.len]
+        } else {
+            &self.spill
+        }
+    }
+}
+
+/// Split `s` on a NON-EMPTY delimiter. `limit < 0` is unbounded, `0` yields an
+/// empty array, `> 0` keeps at most that many parts.
+///
+/// `delimiter` is read only while the parts are located, before the first
+/// allocation, so it may borrow the payload of an unrooted heap string.
+fn split_by_delimiter(s: *const StringHeader, delimiter: &str, limit: i32) -> *mut ArrayHeader {
+    debug_assert!(!delimiter.is_empty());
+    if limit == 0 {
+        return crate::array::js_array_alloc(0);
+    }
+    let max_parts = if limit > 0 {
+        limit as usize
+    } else {
+        usize::MAX
+    };
+
+    // Record the parts as BYTE RANGES into the source payload, not as `&str`
+    // slices. `string_storage_alloc` below allocates, and a collection can move
+    // the source string -- borrowed slices (and the raw pointers inside them)
+    // would dangle, and `ptr::copy_nonoverlapping` from a stale address is the
+    // #5062 class. Offsets stay valid across a move; the source address is
+    // re-read from a rooted handle on every iteration.
+    //
+    // The per-part metadata inputs are derived here too, ONCE, from the source
+    // payload. NOT `is_ascii_string(s)`: that compares `byte_len == utf16_len`
+    // over the WHOLE source, which malformed bytes can satisfy while the
+    // individual parts do not. For `[0x80, b'|', 0xF0]` the source is 3 == 3
+    // (so the old check said "ASCII"), but the parts need utf16_len 0 and 2 --
+    // the fast path stamped 1 and 1 onto them, corrupting `.length` and every
+    // downstream index operation. Scan the bytes instead: a genuinely
+    // all-ASCII source has all-ASCII parts, which IS sound per-part. Both are
+    // plain `bool`s, so they stay valid if a later allocation moves the source.
+    let mut ranges = PartRanges::new();
+    let (src_all_ascii, src_has_lone_surrogates) = unsafe {
+        // Perry payloads may hold malformed WTF-8. `str::split` only compares
+        // bytes and hands back subslices at match boundaries, so it never
+        // decodes through the invalid bytes.
+        let str_data = string_as_str(s);
+        let src_base = str_data.as_ptr() as usize;
+        let range = |part: &str| {
+            (
+                (part.as_ptr() as usize - src_base) as u32,
+                part.len() as u32,
+            )
+        };
+        match *delimiter.as_bytes() {
+            // A one-byte delimiter is ASCII (WTF-8 spells every non-ASCII
+            // unit, lone surrogates included, in two or more bytes), so a
+            // `char` pattern names exactly the same occurrences as the `&str`
+            // one. It takes std's memchr-based searcher instead of the two-way
+            // `StrSearcher`, whose per-call setup is paid in full for a
+            // single-character needle -- the common `split(".")`,
+            // `split(",")`, `split(" ")` shape (#10519).
+            //
+            // `byte < 0x80` is not implied: storage can hold malformed bytes,
+            // and `0x80 as char` is U+0080, which is two bytes wide.
+            [byte] if byte < 0x80 => {
+                for part in str_data.split(byte as char).take(max_parts) {
+                    ranges.push(range(part));
+                }
+            }
+            _ => {
+                for part in str_data.split(delimiter).take(max_parts) {
+                    ranges.push(range(part));
+                }
+            }
+        }
+        (
+            // `is_ascii` is the same predicate as `all(|b| b < 0x80)`, but std
+            // tests a word at a time. The byte-at-a-time form was ~74% of this
+            // function's own time splitting a 211-byte JWT on "." (#10519).
+            str_data.is_ascii(),
+            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
+        )
+    };
+    let part_ranges = ranges.as_slice();
     let n = part_ranges.len();
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
     let (arr, _) = s_handle.across_const::<StringHeader, _>(|| {
         crate::array::js_array_alloc_pointer_elements(n as u32)
     });
     let arr_handle = scope.root_raw_mut_ptr(arr);
 
     unsafe {
-        for (i, &(offset, byte_len_usize)) in part_ranges.iter().enumerate() {
-            let byte_len = byte_len_usize as u32;
+        for (i, &(offset, byte_len)) in part_ranges.iter().enumerate() {
             // Allocate the destination FIRST (it may move the source), then
             // re-read the source address before touching its bytes.
             let (((sh, data_ptr), s_now), arr_now) =
                 arr_handle.across_mut::<ArrayHeader, _>(|| {
                     s_handle.across_const::<StringHeader, _>(|| string_storage_alloc(byte_len))
                 });
-            let part_ptr = string_data(s_now).add(offset);
+            let part_ptr = string_data(s_now).add(offset as usize);
             // Derive metadata from THIS PART's own bytes. The only shortcut
             // taken is the all-ASCII one, which was verified by scanning the
             // source payload (so it holds for every part).
@@ -549,6 +633,74 @@ pub extern "C" fn js_string_split_n(
     }
 
     arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+}
+
+/// `String.prototype.split` for the shape nearly every call has: a heap string
+/// receiver, a string separator, and an absent or numeric `limit` (#10519).
+/// `None` means "not this shape" and the caller runs the general algorithm.
+///
+/// For these inputs every coercion the specification performs is the identity
+/// or pure arithmetic -- `ToString` of a string, `ToUint32` of a Number -- and a
+/// primitive string separator has no `@@split` of its own, so the answer is the
+/// byte split and nothing else. The general entries reach the same byte split
+/// through three nested handle scopes, a setjmp exception trap, a proxy-table
+/// probe, and a `ToString` that copies an inline separator to the heap: ~1,500
+/// of the ~3,200 instructions `"a.b.c".split(".")` cost, against ~1,230 for
+/// the equivalent `indexOf`/`slice` code.
+///
+/// A separator containing a WTF-8 lone surrogate is declined: the byte scan
+/// cannot match one half of a valid pair in the receiver, which a UTF-16 unit
+/// scan does (`"\u{1F600}".split(lowHalf)` is two parts). WTF-8 spells a
+/// surrogate `ED A0..BF xx`, so the test is exact. An empty separator is left
+/// to the general path, which splits by code unit.
+#[inline]
+pub(crate) fn split_string_by_string(receiver: f64, separator: f64, limit: f64) -> Option<f64> {
+    use crate::value::JSValue;
+    let receiver_jv = JSValue::from_bits(receiver.to_bits());
+    if !receiver_jv.is_string() {
+        return None;
+    }
+    let s = receiver_jv.as_string_ptr();
+    if !is_valid_string_ptr(s) {
+        return None;
+    }
+    let limit_jv = JSValue::from_bits(limit.to_bits());
+    let limit = if limit_jv.is_undefined() {
+        -1
+    } else if limit_jv.is_number() {
+        // A plain double: `ToUint32` runs no user code and cannot throw.
+        i32::try_from(split_limit_to_uint32(limit)).unwrap_or(i32::MAX)
+    } else {
+        return None;
+    };
+    let separator_jv = JSValue::from_bits(separator.to_bits());
+    let mut inline = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let delimiter: &str = if separator_jv.is_short_string() {
+        let len = separator_jv.short_string_to_buf(&mut inline);
+        // SAFETY: the same unchecked byte view `string_as_str` gives a heap
+        // string; the split only compares these bytes.
+        unsafe { str::from_utf8_unchecked(&inline[..len]) }
+    } else if separator_jv.is_string() {
+        let d = separator_jv.as_string_ptr();
+        if !is_valid_string_ptr(d) {
+            return None;
+        }
+        // A live string; `split_by_delimiter` reads it only before its first
+        // allocation.
+        string_as_str(d)
+    } else {
+        return None;
+    };
+    if delimiter.is_empty()
+        || delimiter
+            .as_bytes()
+            .windows(2)
+            .any(|w| w[0] == 0xED && (0xA0..=0xBF).contains(&w[1]))
+    {
+        return None;
+    }
+    let parts = split_by_delimiter(s, delimiter, limit);
+    Some(crate::value::js_nanbox_pointer(parts as i64))
 }
 
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`
@@ -679,6 +831,9 @@ pub extern "C" fn js_string_split_value(
 
 #[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
+    if let Some(parts) = split_string_by_string(receiver, separator, limit) {
+        return parts;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let separator = scope.root_nanbox_f64(separator);
