@@ -250,6 +250,7 @@ pub extern "C" fn js_object_set_field_by_name(
                                     if slot_idx >= live_slots {
                                         set_object_live_slot_count(o, slot_idx + 1);
                                     }
+                                    crate::object::proto_validity::note_marked_value_write(o);
                                     crate::gc::runtime_store_jsvalue_slot(
                                         o as usize,
                                         slot as usize,

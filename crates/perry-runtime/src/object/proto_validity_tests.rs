@@ -102,7 +102,7 @@ fn a_structural_mutation_of_an_unmarked_object_does_not_bump_validity() {
 }
 
 #[test]
-fn a_plain_value_store_on_a_marked_object_does_not_bump_validity() {
+fn a_plain_value_store_on_a_marked_object_bumps_validity() {
     let _scope = Scope::new();
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
@@ -111,12 +111,20 @@ fn a_plain_value_store_on_a_marked_object_does_not_bump_validity() {
 
         let before = proto_validity();
         set(proto, "pv_store_a", 99.0);
-        assert_eq!(
+        assert_ne!(
             proto_validity(),
             before,
-            "a cache entry records (holder, slot) and LOADS the value on every \
-             hit, so a replaced value needs no invalidation at all"
+            "owner decision D3(b): an inherited method-site entry memoizes the \
+             VALUE (the method closure), so replacing a value on a marked \
+             prototype must invalidate it"
         );
+
+        // The same store on an object nobody inherits from stays free.
+        let plain = crate::object::js_object_alloc(0, 4);
+        set(plain, "pv_store_b", 1.0);
+        let before = proto_validity();
+        set(plain, "pv_store_b", 2.0);
+        assert_eq!(proto_validity(), before, "an unmarked object never bumps");
     }
 }
 

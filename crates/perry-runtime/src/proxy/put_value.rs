@@ -638,6 +638,11 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
+        // D3(b): a marked prototype's shape is never learned by a store cache,
+        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
+        if !crate::object::proto_validity::store_cache_may_learn(obj) {
+            return result;
+        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
 
@@ -1258,6 +1263,11 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
+        // D3(b): a marked prototype's shape is never learned by a store cache,
+        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
+        if !crate::object::proto_validity::store_cache_may_learn(obj) {
+            return result;
+        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
         let key_bits = key.to_bits() as i64;

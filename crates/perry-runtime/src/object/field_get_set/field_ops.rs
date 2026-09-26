@@ -170,6 +170,7 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
         if field_index >= stored_field_count {
             set_object_live_slot_count(obj, field_index + 1);
         }
+        crate::object::proto_validity::note_marked_value_write(obj);
         crate::gc::runtime_store_jsvalue_slot(
             obj as usize,
             slot as usize,

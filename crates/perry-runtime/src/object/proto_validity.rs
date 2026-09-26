@@ -67,9 +67,14 @@
 //!    into one word is what lets a cached entry re-prove itself with ONE load
 //!    and ONE compare instead of two of each.
 //!
-//! A plain value store to an existing key deliberately does NOT invalidate: a
-//! cache entry records (holder, slot) and LOADS the value on every hit, so a
-//! new value is seen without any invalidation at all.
+//! 4. A plain value store to an EXISTING key of a marked object bumps it too
+//!    ([`note_marked_value_write`], owner decision D3(b)): an inherited
+//!    method-site entry (`object::method_site`) memoizes the method CLOSURE,
+//!    not (holder, slot), so a replaced value must invalidate it. Store caches
+//!    never learn a marked object's shape ([`store_cache_may_learn`]), so every
+//!    such store reaches a runtime funnel that calls it. Entries that record
+//!    (holder, slot) and load the value on every hit do not need this, and
+//!    must not assume the word stays put across such a store either.
 //!
 //! # Why the counter is global, and what that costs
 //!
@@ -356,3 +361,46 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;
+
+static MARKED_VALUE_WRITE_BUMPS: AtomicU64 = AtomicU64::new(0);
+
+/// Bumps taken by [`note_marked_value_write`] (diagnostics, tests).
+pub(crate) fn marked_value_write_bumps() -> u64 {
+    MARKED_VALUE_WRITE_BUMPS.load(Ordering::Relaxed)
+}
+
+/// A value was written into an EXISTING slot of `obj`. When `obj` is a marked
+/// prototype this invalidates every cached inherited verdict: a method-call
+/// site memoizes the CLOSURE an inherited key resolves to (owner decision
+/// D3(b)), so a plain store over it must move the word just as a structural
+/// change does. Unmarked objects — nearly every store — pay the latch load,
+/// and a meta-null test once anything is marked.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn note_marked_value_write(obj: *const crate::object::ObjectHeader) {
+    if !any_prototype_marked() {
+        return;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
+        MARKED_VALUE_WRITE_BUMPS.fetch_add(1, Ordering::Relaxed);
+        bump_proto_validity();
+    }
+}
+
+/// Whether a store cache may LEARN `obj`'s shape: never for a marked
+/// prototype, so every write to one reaches a runtime funnel that calls
+/// [`note_marked_value_write`].
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn store_cache_may_learn(obj: *const crate::object::ObjectHeader) -> bool {
+    if !any_prototype_marked() {
+        return true;
+    }
+    let meta = (*obj).meta;
+    meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0
+}

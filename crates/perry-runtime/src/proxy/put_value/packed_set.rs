@@ -353,6 +353,7 @@ unsafe fn prime_packed_set(
     let obj = obj_addr as *mut crate::ObjectHeader;
     if !crate::object::object_is_regular(obj)
         || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
+        || !crate::object::proto_validity::store_cache_may_learn(obj)
     {
         return;
     }

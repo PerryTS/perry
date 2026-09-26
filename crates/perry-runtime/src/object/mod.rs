@@ -164,6 +164,8 @@ pub(crate) use side_table_roots::{
 };
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
+mod slot_store;
+pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
 mod namespace_create;
 mod native_call_method;
 pub(crate) mod native_get;
@@ -1867,37 +1869,6 @@ pub(super) unsafe fn note_object_field_slot(
     value_bits: u64,
 ) {
     crate::gc::layout_note_slot(obj as usize, field_index, value_bits);
-}
-
-#[inline]
-pub(crate) unsafe fn store_object_field_slot(
-    obj: *mut ObjectHeader,
-    field_index: usize,
-    value_bits: u64,
-) {
-    let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    let slot = fields_ptr.add(field_index);
-    crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, field_index, value_bits);
-}
-
-/// #7630: `store_object_field_slot` without the per-slot layout note, for the
-/// JSON materialiser's construction loops. Returns whether the value carries a
-/// heap pointer; the caller accumulates that and settles the object's layout
-/// state once via `layout_finish_deferred_boxed_object`.
-#[inline]
-pub(crate) unsafe fn store_object_field_slot_layout_deferred(
-    obj: *mut ObjectHeader,
-    field_index: usize,
-    value_bits: u64,
-) -> bool {
-    let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    let slot = fields_ptr.add(field_index);
-    crate::gc::runtime_store_jsvalue_slot_layout_deferred(
-        obj as usize,
-        slot as usize,
-        field_index,
-        value_bits,
-    )
 }
 
 #[inline]

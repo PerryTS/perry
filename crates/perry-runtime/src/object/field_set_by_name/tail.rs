@@ -589,6 +589,7 @@ pub(crate) fn set_field_by_name_object_tail(
                     if slot_idx >= live_slots {
                         set_object_live_slot_count(obj, slot_idx + 1);
                     }
+                    crate::object::proto_validity::note_marked_value_write(obj);
                     crate::gc::runtime_store_jsvalue_slot(
                         obj as usize,
                         slot as usize,
