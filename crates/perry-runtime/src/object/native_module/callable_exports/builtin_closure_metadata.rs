@@ -40,6 +40,10 @@ pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
 }
 
 pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
+    // A bind result carries its length in a capture, not in this table.
+    if let Some(len) = unsafe { crate::closure::bound_function_length(closure) } {
+        return Some(len);
+    }
     BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
 }
 

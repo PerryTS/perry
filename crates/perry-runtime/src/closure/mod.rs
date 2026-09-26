@@ -28,7 +28,9 @@ pub use alloc::{
     CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
     CLOSURE_SHAPE_OFFSET,
 };
-pub(crate) use alloc::{gc_capture_slot_range, singleton_closure_if_cached};
+pub(crate) use alloc::{
+    closure_install_boxed_captures, gc_capture_slot_range, singleton_closure_if_cached,
+};
 pub use shape::closure_kind_probe;
 
 pub(crate) use registry::closure_registry_census;
@@ -61,8 +63,9 @@ pub use registry::{
 };
 
 pub(crate) use dispatch::{
-    bound_function_lazy_name, bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
-    rebind_explicit_this_allocates, reify_function_method_value, reset_throw_not_callable_counter,
+    bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
+    coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,
+    reify_function_method_value, reset_throw_not_callable_counter,
 };
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,

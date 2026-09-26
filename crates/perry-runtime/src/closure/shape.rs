@@ -380,4 +380,42 @@ mod tests {
         }
         assert!(crate::closure::is_closure_ptr(fresh(plain_body) as usize));
     }
+
+    extern "C" fn three_arg_body(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+        a + b + c
+    }
+
+    /// A bind result carries its `.length` in capture 4 (read back through
+    /// `builtin_closure_length`, the one reader every `.length` path uses)
+    /// and its captures are one tag-checked birth, so a bind leaves no
+    /// per-object mask and no metadata-table entry for a minor to prune.
+    #[test]
+    fn a_bind_result_keeps_its_length_in_a_capture() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _t = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::closure::js_register_closure_arity(three_arg_body as *const u8, 3);
+        let target = js_closure_alloc(three_arg_body as *const u8, 0);
+        let args = [f64::from_bits(crate::value::TAG_UNDEFINED), 1.0];
+        let bound = unsafe {
+            crate::closure::js_function_bind(
+                crate::value::js_nanbox_pointer(target as i64),
+                args.as_ptr(),
+                args.len(),
+            )
+        };
+        let b = (bound.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert_eq!(unsafe { crate::closure::bound_function_length(b) }, Some(2));
+        assert_eq!(
+            crate::object::native_module::builtin_closure_length(b),
+            Some(2)
+        );
+        assert_eq!(
+            unsafe { (*(b as *const ClosureHeader)).capture_count },
+            5,
+            "target, this, partial args, name snapshot, bound length"
+        );
+        // The bound call still sees target + partial args + call args.
+        let r = unsafe { crate::closure::js_closure_call2(b as *const ClosureHeader, 2.0, 3.0) };
+        assert_eq!(r, 6.0);
+    }
 }

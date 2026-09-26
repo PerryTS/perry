@@ -566,6 +566,30 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
 /// `js_object_get_own_property_descriptor`, `closure_set_field_by_name`), so
 /// those calls were redundant. `.name`'s string is built lazily by
 /// `bound_function_lazy_name`, on first actual read. Refs #2840.
+/// Capture slots of a `Function.prototype.bind` result: target, bound `this`,
+/// partial-args array (raw pointer or 0), `.name` snapshot, bound length.
+pub(crate) const BOUND_FUNCTION_CAPTURES: u32 = 5;
+
+/// The `.length` a bind recorded in its bound closure's capture 4, or `None`
+/// when `closure` is not a bind result or the length lives as an own
+/// property (a non-u32 length).
+///
+/// # Safety
+/// Any word: ownership is proven (`is_closure_ptr`) before a field is read.
+pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
+    if !is_closure_ptr(closure) {
+        return None;
+    }
+    let c = closure as *const ClosureHeader;
+    if (*c).func_ptr != BOUND_FUNCTION_FUNC_PTR
+        || crate::closure::real_capture_count((*c).capture_count) < BOUND_FUNCTION_CAPTURES
+    {
+        return None;
+    }
+    let v = crate::value::JSValue::from_bits(js_closure_get_capture_f64(c, 4).to_bits());
+    v.is_number().then(|| v.as_number() as u32)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_function_bind(
     target_value: f64,
@@ -668,41 +692,16 @@ pub unsafe extern "C" fn js_function_bind(
     };
     let args_h = (!bound_args_arr.is_null()).then(|| scope.root_raw_mut_ptr(bound_args_arr));
 
-    // Allocate the bound closure with 4 capture slots: target, bound this,
-    // partial-args array, and the `.name` snapshot above.
-    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, 4);
-    let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
-    let target_value = target_h.get_nanbox_f64();
-    let bound_this = this_h.get_nanbox_f64();
-    let name_hint = name_h.get_nanbox_f64();
-    // None of the four capture stores allocates, so both raw addresses are
-    // scoped to this block rather than bound for the rest of the function —
-    // the `.length` reads below can allocate and move either object.
-    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
-        js_closure_set_capture_f64(bound, 0, target_value);
-        js_closure_set_capture_f64(bound, 1, bound_this);
-        match args_h.as_ref() {
-            Some(h) => h.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
-                js_closure_set_capture_ptr(bound, 2, arr as i64)
-            }),
-            None => js_closure_set_capture_ptr(bound, 2, 0),
-        }
-        js_closure_set_capture_f64(bound, 3, name_hint);
-    });
-
-    // Re-derive the target closure pointer from the (possibly refreshed)
-    // `target_value` for the `.length` read below — `target_is_closure`'s
-    // classification doesn't change, but the address might have.
-    let target_closure = target_is_closure
-        .then(|| JSValue::from_bits(target_value.to_bits()).as_pointer::<ClosureHeader>());
-
     // Spec `.length` = max(0, ToIntegerOrInfinity(Get(target, "length")) -
     // boundArgs.length). An `Object.defineProperty(fn, "length", {value})`
     // override (own dynamic prop) wins over the registered declared length,
     // and the value may be NaN (→ 0), ±Infinity, or beyond int32. This read
     // is an own-data-property lookup only (no accessor/getter support), so
-    // unlike `.name` above it cannot run arbitrary code and needs no
-    // rooting of its own.
+    // unlike `.name` above it cannot run arbitrary code or allocate — it is
+    // resolved BEFORE the bound closure exists, from the rooted target.
+    let target_closure = target_is_closure.then(|| {
+        JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>()
+    });
     let target_len_f = if let Some(target_closure) = target_closure {
         match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
             Some(v) => {
@@ -729,13 +728,44 @@ pub unsafe extern "C" fn js_function_bind(
         target_len_f.trunc()
     };
     let bound_len = (target_len_f - bound_arg_count as f64).max(0.0);
-    if bound_len.is_finite() && bound_len <= u32::MAX as f64 {
-        bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
-            crate::object::set_builtin_closure_length(bound as usize, bound_len as u32)
-        });
-    } else {
+    // The common case — a finite length that fits a u32 — rides in capture 4
+    // (`bound_function_length`), so a bind leaves no side-table entry behind
+    // for the next minor to prune. Anything else stays an own `length`.
+    let len_in_capture = bound_len.is_finite() && bound_len <= u32::MAX as f64;
+
+    // Allocate the bound closure with 5 capture slots: target, bound this,
+    // partial-args array, the `.name` snapshot above, and the bound length.
+    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, BOUND_FUNCTION_CAPTURES);
+    let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
+    let target_value = target_h.get_nanbox_f64();
+    let bound_this = this_h.get_nanbox_f64();
+    let name_hint = name_h.get_nanbox_f64();
+    // Nothing below allocates until the capture install is done, so the raw
+    // addresses are scoped to this block.
+    bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
+        let args_bits = match args_h.as_ref() {
+            Some(h) => h.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| arr as u64),
+            None => 0,
+        };
+        let len_bits = if len_in_capture {
+            JSValue::number(bound_len).bits()
+        } else {
+            crate::value::TAG_UNDEFINED
+        };
+        crate::closure::closure_install_boxed_captures(
+            bound,
+            &[
+                target_value.to_bits(),
+                bound_this.to_bits(),
+                args_bits,
+                name_hint.to_bits(),
+                len_bits,
+            ],
+        );
+    });
+    if !len_in_capture {
         // +Infinity (or beyond u32): store as an own dynamic prop, which the
-        // `.length` read path prefers over the registered builtin length.
+        // `.length` read path prefers over the bound-length capture.
         bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
             crate::closure::closure_set_dynamic_prop(
                 bound as usize,

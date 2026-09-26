@@ -516,6 +516,38 @@ pub extern "C" fn js_closure_alloc_init(
     ptr
 }
 
+/// Write `values` into the capture slots of `closure`, a closure fresh from
+/// `js_closure_alloc` (pointer-free birth state, no allocation since), in ONE
+/// step: raw stores, one layout decision (`GC_LAYOUT_UNKNOWN` when any word
+/// can be a pointer — no per-slot mask, no side-table entry to prune at the
+/// next minor), one newborn barrier. Every word must be one the tag-checked
+/// scan understands: a NaN-boxed value, a raw heap pointer, or 0.
+///
+/// # Safety
+/// `closure` is fresh and holds at least `values.len()` capture slots; the
+/// values are current (read through roots AFTER the allocation).
+pub(crate) unsafe fn closure_install_boxed_captures(closure: *mut ClosureHeader, values: &[u64]) {
+    debug_assert!(real_capture_count((*closure).capture_count) as usize >= values.len());
+    let slots = closure_capture_slots_mut(closure);
+    let mut any_pointer = false;
+    for (i, &bits) in values.iter().enumerate() {
+        // GC_STORE_AUDIT(BARRIERED): fresh closure captures, followed by the
+        // one layout decision and newborn barrier below.
+        std::ptr::write(slots.add(i), bits);
+        any_pointer |= crate::gc::layout_pointer_bearing_bits(bits);
+    }
+    if any_pointer {
+        crate::gc::layout_init_unknown_fresh(closure as *mut u8);
+        if crate::gc::newborn_parent_needs_barrier(closure as usize) {
+            crate::gc::runtime_write_barrier_newborn_slots(
+                closure as usize,
+                slots as *const u64,
+                values.len(),
+            );
+        }
+    }
+}
+
 #[inline]
 pub unsafe fn closure_capture_slots_mut(closure: *mut ClosureHeader) -> *mut u64 {
     (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64
