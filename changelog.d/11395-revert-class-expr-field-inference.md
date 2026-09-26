@@ -1,0 +1,1 @@
+Reverted #11369 (compile-time `this`-field inference for class-expression constructors). On a real TypeScript transpile it cost 2-5% more instructions in every build pair measured, and the class-expression construction cost it targeted is already handled at run time by the key-add store path (#11360).
