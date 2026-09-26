@@ -308,7 +308,25 @@ mod tests {
             if let Some((name, dir)) = override_dir {
                 command.env(name, dir);
             }
-            let output = command.output().unwrap();
+            // The copy above held a write fd; a sibling test thread that
+            // forked in that window leaves the fd open in its child until the
+            // child execs, and exec'ing the copy meanwhile fails with ETXTBSY
+            // on Linux. Retry briefly, as cargo does for the same race.
+            let output = {
+                let mut attempts = 0;
+                loop {
+                    match command.output() {
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+                                && attempts < 100 =>
+                        {
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        other => break other.unwrap(),
+                    }
+                }
+            };
             assert!(
                 String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
                 "the installed test binary must execute the discovery probe"
