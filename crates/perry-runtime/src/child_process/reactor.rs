@@ -56,13 +56,13 @@ use stdin::CpStdin;
 /// call sites above).
 mod streams;
 pub(super) use stdin::CP_STDIN_HIGH_WATER_MARK;
+pub(crate) use streams::cp_release_loop_streams;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use streams::on_stream_completion;
 use streams::{
     cp_pipe_from_child_stderr, cp_pipe_from_child_stdout, cp_pipe_from_file, cp_spawn_reader,
     CpPipe,
 };
-pub(crate) use streams::cp_release_loop_streams;
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use streams::on_stream_completion;
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);

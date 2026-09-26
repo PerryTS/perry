@@ -138,8 +138,8 @@ const UNWIND_DATA_REG: (c_int, c_int) = (0, 1); // RAX, RDX
 const UNWIND_DATA_REG: (c_int, c_int) = (0, 1); // R0/X0, R1/X1
 #[cfg(target_arch = "x86")]
 const UNWIND_DATA_REG: (c_int, c_int) = (0, 2); // EAX, EDX
-// WASI (#11377): clang's `__builtin_eh_return_data_regno` is 0/1 on
-// WebAssembly, the pair wasm libunwind's `_Unwind_SetGR` understands.
+                                                // WASI (#11377): clang's `__builtin_eh_return_data_regno` is 0/1 on
+                                                // WebAssembly, the pair wasm libunwind's `_Unwind_SetGR` understands.
 #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 const UNWIND_DATA_REG: (c_int, c_int) = (0, 1);
 
