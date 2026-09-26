@@ -44,6 +44,23 @@ from the binaries given by flags/env with its OWN data dir under
 cannot be started makes its workloads SKIP (reason recorded), not FAIL.
 
 Everything runs with cwd=benchmarks/packages and TZ=UTC.
+
+Build-id pitfall: auto-optimize rebuilds the runtime archives stamped with
+the checkout's HEAD. If HEAD moved after `perry` was built (e.g. you
+committed harness edits), every compile fails with "runtime library does not
+match this Perry compiler". Export PERRY_BUILD_COMMIT=<full sha perry was
+built at> for `compile`, and delete stale target/perry-auto-* dirs.
+
+Typical session (what produced benchmarks/packages/REPORT.md):
+  cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+  (cd benchmarks/packages && npm ci --ignore-scripts)
+  python3 scripts/package_bench.py compile --perry-bin-dir OUT/linux
+  python3 scripts/package_bench.py run --perry-bin-dir OUT/linux --modes instr \
+      --out OUT/instr.json --server-root /srv/... --pg-bin-dir ... --mysqld ... --mongod ...
+  # macOS host: binaries compiled on a Mac, then
+  python3 scripts/package_bench.py run --perry-bin-dir OUT/mac --modes wall,cold,rss --out OUT/wall.json
+  python3 scripts/package_bench.py report --instr OUT/instr.json --wall OUT/wall.json \
+      --compile OUT/linux/compile.json
 """
 
 from __future__ import annotations
@@ -288,24 +305,30 @@ def start_pg(args, env: dict) -> str | None:
         return "no postgres binaries (--pg-bin-dir / PKG_BENCH_PG_BIN_DIR)"
     root = Path(args.server_root) / "pg"
     user = args.pg_user if os.geteuid() == 0 else None
+    # An extracted (not installed) PostgreSQL .deb keeps libpq beside its
+    # bin dir: <root>/usr/lib/postgresql/16/bin -> <root>/usr/lib/<triple>/.
+    penv = dict(os.environ)
+    for lib in Path(bindir).resolve().parents[2].glob("*-linux-gnu"):
+        if (lib / "libpq.so.5").exists():
+            penv["LD_LIBRARY_PATH"] = str(lib) + (":" + penv["LD_LIBRARY_PATH"] if penv.get("LD_LIBRARY_PATH") else "")
     if not (root / "PG_VERSION").exists():
         root.mkdir(parents=True, exist_ok=True)
         if user:
             subprocess.run(["chown", "-R", user, str(root)], check=True)
         r = subprocess.run(_as_user(user) + [f"{bindir}/initdb", "-D", str(root), "-U", "bench", "--auth=trust"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=penv)
         if r.returncode:
             return "initdb failed: " + r.stderr[-400:]
     port = args.pg_port
     p = subprocess.Popen(_as_user(user) + [f"{bindir}/postgres", "-D", str(root), "-p", str(port), "-k", str(root),
                                            "-c", "listen_addresses=127.0.0.1", "-c", "fsync=off"],
-                         stdout=subprocess.DEVNULL, stderr=open(Path(args.server_root) / "pg.log", "a"))
+                         stdout=subprocess.DEVNULL, stderr=open(Path(args.server_root) / "pg.log", "a"), env=penv)
     _SERVERS.append(("postgres", p))
     if not wait_port(port):
         return "postgres did not open its port"
     time.sleep(1)
     subprocess.run([f"{bindir}/createdb", "-h", "127.0.0.1", "-p", str(port), "-U", "bench", "bench"],
-                   capture_output=True, text=True)  # exists after first run
+                   capture_output=True, text=True, env=penv)  # exists after first run
     env["PKG_BENCH_PG_PORT"] = str(port)
     return None
 
@@ -794,6 +817,7 @@ def cmd_report(args) -> None:
             }
             if arm == "perry":
                 r.update(size_bytes=ce.get("size_bytes"), compile_s=ce.get("compile_s"),
+                         runtime_rebuilt=ce.get("runtime_rebuilt"),
                          compile_status=ce.get("status"), compile_reason=ce.get("reason"))
             rec["arms"][arm] = r
         pn = rec["arms"].get("node", {})
@@ -899,7 +923,10 @@ def cmd_report(args) -> None:
         L.append(f"| `{wid}` | {ms(n.get('cold_s'))} | {ms(b.get('cold_s'))} | {ms(p.get('cold_s'))} | {mb(n.get('peak_rss_kb'))} | "
                  f"{mb(b.get('peak_rss_kb'))} | {mb(p.get('peak_rss_kb'))} | "
                  f"{size_mb(p.get('size_bytes'))} | "
-                 f"{'—' if p.get('compile_s') is None else p.get('compile_s')} |")
+                 f"{'—' if p.get('compile_s') is None else p.get('compile_s')}{' †' if p.get('runtime_rebuilt') else ''} |")
+    L.append("\n† this compile was the first with its auto-optimize feature set, so it includes a one-time "
+             "runtime+stdlib archive rebuild (cached for later compiles). Compile times were taken on a shared, "
+             "loaded host and are indicative only.")
     ctl = merged["workloads"].get("control/bare_loop", {}).get("arms", {})
     if ctl:
         L.append("\nBare-loop control (per iteration): " + ", ".join(
