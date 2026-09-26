@@ -1264,6 +1264,7 @@ mod function_ctor_runtime_routing;
 mod mixin_parent_chain;
 mod native_module_sync;
 
+mod class_expr_ctor_fields;
 mod class_expr_subclass_captures;
 mod nullish_over_optional_chain;
 mod subclass_ctor_inherited_method;
