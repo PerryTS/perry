@@ -10,7 +10,7 @@ const t0 = Date.UTC(2024, 2, 15, 0, 0, 0);
 let bits = 0;
 function op(i: number): void {
   const d = new Date(t0 + i * 60000);
-  for (let k = 0; k < tasks.length; k++) if (tasks[k].match(d)) bits = (Math.imul(bits, 31) + k + 1) >>> 0;
+  for (let k = 0; k < tasks.length; k++) if (tasks[k].match(d)) bits = (bits * 31 + k + 1) >>> 0;
 }
 for (let i = 0; i < it.warm; i++) op(i);
 bits = 0;

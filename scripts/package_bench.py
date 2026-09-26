@@ -31,6 +31,10 @@ in benchmarks/packages/manifest.json. Each prints only deterministic text
   report    Merge compile + run JSON files into a Markdown report ranking
             workloads/packages by Perry/Node ratio.
 
+  profile   (Linux) perf-record each Perry binary at n1, keep the top-5
+            symbols; feeds the report's first-pass attribution column.
+            Use binaries compiled with PERRY_KEEP_SYMBOLS=1.
+
   lock      acquire|release|status the host measurement mutex by hand.
 
 Measurement mutex: `run` takes a host-wide mkdir lock (default
@@ -686,21 +690,29 @@ def compiled_modules(log_text: str) -> dict:
             "javascript": int(found.group(3)) if found else None}
 
 
-def binding_symbols(binary: Path, prefixes: list[str]) -> list[str]:
-    if not prefixes:
-        return []
+def defined_symbols(binary: Path) -> set | None:
+    """Global defined symbols, or None when the binary has no symbol table
+    (Perry strips by default — compile with PERRY_KEEP_SYMBOLS=1 to make the
+    binding-symbol half of the liveness check live)."""
     nm = shutil.which("nm")
     if not nm:
-        return ["<nm unavailable>"]
+        return None
     p = subprocess.run([nm, "-g", "--defined-only", str(binary)] if IS_LINUX else [nm, "-gU", str(binary)],
                        capture_output=True, text=True)
-    hits = []
+    syms = set()
     for line in p.stdout.splitlines():
-        sym = line.split()[-1] if line.split() else ""
-        sym = sym.lstrip("_") if IS_MAC else sym
-        if any(sym.startswith(pf) for pf in prefixes):
-            hits.append(sym)
-    return sorted(set(hits))
+        parts = line.split()
+        if parts:
+            syms.add(parts[-1][1:] if IS_MAC and parts[-1].startswith("_") else parts[-1])
+    return syms or None
+
+
+def binding_symbols(syms: set, prefixes: list[str], baseline: set) -> list[str]:
+    """Symbols carrying a removed binding's prefix, minus `baseline`: the
+    bare-loop control binary's symbols plus the manifest's event-loop hooks
+    (js_cron_timer_* are called by the generated event loop whenever stdlib is
+    linked, so they say nothing about how the package was routed)."""
+    return sorted(x for x in syms if any(x.startswith(pf) for pf in prefixes) and x not in baseline)
 
 
 def cmd_compile(args) -> None:
@@ -714,6 +726,7 @@ def cmd_compile(args) -> None:
     data.update(perry=args.perry, perry_version=perry_version, perry_commit=args.perry_commit,
                 host=socket.gethostname(), platform=platform.platform(),
                 flags=args.perry_flags, env={k: v for k, v in os.environ.items() if k.startswith("PERRY_")})
+    baseline_syms: set = set(manifest.get("event_loop_hook_symbols", {}).get("symbols", []))
     for w in wls:
         wid = w["id"]
         pkg = pkg_of(wid)
@@ -742,10 +755,19 @@ def cmd_compile(args) -> None:
             rec["size_bytes"] = binary.stat().st_size
             census = compiled_modules(text)
             hits = census["by_package"].get(pkg, 0)
-            syms = binding_symbols(binary, manifest["packages"].get(pkg, {}).get("binding_symbols", []))
+            allsyms = defined_symbols(binary)
+            if pkg == "control":
+                baseline_syms |= allsyms or set()
+            if allsyms is None:
+                syms = []
+                symbol_check = "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+            else:
+                syms = binding_symbols(allsyms, manifest["packages"].get(pkg, {}).get("binding_symbols", []),
+                                       baseline_syms)
+                symbol_check = f"ran over {len(allsyms)} symbols"
             rec["liveness"] = {"package_modules_compiled": hits, "modules_by_package": census["by_package"],
                                "native_modules": census["native"], "javascript_modules": census["javascript"],
-                               "binding_symbols": syms[:20]}
+                               "binding_symbols": syms[:20], "symbol_check": symbol_check}
             if pkg != "control" and hits == 0:
                 rec.update(status="FAIL", reason=f"liveness: no module of package {pkg} was compiled natively "
                                                  f"(audit.json census: {census['by_package']})")
@@ -760,20 +782,74 @@ def cmd_compile(args) -> None:
         cj.write_text(json.dumps(data, indent=1, sort_keys=True))
 
 
+# ---------------------------------------------------------------- profile
+
+def cmd_profile(args) -> None:
+    """First-pass attribution (Linux): `perf record -e cycles:u` each Perry
+    binary at n1 and keep the top-N symbols. Point --perry-bin-dir at a set
+    compiled with PERRY_KEEP_SYMBOLS=1 (default binaries are stripped)."""
+    if not IS_LINUX:
+        sys.exit("profile needs Linux perf")
+    manifest = load_manifest()
+    wls = [w for w in select_workloads(manifest, args.filter) if not w["id"].startswith("control/")
+           or args.include_control]
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+    atexit.register(stop_servers)
+    env_extra: dict = {}
+    status: dict = {}
+    for srv in sorted({s for w in wls for s in w.get("servers", [])}):
+        Path(args.server_root).mkdir(parents=True, exist_ok=True)
+        status[srv] = STARTERS[srv](args, env_extra) or "ok"
+    env = run_env(env_extra)
+    out: dict = json.loads(Path(args.out).read_text()) if Path(args.out).exists() else {}
+    for w in wls:
+        wid = w["id"]
+        if any(status.get(srv) != "ok" for srv in w.get("servers", [])):
+            continue
+        binary = Path(args.perry_bin_dir) / bin_name(wid)
+        if not binary.exists():
+            continue
+        data = Path(tempfile.gettempdir()) / f"pkgbench-{os.getpid()}.perf"
+        rc, _o, err, _w, _l = run_once(
+            ["perf", "record", "-q", "-F", "999", "-e", "cycles:u", "-o", str(data), "--",
+             str(binary), str(w["n1"]), str(w["warm"])], env, args.timeout)
+        rep = subprocess.run(["perf", "report", "-i", str(data), "--stdio", "--no-children", "--sort", "symbol",
+                              "-q"], capture_output=True, text=True)
+        data.unlink(missing_ok=True)
+        top = []
+        for line in rep.stdout.splitlines():
+            m = re.match(r"\s*([\d.]+)%\s+\[\.\]\s+(.+?)(\s+-\s+-)?\s*$", line)
+            if m:
+                top.append([float(m.group(1)), m.group(2).strip()])
+            if len(top) >= args.top:
+                break
+        out[wid] = {"rc": rc, "top": top}
+        log(f"{wid}: " + ", ".join(f"{n} {p:.0f}%" for p, n in top))
+        Path(args.out).write_text(json.dumps(out, indent=1, sort_keys=True))
+    stop_servers()
+
+
 # ---------------------------------------------------------------- report
 
 def fmt_ratio(x):
-    return "—" if x is None else f"{x:.2f}×"
+    if x is None:
+        return "—"
+    return f"{x:.3f}×" if x < 0.1 else f"{x:.2f}×"
 
 
 def fmt_instr(x):
     if x is None:
         return "—"
+    if abs(x) < 1e4:
+        return f"{x:.0f}"
     return f"{x / 1000:.1f}k" if abs(x) < 1e6 else f"{x / 1e6:.2f}M"
 
 
 def fmt_us(s):
-    return "—" if s is None else f"{s * 1e6:.1f}"
+    if s is None:
+        return "—"
+    return f"{s * 1e6:.3f}" if abs(s) < 1e-6 else f"{s * 1e6:.1f}"
 
 
 def geomean(xs):
@@ -784,12 +860,26 @@ def geomean(xs):
     return math.exp(sum(math.log(x) for x in xs) / len(xs))
 
 
+def short_sym(name: str) -> str:
+    """Trim a demangled Rust/LLVM symbol to something that fits a table cell."""
+    n = re.sub(r"::h[0-9a-f]{16}$", "", name)
+    n = re.sub(r"<[^<>]*>", "", n)
+    n = n.replace("perry_runtime::", "").replace("perry_stdlib::", "")
+    return "`" + (n if len(n) <= 48 else n[:45] + "...").replace("|", "/") + "`"
+
+
 def cmd_report(args) -> None:
     manifest = load_manifest()
     instr = json.loads(Path(args.instr).read_text()) if args.instr else None
     wall = json.loads(Path(args.wall).read_text()) if args.wall else None
     comp = json.loads(Path(args.compile).read_text()) if args.compile else None
+    liv = json.loads(Path(args.liveness).read_text()) if args.liveness else None
     notes = json.loads(Path(args.notes).read_text()) if args.notes and Path(args.notes).exists() else {}
+    if args.profile and Path(args.profile).exists():
+        for wid, pr in json.loads(Path(args.profile).read_text()).items():
+            auto = ", ".join(f"{short_sym(n)} {p:.0f}%" for p, n in pr.get("top", [])[:5])
+            if auto:
+                notes[wid] = (notes[wid] + " — " if notes.get(wid) else "") + "top-5: " + auto
     rows = []
     merged: dict = {"schema": 1, "instr_host": instr and {k: instr[k] for k in ("host", "platform", "toolchain", "started", "finished", "load_threshold", "servers") if k in instr},
                     "wall_host": wall and {k: wall[k] for k in ("host", "platform", "toolchain", "started", "finished", "load_threshold", "servers") if k in wall},
@@ -882,7 +972,7 @@ def cmd_report(args) -> None:
         L.append(f"| {i} | `{wid}` | {fmt_ratio(r['perry_node_instr'])} | {fmt_ratio(r['perry_node_wall'])}{flag} | "
                  f"{fmt_ratio(r['bun_node_instr'])} | {fmt_ratio(r['bun_node_wall'])} | {fmt_instr(pn.get('instr_per_iter'))} | "
                  f"{fmt_instr(pp.get('instr_per_iter'))} | {fmt_us(pn.get('wall_per_iter_s'))} | {fmt_us(pp.get('wall_per_iter_s'))} | "
-                 f"{r.get('note') or ''} |")
+                 f"{(r.get('note') or '') if (r['perry_node_instr'] or 0) > args.attr_threshold else ''} |")
     wall_only = [(wid, r) for wid, r in rows if not wid.startswith("control/") and r["perry_node_instr"] is None
                  and r["perry_node_wall"] is not None]
     if wall_only:
@@ -933,18 +1023,44 @@ def cmd_report(args) -> None:
             f"{arm} {fmt_instr(v.get('instr_per_iter'))} instr / {fmt_us(v.get('wall_per_iter_s'))} µs"
             for arm, v in ctl.items()) + ".\n")
 
-    L.append("## MISMATCH / FAIL / SKIP\n")
+    if liv:
+        L.append("## Liveness (compiled from source, no removed binding)\n")
+        L.append("From a `PERRY_KEEP_SYMBOLS=1` compile of every workload (same commit and flags, symbols kept so the "
+                 "binding-symbol check can run). *modules* = natively compiled modules of the package itself, from "
+                 "Perry's per-compile SBOM (`node_modules/.cache/perry/audit.json`); *deps* = modules of other "
+                 "npm packages pulled in; *JS* = modules routed to a JS runtime (must be 0).\n")
+        L.append("| workload | status | modules | deps | JS | binding-symbol check |")
+        L.append("|---|---|---|---|---|---|")
+        for wid, lr in liv.get("workloads", {}).items():
+            lv = lr.get("liveness", {})
+            byp = lv.get("modules_by_package", {})
+            deps = sum(v for k, v in byp.items() if k not in ("<app>", pkg_of(wid)))
+            chk = lv.get("symbol_check", "")
+            if lv.get("binding_symbols"):
+                chk += "; FOUND " + ", ".join(lv["binding_symbols"][:3])
+            L.append(f"| `{wid}` | {lr.get('status')} | {lv.get('package_modules_compiled', '—')} | {deps} | "
+                     f"{lv.get('javascript_modules', '—')} | {chk} |")
+        L.append("")
+    L.append("## MISMATCH / FAIL\n")
     any_bad = False
+    skips: dict = {}
     for wid, r in rows:
         for arm, a in r["arms"].items():
             for host in ("instr_host", "wall_host"):
                 st = a.get(f"status_{host}")
-                if st and st != "OK":
+                reason = (a.get(f"reason_{host}") or "").replace("\n", " ").replace("|", "\\|")
+                reason = re.sub(r"\s+", " ", reason)[:300]
+                if st == "SKIP":
+                    skips.setdefault((host, reason), []).append(wid)
+                elif st and st != "OK":
                     any_bad = True
-                    reason = (a.get(f"reason_{host}") or "").replace("\n", " ").replace("|", "\\|")[:300]
                     L.append(f"- **{st}** `{wid}` [{arm}, {host.replace('_host', '')} host]: {reason}")
     if not any_bad:
         L.append("None.")
+    if skips:
+        L.append("\n### SKIP (server not available on that host)\n")
+        for (host, reason), ws in skips.items():
+            L.append(f"- {host.replace('_host', '')} host: {', '.join(f'`{w}`' for w in sorted(set(ws)))} — {reason}")
     L.append("")
     if args.extra and Path(args.extra).exists():
         L.append(Path(args.extra).read_text())
@@ -1004,9 +1120,25 @@ def main() -> None:
     rp.add_argument("--compile", help="compile.json")
     rp.add_argument("--notes", default=str(PKG_DIR / "attribution.json"))
     rp.add_argument("--extra", help="Markdown appended verbatim (known issues, blockers)")
+    rp.add_argument("--liveness", help="compile.json of a PERRY_KEEP_SYMBOLS=1 build (liveness table)")
+    rp.add_argument("--profile", help="profile JSON (from `profile`) for the attribution column")
+    rp.add_argument("--attr-threshold", type=float, default=2.0,
+                    help="only annotate workloads whose Perry/Node instr ratio exceeds this")
     rp.add_argument("--out", default=str(PKG_DIR / "REPORT.md"))
     rp.add_argument("--json-out", default=str(PKG_DIR / "results.json"))
     rp.set_defaults(func=cmd_report)
+
+    pf = sub.add_parser("profile")
+    common(pf)
+    pf.add_argument("--out", required=True)
+    pf.add_argument("--top", type=int, default=5)
+    pf.add_argument("--timeout", type=float, default=600)
+    pf.add_argument("--include-control", action="store_true")
+    for a in pr._actions:
+        if a.dest in ("server_root", "pg_bin_dir", "pg_user", "pg_port", "mysqld", "mysql_port", "mongod",
+                      "mongo_port", "redis_server", "redis_port", "node"):
+            pf._add_action(a)
+    pf.set_defaults(func=cmd_profile)
 
     lk = sub.add_parser("lock")
     lk.add_argument("action", choices=["acquire", "release", "status"])

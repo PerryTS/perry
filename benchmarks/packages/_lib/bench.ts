@@ -41,12 +41,22 @@ export function pkgVersion(name: string): string {
   return JSON.parse(text).version;
 }
 
+// x * 16777619 mod 2^32, exactly, without Math.imul. The FNV prime is
+// 2^24 + 403: (x << 24) wraps as int32 and x * 403 < 2^41, so the sum is an
+// exact double and >>> 0 reduces it mod 2^32. (Math.imul is avoided on
+// purpose: in Perry 0.5.1654 every Math.imul call site pays a dynamic
+// `Math` property lookup, ~1,250 instructions — that is a Perry finding in
+// its own right, not package cost, so the harness must not add it to every
+// workload's per-iteration number.)
+export function mulFnv(x: number): number {
+  return ((x << 24) + x * 403) >>> 0;
+}
+
 // 32-bit FNV-1a over UTF-16 code units. Deterministic across engines.
 export function fnv(h: number, s: string): number {
   let x = h >>> 0;
   for (let i = 0; i < s.length; i++) {
-    x ^= s.charCodeAt(i);
-    x = Math.imul(x, 16777619) >>> 0;
+    x = mulFnv((x ^ s.charCodeAt(i)) >>> 0);
   }
   return x;
 }
@@ -61,7 +71,8 @@ export function hex(h: number): string {
 export function lcg(seed: number): () => number {
   let s = seed >>> 0;
   return () => {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    // s < 2^32 and 1664525 < 2^21, so the product is an exact double.
+    s = (s * 1664525 + 1013904223) >>> 0;
     return s;
   };
 }

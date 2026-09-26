@@ -1,5 +1,9 @@
 {
   "_doc": "Workload registry for scripts/package_bench.py. n1 < n2 are the two iteration counts of the two-N method (per-iteration = (X(n2) - X(n1)) / (n2 - n1)); warm runs before either. servers lists what the runner must start. binding_symbols are the exported-symbol prefixes of the REMOVED perry-ext-* binding for that package; the liveness check fails if a compiled binary still carries one.",
+  "event_loop_hook_symbols": {
+    "_doc": "Symbols carrying a removed binding's prefix that are NOT the binding: the generated event loop calls these every turn whenever perry-stdlib is linked (crates/perry-codegen/src/codegen/entry/event_loop.rs; stubs in perry-runtime/src/stdlib_stubs.rs). Excluded from the binding-symbol check.",
+    "symbols": ["js_cron_timer_tick", "js_cron_timer_has_pending"]
+  },
   "packages": {
     "control": { "binding_symbols": [] },
     "axios": { "binding_symbols": ["js_axios_"] },
