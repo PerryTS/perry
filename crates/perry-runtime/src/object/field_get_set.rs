@@ -291,6 +291,7 @@ pub use field_ops::{
     js_value_to_object,
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
+pub(crate) use get_field_by_name::class_value_get_field;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;

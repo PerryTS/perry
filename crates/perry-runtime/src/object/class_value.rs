@@ -63,6 +63,14 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
     if !crate::object::shapes::is_exotic_shape_id(shape) {
         return None;
     }
+    class_closure_id_exotic(ptr)
+}
+
+/// [`class_closure_id`] past its inline pre-filter (a plausible, aligned heap
+/// address whose ShapeId word is in the exotic band): out of line, so the
+/// many gates that inline the pre-filter stay small.
+#[inline(never)]
+fn class_closure_id_exotic(ptr: usize) -> Option<u32> {
     // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
     // at least 16 bytes; +8 is the code pointer of a closure.
     let code = unsafe { *((ptr as *const u8).add(8) as *const *const u8) };
@@ -225,7 +233,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // GC_STORE_AUDIT(INIT): fresh class function object; the one capture
         // is an INT32 class id and the props edge is null — pointer-free.
         (*ptr).capture_count = 1;
-        (*ptr).shape_id = crate::closure::shape::function_dictionary_shape();
+        (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).func_ptr = js_class_constructor_called as *const u8;
         (*ptr).props = std::ptr::null_mut();
         std::ptr::write(
@@ -286,6 +294,27 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             }
         }
     }
+}
+
+/// `C[prop]` for a class function object at `ptr` (routed by
+/// `closure_get_dynamic_prop` on the class ShapeId): the class lookup.
+#[cold]
+#[inline(never)]
+pub(crate) fn class_static_read(ptr: usize, prop: &str) -> f64 {
+    // SAFETY: the caller proved a live class closure (its ShapeId).
+    let Some(class_id) = (unsafe { class_closure_id_unchecked(ptr as *const ClosureHeader) })
+    else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    // The class object is pinned: `ptr` survives the key allocation.
+    let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    let value = crate::object::field_get_set::class_value_get_field(
+        ptr as *const crate::object::ObjectHeader,
+        key,
+        ptr as u64,
+        class_id,
+    );
+    f64::from_bits(value.bits())
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +446,35 @@ mod tests {
             },
         ));
         assert!(seen, "the class-value table must be a GC root");
+    }
+
+    /// The kind is a shape fact: class function objects carry their own
+    /// ShapeId, distinct from FunctionDictionary (shapes are canonical per
+    /// facts — without its marker fact the class shape WOULD be the dictionary
+    /// id and every dictionary function would route as a class), and it is
+    /// sticky across own-property installs.
+    #[test]
+    fn class_function_objects_have_their_own_sticky_shape() {
+        let cid = 0x6C01;
+        register(cid);
+        let class_shape = crate::closure::shape::function_class_shape();
+        assert_ne!(
+            class_shape,
+            crate::closure::shape::function_dictionary_shape()
+        );
+        let ptr = class_value_ptr(cid);
+        assert_eq!(unsafe { (*ptr).shape_id }, class_shape);
+        class_static_set(cid, "s", 1.0);
+        crate::closure::shape::note_function_own_state_changed(ptr as usize);
+        assert_eq!(unsafe { (*ptr).shape_id }, class_shape, "sticky");
+        extern "C" fn body() {}
+        let f = crate::closure::js_closure_alloc(body as *const u8, 0);
+        crate::closure::shape::note_function_own_state_changed(f as usize);
+        assert_ne!(
+            unsafe { (*f).shape_id },
+            class_shape,
+            "a dictionary function is not a class"
+        );
     }
 
     /// Only the function object's own code pointer names a class.

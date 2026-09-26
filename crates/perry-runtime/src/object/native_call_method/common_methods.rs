@@ -716,8 +716,10 @@ pub(crate) unsafe fn dispatch_function_proto_method(
         "call" => {
             // Class constructors have no [[Call]] slot. `C.call(...)` must
             // reject instead of treating the INT32-tagged ClassRef payload as
-            // a closure pointer in the generic Function.prototype path.
-            if super::class_ref_id(object).is_some() {
+            // a closure pointer in the generic Function.prototype path. (A
+            // class FUNCTION OBJECT needs no gate: its code is the throwing
+            // [[Call]] `js_class_constructor_called`.)
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("call");
             }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
@@ -799,7 +801,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
         }
         "apply" => {
-            if super::class_ref_id(object).is_some() {
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("apply");
             }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes

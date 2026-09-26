@@ -350,6 +350,11 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     let on_base = unsafe { super::shape::closure_on_base_shape(ptr as *const ClosureHeader) };
     if on_base {
         // fall through to the data lookups below
+    } else if super::shape::is_class_code(unsafe { (*(ptr as *const ClosureHeader)).func_ptr }) {
+        // A class constructor: its class lookup (statics, the parent chain,
+        // `name`/`length`/`prototype`, Function.prototype) — never the plain
+        // function fallbacks below.
+        return crate::object::class_value::class_static_read(ptr, prop);
     } else if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
         if acc.get == 0 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);

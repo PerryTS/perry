@@ -1365,31 +1365,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     let object = || object_handle.get_nanbox_f64();
     let jsval = || JSValue::from_bits(object().to_bits());
 
-    // A class function object is a class constructor: `C.m()` on one is the
-    // class arm's (`primitive_methods::dispatch_primitive` — static methods,
-    // callable static data, Function.prototype methods), reached here before
-    // the instance / native / own-override arms it would otherwise walk first.
-    if jsval().is_pointer()
-        && crate::object::class_value::class_closure_id(
-            (object().to_bits() & crate::value::POINTER_MASK) as usize,
-        )
-        .is_some()
-    {
-        if let Some(r) = primitive_methods::dispatch_primitive(
-            &root_scope,
-            &object_handle,
-            &arg_handles,
-            object(),
-            method_name,
-            method_name_ptr,
-            method_name_len,
-            args_ptr,
-            args_len,
-        ) {
-            return r;
-        }
-    }
-
     // An explicit `Object.setPrototypeOf(instance, proto)` replaces the
     // instance's class prototype. Resolve a method value through ordinary
     // property lookup before any class/native dispatch: that lookup preserves

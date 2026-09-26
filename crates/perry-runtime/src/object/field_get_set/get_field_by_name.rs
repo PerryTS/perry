@@ -390,8 +390,11 @@ pub(crate) fn class_value_get_field(
             // class (`class Flags extends ConfigTag {}` where
             // `ConfigTag extends Context.Service()(id)`), so walk the
             // parent chain like `super()` dispatch does.
-            if let Some(closure_ptr) =
-                super::super::class_registry::parent_closure_in_chain(class_id)
+            // `name`/`length` are own properties of every constructor (#6530),
+            // never inherited from a function-valued parent.
+            if let Some(closure_ptr) = (!matches!(name, "name" | "length"))
+                .then(|| super::super::class_registry::parent_closure_in_chain(class_id))
+                .flatten()
             {
                 let v = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
                 let vb = JSValue::from_bits(v.to_bits());
@@ -575,15 +578,6 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     // computed-access path.
     if key.is_null() {
         return JSValue::undefined();
-    }
-    // A class function object (not the legacy immediate, which keeps its
-    // later arm) is a class constructor: its statics are the class lookup's.
-    // One ShapeId-word pre-filter for every other receiver.
-    {
-        let raw = (obj as u64 & crate::value::POINTER_MASK) as usize;
-        if let Some(class_id) = crate::object::class_value::class_closure_id(raw) {
-            return class_value_get_field(obj, key, obj as u64, class_id);
-        }
     }
     // `process.env` is a live OS-backed exotic object. Direct reads are
     // codegen-specialized, but an alias (`const env = process.env; env.X`)

@@ -1027,7 +1027,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
             const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
             // A dynamic parent that resolved to a ClassRef (INT32-tagged) is a
             // real registered Perry class — `class X extends _mod.default`
             // where the default export is a user class (Next.js
