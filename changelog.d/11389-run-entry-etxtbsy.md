@@ -1,0 +1,1 @@
+**test(run): `local_runtime_discovery_uses_install_layouts` retries exec on ETXTBSY.** A sibling test thread that forked while the binary copy was open kept its write fd, so exec failed with "Text file busy" on Linux.
