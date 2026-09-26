@@ -1145,7 +1145,8 @@ def main() -> None:
                          "inclusive/bucket/runtime-entry/JS-site tables; writes --out (JSON) and its .md")
     pf.add_argument("--callgraph-mode", default="dwarf", help="perf --call-graph mode: dwarf (default) or fp")
     pf.add_argument("--dwarf-stack", type=int, default=16384, help="bytes of stack copied per DWARF sample")
-    pf.add_argument("--target-samples", type=int, default=12000, help="samples at n2 (sets the fixed period)")
+    pf.add_argument("--target-samples", type=int, default=12000, help="samples wanted at n2 (sets -F from its wall time)")
+    pf.add_argument("--max-freq", type=int, default=4000, help="cap on perf -F (DWARF samples are expensive)")
     pf.add_argument("--top-chains", type=int, default=25)
     pf.add_argument("--node-instr", help="reuse Node per-iteration counts from a `run` JSON instead of measuring")
     pf.add_argument("--node-verify", action="store_true", help="with --node-instr: still run node for stdout checks")
@@ -1153,6 +1154,8 @@ def main() -> None:
     pf.add_argument("--owner", default=os.environ.get("USER", "unknown") + ":package_bench profile")
     pf.add_argument("--lock-timeout", type=float, default=4 * 3600)
     pf.add_argument("--tmp-dir", help="where perf.data files go (default $TMPDIR)")
+    pf.add_argument("--reanalyze", action="store_true",
+                    help="with --callgraph: rebuild --out's tables from its saved <out>-stacks/ (no perf runs)")
     for a in pr._actions:
         if a.dest in ("server_root", "pg_bin_dir", "pg_user", "pg_port", "mysqld", "mysql_port", "mongod",
                       "mongo_port", "redis_server", "redis_port", "node"):
