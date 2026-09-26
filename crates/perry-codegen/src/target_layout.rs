@@ -10,19 +10,45 @@
 //! target-dependent sizes.
 
 /// True when `target_triple` names a 32-bit-pointer (ILP32) target. `arm64_32`
-/// (64-bit registers, 32-bit pointers) is the live case for Perry; the other
-/// 32-bit families are matched defensively so a future target is sized
-/// correctly rather than silently treated as 64-bit.
+/// (64-bit registers, 32-bit pointers) is the live case for Perry.
+///
+/// Decided by an allowlist of 64-bit architectures rather than a list of
+/// 32-bit ones, so a 32-bit family nobody listed (`i586`, `arm-…-gnueabihf`,
+/// `mips`, `powerpc`, …) is sized as ILP32 and refused by
+/// [`ilp32_codegen_refusal`] instead of silently getting LP64 offsets.
 pub fn target_is_ilp32(target_triple: &str) -> bool {
-    target_triple.starts_with("arm64_32")
-        || target_triple.starts_with("armv7")
-        || target_triple.starts_with("thumbv7")
-        || target_triple.starts_with("wasm32")
-        || target_triple.starts_with("i686")
-        || target_triple.starts_with("i386")
-        // x32: 64-bit ISA with 32-bit pointers — the `x86_64` prefix alone
-        // would misclassify it as LP64.
-        || target_triple.ends_with("gnux32")
+    let triple = target_triple.to_ascii_lowercase();
+    let mut parts = triple.split('-');
+    let arch = parts.next().unwrap_or_default();
+    // 64-bit ISAs with a 32-bit-pointer ABI, spelled in the environment:
+    // x86 x32 (`…-gnux32`) and AArch64 ILP32 (`…-gnu_ilp32`).
+    if parts.any(|part| part.ends_with("x32") || part.ends_with("ilp32")) {
+        return true;
+    }
+    let lp64 = matches!(
+        arch,
+        "x86_64"
+            | "x86_64h"
+            | "amd64"
+            | "aarch64"
+            | "aarch64_be"
+            | "arm64"
+            | "arm64e"
+            | "s390x"
+            | "sparc64"
+            | "sparcv9"
+            | "wasm64"
+    ) || [
+        "riscv64",
+        "powerpc64",
+        "ppc64",
+        "mips64",
+        "mipsisa64",
+        "loongarch64",
+    ]
+    .iter()
+    .any(|family| arch.starts_with(family));
+    !lp64
 }
 
 /// Why codegen refuses `target_triple`, or `None` when it can emit for it.
@@ -302,6 +328,9 @@ mod tests {
             "arm64_32-apple-watchos",
             "wasm32-wasip2",
             "i686-unknown-linux-gnu",
+            // Not named anywhere: refused because they are not known 64-bit.
+            "i586-unknown-linux-gnu",
+            "arm-unknown-linux-gnueabihf",
         ] {
             let refusal = ilp32_codegen_refusal(triple).unwrap_or_else(|| {
                 panic!("{triple}: ILP32 codegen would miscompile, it must be refused")
@@ -414,10 +443,42 @@ mod tests {
 
     #[test]
     fn ilp32_classification() {
-        assert!(target_is_ilp32("arm64_32-apple-watchos"));
-        // The 64-bit watch target must NOT be treated as ILP32.
-        assert!(!target_is_ilp32("aarch64-apple-watchos"));
-        assert!(!target_is_ilp32("aarch64-apple-darwin"));
-        assert!(!target_is_ilp32("x86_64-pc-windows-msvc"));
+        for ilp32 in [
+            "arm64_32-apple-watchos",
+            "armv7-linux-androideabi",
+            "arm-unknown-linux-gnueabihf",
+            "thumbv7neon-unknown-linux-gnueabihf",
+            "i386-apple-ios",
+            "i586-unknown-linux-gnu",
+            "i686-pc-windows-msvc",
+            "wasm32-wasip2",
+            "mips-unknown-linux-gnu",
+            "powerpc-unknown-linux-gnu",
+            "riscv32imac-unknown-none-elf",
+            "x86_64-unknown-linux-gnux32",
+            "aarch64-unknown-linux-gnu_ilp32",
+        ] {
+            assert!(target_is_ilp32(ilp32), "{ilp32} has 32-bit pointers");
+        }
+        // Every 64-bit spelling Perry's driver produces, plus the other LP64
+        // families. The 64-bit watch target must NOT be treated as ILP32.
+        for lp64 in [
+            "aarch64-apple-watchos",
+            "arm64-apple-watchos26.0",
+            "aarch64-apple-darwin",
+            "arm64-apple-ios17.0",
+            "arm64e-apple-darwin",
+            "aarch64-linux-android",
+            "aarch64-unknown-linux-ohos",
+            "x86_64-pc-windows-msvc",
+            "x86_64h-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "riscv64gc-unknown-linux-gnu",
+            "powerpc64le-unknown-linux-gnu",
+            "s390x-unknown-linux-gnu",
+            "loongarch64-unknown-linux-gnu",
+        ] {
+            assert!(!target_is_ilp32(lp64), "{lp64} has 64-bit pointers");
+        }
     }
 }
