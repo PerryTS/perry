@@ -19,7 +19,7 @@ use crate::closure::js_closure_call3;
 pub(crate) fn is_callable_function(value: f64) -> bool {
     let bits = value.to_bits();
     // Class-ref constructors (INT32-tagged, top16 == 0x7FFE) are callable.
-    if (bits >> 48) == 0x7FFE {
+    if (bits >> 48) == 0x7FFE || crate::object::class_value_id(value).is_some() {
         return crate::object::class_ref_id(value).is_some();
     }
     // A proxy whose target is callable is itself callable.

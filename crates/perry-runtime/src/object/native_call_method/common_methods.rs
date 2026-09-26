@@ -75,9 +75,10 @@ pub(super) unsafe fn dispatch_common(
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 return Some(super::object_ops::js_object_has_own(object, key_value));
             }
-            if (object.to_bits() >> 48) == 0x7FFE {
+            if let Some(class_id) =
+                crate::object::class_value::legacy_class_value_word(object.to_bits())
+            {
                 let key_str = crate::builtins::js_string_coerce(key_value);
-                let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
                 let present = if key_str.is_null() {
                     false
                 } else {

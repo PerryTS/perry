@@ -1290,9 +1290,11 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     // `SQL.Aliased` lookup pattern.
     {
         let bits = obj as u64;
-        if (bits >> 48) == 0x7FFE && !key.is_null() {
-            let class_id = (bits & 0xFFFF_FFFF) as u32;
-            let class_value = f64::from_bits(bits);
+        if let (Some(class_id), false) = (
+            crate::object::class_value::legacy_class_ptr_word(bits),
+            key.is_null(),
+        ) {
+            let class_value = crate::object::class_value::boxed_class_word(bits);
             let is_prototype_ref = super::super::class_prototype_ref_id(class_value).is_some();
             unsafe {
                 let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());

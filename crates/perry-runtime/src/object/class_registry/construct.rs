@@ -1250,10 +1250,7 @@ pub unsafe extern "C" fn js_new_function_construct_apply(func_value: f64, args_a
 }
 
 fn constructor_class_ref_id(value: f64) -> Option<u32> {
-    if super::super::class_prototype_ref_id(value).is_some() {
-        return None;
-    }
-    super::super::class_ref_id(value)
+    super::super::class_value_id(value)
 }
 
 /// Spec `IsConstructor(value)` — used by `NewPromiseCapability` (the Promise

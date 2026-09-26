@@ -540,7 +540,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable.
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let bits = obj_value.to_bits();
-            if (bits >> 48) == 0x7FFE {
+            if crate::object::class_value::legacy_class_value_word(bits).is_some() {
                 // ClassRef receivers: statics live in the class registry and
                 // are non-enumerable like builtin statics.
                 return f64::from_bits(TAG_FALSE);

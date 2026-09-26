@@ -1611,8 +1611,9 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // class_id stamped on a POINTER class object's ObjectHeader.
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
-    let class_id = if top16 == 0x7FFE {
-        (bits & 0xFFFF_FFFF) as u32
+    let _ = top16;
+    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+        cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
         js_object_get_class_id(obj)

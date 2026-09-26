@@ -2751,7 +2751,7 @@ pub extern "C" fn js_typed_feedback_array_set_string_key(
     // Class-ref receivers (INT32 tag 0x7FFE) are not arrays; skip the array
     // shape observation (which would probe the GC header of a non-pointer) and
     // route straight to the class-ref-aware string-key setter.
-    if (arr as u64) >> 48 == 0x7FFE {
+    if crate::object::class_value::legacy_class_ptr_word(arr as u64).is_some() {
         return crate::array::js_array_set_string_key(arr, key, value);
     }
     observe_array(site_id, arr, u32::MAX);

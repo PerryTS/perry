@@ -31,15 +31,11 @@ pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
     None
 }
 
+/// A class constructor OR its `C.prototype` reference -> the class id. The
+/// constructor half is [`super::class_value::class_value_id`] (both forms);
+/// callers that mean only the constructor ask that directly.
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
-    let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
-        if class_id != 0 && is_class_id_registered(class_id) {
-            return Some(class_id);
-        }
-    }
-    None
+    super::class_value::class_value_id(value).or_else(|| class_prototype_ref_id(value))
 }
 
 pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {

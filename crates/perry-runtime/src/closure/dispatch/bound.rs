@@ -493,9 +493,10 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
         return String::new();
     }
     let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        ((target_value.to_bits() >> 48) == 0x7FFE
-            && crate::object::class_prototype_ref_id(target_value).is_none())
-        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
+        crate::object::class_prototype_ref_id(target_value)
+            .is_none()
+            .then(|| crate::object::class_value::legacy_class_value_word(target_value.to_bits()))
+            .flatten()
     });
     target_class_id
         .and_then(crate::object::class_name_for_id)
@@ -615,9 +616,10 @@ pub unsafe extern "C" fn js_function_bind(
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
     let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        ((target_value.to_bits() >> 48) == 0x7FFE
-            && crate::object::class_prototype_ref_id(target_value).is_none())
-        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
+        crate::object::class_prototype_ref_id(target_value)
+            .is_none()
+            .then(|| crate::object::class_value::legacy_class_value_word(target_value.to_bits()))
+            .flatten()
     });
     let target_is_closure = if target_jv.is_pointer() {
         let ptr = target_jv.as_pointer::<ClosureHeader>();

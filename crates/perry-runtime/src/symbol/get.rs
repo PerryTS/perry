@@ -724,8 +724,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
             if let Some(v) =

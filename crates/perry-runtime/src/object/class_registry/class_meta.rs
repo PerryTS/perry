@@ -254,8 +254,8 @@ pub(crate) fn dispatch_diag_enabled() -> bool {
 fn describe_dispatch_receiver(recv: f64) -> String {
     let bits = recv.to_bits();
     let top16 = bits >> 48;
-    if top16 == 0x7FFE {
-        let cid = (bits & 0xFFFF_FFFF) as u32;
+    let _ = top16;
+    if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
         return match class_name_for_id(cid) {
             Some(n) => format!("class-ref `{}` (id {})", n, cid),
             None => format!("class-ref (id {})", cid),

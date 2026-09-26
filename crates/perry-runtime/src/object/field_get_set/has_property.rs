@@ -411,8 +411,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // keys and CLASS_DYNAMIC_PROPS for string keys.
     {
         let bits = obj.to_bits();
-        if (bits >> 48) == 0x7FFE {
-            let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
             // Symbol key path.
             if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
                 return nanbox_true;

@@ -221,8 +221,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
         // An INT32-tagged value may be a class ref (same 0x7FFE tag as small
         // integers) — those must keep flowing to the class resolution below.
-        let is_class_ref = (obj_value.to_bits() >> 48) == 0x7FFE
-            && super::super::class_ref_id(obj_value).is_some();
+        let is_class_ref = super::super::class_ref_id(obj_value).is_some();
         let wrapper = if is_class_ref {
             None
         } else if jv.is_number() {

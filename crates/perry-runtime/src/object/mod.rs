@@ -84,6 +84,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;
 pub(crate) use class_registry::async_resource_prototype_value;
@@ -94,6 +95,8 @@ pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_tar
 pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
+pub(crate) use class_value::class_value_id;
+pub use class_value::{class_closure_id, js_class_constructor_called};
 pub(crate) mod canonical_keys;
 mod census;
 pub(crate) mod key_attrs;
