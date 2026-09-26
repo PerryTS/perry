@@ -124,9 +124,6 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 /// INHERITED read an inline-cache hit. See the module docs for the guard and
 /// the GC contract.
 pub(crate) mod chain_store;
-/// #10498: (receiver shape, key) -> class-vtable getter/setter, recorded where
-/// the generic path commits to one. See the module docs.
-pub(crate) mod class_accessor_cache;
 mod global_this;
 pub mod handle_expando;
 pub(crate) mod inherited_read_cache;

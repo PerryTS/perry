@@ -172,13 +172,23 @@ pub extern "C" fn js_put_value_set_packed_miss(
                 return stored;
             }
         }
-        // #10498: a class accessor this site's key resolves to for the
-        // receiver's shape — ahead of the rooting and re-priming below, which
-        // it would pay for nothing (an accessor key never primes a way).
-        if let Some(stored) =
-            crate::object::class_accessor_cache::class_setter_hit_value(target, key, value)
-        {
-            return stored;
+    }
+
+    // Charter step 3: a key this receiver shape inherits as an accessor runs
+    // its setter from the inherited-access table (the same entries reads use),
+    // ahead of the key interning, chain proof and rooting below, which it
+    // would pay for nothing.
+    {
+        let tb = target.to_bits();
+        if tb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG && !key.is_null() {
+            let obj = (tb & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
+            if crate::value::addr_class::is_above_handle_band(obj as usize)
+                && unsafe {
+                    crate::object::inherited_read_cache::inherited_write_through(obj, key, value)
+                }
+            {
+                return value;
+            }
         }
     }
 

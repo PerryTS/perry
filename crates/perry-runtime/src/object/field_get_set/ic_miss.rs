@@ -780,21 +780,6 @@ pub(super) fn get_field_ic_miss_impl(
     // `object::inherited_read_cache`.
     let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
-        // #10498: a key the generic path has already resolved to a class
-        // vtable getter for this receiver shape (`class_accessor_cache`).
-        // Asked first: an emitted site has already put the inherited-read
-        // question to `js_inherited_read_cache_hit_f64` before calling here,
-        // and a (receiver shape, key) pair has one generic answer — a vtable
-        // getter or an inherited data slot — so at most one of the two caches
-        // holds a valid entry for it.
-        if let Some(value) =
-            unsafe { crate::object::class_accessor_cache::class_getter_hit(obj, key) }
-        {
-            if diag {
-                ic_diag_note(cache_slot, key, R::NotOwn);
-            }
-            return value;
-        }
         // Lane 3 hook A: an INHERITED read that this site has already resolved
         // once. Placed before the ladder rather than after it because the
         // whole point is the ladder: an inherited read otherwise re-walks the

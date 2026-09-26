@@ -1289,15 +1289,11 @@ pub(crate) fn get_field_by_name_object_tail(
                     // Class accessors are properties of the class prototype
                     // (charter step 3), so keyless receivers need the same
                     // fallback as shaped receivers.
-                    if let Some((v, raw)) = super::super::class_registry::class_chain_getter_value(
+                    if let Some((v, _)) = super::super::class_registry::class_chain_getter_value(
                         class_id,
                         name,
                         || super::accessors::class_getter_this(obj),
                     ) {
-                        if raw != 0 {
-                            // #10498: see `class_accessor_cache`.
-                            super::super::class_accessor_cache::note_class_getter(obj, key, raw);
-                        }
                         return v;
                     }
                     if lookup_class_method_in_chain(class_id, name).is_some() {
@@ -1654,15 +1650,11 @@ pub(crate) fn get_field_by_name_object_tail(
             // Class accessors (a base class's included) are accessor
             // properties of the class prototype chain (charter step 3).
             if let Ok(name) = std::str::from_utf8(key_bytes) {
-                if let Some((v, raw)) =
+                if let Some((v, _)) =
                     super::super::class_registry::class_chain_getter_value(class_id, name, || {
                         super::accessors::class_getter_this(obj)
                     })
                 {
-                    if raw != 0 {
-                        // #10498: see `class_accessor_cache`.
-                        super::super::class_accessor_cache::note_class_getter(obj, key, raw);
-                    }
                     return v;
                 }
             }

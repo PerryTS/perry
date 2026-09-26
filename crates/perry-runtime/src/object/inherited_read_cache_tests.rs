@@ -803,23 +803,85 @@ fn a_null_prototype_receiver_never_primes() {
     }
 }
 
+extern "C" fn forty_two_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
+    42.0
+}
+
+extern "C" fn forty_two_raw_getter(_this: f64) -> f64 {
+    42.0
+}
+
+/// A CLASS accessor on `proto`: its pair carries a compiled getter entry, as
+/// a ClassBody `get` does (`decl_accessors.rs`).
+unsafe fn install_class_getter(proto: *mut ObjectHeader, name: &str) {
+    let getter = crate::closure::js_closure_alloc(forty_two_getter as *const u8, 0);
+    crate::object::set_builtin_accessor_pair(
+        proto as usize,
+        name.to_string(),
+        crate::object::accessor_pair::Accessor {
+            get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+            set: 0,
+            raw_get: forty_two_raw_getter as *const () as usize,
+            raw_set: 0,
+        },
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+/// A closure-only accessor (a builtin prototype's, or one `defineProperty`
+/// installed) keeps the generic path, whose receiver handling it may need
+/// (`Map.prototype.size` on a subclass instance). Sabotage: dropping the
+/// compiled-entry requirement in the walk primes it.
 #[test]
-fn an_accessor_on_the_prototype_never_primes() {
+fn a_closure_only_accessor_is_not_primed() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let proto = crate::object::js_object_alloc(0, 4);
+        set(proto, "irc_closure", 7.0);
+        let getter = crate::closure::js_closure_alloc(forty_two_getter as *const u8, 0);
+        crate::object::descriptor_state::set_accessor_descriptor(
+            proto as usize,
+            "irc_closure".to_string(),
+            crate::object::descriptor_state::AccessorDescriptor {
+                get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+                set: 0,
+            },
+        );
+        let obj = crate::object::js_object_alloc(0, 4);
+        set(obj, "irc_own", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
+        assert!(inherited_read_cache_prime(obj, key("irc_closure")).is_none());
+        assert_eq!(inherited_read_cache_primes(), 0);
+    }
+}
+
+/// Charter step 3: a CLASS accessor on the prototype primes an ACCESSOR entry
+/// (the holder's slot holds the pair), and a hit runs the compiled getter.
+/// Sabotage: serving the entry as a data slot returns the pair word instead
+/// of 42.
+#[test]
+fn an_accessor_on_the_prototype_primes_an_accessor_entry() {
     let _scope = PrimeScope::new();
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_acc", 7.0);
-        install_getter(proto, "irc_acc");
+        install_class_getter(proto, "irc_acc");
         let obj = crate::object::js_object_alloc(0, 4);
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
+        let k = key("irc_acc");
 
-        assert!(
-            inherited_read_cache_prime(obj, key("irc_acc")).is_none(),
-            "a data slot may sit UNDER an accessor; caching it would return \
-             the slot and never call the getter"
+        let primed = inherited_read_cache_prime(obj, k).expect("the accessor primes");
+        assert_eq!(
+            f64::from_bits(primed.bits()),
+            42.0,
+            "the prime runs the getter"
         );
-        assert_eq!(inherited_read_cache_primes(), 0);
+        assert_eq!(inherited_read_cache_primes(), 1);
+        match inherited_read_cache_lookup(obj, k) {
+            Lookup::Hit(v) => assert_eq!(f64::from_bits(v.bits()), 42.0, "a hit runs the getter"),
+            _ => panic!("the accessor entry must serve the next read"),
+        }
     }
 }
 
@@ -848,13 +910,13 @@ fn an_undefined_holder_slot_never_primes() {
 fn a_refusal_is_remembered_so_the_chain_is_walked_once() {
     let _scope = PrimeScope::new();
     unsafe {
+        // A key on no prototype at all: the walk runs off the chain.
         let proto = crate::object::js_object_alloc(0, 4);
-        set(proto, "irc_acc", 7.0);
-        install_getter(proto, "irc_acc");
+        set(proto, "irc_other", 7.0);
         let obj = crate::object::js_object_alloc(0, 4);
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
-        let k = key("irc_acc");
+        let k = key("irc_absent");
 
         assert!(inherited_read_cache_prime(obj, k).is_none());
         assert_eq!(
@@ -1054,4 +1116,32 @@ fn the_cache_can_be_turned_off_for_an_a_b_measurement() {
         cache_enabled() || !cache_enabled(),
         "cache_enabled must be reachable"
     );
+}
+
+/// The emitted hit is a GC leaf in codegen's call-effect tables, so it must
+/// never run a getter: an accessor entry declines there (`TAG_HOLE`) and is
+/// served by the miss handler. Sabotage: dropping the accessor decline in
+/// `js_inherited_read_cache_hit_f64` makes it return 42.
+#[test]
+fn the_emitted_leaf_hit_never_runs_a_getter() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let proto = crate::object::js_object_alloc(0, 4);
+        set(proto, "irc_leaf", 7.0);
+        install_class_getter(proto, "irc_leaf");
+        let obj = crate::object::js_object_alloc(0, 4);
+        set(obj, "irc_own", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
+        let k = key("irc_leaf");
+        inherited_read_cache_prime(obj, k).expect("the accessor primes");
+        assert_eq!(
+            super::js_inherited_read_cache_hit_f64(obj, k).to_bits(),
+            crate::value::TAG_HOLE,
+            "a GC-leaf call must not run user code"
+        );
+        assert!(matches!(
+            inherited_read_cache_lookup(obj, k),
+            Lookup::Hit(_)
+        ));
+    }
 }

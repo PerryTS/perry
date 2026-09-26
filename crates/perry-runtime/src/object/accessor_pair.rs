@@ -15,12 +15,13 @@
 //! |---|---|
 //! | [`PAIR_GET`] | the getter as a NaN-boxed closure, or `undefined` |
 //! | [`PAIR_SET`] | the setter as a NaN-boxed closure, or `undefined` |
-//! | [`PAIR_RAW_GET`] | a class getter's compiled entry `fn(this) -> value` as a Number, or 0 |
-//! | [`PAIR_RAW_SET`] | a class setter's compiled entry `fn(this, v) -> value` as a Number, or 0 |
+//! | [`PAIR_RAW_GET`] | a class getter's compiled entry `fn(this) -> value` (its address bits), or 0 |
+//! | [`PAIR_RAW_SET`] | a class setter's compiled entry `fn(this, v) -> value` (its address bits), or 0 |
 //!
 //! The two closure words are ordinary traced slots. The raw entries are code
-//! addresses stored as JS Numbers (exact below 2^53), so the collector reads
-//! them as data. A class accessor keeps both forms: the closure is what
+//! addresses stored as their plain bits: an address below 2^48 has none of the
+//! NaN-box tag bits set, so the collector reads the word as a (subnormal) JS
+//! Number and never follows it, and a cache hit uses it without conversion. A class accessor keeps both forms: the closure is what
 //! reflection hands out (`getOwnPropertyDescriptor(C.prototype, k).get`), the
 //! raw entry is what an inline cache calls with the receiver as `this`.
 //!
@@ -57,18 +58,44 @@ pub(crate) struct Accessor {
     pub raw_set: usize,
 }
 
+/// Largest code address a raw word can hold: below it no NaN-box tag bit is
+/// set, so the word is a Number to the collector.
+const RAW_ADDRESS_LIMIT: usize = 1 << 48;
+
 #[inline]
 fn raw_word(raw: usize) -> u64 {
-    (raw as f64).to_bits()
+    debug_assert!(raw < RAW_ADDRESS_LIMIT);
+    if raw < RAW_ADDRESS_LIMIT {
+        raw as u64
+    } else {
+        0
+    }
 }
 
 #[inline]
 fn raw_of(word: u64) -> usize {
-    let n = f64::from_bits(word);
-    if n.is_finite() && n > 0.0 {
-        n as usize
+    if (word as usize) < RAW_ADDRESS_LIMIT {
+        word as usize
     } else {
         0
+    }
+}
+
+/// The accessor a pair VALUE holds, without re-proving that it is one — for a
+/// cache hit whose entry proved it at prime time (the holder's key is an
+/// accessor, and a slot of an accessor key is written only by an accessor
+/// install, which transitions the holder's ShapeId).
+///
+/// # Safety
+/// `value` is a NaN-boxed pointer to a pair.
+#[inline(always)]
+pub(crate) unsafe fn pair_of_value_unchecked(value: u64) -> Accessor {
+    let w = crate::array::array_elements_ptr((value & POINTER_MASK) as *const ArrayHeader);
+    Accessor {
+        get: closure_of(*w.add(PAIR_GET)),
+        set: closure_of(*w.add(PAIR_SET)),
+        raw_get: raw_of(*w.add(PAIR_RAW_GET)),
+        raw_set: raw_of(*w.add(PAIR_RAW_SET)),
     }
 }
 

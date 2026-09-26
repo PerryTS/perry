@@ -416,13 +416,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::inherited_read_cache::prune_dead_inherited_cache_entries,
         young_prune: None,
     },
-    // #10498: same death story for the class-accessor cache's keys.
-    DeadKeyPrune {
-        table: "CLASS_ACCESSOR_CACHE",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::class_accessor_cache::prune_dead_class_accessor_cache_entries,
-        young_prune: None,
-    },
     // #6759 C1: shape records are keyed on keys_array addresses; drop the
     // ones whose keys_array died (memory only — per-hit validation covers
     // correctness for anything this misses).
