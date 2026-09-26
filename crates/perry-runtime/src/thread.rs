@@ -1068,9 +1068,15 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     let closure_ptr_raw = closure as i64;
 
     // ── 2. Determine thread count ────────────────────────────────────
+    #[cfg(not(target_os = "wasi"))]
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
+    // WASI preview 2 is single-threaded (#11377): always take the sequential
+    // path below (`available_parallelism` errors there, so the `4` fallback
+    // would otherwise try to spawn).
+    #[cfg(target_os = "wasi")]
+    let num_threads = 1;
     // Don't spawn more threads than elements
     let num_threads = num_threads.min(len);
 
@@ -1336,10 +1342,14 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     // are behind us; no further GC points before the derefs below.
     let closure = closure_handle.get_raw_const_ptr::<ClosureHeader>();
 
+    #[cfg(not(target_os = "wasi"))]
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
         .min(len);
+    // WASI is single-threaded (#11377); see `parallel_map_impl`.
+    #[cfg(target_os = "wasi")]
+    let num_threads = 1;
 
     // Fast path: single thread for small arrays
     if num_threads <= 1 {
@@ -1556,7 +1566,19 @@ pub extern "C" fn js_thread_spawn(closure_val: f64) -> f64 {
     f64::from_bits(POINTER_TAG | (promise as u64 & POINTER_MASK))
 }
 
+#[cfg_attr(target_os = "wasi", allow(unreachable_code, unused_variables))]
 unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
+    // WASI preview 2 has no threads (#11377). Running the worker body inline
+    // is not faithful — it claims and retires its own agent — so until a
+    // main-thread `spawn` lands with the WASI event loop, reject clearly
+    // instead of aborting on the failed `std::thread::spawn`.
+    #[cfg(target_os = "wasi")]
+    {
+        let msg = "perry/thread spawn() is not supported on WASI yet (#11377)";
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_error_new_with_message(s);
+        return crate::promise::js_promise_rejected(crate::value::js_nanbox_pointer(err as i64));
+    }
     // ── 0. Extract closure pointer and func_ptr ──────────────────────
     let closure_bits = closure_val.to_bits();
     let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;

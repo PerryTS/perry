@@ -244,6 +244,14 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
     }
 }
 
+/// WASI (#11377) has no time-zone database (wasi-libc's `localtime` is UTC),
+/// so local time is UTC with a zero offset.
+#[cfg(target_os = "wasi")]
+fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    let (y, m, d, h, mi, s) = timestamp_to_components(secs);
+    (y, m, d, h, mi, s, 0)
+}
+
 #[cfg(windows)]
 fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
     unsafe {

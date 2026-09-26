@@ -383,7 +383,6 @@ ryu.workspace = true
 ryu-js = "1.0.3"
 simdutf8 = "0.1.5"
 perry-base64.workspace = true
-hostname = { version = "0.4", optional = true }
 dirs = { workspace = true, optional = true }
 # #6559 `dyn-eval`: reuse the compiler's own SWC-based parser for runtime-
 # generated `new Function` bodies (no second parser). perry-parser depends
@@ -555,3 +554,8 @@ notify.workspace = true
 # are wired per agent (P3/P4).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 turnloop.workspace = true
+
+# `os.hostname()` under `full`. WASI has no hostname (the crate refuses the
+# target), so `js_os_hostname` answers "localhost" there (#11377).
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+hostname = { version = "0.4", optional = true }

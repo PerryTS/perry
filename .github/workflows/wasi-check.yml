@@ -1,0 +1,70 @@
+name: WASI Check
+
+# Keeps `perry-runtime` building for the standalone WASI target
+# (wasm32-wasip2). Tracking issue #11375; this gate is phase 2a (#11377).
+# The check itself is `scripts/wasi_check.sh` — run it locally the same way.
+#
+# Checked against CLAUDE.md's "four ways a gate can be unable to fail":
+#
+#   1. no `continue-on-error`, no `|| true`: the script runs under
+#      `set -euo pipefail`, so a cargo failure is the job's failure.
+#   2. NOT a required context, and not part of test.yml's `pr-gate` or
+#      `full-suite-gate`, by design of the change that adds it: a new gate has
+#      never been green, and WASI must not block unrelated PRs or releases
+#      while the target is being brought up. Promotion is a maintainer action
+#      after it has been green on `main`.
+#   3. `concurrency` below cancels `pull_request` runs only; main-line runs are
+#      keyed on `github.run_id` (#7966) so they queue instead of superseding.
+#   4. The subject is asserted live: the script fails unless cargo reports a
+#      perry-runtime artifact under the wasm32-wasip2 target directory, so a
+#      green run cannot be a host build or a silently skipped check.
+
+on:
+  pull_request:
+    # Opt-in via the `run-extended-tests` label, like the other satellite
+    # gates (docs/src/testing/ci-tiers.md), and only when something that can
+    # break the WASI build changed.
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "crates/perry-runtime/**"
+      - "crates/perry-dispatch/**"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "scripts/wasi_check.sh"
+      - ".github/workflows/wasi-check.yml"
+  # Main-line arm: one daily sweep, not one run per merge — see
+  # docs/src/testing/ci-gate-scheduling.md before adding `push: branches: [main]`.
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wasi-check-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wasi-check:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain with the WASI target
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-wasi-check"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: perry-runtime builds for wasm32-wasip2
+        run: ./scripts/wasi_check.sh

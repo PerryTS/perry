@@ -74,6 +74,12 @@ fn current_os_thread_id() -> u64 {
         }
         u64::from(unsafe { GetCurrentThreadId() })
     }
+    // WASI preview 2 is single-threaded (#11377): the one thread is the main
+    // thread. Non-zero, because `MAIN_OS_THREAD_ID == 0` means "not recorded".
+    #[cfg(target_os = "wasi")]
+    {
+        1
+    }
 }
 
 static MAIN_OS_THREAD_ID: AtomicU64 = AtomicU64::new(0);
