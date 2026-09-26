@@ -641,3 +641,42 @@ fn a_stale_completion_for_a_delivered_job_is_dropped() {
     assert_eq!(events(), Vec::new(), "a stale token delivers nothing");
     assert_eq!(outstanding(), 0);
 }
+
+/// #11417: [`turn`] is what a synchronous waiter loops on until its own
+/// completion lands, and nothing in that loop consumes a pending main-thread
+/// notify. The park declines to wait while one is pending — correctly — but it
+/// used to skip the turn with it, so every call returned without collecting
+/// anything and the waiter spun until some unrelated `js_wait_for_event`
+/// cleared the process-global flag. It must still collect what is ready.
+#[test]
+fn turn_collects_a_completion_while_a_main_thread_notify_is_pending() {
+    let fixture = Fixture::start();
+    submit(
+        || b"ready".to_vec(),
+        // Records rather than panics on a non-Done outcome: a regression
+        // leaves the job for the fixture's shutdown to cancel, and a panic in
+        // that destructor would abort the test binary instead of failing this
+        // one test.
+        |delivery| match delivery {
+            Delivery::Done(bytes) => record(Rec::Done("job", bytes)),
+            Delivery::Cancelled => record(Rec::Cancelled("job")),
+            Delivery::Failed(e) => record(Rec::Failed("job", e.kind)),
+        },
+    )
+    .expect("the pool accepts a job on a loop-owning thread");
+    crate::event_pump::js_notify_main_thread();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while events().is_empty() && Instant::now() < deadline {
+        // The subject: a notify that stays pending across every turn below.
+        assert_eq!(
+            crate::event_pump::js_main_thread_notified(),
+            1,
+            "the notify must stay pending, or this test proves nothing"
+        );
+        turn(10);
+    }
+    crate::event_pump::clear_main_thread_notified_for_test();
+    assert_eq!(events(), vec![Rec::Done("job", b"ready".to_vec())]);
+    assert_eq!(outstanding(), 0);
+    assert_eq!(fixture.delta(), (1, 1, 0, 0));
+}
