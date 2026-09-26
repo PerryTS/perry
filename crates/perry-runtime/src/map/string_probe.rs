@@ -55,10 +55,9 @@ fn byte_mask(len: u32) -> u64 {
 unsafe fn heap_view(bits: u64) -> Option<(*const u8, u32)> {
     let ptr = (bits & crate::value::POINTER_MASK) as *const StringHeader;
     match crate::value::addr_class::try_read_gc_header(ptr as usize) {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING => Some((
-            (ptr as *const u8).add(std::mem::size_of::<StringHeader>()),
-            (*ptr).byte_len,
-        )),
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_STRING => {
+            Some((crate::string::string_data(ptr), (*ptr).byte_len))
+        }
         _ => None,
     }
 }

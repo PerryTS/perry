@@ -1159,6 +1159,7 @@ pub(crate) fn js_string_from_str(s: &str) -> *mut StringHeader {
 }
 
 /// Get the data pointer for a string
+#[inline]
 pub(crate) fn string_data(s: *const StringHeader) -> *const u8 {
     unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) }
 }
