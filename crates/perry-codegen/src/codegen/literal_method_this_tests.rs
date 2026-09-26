@@ -296,3 +296,44 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
         "two shape classes: no single candidate"
     );
 }
+
+/// Byte offset of the first line of `ir` that contains every one of `parts`.
+fn first_line_with(ir: &str, parts: &[&str]) -> Option<usize> {
+    let mut offset = 0;
+    for line in ir.split_inclusive('\n') {
+        if parts.iter().all(|p| line.contains(p)) {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+#[test]
+fn anon_shape_is_registered_before_its_shape_id_is_minted() {
+    // #11420: the module-init ShapeId minted beside a class's keys global
+    // records `class_proto_id(cid)`, which answers the ordinary object
+    // prototype only once the id is in the anon-shape set. Registered after
+    // the mint, every literal allocation failed
+    // `try_birth_stamp_preinstalled_shape`'s proto check, was stamped with a
+    // second ShapeId, and every guarded `this.a` / `lit.a` read missed.
+    //
+    // Init ops are chunked into `__perry_init_strings_*_chunkN` functions
+    // that are defined, and called, in emission order, so textual order in
+    // the IR is execution order.
+    let ir = compile_ir(&literal_module(method(METHOD, false, false)));
+    let register = first_line_with(&ir, &["call void @js_register_anon_shape_class_id(i32 1)"])
+        .unwrap_or_else(|| panic!("the literal's shape class is never registered:\n{ir}"));
+    let mint = [
+        "@js_object_shape_id_for_class_keys",
+        "@js_gc_typed_shape_id_for_keys",
+    ]
+    .iter()
+    .filter_map(|callee| first_line_with(&ir, &["call i32 ", callee]))
+    .min()
+    .unwrap_or_else(|| panic!("the literal's ShapeId is never minted:\n{ir}"));
+    assert!(
+        register < mint,
+        "js_register_anon_shape_class_id must run before the class ShapeId is minted"
+    );
+}
