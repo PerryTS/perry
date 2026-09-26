@@ -138,6 +138,9 @@ thread_local! {
 mod gc_scan;
 mod owner_lifecycle;
 mod young;
+
+#[cfg(test)]
+mod native_owner_tests;
 pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
 pub(crate) use owner_lifecycle::{
     clear_object_descriptors, prune_dead_descriptor_owner_entries,
@@ -819,8 +822,18 @@ unsafe fn descriptor_summary_meta(owner: usize) -> Option<*mut ObjectMeta> {
 /// set the key bits would answer a proven-absent for an owner that really has
 /// a descriptor — e.g. `Object.defineProperty(re, "lastIndex", {writable:false})`
 /// would stop throwing (test262 prototype/{exec,test}/y-fail-lastindex-no-write).
+///
+/// The installing twin WRITES the owner's meta edge, so it must not trust the
+/// magnitude-window header reader `cell_meta_slot` uses: a descriptor owner can
+/// be an arbitrary address (a native `Box` backing such as an
+/// `AsyncResource`'s, #11258), whose preceding bytes may decode as a cell type,
+/// and the install would then store a meta pointer into native memory.
+/// Ownership is proved by allocator metadata first. Installs are rare, so the
+/// proof costs nothing on the lookup path; the lookup path's handle owners go
+/// through `get_handle_*` and never reach the summary (bf16bc752).
 #[inline]
 unsafe fn descriptor_summary_meta_ensure(owner: usize) -> Option<*mut ObjectMeta> {
+    crate::value::addr_class::try_read_tracked_gc_header(owner)?;
     super::object_meta_ensure_for_cell(owner)
 }
 
