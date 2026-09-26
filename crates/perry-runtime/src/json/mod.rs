@@ -218,23 +218,6 @@ thread_local! {
     pub(crate) static SUPPRESS_NEXT_TO_JSON: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 
-    /// The object whose `toJSON` lookup (ECMA-262 §25.5.2.2 step 2) its
-    /// PARENT has just performed and found nothing callable (#10696). The
-    /// member loop and the root entry each probe a value before dispatching
-    /// it, and the dispatched object's own `stringify_object_inner` used to
-    /// probe it again — two probes per object visited, which also ran a
-    /// `toJSON` accessor twice where the spec reads it once.
-    ///
-    /// A one-shot address token, never dereferenced, so it roots nothing.
-    /// Set only immediately before that object's dispatch, cleared by the
-    /// setter as soon as the dispatch returns, and taken (always cleared) at
-    /// the top of every `stringify_object_inner`. Only the FIRST object walk
-    /// entered in the dispatch can match it, and nothing between the parent's
-    /// probe and that walk runs user code. A GC that moves the object in
-    /// between only turns the token into a miss, i.e. the ordinary probe.
-    pub(crate) static TO_JSON_RESOLVED_FOR: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-
     /// The property key handed to `toJSON` for the value currently being
     /// serialized (#5909 — test262 JSON/stringify/value-tojson-arguments).
     /// ECMA-262 §25.5.2.2 SerializeJSONProperty step 2.b.i is
@@ -286,6 +269,23 @@ thread_local! {
 }
 
 crate::perry_thread_local! {
+    /// The object whose `toJSON` lookup (ECMA-262 §25.5.2.2 step 2) its
+    /// PARENT has just performed and found nothing callable (#10696). The
+    /// member loop and the root entry each probe a value before dispatching
+    /// it, and the dispatched object's own `stringify_object_inner` used to
+    /// probe it again — two probes per object visited, which also ran a
+    /// `toJSON` accessor twice where the spec reads it once.
+    ///
+    /// A one-shot address token, never dereferenced, so it roots nothing.
+    /// Set only immediately before that object's dispatch, cleared by the
+    /// setter as soon as the dispatch returns, and taken (always cleared) at
+    /// the top of every `stringify_object_inner`. Only the FIRST object walk
+    /// entered in the dispatch can match it, and nothing between the parent's
+    /// probe and that walk runs user code. A GC that moves the object in
+    /// between only turns the token into a miss, i.e. the ordinary probe.
+    pub(crate) static TO_JSON_RESOLVED_FOR: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+
     /// Set exactly when the key cache crosses its boundary limit. Tiny parse
     /// completions can test this bit without borrowing the hash table.
     pub(super) static PARSE_KEY_CACHE_OVERSIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
