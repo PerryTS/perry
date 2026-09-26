@@ -146,22 +146,7 @@ type FetchBlobNewFn = unsafe extern "C" fn(f64, f64) -> f64;
 type FetchFileNewFn = unsafe extern "C" fn(f64, f64, f64, f64) -> f64;
 type FetchHeadersNewFn = extern "C" fn() -> f64;
 type FetchHeadersInitFromValueFn = unsafe extern "C" fn(f64, f64) -> f64;
-type FetchRequestNewFn = unsafe extern "C" fn(
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    f64,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    *const crate::StringHeader,
-    f64,
-    *const crate::StringHeader,
-    f64,
-) -> f64;
+type FetchRequestNewFn = unsafe extern "C" fn(f64, f64) -> f64;
 type FetchResponseNewFn =
     unsafe extern "C" fn(*const crate::StringHeader, f64, *const crate::StringHeader, f64) -> f64;
 type FetchResponseStaticJsonFn =
@@ -382,22 +367,7 @@ unsafe extern "C" {
     fn js_file_new(parts: f64, name: f64, type_value: f64, last_modified: f64) -> f64;
     fn js_headers_new() -> f64;
     fn js_headers_init_from_value(handle: f64, init: f64) -> f64;
-    fn js_request_new(
-        url_ptr: *const crate::StringHeader,
-        method_ptr: *const crate::StringHeader,
-        body_ptr: *const crate::StringHeader,
-        headers_handle: f64,
-        referrer_ptr: *const crate::StringHeader,
-        referrer_policy_ptr: *const crate::StringHeader,
-        mode_ptr: *const crate::StringHeader,
-        credentials_ptr: *const crate::StringHeader,
-        cache_ptr: *const crate::StringHeader,
-        redirect_ptr: *const crate::StringHeader,
-        integrity_ptr: *const crate::StringHeader,
-        keepalive: f64,
-        duplex_ptr: *const crate::StringHeader,
-        signal: f64,
-    ) -> f64;
+    fn js_request_new_from_input(input: f64, init: f64) -> f64;
     fn js_response_new(
         body_ptr: *const crate::StringHeader,
         status: f64,
@@ -595,82 +565,18 @@ pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::Str
 }
 
 #[cfg(feature = "external-fetch-symbols")]
-pub(super) fn call_global_request_new(
-    url_ptr: *const crate::StringHeader,
-    method_ptr: *const crate::StringHeader,
-    body_ptr: *const crate::StringHeader,
-    headers_handle: f64,
-    referrer_ptr: *const crate::StringHeader,
-    referrer_policy_ptr: *const crate::StringHeader,
-    mode_ptr: *const crate::StringHeader,
-    credentials_ptr: *const crate::StringHeader,
-    cache_ptr: *const crate::StringHeader,
-    redirect_ptr: *const crate::StringHeader,
-    integrity_ptr: *const crate::StringHeader,
-    keepalive: f64,
-    duplex_ptr: *const crate::StringHeader,
-    signal: f64,
-) -> f64 {
-    unsafe {
-        js_request_new(
-            url_ptr,
-            method_ptr,
-            body_ptr,
-            headers_handle,
-            referrer_ptr,
-            referrer_policy_ptr,
-            mode_ptr,
-            credentials_ptr,
-            cache_ptr,
-            redirect_ptr,
-            integrity_ptr,
-            keepalive,
-            duplex_ptr,
-            signal,
-        )
-    }
+pub(super) fn call_global_request_new(input: f64, init: f64) -> f64 {
+    unsafe { js_request_new_from_input(input, init) }
 }
 
 #[cfg(not(feature = "external-fetch-symbols"))]
-pub(super) fn call_global_request_new(
-    url_ptr: *const crate::StringHeader,
-    method_ptr: *const crate::StringHeader,
-    body_ptr: *const crate::StringHeader,
-    headers_handle: f64,
-    referrer_ptr: *const crate::StringHeader,
-    referrer_policy_ptr: *const crate::StringHeader,
-    mode_ptr: *const crate::StringHeader,
-    credentials_ptr: *const crate::StringHeader,
-    cache_ptr: *const crate::StringHeader,
-    redirect_ptr: *const crate::StringHeader,
-    integrity_ptr: *const crate::StringHeader,
-    keepalive: f64,
-    duplex_ptr: *const crate::StringHeader,
-    signal: f64,
-) -> f64 {
+pub(super) fn call_global_request_new(input: f64, init: f64) -> f64 {
     let f = GLOBAL_FETCH_REQUEST_NEW.load(Ordering::Acquire);
     if !f.is_null() {
         let func: FetchRequestNewFn = unsafe { std::mem::transmute(f) };
-        return unsafe {
-            func(
-                url_ptr,
-                method_ptr,
-                body_ptr,
-                headers_handle,
-                referrer_ptr,
-                referrer_policy_ptr,
-                mode_ptr,
-                credentials_ptr,
-                cache_ptr,
-                redirect_ptr,
-                integrity_ptr,
-                keepalive,
-                duplex_ptr,
-                signal,
-            )
-        };
+        return unsafe { func(input, init) };
     }
-    warn_unregistered_fetch_symbol("js_request_new")
+    warn_unregistered_fetch_symbol("js_request_new_from_input")
 }
 
 #[cfg(feature = "external-fetch-symbols")]

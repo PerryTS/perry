@@ -213,10 +213,19 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
         keepalive
     };
 
+    // Reflective Request construction also reaches this path (#10380).
+    // Keep its BodyInit conversion: a ReadableStream is a handle whose
+    // bytes must be drained, rather than interpreted as a string pointer.
+    let body_value = field(b"body");
+    let body_ptr = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+        std::ptr::null()
+    } else {
+        js_response_body_init_ptr(body_value) as *const StringHeader
+    };
     js_request_new(
         url_ptr,
         str_field(b"method"),
-        str_field(b"body"),
+        body_ptr,
         headers_handle,
         str_field(b"referrer"),
         str_field(b"referrerPolicy"),

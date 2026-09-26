@@ -344,60 +344,7 @@ pub(crate) extern "C" fn global_this_request_thunk(
     input: f64,
     init: f64,
 ) -> f64 {
-    let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
-    let method_ptr = global_this_fetch_option_string_ptr(init, b"method");
-    // Body init coercion that DRAINS a `ReadableStream` body. @hono/node-server
-    // wraps the incoming request body as `Readable.toWeb(incoming)` / a
-    // `new ReadableStream({...})`, so the plain string coercion would stringify
-    // the stream HANDLE to its numeric id and `await c.req.text()` would resolve
-    // to a bogus number. Route through the registered body-init helper (stdlib
-    // `js_response_body_init_ptr`), which drains the stream's buffered chunks;
-    // string bodies fall back to the ordinary coercion. Refs Hono `c.req.text()`.
-    let body_ptr = {
-        let body_val = global_this_fetch_option(init, b"body");
-        if matches!(
-            body_val.to_bits(),
-            crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-        ) {
-            std::ptr::null()
-        } else {
-            super::super::global_fetch::call_global_body_init_ptr(body_val)
-        }
-    };
-    let headers_handle = global_this_init_headers_handle(init);
-    let referrer_ptr = global_this_fetch_option_string_ptr(init, b"referrer");
-    let referrer_policy_ptr = global_this_fetch_option_string_ptr(init, b"referrerPolicy");
-    let mode_ptr = global_this_fetch_option_string_ptr(init, b"mode");
-    let credentials_ptr = global_this_fetch_option_string_ptr(init, b"credentials");
-    let cache_ptr = global_this_fetch_option_string_ptr(init, b"cache");
-    let redirect_ptr = global_this_fetch_option_string_ptr(init, b"redirect");
-    let integrity_ptr = global_this_fetch_option_string_ptr(init, b"integrity");
-    let keepalive = {
-        let value = global_this_fetch_option(init, b"keepalive");
-        if value.to_bits() == crate::value::TAG_UNDEFINED {
-            f64::from_bits(crate::value::TAG_FALSE)
-        } else {
-            value
-        }
-    };
-    let duplex_ptr = global_this_fetch_option_string_ptr(init, b"duplex");
-    let signal = global_this_fetch_option(init, b"signal");
-    super::super::global_fetch::call_global_request_new(
-        url_ptr,
-        method_ptr,
-        body_ptr,
-        headers_handle,
-        referrer_ptr,
-        referrer_policy_ptr,
-        mode_ptr,
-        credentials_ptr,
-        cache_ptr,
-        redirect_ptr,
-        integrity_ptr,
-        keepalive,
-        duplex_ptr,
-        signal,
-    )
+    super::super::global_fetch::call_global_request_new(input, init)
 }
 
 /// Resolve a NaN-boxed `this` value to a heap `ObjectHeader` pointer, or

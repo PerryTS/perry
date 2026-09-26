@@ -1582,7 +1582,7 @@ POLL_CAPABLE_RUNTIME = {
     "js_promise_new_with_executor",
     "js_proxy_construct", "js_proxy_revocable",
     "js_regexp_construct",
-    "js_request_new_from_init",
+    "js_request_new_from_init", "js_request_new_from_input",
     "js_string_concat_chain", "js_string_concat_value",
     "js_string_normalize", "js_string_pad_fill", "js_string_repeat",
     # The `_dyn` half of the replace family. The block comment above deferred
