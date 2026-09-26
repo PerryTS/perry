@@ -303,6 +303,10 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
 /// Function shape whose prototype identity is Function.prototype's and whose
 /// own key list does not contain `key`.
 pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8]) -> bool {
+    // The common receiver: no own keys, Function.prototype — one compare.
+    if id == function_base_shape(FunctionProtoKind::Function) {
+        return true;
+    }
     if id == function_dictionary_shape() {
         return false;
     }
