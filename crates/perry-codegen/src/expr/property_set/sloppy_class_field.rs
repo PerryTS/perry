@@ -223,11 +223,16 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             let obj_ptr = blk.inttoptr(I64, &obj_handle);
             let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
             let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+            // #10907: no `js_array_numeric_value_to_raw_f64` canonicalization is
+            // due — this block's only predecessor is the precheck hit, and the
+            // call is the identity on a plain finite double. It used to be
+            // emitted anyway, which made every `o.f = k` into a `: number` field
+            // ~31 instructions dearer than the same store into a `: any` field.
+            //
             // GC_STORE_AUDIT(POINTER_FREE): a guarded raw-f64 class slot holds
             // numbers only, and the precheck rejected every value that is not a
             // plain finite double, so no write barrier and no layout note are due.
-            let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, &val_double);
-            blk.store(DOUBLE, &numeric_value, &field_ptr);
+            blk.store(DOUBLE, &val_double, &field_ptr);
             blk.br(&merge_label);
         }
 

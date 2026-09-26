@@ -521,3 +521,182 @@ fn raw_f64_field_store_emits_no_guard() {
         "a raw-f64 class-field store has no bookkeeping to guard:\n{ir}"
     );
 }
+
+/// #10907: `function probe(p: Numeric, x: number) { p.v = <stored>; return p }`
+/// — a `: number` field written through a declared-class PARAMETER receiver,
+/// so the store takes the runtime-guarded class-field arm (sloppy or strict per
+/// `strict`) rather than a scalar-replaced slot or a `Ptr<Shape>`-proven store.
+fn module_with_param_receiver_raw_f64_store(strict: bool, stored: Expr) -> Module {
+    let mut module = module_with_new(
+        class(
+            6,
+            "Numeric6",
+            vec![field("v", Type::Number)],
+            Some(param_prologue_ctor("v", 7, Type::Number)),
+        ),
+        vec![Expr::Number(1.0)],
+    );
+    let probe = &mut module.functions[0];
+    probe.is_strict = strict;
+    probe.params = vec![
+        param(8, "p", Type::Named("Numeric6".to_string())),
+        param(9, "x", Type::Number),
+    ];
+    probe.return_type = Type::Any;
+    probe.body = vec![
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(8)),
+            property: "v".to_string(),
+            value: Box::new(stored),
+        }),
+        Stmt::Return(Some(Expr::LocalGet(8))),
+    ];
+    module
+}
+
+/// Every `define` whose name contains `__probe` (the exported body plus its
+/// `$generic` / `$spec_*` clones), each split into `(label, body)` blocks.
+fn probe_blocks(ir: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut in_probe = false;
+    for line in ir.lines() {
+        if line.starts_with("define ") {
+            in_probe = line.contains("__probe");
+            continue;
+        }
+        if !in_probe {
+            continue;
+        }
+        if line.starts_with('}') {
+            in_probe = false;
+            continue;
+        }
+        let trimmed = line.trim_end();
+        if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
+            out.push((trimmed.trim_end_matches(':').to_string(), String::new()));
+        } else if let Some((_, body)) = out.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    out
+}
+
+const CANONICALIZE: &str = "@js_array_numeric_value_to_raw_f64";
+
+/// #10907, sloppy arm: the fast block's ONLY predecessor is the inline
+/// precheck, which already rejected every value that is not a plain finite
+/// double — so the canonicalization call is dead and must not be emitted at
+/// all. It used to be, and it was the whole ~31-instruction `: number` vs
+/// `: any` store penalty.
+#[test]
+fn sloppy_raw_f64_field_store_skips_the_canonicalize_call() {
+    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
+        false,
+        Expr::LocalGet(9),
+    ));
+    let blocks = probe_blocks(&ir);
+    let fast: Vec<_> = blocks
+        .iter()
+        .filter(|(label, _)| label.starts_with("class_field_sloppy_set.fast"))
+        .collect();
+    assert!(
+        !fast.is_empty(),
+        "expected the sloppy raw-f64 class-field fast arm in probe:\n{ir}"
+    );
+    for (label, body) in &fast {
+        assert!(
+            body.contains("store double"),
+            "{label} must still store the value into the slot:\n{body}"
+        );
+    }
+    for (label, body) in &blocks {
+        assert!(
+            !body.contains(CANONICALIZE),
+            "{label}: the sloppy raw-f64 store must not canonicalize a value the \
+             precheck already proved plain-finite:\n{body}"
+        );
+    }
+}
+
+/// #10907, strict arm: its fast block is ALSO reached from the runtime guard
+/// call, which admits INT32-boxed / non-finite numbers, so canonicalization
+/// must survive — but only behind an inline plain-finite test, never on the
+/// fast block itself, and with the plain arm storing the value verbatim.
+#[test]
+fn strict_raw_f64_field_store_canonicalizes_only_off_the_plain_finite_path() {
+    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
+        true,
+        Expr::LocalGet(9),
+    ));
+    let blocks = probe_blocks(&ir);
+    let find = |prefix: &str| -> Vec<&(String, String)> {
+        blocks
+            .iter()
+            .filter(|(label, _)| label.starts_with(prefix))
+            .collect()
+    };
+    let fast = find("class_field_set.fast");
+    let plain = find("class_field_set.raw_plain");
+    let canon = find("class_field_set.raw_canonicalize");
+    assert!(
+        !fast.is_empty() && !plain.is_empty() && !canon.is_empty(),
+        "expected fast / raw_plain / raw_canonicalize blocks in probe:\n{ir}"
+    );
+    for (label, body) in &fast {
+        assert!(
+            !body.contains(CANONICALIZE),
+            "{label}: canonicalization must be off the fast block's straight line:\n{body}"
+        );
+        assert!(
+            body.contains("9218868437227405312") && body.contains("class_field_set.raw_plain"),
+            "{label}: expected the inline exponent test branching to raw_plain:\n{body}"
+        );
+    }
+    for (label, body) in &plain {
+        assert!(
+            body.contains("store double") && !body.contains("@js_"),
+            "{label}: the plain-finite arm stores the value verbatim, with no runtime call:\n{body}"
+        );
+    }
+    for (label, body) in &canon {
+        assert!(
+            body.contains(CANONICALIZE) && body.contains("store double"),
+            "{label}: the non-plain arm must still canonicalize before storing:\n{body}"
+        );
+    }
+    // No phi merges the two arms: a phi operand is invisible to root_reload.
+    for (label, body) in find("class_field_set.raw_join") {
+        assert!(
+            !body.contains(" phi "),
+            "{label}: the arms must store separately, not merge through a phi:\n{body}"
+        );
+    }
+}
+
+/// #10907: a value that is canonical raw f64 by construction needs neither the
+/// call nor the inline test.
+#[test]
+fn strict_raw_f64_field_store_of_a_literal_emits_no_canonicalization() {
+    let ir = compile_ir(&module_with_param_receiver_raw_f64_store(
+        true,
+        Expr::Number(3.5),
+    ));
+    let blocks = probe_blocks(&ir);
+    assert!(
+        blocks
+            .iter()
+            .any(|(label, _)| label.starts_with("class_field_set.fast")),
+        "expected the strict guarded class-field arm in probe:\n{ir}"
+    );
+    for (label, body) in &blocks {
+        assert!(
+            !body.contains(CANONICALIZE),
+            "{label}: a literal store must not canonicalize:\n{body}"
+        );
+        assert!(
+            !label.starts_with("class_field_set.raw_canonicalize"),
+            "{label}: a literal store needs no plain-finite diamond:\n{ir}"
+        );
+    }
+}

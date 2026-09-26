@@ -73,6 +73,71 @@ fn canonicalize_raw_f64_numeric_store_value(
     )
 }
 
+/// #10907: store a numeric value into a raw-f64 class-field slot without
+/// paying the out-of-line `js_array_numeric_value_to_raw_f64` call on the
+/// common path.
+///
+/// Used where the stored value is NOT already known to be a plain finite
+/// double: the strict guarded arm's fast block (reached both from the inline
+/// precheck and from `js_typed_feedback_class_field_set_guard`, which also
+/// admits INT32-boxed / non-finite numbers) and the scalar-replaced field
+/// stores. Canonicalizing unconditionally made every `o.f = <number>` into a
+/// `: number` field ~31 instructions dearer than the same store into a `: any`
+/// field. The call is the identity on any finite double and on any value
+/// `expr_produces_canonical_raw_f64` admits, so it is skipped statically for
+/// the latter and, otherwise, kept only on the arm an inline plain-finite test
+/// of the bits cannot rule out.
+///
+/// Each arm does its own store instead of merging through a `phi`: a phi
+/// operand is never re-materialised by `root_reload`, while an ordinary store
+/// operand is, so this keeps the value's uses in the shape the rooting passes
+/// and `gc_root_dominance_check.py` already understand. Leaves
+/// `ctx.current_block` on a block with no terminator.
+fn emit_raw_f64_class_field_slot_store(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+    value_double: &str,
+    slot_ptr: &str,
+) {
+    if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value) {
+        // GC_STORE_AUDIT(POINTER_FREE): canonical raw f64 by construction —
+        // never a NaN-boxed heap pointer.
+        ctx.block().store(DOUBLE, value_double, slot_ptr);
+        return;
+    }
+    let plain_idx = ctx.new_block("class_field_set.raw_plain");
+    let canon_idx = ctx.new_block("class_field_set.raw_canonicalize");
+    let join_idx = ctx.new_block("class_field_set.raw_join");
+    let plain_label = ctx.block_label(plain_idx);
+    let canon_label = ctx.block_label(canon_idx);
+    let join_label = ctx.block_label(join_idx);
+    {
+        let blk = ctx.block();
+        let value_bits = blk.bitcast_double_to_i64(value_double);
+        let finite =
+            crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &value_bits);
+        blk.cond_br(&finite, &plain_label, &canon_label);
+    }
+    ctx.current_block = plain_idx;
+    {
+        let blk = ctx.block();
+        // GC_STORE_AUDIT(POINTER_FREE): the plain-finite test proved a genuine
+        // unboxed double (every NaN-box tag has the all-ones exponent).
+        blk.store(DOUBLE, value_double, slot_ptr);
+        blk.br(&join_label);
+    }
+    ctx.current_block = canon_idx;
+    {
+        let blk = ctx.block();
+        let canonical = canonicalize_raw_f64_numeric_store_value(blk, value_double);
+        // GC_STORE_AUDIT(POINTER_FREE): the canonicalizer returns a raw number
+        // (NaN for anything non-numeric), never a heap pointer.
+        blk.store(DOUBLE, &canonical, slot_ptr);
+        blk.br(&join_label);
+    }
+    ctx.current_block = join_idx;
+}
+
 /// Lower the receiver/value pair for the class-field and setter fast paths.
 ///
 /// `root_reload` already repairs the common bare-local / `this` receiver, and
@@ -507,12 +572,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         && is_numeric_expr(ctx, value)
                         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value);
                     let val_double = lower_expr(ctx, value)?;
-                    let stored_value = if numeric_store {
-                        canonicalize_raw_f64_numeric_store_value(ctx.block(), &val_double)
+                    if numeric_store {
+                        emit_raw_f64_class_field_slot_store(ctx, value, &val_double, &slot);
                     } else {
-                        val_double.clone()
-                    };
-                    ctx.block().store(DOUBLE, &stored_value, &slot);
+                        ctx.block().store(DOUBLE, &val_double, &slot);
+                    }
                     // #6968: bind the field alloca as a precise GC root, the
                     // same treatment `emit_shadow_slot_update_for_expr` gives
                     // an ordinary pointer-typed local. Skipped for a
@@ -558,7 +622,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         ],
                     );
                     if numeric_store {
-                        let lowered_f64 = LoweredValue::f64(stored_value.clone());
+                        let lowered_f64 = LoweredValue::f64(val_double.clone());
                         ctx.record_lowered_value_with_access_mode(
                             "ScalarObjectFieldSet",
                             Some(*id),
@@ -653,12 +717,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value);
                     let val_double = lower_expr(ctx, value)?;
                     if let Some(slot) = maybe_slot {
-                        let stored_value = if numeric_store {
-                            canonicalize_raw_f64_numeric_store_value(ctx.block(), &val_double)
+                        if numeric_store {
+                            emit_raw_f64_class_field_slot_store(ctx, value, &val_double, &slot);
                         } else {
-                            val_double.clone()
-                        };
-                        ctx.block().store(DOUBLE, &stored_value, &slot);
+                            ctx.block().store(DOUBLE, &val_double, &slot);
+                        }
                         // #6968: see the `ScalarObjectFieldSet` path above —
                         // an inlined constructor's `this.f = …` writes the
                         // same kind of unrooted per-field alloca.
@@ -696,7 +759,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                             ],
                         );
                         if numeric_store {
-                            let lowered_f64 = LoweredValue::f64(stored_value.clone());
+                            let lowered_f64 = LoweredValue::f64(val_double.clone());
                             ctx.record_lowered_value_with_access_mode(
                                 "ScalarThisFieldSet",
                                 Some(target_id),
@@ -1340,16 +1403,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         // Guarded raw-f64 slots are pointer-free by typed
                                         // shape descriptor; non-number writes miss the
                                         // guard and use the boxed setter fallback.
-                                        let blk = ctx.block();
-                                        let numeric_value =
-                                            canonicalize_raw_f64_numeric_store_value(
-                                                blk,
-                                                &val_double,
-                                            );
+                                        // #10907: canonicalize only off the
+                                        // plain-finite path.
+                                        //
                                         // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
                                         // slots contain numbers only.
-                                        blk.store(DOUBLE, &numeric_value, &field_ptr);
-                                        Some(numeric_value)
+                                        emit_raw_f64_class_field_slot_store(
+                                            ctx,
+                                            value,
+                                            &val_double,
+                                            &field_ptr,
+                                        );
+                                        Some(val_double.clone())
                                     } else {
                                         // #5334 lever D: skip the barrier when the value
                                         // is a non-pointer by construction. #7469 extends
