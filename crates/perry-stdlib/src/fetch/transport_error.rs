@@ -142,6 +142,7 @@ impl Rejection {
     pub(crate) fn for_declined(declined: Declined, url: &str, method: &str) -> Self {
         match declined {
             Declined::Unsupported(error) => match error.message {
+                "bad port" => Rejection::Failure(FetchFailure::refused("bad port", None)),
                 "invalid URL" => Rejection::ParseUrl {
                     message: format!("Failed to parse URL from {url}"),
                     cause: "Invalid URL",
@@ -271,6 +272,22 @@ mod tests {
             unsupported("http://example.test/x", "BAD METHOD"),
             Rejection::TypeError(ref m) if m == "'BAD METHOD' is not a valid HTTP method."
         ));
+    }
+
+    #[test]
+    fn blocked_port_has_no_javascript_error_code() {
+        let rejection = Rejection::for_declined(
+            Declined::Unsupported(turnloop_http::Error::new("ERR_BAD_PORT", "bad port")),
+            "http://127.0.0.1:22/",
+            "GET",
+        );
+        match rejection {
+            Rejection::Failure(failure) => {
+                assert_eq!(failure.cause_message, "bad port");
+                assert_eq!(failure.code, None);
+            }
+            _ => panic!("bad port must reject as a fetch failure"),
+        }
     }
 
     #[test]

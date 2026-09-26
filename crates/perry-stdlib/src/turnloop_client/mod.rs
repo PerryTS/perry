@@ -90,11 +90,15 @@ use turnloop_http::http1;
 
 mod content_decoding;
 mod exchange;
+mod port_policy;
 mod posted;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod blocked_port_tests;
 
 pub(crate) use exchange::ClientError;
 
@@ -162,8 +166,7 @@ pub(crate) enum Declined {
     /// loses nothing — reqwest was built without its `socks` feature, so it
     /// failed there too.
     Proxy(turnloop_http::Error),
-    /// Not an `http:`/`https:` URL, embedded credentials, or a method fetch
-    /// refuses: the error `client::Request::new` returned.
+    /// A URL, method, or destination port refused by Fetch policy.
     Unsupported(turnloop_http::Error),
     /// TLS is wanted but the client configuration could not be built.
     NoTls,
@@ -568,6 +571,7 @@ struct Prepared {
 
 fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
     let request = tlc::Request::new(&spec.url, &spec.method).map_err(Declined::Unsupported)?;
+    port_policy::check(&request.url).map_err(Declined::Unsupported)?;
     let proxy = proxy_for(&request.url)?;
     if request.url.scheme() == "https" && exchange::tls_config().is_none() {
         return Err(Declined::NoTls);

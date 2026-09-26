@@ -298,7 +298,8 @@ fn store(response: ResponseOut) -> usize {
 }
 
 fn failure_for(error: ClientError) -> FetchFailure {
-    // The engine's two redirect refusals carry a `code` Node's own rejection
+    // Bad ports and the engine's redirect refusals carry internal codes that
+    // Node does not expose. The two redirect refusals carry a `code` Node's rejection
     // does not: measured against Node 26.5.1, `redirect: 'error'` hitting a
     // 3xx rejects with `cause = Error("unexpected redirect")` (no `.code`),
     // and exceeding the redirect limit rejects with
@@ -307,6 +308,7 @@ fn failure_for(error: ClientError) -> FetchFailure {
     // turnloop-http's text already matches the second message; the first
     // needs remapping from "redirect mode is error" to Node's wording.
     match (error.code, error.message.as_str()) {
+        ("ERR_BAD_PORT", "bad port") => FetchFailure::refused("bad port", None),
         ("UND_ERR_REQ_RETRY", "redirect mode is error") => {
             FetchFailure::refused("unexpected redirect", None)
         }

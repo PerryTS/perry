@@ -102,6 +102,20 @@ pub(super) fn start(id: u64) {
 }
 
 fn start_locked(engine: &mut Engine, id: u64) {
+    // Redirects rewrite the request URL without going through `prepare`.
+    // Check the destination (not the proxy) before acquiring any connection.
+    if let Some(Err(error)) = engine
+        .requests
+        .get(&id)
+        .map(|req| super::port_policy::check(&req.request.url))
+    {
+        deliver(
+            engine,
+            id,
+            Outcome::Err(ClientError::new(error.code, error.message)),
+        );
+        return;
+    }
     // Everything the pool decision needs is copied out first: `acquire` takes
     // `&mut Engine` and a live borrow of the request map would outlive it.
     let Some((key, host, port, secure, proxy, tunnelled)) = engine.requests.get(&id).map(|req| {

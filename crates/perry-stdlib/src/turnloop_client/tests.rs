@@ -866,8 +866,13 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
             "an unsupported URL must be refused to the caller, not be \
              handed to a thread that would refuse it identically"
         );
+        // Use a released ephemeral port: Fetch rejects well-known blocked
+        // ports before posting, whereas this test needs a transport failure.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
         let spec = super::RequestSpec {
-            url: "http://127.0.0.1:1/p10".to_string(),
+            url: format!("http://127.0.0.1:{port}/p10"),
             method: "GET".to_string(),
             headers: Vec::new(),
             body: None,
