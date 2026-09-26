@@ -48,6 +48,7 @@ perry-api-manifest.workspace = true
 anyhow.workspace = true
 aho-corasick.workspace = true
 log.workspace = true
+memchr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

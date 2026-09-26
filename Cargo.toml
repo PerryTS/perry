@@ -378,6 +378,7 @@ serde_json = "1.0"
 libc = "0.2"
 regex = "1.12"
 aho-corasick = "1.1"
+memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
 perex = "0.1.9"
 # turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's

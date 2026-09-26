@@ -169,19 +169,10 @@ fn share_into_longest(input: &[&[u8]]) -> Vec<(usize, usize)> {
     result
 }
 
+/// Single-needle search: `memmem` needs no automaton build per needle, which
+/// the one-pattern Aho-Corasick this replaced paid once per function (#10681).
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if needle.len() > haystack.len() {
-        return None;
-    }
-    AhoCorasickBuilder::new()
-        .kind(Some(AhoCorasickKind::ContiguousNFA))
-        .build(std::iter::once(needle))
-        .ok()?
-        .find(haystack)
-        .map(|found| found.start())
+    memchr::memmem::find(haystack, needle)
 }
 
 #[cfg(test)]
