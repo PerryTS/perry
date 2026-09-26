@@ -18,7 +18,9 @@
 //! clang 22's `clang -c`.
 
 mod optimize_emit;
+mod split_emit;
 use optimize_emit::optimize_and_emit;
+pub use split_emit::WholeUnitReason;
 
 use std::ffi::CString;
 use std::sync::Once;
@@ -162,13 +164,17 @@ fn announce() {
 /// from `build_clang_compile_plan`. `module_name` becomes the module
 /// identifier (the deterministic content-addressed basename, mirroring #7131's
 /// contract that only the IR bytes decide what lands in the object).
+///
+/// Returns one object (or assembly, under `-S`) per emitted piece: one
+/// normally, two when the fast-emit budget split its offenders out (#10586).
+/// `linker::finish_native_pieces` turns them into the single linker input.
 pub fn compile_ll_to_object_inprocess(
     ll_text: &str,
     effective_target: &str,
     clang_style_args: &[String],
     module_name: &str,
     native_roots: bool,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     // Same guard as the external `opt` path (`linker::rs4gc_funclet_refusal`):
     // rewrite-statepoints-for-gc crashes on WinEH funclet pads, and here the
@@ -294,13 +300,15 @@ pub(crate) fn parse_ir_text<'ctx>(
 
 /// Interpret plan argv (same grammar as `compile_ll_to_object_inprocess`) and
 /// run verify -> pass pipeline -> object emission on an already-built module.
-/// The native construction path calls this directly.
+/// The native construction path calls this directly. Pieces as for
+/// [`compile_ll_to_object_inprocess`]; the module is edited in place when the
+/// fast-emit budget splits it.
 pub(crate) fn optimize_and_emit_module(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
     clang_style_args: &[String],
     native_roots: bool,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     optimize_and_emit_module_with_stats(
         module,
         effective_target,
@@ -319,7 +327,7 @@ pub(crate) fn optimize_and_emit_module_with_stats(
     clang_style_args: &[String],
     native_roots: bool,
     stats: Option<&mut UnitCodegenStats>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
         module,
@@ -332,6 +340,14 @@ pub(crate) fn optimize_and_emit_module_with_stats(
         native_roots,
         stats,
     )
+}
+
+/// Test view of an emission that cannot have split (no fast-emit offender):
+/// its one piece.
+#[cfg(test)]
+pub(crate) fn single_piece(mut pieces: Vec<Vec<u8>>) -> Vec<u8> {
+    assert_eq!(pieces.len(), 1, "expected one emitted piece");
+    pieces.pop().expect("one piece")
 }
 
 /// Per-unit facts the backend learns while it works: instruction totals and
@@ -403,13 +419,16 @@ fn module_instruction_census(
 /// live-interval and register-allocation pipeline for a unit containing an
 /// extreme generated function.
 ///
-/// **The demotion is a whole-unit act, so the budget must not be set where
-/// ordinary functions pay for it.** A `TargetMachine`'s optimization level is
-/// a per-module property: LLVM has no per-function escape from the optimized
-/// machine pipeline (`optnone` reaches instruction selection and the optional
-/// machine passes, but *not* LiveIntervals or the greedy register allocator —
-/// measured below), so every ordinary function sharing the unit with one
-/// extreme function is emitted through the O0 machine pipeline too.
+/// **The demotion used to be a whole-unit act.** A `TargetMachine`'s
+/// optimization level is a per-module property: LLVM has no per-function
+/// escape from the optimized machine pipeline (`optnone` reaches instruction
+/// selection and the optional machine passes, but *not* LiveIntervals or the
+/// greedy register allocator — measured below), so every ordinary function
+/// sharing the unit with one extreme function was emitted through the O0
+/// machine pipeline too. Since #10586 the offenders are split into a module
+/// of their own after IR optimization (`inprocess/split_emit.rs`) and only
+/// they are demoted; the measurements below are what that collateral cost,
+/// and why the x86-64 ceiling was first raised to avoid it.
 ///
 /// Measured on `@babel/parser`'s unit 0, LLVM 22 / x86-64 / `-Os` IR pipeline:
 /// one 227,108-instruction closure (163,100 of those are `gc.relocate`) and
@@ -422,11 +441,12 @@ fn module_instruction_census(
 /// | `optnone` on the closure only | 2,070,326 B | 621,693 B | 1.382 MiB | 9.5 s | 518 MiB |
 /// | the same unit *without* the closure | 1,448,633 B | — | 1.382 MiB | 6.4 s | 208 MiB |
 ///
-/// So the siblings are pure loss: the fallback costs them 2.06 MiB of machine
+/// So the siblings were pure loss: the fallback cost them 2.06 MiB of machine
 /// code (168 of 282 functions change) to save ~6 s, and their emitted code is
 /// byte-for-byte what a unit without the extreme function produces as soon as
-/// the unit keeps the optimized pipeline. The `optnone` row is why this is a
-/// budget and not a per-function demotion: it frees the siblings but bounds
+/// they keep the optimized pipeline — which is exactly what the split gives
+/// them. The `optnone` row is why the offender itself is demoted by target
+/// machine rather than by attribute: `optnone` frees the siblings but bounds
 /// neither time (9.5 s of 10.0 s) nor memory (518 MiB — *above* the -O2 arm),
 /// because the greedy allocator still runs on the demoted function.
 ///
@@ -455,7 +475,9 @@ fn module_instruction_census(
 /// 10 GiB compile. aarch64/arm64 — and every other target nobody has measured
 /// — therefore keep 100k until someone measures them the way `x86_64` was
 /// measured above, at which point `default_fast_emit_max_instrs` grows a
-/// match arm and this comment grows a row.
+/// match arm and this comment grows a row. With the split, what the lower
+/// ceiling costs there is the offenders' own O0 code, no longer their
+/// siblings'.
 ///
 /// `PERRY_LL_FAST_EMIT_MAX_INSTRS=<n>` raises or lowers the ceiling on every
 /// target; `0` / `off` disables the fallback. On x86-64,
@@ -551,9 +573,14 @@ pub struct FastEmitFallback {
     pub name: String,
     pub instructions: usize,
     pub cap: usize,
-    /// Defined functions in the unit — the size of the collateral, since the
-    /// machine pipeline is selected per module and not per function.
+    /// Defined functions in the unit, this one included.
     pub unit_functions: usize,
+    /// Defined functions in the unit over the budget, this one included.
+    pub unit_offenders: usize,
+    /// `None` when the offenders are emitted in an object of their own and
+    /// the unit's other functions keep the optimized machine pipeline
+    /// (#10586); otherwise why the whole unit had to be demoted with them.
+    pub whole_unit: Option<WholeUnitReason>,
 }
 
 impl std::fmt::Display for FastEmitFallback {
@@ -561,25 +588,48 @@ impl std::fmt::Display for FastEmitFallback {
         write!(
             f,
             "`{}` has {} instructions after IR optimization, above the optimized machine-pipeline \
-             budget {}; keeping the requested IR optimization, then emitting this unit — all {} \
-             of its defined functions, not only this one — through LLVM's O0 machine pipeline to \
-             bound instruction selection, live intervals and register allocation. LLVM selects \
-             that pipeline per module, so the siblings are demoted too and grow: shrinking this \
-             function is what lifts the whole unit back. Override with \
-             PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or =0 (disable).",
-            self.name, self.instructions, self.cap, self.unit_functions
+             budget {}; keeping the requested IR optimization, then ",
+            self.name, self.instructions, self.cap
+        )?;
+        match self.whole_unit {
+            None => write!(
+                f,
+                "emitting the unit's {} over-budget function(s) through LLVM's O0 machine \
+                 pipeline, in an object of their own, to bound instruction selection, live \
+                 intervals and register allocation; the unit's other {} function(s) keep the \
+                 optimized machine pipeline.",
+                self.unit_offenders,
+                self.unit_functions - self.unit_offenders
+            )?,
+            Some(WholeUnitReason::NoSiblings) => write!(
+                f,
+                "emitting this unit — all {} of its defined functions, every one over the \
+                 budget — through LLVM's O0 machine pipeline to bound instruction selection, \
+                 live intervals and register allocation.",
+                self.unit_functions
+            )?,
+            Some(WholeUnitReason::AliasOrIfunc) => write!(
+                f,
+                "emitting this unit — all {} of its defined functions, not only this one — \
+                 through LLVM's O0 machine pipeline: the unit has a global alias or ifunc, so \
+                 its siblings cannot be split off into their own object.",
+                self.unit_functions
+            )?,
+        }
+        write!(
+            f,
+            " Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or =0 (disable)."
         )
     }
 }
 
 /// Every defined function over `budget`, widest first.
 ///
-/// The decision is per function; the consequence cannot be (see
-/// [`DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64`]), which is why every offender is
-/// returned
-/// rather than only the widest: the compile log then names each function that
-/// has to shrink before the unit can keep the optimized machine pipeline,
-/// instead of naming one and re-reporting a new widest on the next build.
+/// Every offender is returned rather than only the widest: they are all split
+/// into the O0 half together (#10586), and the compile log names each one that
+/// has to shrink to keep the optimized machine pipeline, instead of naming one
+/// and re-reporting a new widest on the next build. `whole_unit` is filled in
+/// by the emission path, which decides whether the split is possible.
 fn fast_emit_fallbacks(
     module: &inkwell::module::Module<'_>,
     budget: FastEmitBudget,
@@ -604,12 +654,15 @@ fn fast_emit_fallbacks(
     // Widest first, ties by name: one deterministic order for the log and the
     // per-unit report, whatever order LLVM holds the functions in.
     over.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let unit_offenders = over.len();
     over.into_iter()
         .map(|(name, instructions)| FastEmitFallback {
             name,
             instructions,
             cap,
             unit_functions: defined,
+            unit_offenders,
+            whole_unit: None,
         })
         .collect()
 }

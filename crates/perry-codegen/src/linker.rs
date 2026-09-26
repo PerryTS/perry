@@ -735,6 +735,26 @@ pub(crate) fn finish_native_emission(
     assembled
 }
 
+/// [`finish_native_emission`] for every piece the in-process backend emitted,
+/// then one linker input: the piece itself when there is one, otherwise the
+/// pieces combined exactly as codegen units are (#10586 — the fast-emit
+/// budget's offenders are emitted apart from their siblings).
+pub(crate) fn finish_native_pieces(
+    pieces: Vec<Vec<u8>>,
+    effective_target: &str,
+    clang_args: &[String],
+) -> Result<Vec<u8>> {
+    let mut objs = pieces
+        .into_iter()
+        .map(|piece| finish_native_emission(piece, effective_target, clang_args))
+        .collect::<Result<Vec<_>>>()?;
+    match objs.len() {
+        0 => Err(anyhow!("the in-process backend emitted no object")),
+        1 => Ok(objs.pop().expect("one piece")),
+        _ => merge_unit_objects(&objs),
+    }
+}
+
 /// Route `.ll -> .o` through the LLVM C API inside this process (no clang
 /// subprocess, no `.ll` on disk).
 ///
@@ -823,9 +843,30 @@ fn compile_ll_inprocess_in(
         &module_name,
         native_roots,
     ) {
+        // A unit whose fast-emit offenders were emitted apart (#10586): each
+        // piece is finished on its own and the pieces are merged.
+        Ok(pieces) if pieces.len() > 1 => {
+            let obj = finish_native_pieces(pieces, &plan.effective_target, &plan.clang_args)
+                .map_err(|error| failed_scratch.finish_with_ir(error, ll_text))?;
+            if policy.keep {
+                let _ = fs::create_dir_all(&paths.scratch_dir);
+                if let Err(e) = fs::write(&plan.obj_path, &obj) {
+                    eprintln!(
+                        "[perry-codegen] could not keep {}: {e}",
+                        plan.obj_path.display()
+                    );
+                } else {
+                    eprintln!("[perry-codegen] kept object: {}", plan.obj_path.display());
+                }
+            } else {
+                let _ = fs::remove_dir_all(&paths.scratch_dir);
+            }
+            Ok(obj)
+        }
         // Statepoint plans ask for `-S`: #7314's compact-map rewriter operates
         // on assembly. Rewrite and assemble those bytes before returning them.
-        Ok(bytes) if plan.asm_path.is_some() => {
+        Ok(mut pieces) if plan.asm_path.is_some() => {
+            let bytes = pieces.pop().expect("one piece");
             let asm_path = plan.asm_path.as_ref().expect("checked");
             if let Some(parent) = asm_path.parent() {
                 fs::create_dir_all(parent).ok();
@@ -869,7 +910,8 @@ fn compile_ll_inprocess_in(
             }
             Ok(obj)
         }
-        Ok(bytes) => {
+        Ok(mut pieces) => {
+            let bytes = pieces.pop().expect("one piece");
             // `PERRY_LLVM_KEEP_IR` promises the whole scratch dir, `.o`
             // included. The clang path gets that for free because the object
             // IS a file; in-process returns bytes and would silently drop it —

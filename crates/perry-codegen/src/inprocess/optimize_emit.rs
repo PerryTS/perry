@@ -14,7 +14,7 @@ pub(super) fn optimize_and_emit(
     emit_asm: bool,
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     global_init(mllvm);
     announce();
 
@@ -185,21 +185,27 @@ pub(super) fn optimize_and_emit(
     // an extreme generated function, LLVM's optimized *machine* pipeline can
     // still become super-linear in instruction selection / LiveIntervals /
     // register allocation. Use an O0 target machine only for final emission
-    // of that unit; ordinary units keep `tm`, and the optimized IR is not
-    // rebuilt or demoted.
+    // of such functions; the optimized IR is not rebuilt or demoted.
     //
-    // The selection is per function, the emission cannot be — a TargetMachine
-    // carries one optimization level for the whole module, and `optnone` does
-    // not reach LiveIntervals or the register allocator. Every ordinary
-    // function in the unit is demoted with the offender, which is why the
-    // budget sits above the measured population of extreme functions and why
-    // the log below names each of them.
-    let fast_emit = if opt == '0' {
+    // A TargetMachine carries one optimization level for a whole module, and
+    // `optnone` does not reach LiveIntervals or the register allocator, so the
+    // offenders are split into a module of their own (#10586) and every
+    // ordinary function in the unit keeps `tm`. Only a unit with nothing left
+    // to free (every function over budget) is demoted whole.
+    let mut fast_emit = if opt == '0' {
         Vec::new()
     } else {
         fast_emit_fallbacks(module, fast_emit_budget(effective_target))
     };
-    for fallback in &fast_emit {
+    let offenders: std::collections::HashSet<String> =
+        fast_emit.iter().map(|f| f.name.clone()).collect();
+    let whole_unit = if fast_emit.is_empty() {
+        None
+    } else {
+        split_emit::whole_unit_reason(module, &offenders)
+    };
+    for fallback in &mut fast_emit {
+        fallback.whole_unit = whole_unit;
         eprintln!("perry: {fallback}");
     }
     if let Some(stats) = stats.as_deref_mut() {
@@ -226,7 +232,10 @@ pub(super) fn optimize_and_emit(
     } else {
         None
     };
-    let emit_tm = fast_tm.as_ref().unwrap_or(&tm);
+    let offender_module = match (&fast_tm, whole_unit) {
+        (Some(_), None) => Some(split_emit::split_offenders(module, &offenders)?),
+        _ => None,
+    };
 
     let kind = if emit_asm {
         FileType::Assembly
@@ -234,13 +243,22 @@ pub(super) fn optimize_and_emit(
         FileType::Object
     };
     let emit_started = std::time::Instant::now();
-    let obj = emit_tm
-        .write_to_memory_buffer(module, kind)
-        .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))?;
+    let emit = |tm: &TargetMachine, m: &inkwell::module::Module<'_>| -> Result<Vec<u8>> {
+        tm.write_to_memory_buffer(m, kind)
+            .map(|obj| obj.as_slice().to_vec())
+            .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))
+    };
+    let pieces = match (&fast_tm, &offender_module) {
+        (Some(fast_tm), Some(offenders)) => {
+            vec![emit(&tm, module)?, emit(fast_tm, &offenders.module)?]
+        }
+        (Some(fast_tm), None) => vec![emit(fast_tm, module)?],
+        (None, _) => vec![emit(&tm, module)?],
+    };
     if let Some(stats) = stats {
         stats.emit_secs = emit_started.elapsed().as_secs_f64();
     }
-    Ok(obj.as_slice().to_vec())
+    Ok(pieces)
 }
 
 #[cfg(test)]
@@ -652,6 +670,7 @@ entry:
             let context = Context::create();
             let module = parse_ir_text(&context, ir, name).expect("fixture parses");
             optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], true)
+                .map(single_piece)
                 .expect("fixture emits assembly")
         };
         // Both arms must be emitted under the SAME module name. The name
@@ -683,6 +702,7 @@ entry:
             (
                 rewritten,
                 optimize_and_emit_module(&module, &target, &["-O3".into(), "-S".into()], false)
+                    .map(single_piece)
                     .expect("rewritten fixture emits assembly"),
             )
         };
@@ -1188,9 +1208,11 @@ entry:
                 name: "wide".to_string(),
                 instructions: 9,
                 cap: 8,
-                // `narrow` is under the cap and `sink` is a declaration; both
-                // are still emitted by the demoted machine pipeline.
+                // `narrow` is under the cap and `sink` is a declaration.
                 unit_functions: 2,
+                unit_offenders: 1,
+                // Decided by the emission path, which can see the aliases.
+                whole_unit: None,
             }],
             "only the function over the budget is selected"
         );
@@ -1204,21 +1226,48 @@ entry:
             .collect();
         assert_eq!(named, [("wide", 9), ("narrow", 3)]);
 
-        let message = fallbacks[0].to_string();
-        for needle in [
+        let mut fallback = fallbacks[0].clone();
+        let common = [
             "`wide`",
             "9 instructions",
             "budget 8",
             "requested IR optimization",
             "O0 machine pipeline",
-            "all 2 of its defined functions",
             "PERRY_LL_FAST_EMIT_MAX_INSTRS",
-        ] {
-            assert!(
-                message.contains(needle),
-                "{needle:?} missing from:\n{message}"
-            );
-        }
+        ];
+        let split = [
+            "1 over-budget function(s)",
+            "object of their own",
+            "other 1 function(s) keep the optimized machine pipeline",
+        ];
+        let whole = ["all 2 of its defined functions"];
+        let check = |message: &str, present: &[&str], absent: &[&str]| {
+            for needle in common.iter().chain(present) {
+                assert!(
+                    message.contains(needle),
+                    "{needle:?} missing from:\n{message}"
+                );
+            }
+            for needle in absent {
+                assert!(
+                    !message.contains(needle),
+                    "{needle:?} wrongly in:\n{message}"
+                );
+            }
+        };
+        check(&fallback.to_string(), &split, &whole);
+        fallback.whole_unit = Some(WholeUnitReason::NoSiblings);
+        check(
+            &fallback.to_string(),
+            &[whole[0], "every one over the budget"],
+            &split,
+        );
+        fallback.whole_unit = Some(WholeUnitReason::AliasOrIfunc);
+        check(
+            &fallback.to_string(),
+            &[whole[0], "global alias or ifunc"],
+            &split,
+        );
     }
 
     /// The ceiling is a calibration, not a round number, and it is only as
@@ -1405,6 +1454,10 @@ entry:
         assert_eq!(fallback.name, "wide");
         assert!(fallback.instructions > fallback.cap);
         assert_eq!(fallback.cap, 1);
+        // Both of the fixture's functions are over a cap of 1: nothing is left
+        // to free, so the unit is demoted whole, as one piece.
+        assert_eq!(fallback.whole_unit, Some(WholeUnitReason::NoSiblings));
+        assert_eq!(object.len(), 1);
 
         // A requested O0 compile already uses the bounded target machine; it
         // neither needs nor reports a fallback.
@@ -1490,13 +1543,19 @@ entry:
         body.join("\n")
     }
 
-    fn emit_assembly(ir: &str, module_name: &str, budget: FastEmitBudget) -> (String, Vec<String>) {
+    /// Every emitted piece's assembly (one normally, two when the budget
+    /// split the offenders out), and the names the budget selected.
+    fn emit_assembly(
+        ir: &str,
+        module_name: &str,
+        budget: FastEmitBudget,
+    ) -> (Vec<String>, Vec<FastEmitFallback>) {
         global_init(&[]);
         let target = crate::codegen::default_target_triple();
         let context = Context::create();
         let module = parse_ir_text(&context, ir, module_name).expect("fixture parses");
         let mut stats = UnitCodegenStats::default();
-        let asm = with_test_fast_emit_budget_value(budget, || {
+        let pieces = with_test_fast_emit_budget_value(budget, || {
             optimize_and_emit_module_with_stats(
                 &module,
                 &target,
@@ -1507,47 +1566,66 @@ entry:
         })
         .expect("the fixture emits");
         (
-            String::from_utf8(asm).expect("LLVM emits UTF-8 assembly"),
-            stats
-                .fast_emit_fallbacks
-                .iter()
-                .map(|f| f.name.clone())
+            pieces
+                .into_iter()
+                .map(|asm| String::from_utf8(asm).expect("LLVM emits UTF-8 assembly"))
                 .collect(),
+            stats.fast_emit_fallbacks,
         )
     }
 
-    /// What the budget actually costs, and why it is calibrated above the
-    /// measured population instead of below the smallest pathological case:
-    /// the demotion is a whole-unit act. An ordinary function emits the same
-    /// machine code whether or not an extreme function shares its unit — but
-    /// only while the unit keeps the optimized machine pipeline. Cross the
-    /// budget and that ordinary function's code changes too, without ever
-    /// having been over any budget itself.
+    fn defines(asm: &str, name: &str) -> bool {
+        asm.lines()
+            .map(str::trim)
+            .any(|line| line == format!("{name}:") || line == format!("_{name}:"))
+    }
+
+    /// #10586: the demotion used to be a whole-unit act — an ordinary
+    /// function sharing a unit with an extreme one was compiled differently
+    /// the moment the budget was crossed, without ever having been over any
+    /// budget itself. The offenders are now emitted in an object of their
+    /// own, so the ordinary function's code is exactly what an undemoted unit
+    /// (and a unit without the extreme function) emits.
     #[test]
-    fn the_budget_is_what_makes_ordinary_siblings_pay() {
+    fn the_budget_no_longer_makes_ordinary_siblings_pay() {
         let with_wide = sibling_cost_fixture(true);
         let alone = sibling_cost_fixture(false);
 
         let (undemoted, none) = emit_assembly(&with_wide, "sibling_cost_ok", FastEmitBudget::Off);
         assert!(none.is_empty(), "this arm must not demote: {none:?}");
+        assert_eq!(undemoted.len(), 1, "an undemoted unit emits one piece");
         let (solo, _) = emit_assembly(&alone, "sibling_cost_alone", FastEmitBudget::Off);
         assert_eq!(
-            function_assembly(&undemoted, "narrow"),
-            function_assembly(&solo, "narrow"),
+            function_assembly(&undemoted[0], "narrow"),
+            function_assembly(&solo[0], "narrow"),
             "an undemoted unit emits an ordinary function exactly as a unit without the \
              extreme function does"
         );
 
-        // Same module, same IR pipeline, budget crossed: `narrow` is not over
-        // it and is compiled differently anyway.
-        let (demoted, over) =
+        // Same module, same IR pipeline, budget crossed by `wide` only.
+        let (split, over) =
             emit_assembly(&with_wide, "sibling_cost_demoted", FastEmitBudget::Cap(7));
-        assert_eq!(over, ["wide"], "only `wide` is over the budget");
+        let names: Vec<&str> = over.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["wide"], "only `wide` is over the budget");
+        assert_eq!(over[0].whole_unit, None, "a unit with a sibling is split");
+        assert_eq!((over[0].unit_functions, over[0].unit_offenders), (2, 1));
+        assert_eq!(split.len(), 2, "siblings and offenders are emitted apart");
+        let (siblings, offenders) = (&split[0], &split[1]);
+        assert!(defines(siblings, "narrow") && !defines(siblings, "wide"));
+        assert!(defines(offenders, "wide") && !defines(offenders, "narrow"));
+        assert_eq!(
+            function_assembly(siblings, "narrow"),
+            function_assembly(&undemoted[0], "narrow"),
+            "the sibling keeps the optimized machine pipeline"
+        );
+
+        // Control: the offender really went through the O0 machine pipeline
+        // — its code differs from what the optimized pipeline emits for it —
+        // or the equality above could not tell a split from no demotion.
         assert_ne!(
-            function_assembly(&demoted, "narrow"),
-            function_assembly(&undemoted, "narrow"),
-            "if the demotion did not reach `narrow`, LLVM grew a per-function escape from the \
-             optimized machine pipeline and this budget can move back down"
+            function_assembly(offenders, "wide"),
+            function_assembly(&undemoted[0], "wide"),
+            "the offender must still be emitted through the O0 machine pipeline"
         );
     }
 }

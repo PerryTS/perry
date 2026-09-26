@@ -432,6 +432,7 @@ fn the_clone_entry_is_shrink_wrapped_frameless() {
         "spec_preserve_none_asm",
         crate::codegen::helpers::native_stack_roots_enabled(),
     )
+    .map(crate::inprocess::single_piece)
     .expect("in-process -O3 -S pipeline");
     let asm = String::from_utf8(asm_bytes).expect("assembly is UTF-8");
 
