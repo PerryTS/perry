@@ -730,8 +730,7 @@ pub(crate) fn build_optimized_libs(
     // Content fingerprint of the sources that land in the archives — makes the
     // stamp (and therefore the freshness gate) immune to mtime scrambling from
     // cache restores / fresh checkouts (#5892 layer 2, #5778 warm-cache trap).
-    let source_fingerprint =
-        auto_optimized_source_fingerprint(&workspace_root, &cobuilt_bindings);
+    let source_fingerprint = auto_optimized_source_fingerprint(&workspace_root, &cobuilt_bindings);
     let build_stamp = auto_optimized_build_stamp(
         &key_input,
         target,

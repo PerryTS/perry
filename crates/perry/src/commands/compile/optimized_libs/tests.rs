@@ -488,9 +488,28 @@ fn net_cobuilds_with_stdlib() {
 #[test]
 fn no_feature_selection_reaches_tokio() {
     let mut modules: Vec<String> = [
-        "net", "tls", "http", "https", "http2", "ws", "dgram", "dns", "zlib", "crypto",
-        "child_process", "worker_threads", "readline", "stream", "streams", "fs/promises",
-        "bcrypt", "argon2", "sharp", "nodemailer", "undici", "perry/container",
+        "net",
+        "tls",
+        "http",
+        "https",
+        "http2",
+        "ws",
+        "dgram",
+        "dns",
+        "zlib",
+        "crypto",
+        "child_process",
+        "worker_threads",
+        "readline",
+        "stream",
+        "streams",
+        "fs/promises",
+        "bcrypt",
+        "argon2",
+        "sharp",
+        "nodemailer",
+        "undici",
+        "perry/container",
     ]
     .iter()
     .map(|m| m.to_string())
@@ -522,7 +541,11 @@ fn no_feature_selection_reaches_tokio() {
         ["perry-stdlib/async-runtime", "perry-stdlib/tokio"],
         "perry-stdlib must declare neither `async-runtime` nor a `tokio` dependency"
     );
-    assert_eq!(cross, ["perry-stdlib/async-bridge"], "the bridge is the one that stays");
+    assert_eq!(
+        cross,
+        ["perry-stdlib/async-bridge"],
+        "the bridge is the one that stays"
+    );
 }
 
 #[test]
@@ -587,7 +610,9 @@ fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
 fn unknown_modules_default_to_workspace_path() {
     // Defensive default: if a module isn't in the allowlist,
     // treat it as CPU-only (existing v0.5.586 behavior).
-    assert!(!binding_cobuilds_with_stdlib("definitely-not-a-real-package"));
+    assert!(!binding_cobuilds_with_stdlib(
+        "definitely-not-a-real-package"
+    ));
 }
 
 #[test]
