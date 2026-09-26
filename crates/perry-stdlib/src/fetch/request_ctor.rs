@@ -213,10 +213,27 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
         keepalive
     };
 
-    js_request_new(
+    // Reflective Request construction also reaches this path (#10380).
+    // Keep its BodyInit conversion: a ReadableStream is a handle whose
+    // bytes must be drained, rather than interpreted as a string pointer.
+    let body_value = field(b"body");
+    let (body_ptr, content_type) = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+        // No conversion happened here: pending metadata can belong to an
+        // outer Response whose init getter is constructing this Request.
+        (std::ptr::null(), None)
+    } else {
+        let outer_content_type = take_pending_fetch_body_content_type();
+        let ptr = js_response_body_init_ptr(body_value) as *const StringHeader;
+        // Consume our metadata while restoring any enclosing constructor's.
+        // Later getters and stream pulls can perform more nested conversions.
+        let content_type = take_pending_fetch_body_content_type();
+        set_pending_fetch_body_content_type(outer_content_type);
+        (ptr, content_type)
+    };
+    let result = js_request_new(
         url_ptr,
         str_field(b"method"),
-        str_field(b"body"),
+        body_ptr,
         headers_handle,
         str_field(b"referrer"),
         str_field(b"referrerPolicy"),
@@ -228,5 +245,14 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
         keepalive,
         str_field(b"duplex"),
         field(b"signal"),
-    )
+    );
+    if let Some(content_type) = content_type {
+        let mut registry = REQUEST_REGISTRY.lock().unwrap();
+        if let Some(request) = registry.get_mut(&handle_id(result)) {
+            if !request.headers.has("content-type") {
+                request.headers.set("content-type", content_type);
+            }
+        }
+    }
+    result
 }

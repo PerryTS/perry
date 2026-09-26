@@ -72,6 +72,8 @@ mod lifecycle;
 // `js_request_new_from_init`) — split out to keep this file under the
 // 2,000-line lint gate (#5458). Same child-module/`use super::*` contract as
 // `headers`.
+mod request_copy;
+pub use request_copy::js_request_new_from_input;
 mod request_ctor;
 pub use request_ctor::*;
 

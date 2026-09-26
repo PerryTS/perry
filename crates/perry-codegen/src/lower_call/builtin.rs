@@ -1128,135 +1128,14 @@ pub(super) fn lower_builtin_new<'a>(
         }
 
         "Request" => {
-            // new Request(url, init?) — init = Fetch RequestInit subset.
-            // The spec runs ToString on `input` when it isn't already a Request,
-            // so a URL object must stringify to its href. `get_raw_string_ptr`
-            // (js_get_string_pointer_unified) only unwraps an actual string value
-            // — handed a URL object (a heap ObjectHeader) it read the object
-            // pointer as a string and produced "", so `new Request(new URL(u)).url`
-            // was empty. Auth.js v5 builds its session request as `new
-            // Request(fu("session", …))` where `fu` returns a URL object, so the
-            // session lookup got an empty URL, returned 400 "Bad request.", and
-            // `auth()` yielded that string instead of null — the authenticated-page
-            // guard then never redirected and fell through to a DB-pool init that
-            // threw. Route through `js_jsvalue_to_string`, which invokes `toString`
-            // on an object (URL → href) and passes a real string straight through.
-            let url_ptr = if !args.is_empty() {
-                let v = lower_expr(ctx, &args[0])?;
-                ctx.block()
-                    .call(I64, "js_request_input_to_url", &[(DOUBLE, &v)])
-            } else {
-                "0".to_string()
-            };
-
-            let mut method_ptr = "0".to_string();
-            let mut body_ptr = "0".to_string();
-            let mut headers_handle = "0.0".to_string();
-            let mut referrer_ptr = "0".to_string();
-            let mut referrer_policy_ptr = "0".to_string();
-            let mut mode_ptr = "0".to_string();
-            let mut credentials_ptr = "0".to_string();
-            let mut cache_ptr = "0".to_string();
-            let mut redirect_ptr = "0".to_string();
-            let mut integrity_ptr = "0".to_string();
-            let mut keepalive = double_literal(f64::from_bits(crate::nanbox::TAG_FALSE));
-            let mut duplex_ptr = "0".to_string();
-            let mut signal = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-
-            // #5458: when the init isn't a statically-extractable object
-            // literal (e.g. a call-expression result `f()`, a spread `{...e}`,
-            // or a dynamic object), read its fields at runtime instead of
-            // discarding it. Dropping the init silently defaulted `method` back
-            // to "GET", mis-dispatching POST requests to GET handlers in Hono.
-            if args.len() >= 2 && extract_options_fields(ctx, &args[1]).is_none() {
-                let init_val = lower_expr(ctx, &args[1])?;
-                let handle = ctx.block().call(
-                    DOUBLE,
-                    "js_request_new_from_init",
-                    &[(I64, &url_ptr), (DOUBLE, &init_val)],
-                );
-                return Ok(Some(handle));
-            }
-
-            if args.len() >= 2 {
-                if let Some(props) = extract_options_fields(ctx, &args[1]) {
-                    for (k, vexpr) in &props {
-                        match k.as_str() {
-                            "method" => {
-                                method_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "body" => {
-                                body_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "headers" => {
-                                if let Some(hprops) = extract_options_fields(ctx, vexpr) {
-                                    headers_handle = build_headers_from_object(ctx, &hprops)?;
-                                } else {
-                                    headers_handle =
-                                        super::options::build_headers_from_value(ctx, vexpr)?;
-                                }
-                            }
-                            "referrer" => {
-                                referrer_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "referrerPolicy" => {
-                                referrer_policy_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "mode" => {
-                                mode_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "credentials" => {
-                                credentials_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "cache" => {
-                                cache_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "redirect" => {
-                                redirect_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "integrity" => {
-                                integrity_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "keepalive" => {
-                                keepalive = lower_expr(ctx, vexpr)?;
-                            }
-                            "duplex" => {
-                                duplex_ptr = get_raw_string_ptr(ctx, vexpr)?;
-                            }
-                            "signal" => {
-                                signal = lower_expr(ctx, vexpr)?;
-                            }
-                            _ => {
-                                let _ = lower_expr(ctx, vexpr)?;
-                            }
-                        }
-                    }
-                } else {
-                    let _ = lower_expr(ctx, &args[1])?;
-                }
-            }
-
-            let handle = ctx.block().call(
+            // Preserve the input until runtime construction. Reducing it to a
+            // URL loses Request fields before init overrides are applied (#10380).
+            let (input, init) = adopt_two_leading_args_discard_rest(ctx, args, group)?;
+            Ok(Some(ctx.block().call(
                 DOUBLE,
-                "js_request_new",
-                &[
-                    (I64, &url_ptr),
-                    (I64, &method_ptr),
-                    (I64, &body_ptr),
-                    (DOUBLE, &headers_handle),
-                    (I64, &referrer_ptr),
-                    (I64, &referrer_policy_ptr),
-                    (I64, &mode_ptr),
-                    (I64, &credentials_ptr),
-                    (I64, &cache_ptr),
-                    (I64, &redirect_ptr),
-                    (I64, &integrity_ptr),
-                    (DOUBLE, &keepalive),
-                    (I64, &duplex_ptr),
-                    (DOUBLE, &signal),
-                ],
-            );
-            Ok(Some(handle))
+                "js_request_new_from_input",
+                &[(DOUBLE, &input), (DOUBLE, &init)],
+            )))
         }
 
         // Issue #237: Web Streams API constructors. Source / sink / transform

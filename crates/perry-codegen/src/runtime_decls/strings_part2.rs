@@ -1016,6 +1016,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // spreads, dynamic objects). Reads method/body/headers/... off the init
     // object at runtime instead of silently dropping them.
     module.declare_function("js_request_new_from_init", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_request_new_from_input", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_input_to_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
