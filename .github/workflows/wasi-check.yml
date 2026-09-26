@@ -31,6 +31,8 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/wasi_check.sh"
+      - "scripts/runtime_abi_check.py"
+      - "crates/perry-codegen/src/**"
       - ".github/workflows/wasi-check.yml"
   # Main-line arm: one daily sweep, not one run per merge — see
   # docs/src/testing/ci-gate-scheduling.md before adding `push: branches: [main]`.
@@ -68,3 +70,11 @@ jobs:
 
       - name: perry-runtime builds for wasm32-wasip2
         run: ./scripts/wasi_check.sh
+
+      # Report-only until #11378 turns the wasm32 categories into a ratchet:
+      # codegen's runtime declarations and call sites vs the runtime's real
+      # `extern "C"` signatures. The self-test proves every category can fire.
+      - name: Runtime ABI check (self-test)
+        run: python3 scripts/runtime_abi_check.py --self-test
+      - name: Runtime ABI check (report)
+        run: python3 scripts/runtime_abi_check.py
