@@ -184,14 +184,21 @@ pub(crate) fn forget_body_classification(func_ptr: *const u8) {
     });
 }
 
-/// Is `closure` on a base Function shape (any body kind)? One cached kind
-/// lookup of its +4 word.
+/// Is `closure` on a base Function shape (any body kind)?
 ///
 /// # Safety
 /// `closure` is a proven, live closure cell.
 #[inline]
 pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> bool {
-    shapes::shape_object_kind_by_id((*closure).shape_id) == Some(ShapeObjectKind::Function)
+    // A closure's word is a base Function id or the one FunctionDictionary
+    // id (the only transition this stage makes), so one compare answers it.
+    let id = (*closure).shape_id;
+    debug_assert!(
+        id == function_dictionary_shape()
+            || shapes::shape_object_kind_by_id(id) == Some(ShapeObjectKind::Function),
+        "a closure carries a Function or the FunctionDictionary shape: {id:#x}"
+    );
+    id != function_dictionary_shape()
 }
 
 /// Record that `closure` now answers something its base shape does not:

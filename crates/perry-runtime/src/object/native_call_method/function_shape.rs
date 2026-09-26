@@ -42,10 +42,18 @@ pub(crate) unsafe fn try_function_shape_method_call(
     }
     // (1) One compare on the shape word, then prove the cell really is a
     // closure (the word alone is a claim; the tracked header is the proof).
-    let base = crate::closure::shape::function_base_shape(
-        crate::closure::shape::FunctionProtoKind::Function,
-    );
-    if *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32) != base {
+    // The band test first: every non-function receiver (a Map's capacity, an
+    // object's ordinary ShapeId) leaves here on one compare, before the
+    // agent's base id is even loaded.
+    let word = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
+    if !crate::object::shapes::is_exotic_shape_id(word) {
+        return None;
+    }
+    if word
+        != crate::closure::shape::function_base_shape(
+            crate::closure::shape::FunctionProtoKind::Function,
+        )
+    {
         return None;
     }
     if !crate::closure::is_closure_ptr(addr) {

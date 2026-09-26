@@ -486,7 +486,10 @@ unsafe fn proved_entry(
     // always in that range, so a word that is not cannot match it.
     let recv_class_id = (*obj).class_id;
     let recv_shape = shapes::object_shape_stamp(obj);
-    if recv_shape == 0 {
+    // 0 = no ShapeId at +4; an exotic-band id is a non-object receiver (a
+    // function), which this cache does not serve (yet): it answers a
+    // `GC_TYPE_OBJECT` chain only.
+    if recv_shape == 0 || shapes::is_exotic_shape_id(recv_shape) {
         return Err(Lookup::Unknown);
     }
     let index = entry_index(recv_class_id, recv_shape, key as usize);
