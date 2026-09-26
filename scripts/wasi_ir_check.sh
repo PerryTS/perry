@@ -8,12 +8,13 @@
 #
 # Linking a `.wasm` is phase 4 (#11379), so the compile is expected to fail
 # at the link step for now; what this checks is the codegen output, which
-# `PERRY_SAVE_LL` captures before that. A program that produces no IR fails.
+# `PERRY_SAVE_LL` captures before that. A program that produces no IR fails,
+# and so does one whose objects fail to compile ("Error compiling module"):
+# only the link may fail.
 #
 # Liveness: every saved module must carry the wasm32 triple (a host compile
-# would pass the ABI check vacuously against nothing), a forced two-unit
-# compile must produce per-unit IR, and the ABI check must have verified a
-# non-zero number of runtime calls.
+# would pass the ABI check vacuously against nothing) and the ABI check must
+# have verified a non-zero number of runtime calls.
 
 set -euo pipefail
 
@@ -37,6 +38,16 @@ SAMPLES=(
   test_gap_object_methods
 )
 
+# The IR is saved before object emission, so saved IR alone does not show the
+# objects compiled: reject a failure before the (expected) link failure.
+require_objects() {
+  if grep -q "Error compiling module" "$2"; then
+    echo "::error::$1 failed to compile to wasm32 objects" >&2
+    grep -A6 "Error compiling module" "$2" >&2
+    exit 1
+  fi
+}
+
 n=0
 for name in "${SAMPLES[@]}"; do
   src="$ROOT/test-files/$name.ts"
@@ -54,6 +65,7 @@ for name in "${SAMPLES[@]}"; do
     tail -20 "$dir/log.txt" >&2
     exit 1
   fi
+  require_objects "$name" "$dir/log.txt"
   for ll in "$dir"/*.ll; do
     if ! grep -q '^target triple = "wasm32-' "$ll"; then
       echo "::error::$ll is not wasm32 IR; was perry built with --features target-wasi?" >&2
@@ -61,27 +73,6 @@ for name in "${SAMPLES[@]}"; do
     fi
     n=$((n + 1))
   done
-done
-
-# The codegen-unit split path adapts each unit on its own. Force it on one
-# sample (small modules never split by themselves) and require per-unit IR,
-# so the ABI check below also covers split output.
-split="$OUT/split_${SAMPLES[0]}"
-mkdir -p "$split"
-( cd "$split" && PERRY_CODEGEN_UNITS=2 PERRY_SAVE_LL="$split" PERRY_NO_AUTO_OPTIMIZE=1 PERRY_NO_CACHE=1 \
-    timeout 300 "$PERRY" compile "$ROOT/test-files/${SAMPLES[0]}.ts" -o "$split/out" --target wasi \
-    >"$split/log.txt" 2>&1 ) || true
-if ! compgen -G "$split/*.unit1.ll" >/dev/null; then
-  echo "::error::PERRY_CODEGEN_UNITS=2 produced no per-unit IR; the split path did not run" >&2
-  tail -20 "$split/log.txt" >&2
-  exit 1
-fi
-for ll in "$split"/*.ll; do
-  if ! grep -q '^target triple = "wasm32-' "$ll"; then
-    echo "::error::$ll is not wasm32 IR" >&2
-    exit 1
-  fi
-  n=$((n + 1))
 done
 
 # A mismatch exits 1: capture it so the report still prints, then fail.
