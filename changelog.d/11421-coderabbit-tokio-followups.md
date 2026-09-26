@@ -1,0 +1,2 @@
+- Docs: the native-bindings authoring guide's async one-shot example now compiles as written. It imports `StringHeader`, `JsString` and `read_string`, reads its argument with `read_string(JsString::from_raw(..))` and defines its `my_digest` stand-in. (A CodeRabbit follow-up from #11402.)
+- Tests: `tls_import_routes_net_wrapper` holds `env_lock()` around `well_known_iteration_set`, which reads `PERRY_FORCE_WELL_KNOWN`. (A CodeRabbit follow-up from #11405.)
