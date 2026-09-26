@@ -524,3 +524,153 @@ mod first_timer_cost_tests {
         .expect("the probe thread must not panic");
     }
 }
+
+/// #10522: `t.unref()` & co. skip the dispatch tower only while the call
+/// provably resolves to the family's own native method. Each override a
+/// program can make must send the call back to the tower, or the fast path
+/// would run the native method where JS says something else runs.
+#[cfg(test)]
+mod method_fast_path_tests {
+    use super::*;
+    use crate::timer::try_timer_method_fast_dispatch as fast;
+
+    fn key(name: &str) -> *const crate::StringHeader {
+        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    }
+
+    /// Timer prototypes are per-thread singletons, and a test that mutates one
+    /// must not leak that into later tests on a reused thread.
+    fn on_fresh_thread(body: impl FnOnce() + Send + 'static) {
+        let _serial = crate::gc::global_side_table_test_lock();
+        std::thread::spawn(move || {
+            crate::gc::ensure_gc_initialized();
+            body();
+        })
+        .join()
+        .expect("the probe thread must not panic");
+    }
+
+    fn new_timeout() -> (f64, i64) {
+        let value = crate::value::js_nanbox_pointer(js_set_timeout_callback(0, 50_000.0));
+        let (id, _) = crate::timer::timer_handle_parts(value).expect("branded handle");
+        (value, id)
+    }
+
+    fn timeout_proto() -> *mut crate::object::ObjectHeader {
+        handle_object::TIMEOUT_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut _
+    }
+
+    #[test]
+    fn a_pristine_handle_takes_the_fast_path_with_the_thunks_answers() {
+        on_fresh_thread(|| unsafe {
+            let (t, id) = new_timeout();
+            assert_eq!(fast(t, b"unref").map(f64::to_bits), Some(t.to_bits()));
+            assert_eq!(js_timer_has_ref(id), 0, "unref() did not take");
+            let has_ref = fast(t, b"hasRef").expect("hasRef on the fast path");
+            assert_eq!(has_ref.to_bits(), crate::value::JSValue::bool(false).bits());
+            assert_eq!(fast(t, b"ref").map(f64::to_bits), Some(t.to_bits()));
+            assert_eq!(js_timer_has_ref(id), 1, "ref() did not take");
+            assert_eq!(fast(t, b"refresh").map(f64::to_bits), Some(t.to_bits()));
+            // Not a fast-path name: the tower answers it.
+            assert!(fast(t, b"close").is_none());
+            // An Immediate has no `refresh` in node; the tower throws for it.
+            let imm = crate::value::js_nanbox_pointer(js_set_immediate_callback(0));
+            assert!(fast(imm, b"refresh").is_none());
+            assert!(fast(imm, b"unref").is_some());
+            // And the generic entry point reaches it: `t.unref()` as emitted.
+            let result = crate::object::js_native_call_method(
+                t,
+                b"unref".as_ptr() as *const i8,
+                5,
+                std::ptr::null(),
+                0,
+            );
+            assert_eq!(result.to_bits(), t.to_bits());
+            assert_eq!(js_timer_has_ref(id), 0);
+            clearTimeout(id);
+        });
+    }
+
+    #[test]
+    fn an_own_property_on_the_handle_is_not_bypassed() {
+        on_fresh_thread(|| unsafe {
+            let (t, id) = new_timeout();
+            let obj =
+                (t.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+            crate::object::js_object_set_field_by_name(obj, key("unref"), 1.0);
+            assert!(
+                fast(t, b"unref").is_none(),
+                "an own `unref` shadows the prototype"
+            );
+            // Any own key at all leaves the pristine shape; stay conservative.
+            let (t2, id2) = new_timeout();
+            let obj2 =
+                (t2.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+            crate::object::js_object_set_field_by_name(obj2, key("tag"), 1.0);
+            assert!(fast(t2, b"unref").is_none());
+            clearTimeout(id);
+            clearTimeout(id2);
+        });
+    }
+
+    #[test]
+    fn a_replaced_prototype_method_is_not_bypassed() {
+        on_fresh_thread(|| unsafe {
+            let (t, id) = new_timeout();
+            let proto = timeout_proto();
+            let original = crate::object::js_object_get_field_by_name(proto, key("unref"));
+            let ref_method = crate::object::js_object_get_field_by_name(proto, key("ref"));
+            // `Timeout.prototype.unref = Timeout.prototype.ref`: a closure, and
+            // a native one, but not THIS method's thunk.
+            crate::object::js_object_set_field_by_name(
+                proto,
+                key("unref"),
+                f64::from_bits(ref_method.bits()),
+            );
+            assert!(fast(t, b"unref").is_none());
+            crate::object::js_object_set_field_by_name(
+                proto,
+                key("unref"),
+                f64::from_bits(original.bits()),
+            );
+            assert!(
+                fast(t, b"unref").is_some(),
+                "restoring the method restores the path"
+            );
+            clearTimeout(id);
+        });
+    }
+
+    #[test]
+    fn a_prototype_getter_is_not_bypassed() {
+        on_fresh_thread(|| unsafe {
+            let (t, id) = new_timeout();
+            let proto = timeout_proto();
+            let getter = crate::object::js_object_get_field_by_name(proto, key("ref"));
+            crate::object::js_object_define_getter(
+                crate::value::js_nanbox_pointer(proto as i64),
+                crate::value::js_nanbox_string(key("unref") as i64),
+                f64::from_bits(getter.bits()),
+            );
+            assert!(
+                fast(t, b"unref").is_none(),
+                "an accessor must run, not the thunk"
+            );
+            clearTimeout(id);
+        });
+    }
+
+    #[test]
+    fn a_replaced_handle_prototype_is_not_bypassed() {
+        on_fresh_thread(|| unsafe {
+            let (t, id) = new_timeout();
+            let other = crate::object::js_object_alloc(0, 0);
+            crate::object::prototype_chain::object_set_user_prototype(
+                (t.to_bits() & crate::value::POINTER_MASK) as usize,
+                crate::value::js_nanbox_pointer(other as i64).to_bits(),
+            );
+            assert!(fast(t, b"unref").is_none());
+            clearTimeout(id);
+        });
+    }
+}

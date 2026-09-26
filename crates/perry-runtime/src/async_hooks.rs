@@ -160,8 +160,12 @@ struct HookRecord {
 // thread resolves to, not the scanner's reach.
 per_test_global! {
     static HOOKS: LazyLock<Mutex<Vec<HookRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-    static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+    // #10522: aHash, not SipHash — every `setTimeout` inserts and every clear
+    // or fire removes an entry, keyed by our own monotonic async id, so there
+    // is no untrusted key to defend against and SipHash's rounds were a
+    // measurable share of timer churn.
+    static RESOURCES: LazyLock<Mutex<HashMap<u64, ResourceMeta, ahash::RandomState>>> =
+        LazyLock::new(|| Mutex::new(HashMap::default()));
     static GC_DESTROY_QUEUE: Mutex<VecDeque<u64>> = Mutex::new(VecDeque::new());
     static NEXT_CONTEXT_SNAPSHOT_ID: AtomicUsize = AtomicUsize::new(1);
     static CONTEXT_SNAPSHOTS: LazyLock<
@@ -976,6 +980,12 @@ pub fn init_resource_with_trigger(
 }
 
 fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f64) {
+    // `with_hook_callbacks` returns at once without hooks; check first so the
+    // common no-hooks case does not allocate the type-name string per resource
+    // (one per `setTimeout`, #10522).
+    if !hooks_active() {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let resource_handle = scope.root_nanbox_f64(resource);
     let type_ptr = js_string_from_bytes(type_name.as_ptr(), type_name.len() as u32);

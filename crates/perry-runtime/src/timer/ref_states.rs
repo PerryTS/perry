@@ -31,7 +31,10 @@ struct TimerHandleState {
 /// [`ScheduledTimerId`]. The map is bounded by live timers + `cap`.
 #[derive(Default)]
 pub(super) struct TimerRefStates {
-    states: HashMap<i64, TimerHandleState>,
+    /// #10522: aHash — the key is our own monotonic timer id (no untrusted
+    /// input), and this map is touched on every schedule, `ref`/`unref` and
+    /// retire, where SipHash's rounds were a measurable share of timer churn.
+    states: HashMap<i64, TimerHandleState, ahash::RandomState>,
     /// Retired ids, oldest first — the only eviction candidates.
     retired: VecDeque<i64>,
 }

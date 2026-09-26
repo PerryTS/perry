@@ -1295,6 +1295,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     {
         return result;
     }
+    // #10522: `t.unref()` & co. on a pristine timer handle; the guard proves the
+    // tower would resolve the family's own native method (`timer::handle_object`).
+    if !method_name_ptr.is_null() {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if let Some(result) = crate::timer::try_timer_method_fast_dispatch(object, name) {
+            return result;
+        }
+    }
 
     // Get the method name (parsed early for depth guard logging).
     //

@@ -389,7 +389,7 @@ pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 pub use ref_states::is_known_timer_id;
 use ref_states::register_scheduled_timer;
 
-pub(crate) use handle_object::scan_timer_prototype_roots_mut;
+pub(crate) use handle_object::{scan_timer_prototype_roots_mut, try_timer_method_fast_dispatch};
 // `crate::timer::`-qualified only from unit tests (`timer/tests_inline.rs`,
 // `gc/tests/handle_bound_method_name.rs`, `timer/ref_states.rs`'s test module);
 // an unconditional `pub(crate) use` would be an unused import in a lib build

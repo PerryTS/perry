@@ -184,6 +184,109 @@ extern "C" fn timer_proto_refresh_thunk(_c: *const crate::closure::ClosureHeader
     this
 }
 
+/// #10522: `t.ref()` / `t.unref()` / `t.hasRef()` / `t.refresh()` answered
+/// without the generic dispatch tower, when the call provably resolves to the
+/// native method this family installed.
+///
+/// A timer handle carries a `meta` record (its state word) and a recorded
+/// prototype, so the class-vtable fast path (#7769) refuses it, and every call
+/// walked the whole tower instead: primitive and handle probes, a by-name
+/// prototype read that allocates the key string, then a closure rebind and a
+/// call through the thunk. That walk was ~6.3 k instructions of a ~13.7 k
+/// `setTimeout` + `unref` + `clearTimeout` round (rate-limiter-flexible's
+/// `MemoryStorage` shape), more than the timer bookkeeping itself.
+///
+/// The fast path resolves the property itself, with no cache to go stale:
+///
+/// * the receiver is a timer handle whose `[[Prototype]]` is still its
+///   family's prototype, with no own string keys, not in dictionary mode, and
+///   no accessor recorded for the name — so the lookup reaches the prototype;
+/// * the prototype holds the name as an own DATA property (no accessor; a
+///   dictionary-mode prototype is not scanned) whose value is a closure over
+///   exactly this method's thunk.
+///
+/// Any user change on either side — `t.unref = f`, `Object.setPrototypeOf`,
+/// `Timeout.prototype.unref = f`, a getter via `defineProperty`, `delete` —
+/// fails one of those checks and the call takes the tower as before. The
+/// answer is the thunk's own, so the two paths cannot disagree.
+pub(crate) unsafe fn try_timer_method_fast_dispatch(object: f64, name: &[u8]) -> Option<f64> {
+    let thunk = match name {
+        b"unref" => timer_proto_unref_thunk as *const u8,
+        b"ref" => timer_proto_ref_thunk as *const u8,
+        b"hasRef" => timer_proto_has_ref_thunk as *const u8,
+        b"refresh" => timer_proto_refresh_thunk as *const u8,
+        _ => return None,
+    };
+    let (id, is_immediate) = timer_handle_parts(object)?;
+    let obj = (object.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
+    let slot = if is_immediate {
+        &IMMEDIATE_PROTOTYPE_PTR
+    } else {
+        &TIMEOUT_PROTOTYPE_PTR
+    };
+    let proto = slot.load(Ordering::Acquire) as *const crate::object::ObjectHeader;
+    if proto.is_null() {
+        return None;
+    }
+    // `timer_handle_parts` proved `meta` non-null.
+    if (*(*obj).meta).prototype != crate::value::js_nanbox_pointer(proto as i64).to_bits() {
+        return None;
+    }
+    let name_str = std::str::from_utf8_unchecked(name);
+    if crate::object::dictionary::is_dictionary(obj)
+        || crate::object::shapes::object_shape_descriptor(obj)?.logical_key_count != 0
+        || crate::object::descriptor_state::may_have_descriptor_entry(obj as usize, name_str, true)
+    {
+        return None;
+    }
+    if crate::object::dictionary::is_dictionary(proto)
+        || crate::object::descriptor_state::may_have_descriptor_entry(
+            proto as usize,
+            name_str,
+            true,
+        )
+    {
+        return None;
+    }
+    let descriptor = crate::object::shapes::object_shape_descriptor(proto)?;
+    let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
+    if keys.is_null() || !crate::value::addr_class::is_above_handle_band(keys as usize) {
+        return None;
+    }
+    let (slots, slot_len) = crate::object::keys_array_dense_slots_resolved(keys);
+    let key_count = (descriptor.logical_key_count as usize).min(slot_len);
+    let index = (0..key_count).find(|&i| {
+        let key = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        crate::string::js_string_key_matches_bytes(key, name)
+    })?;
+    let value = crate::object::js_object_get_field(proto, index as u32);
+    if !value.is_pointer() {
+        return None;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    if !crate::closure::is_closure_ptr(closure as usize)
+        || crate::closure::get_valid_func_ptr(closure) != thunk
+    {
+        return None;
+    }
+    // The thunks' bodies, with the receiver already in hand.
+    Some(match name {
+        b"unref" => {
+            js_timer_unref(id);
+            object
+        }
+        b"ref" => {
+            js_timer_ref(id);
+            object
+        }
+        b"hasRef" => f64::from_bits(crate::value::JSValue::bool(js_timer_has_ref(id) != 0).bits()),
+        _ => {
+            js_timer_refresh(id);
+            object
+        }
+    })
+}
+
 fn clear_every_kind(id: i64) {
     clearTimeout(id);
     clearInterval(id);
