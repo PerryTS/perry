@@ -137,7 +137,9 @@ fn non_macos_targets_do_not_reference_bundle_chdir() {
         "aarch64-apple-tvos",
         "arm64-apple-tvos17.0-simulator",
         "arm64-apple-xros1.0",
-        "arm64_32-apple-watchos",
+        // The default watchOS device triple; arm64_32 (opt-in) is refused by
+        // codegen until #11378.
+        "aarch64-apple-watchos",
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
         "aarch64-unknown-linux-android",

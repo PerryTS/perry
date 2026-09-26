@@ -330,9 +330,10 @@ fn a_call_inside_a_try_region_invokes_with_the_convention() {
 fn unsupported_targets_keep_the_default_convention() {
     // Same predicate family as the RS4GC target-awareness: watchOS arm64_32
     // and ARM64 Windows never see the convention, everything the runtime can
-    // walk does.
+    // walk does. (arm64_32 is refused by `compile_module` before this gate
+    // until #11378 — `target_layout::ilp32_codegen_refusal` — so it cannot be
+    // compiled here; put it back in this list when that refusal is lifted.)
     for triple in [
-        "arm64_32-apple-watchos",
         "aarch64-pc-windows-msvc",
         "aarch64-w64-mingw32",
     ] {
