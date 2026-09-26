@@ -599,14 +599,13 @@ pub fn try_lower_closure_typed_local_call(
                     // `declared_count == lowered_args.len()` gate. The only
                     // dynamic question is "is the value still the closure
                     // whose body is `@closure_fn`", and two compare-only loads
-                    // answer it: `type_tag == CLOSURE_MAGIC` at the header's
-                    // tag slot and `func_ptr == @closure_fn` at word 0. A
-                    // forwarded (moved) closure fails the func-ptr compare —
-                    // its word 0 holds the forwarding target — and takes the
-                    // guard, which resolves forwarding as it always did. A
-                    // non-closure heap object would need BOTH its tag word to
-                    // spell "CLOS" AND its first word to equal this exact code
-                    // address to slip through; the runtime's volatile-ordering
+                    // answer it: the GcHeader's (type, flags) halfword is exactly
+                    // (CLOSURE, not FORWARDED) and `func_ptr == @closure_fn`. A
+                    // forwarded (moved) closure fails the header compare and
+                    // takes the guard, which resolves forwarding as it always
+                    // did. A non-closure heap cell fails the header compare —
+                    // the kind is the GC type byte, not payload bytes; the
+                    // runtime's volatile-ordering
                     // ceremony guards a transmute-and-call of an ARBITRARY
                     // func_ptr, which this compare-only probe never does.
                     // #7170 R1 single-binding fact: identity holds with
@@ -638,27 +637,36 @@ pub fn try_lower_closure_typed_local_call(
                         }
                         ctx.current_block = probe_idx;
                         {
-                            let tag_offset = crate::target_layout::closure_type_tag_offset_bytes(
+                            let fp_offset = crate::target_layout::closure_func_ptr_offset_bytes(
                                 ctx.target_triple,
                             )
                             .to_string();
                             let blk = ctx.block();
                             let bits = blk.bitcast_double_to_i64(&recv_box);
                             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-                            let tag_addr = blk.add(I64, &handle, &tag_offset);
-                            let tag_ptr = blk.inttoptr(I64, &tag_addr);
-                            let tag = blk.load(I32, &tag_ptr);
-                            // CLOSURE_MAGIC — "CLOS" (0x434C4F53). Derived, not
-                            // hand-typed: a transposed hand conversion of this
-                            // constant made the probe miss on every call and
-                            // cost three rounds of wrong conclusions.
-                            const CLOSURE_MAGIC_I32: u32 = 0x434C_4F53;
-                            let magic_ok = blk.icmp_eq(I32, &tag, &CLOSURE_MAGIC_I32.to_string());
-                            let fp_ptr = blk.inttoptr(I64, &handle);
+                            // GcHeader bytes 0..2 = (obj_type, gc_flags): the
+                            // closure kind with the FORWARDED bit clear.
+                            let hdr_addr = blk.sub(
+                                I64,
+                                &handle,
+                                &crate::runtime_abi::GC_HEADER_SIZE.to_string(),
+                            );
+                            let hdr_ptr = blk.inttoptr(I64, &hdr_addr);
+                            let kind_flags = blk.load(crate::types::I16, &hdr_ptr);
+                            let kind_mask = u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8 | 0xFF;
+                            let masked =
+                                blk.and(crate::types::I16, &kind_flags, &kind_mask.to_string());
+                            let kind_ok = blk.icmp_eq(
+                                crate::types::I16,
+                                &masked,
+                                &crate::runtime_abi::GC_TYPE_CLOSURE.to_string(),
+                            );
+                            let fp_addr = blk.add(I64, &handle, &fp_offset);
+                            let fp_ptr = blk.inttoptr(I64, &fp_addr);
                             let fp = blk.load(I64, &fp_ptr);
                             let expected_fp = blk.ptrtoint(&format!("@{}", closure_fn), I64);
                             let fp_ok = blk.icmp_eq(I64, &fp, &expected_fp);
-                            let hit = blk.and(I1, &magic_ok, &fp_ok);
+                            let hit = blk.and(I1, &kind_ok, &fp_ok);
                             blk.cond_br(&hit, &fast_label, &guard_call_label);
                         }
                         ctx.current_block = guard_call_idx;

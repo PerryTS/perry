@@ -406,6 +406,15 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            if name == "Function" {
+                // SAFETY: `proto_obj` is the live, just-populated prototype.
+                unsafe {
+                    crate::object::proto_validity::assign_intrinsic_prototype_serial(
+                        proto_obj as usize,
+                        crate::closure::shape::INTRINSIC_SERIAL_FUNCTION,
+                    );
+                }
+            }
             install_error_prototype_data_properties(name, proto_obj);
             // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
             // object is %Error.prototype% (not %Object.prototype%). `Error` is

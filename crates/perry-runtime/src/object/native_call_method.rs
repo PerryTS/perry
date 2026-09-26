@@ -2118,8 +2118,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
 
-        // Issue #618: closure receivers (GC_TYPE_CLOSURE=4 OR
-        // CLOSURE_MAGIC-marked GC_TYPE_OBJECT slot) — look up the method
+        // Issue #618: closure receivers (GC_TYPE_CLOSURE) — look up the method
         // name in the closure's dynamic-prop side-table. If a callable
         // closure is stored there (via the IIFE-namespace pattern
         // `((sql2) => { sql2.identifier = ...; })(sql)`), dispatch
@@ -2127,9 +2126,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         // NULL_OBJECT_BYTES stub for any method call on a closure, so
         // the call result was an empty object stub instead of the
         // dynamic-prop closure's return value.
-        let is_closure = gc_type == crate::gc::GC_TYPE_CLOSURE
-            || *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32)
-                == crate::closure::CLOSURE_MAGIC;
+        let is_closure = gc_type == crate::gc::GC_TYPE_CLOSURE;
         if is_closure {
             let dyn_val = crate::closure::closure_get_dynamic_prop(obj as usize, method_name);
             if dyn_val.to_bits() != crate::value::TAG_UNDEFINED {

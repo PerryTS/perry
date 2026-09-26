@@ -10,6 +10,7 @@ mod box_captures;
 mod dispatch;
 mod dynamic_props;
 mod registry;
+pub(crate) mod shape;
 mod unbox;
 mod v8_stubs;
 mod wide_call;
@@ -25,8 +26,9 @@ pub use alloc::{
     js_closure_set_capture_f64, js_closure_set_capture_ptr, note_closure_capture_slot,
     rebuild_closure_layout_and_barriers, scan_singleton_closure_roots_mut, ClosureHeader,
     CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
-    CLOSURE_TYPE_TAG_OFFSET,
+    CLOSURE_SHAPE_OFFSET,
 };
+pub use shape::closure_kind_probe;
 pub(crate) use alloc::{gc_capture_slot_range, singleton_closure_if_cached};
 
 pub(crate) use registry::closure_registry_census;
@@ -55,7 +57,7 @@ pub use registry::{
     js_register_closure_synthetic_arguments, js_register_closure_trusted_direct,
     lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
     real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
-    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
+    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, NO_THIS_REBIND_FLAG,
 };
 
 pub(crate) use dispatch::{

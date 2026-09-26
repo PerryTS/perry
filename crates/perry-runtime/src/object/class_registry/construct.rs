@@ -1916,7 +1916,7 @@ pub(crate) fn is_callable_function_value(value: f64) -> bool {
     if !is_valid_obj_ptr(ptr as *const u8) {
         return false;
     }
-    unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC }
+    unsafe { crate::closure::closure_kind_probe(ptr as usize) }
 }
 
 pub(super) fn is_arrow_function_value(value: f64) -> bool {
@@ -1933,7 +1933,7 @@ pub(super) fn is_arrow_function_value(value: f64) -> bool {
         return false;
     }
     unsafe {
-        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+        if !crate::closure::closure_kind_probe(ptr as usize) {
             return false;
         }
     }

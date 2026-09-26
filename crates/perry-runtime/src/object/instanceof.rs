@@ -188,7 +188,7 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
     if closure.is_null() {
         return None;
     }
-    if unsafe { (*closure).type_tag } != crate::closure::CLOSURE_MAGIC {
+    if !crate::closure::is_closure_ptr(closure as usize) {
         return None;
     }
     let name_value = crate::closure::closure_get_dynamic_prop(closure as usize, "name");

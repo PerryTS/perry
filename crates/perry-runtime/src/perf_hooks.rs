@@ -1326,7 +1326,7 @@ unsafe fn closure_ptr_from_value(value: f64) -> Option<*const crate::closure::Cl
         return None;
     }
     let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
-    if ptr.is_null() || (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+    if ptr.is_null() || !crate::closure::is_closure_ptr(ptr as usize) {
         return None;
     }
     Some(ptr)

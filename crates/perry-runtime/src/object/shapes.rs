@@ -408,9 +408,25 @@ pub(crate) enum ShapeObjectKind {
     /// which writes out of bounds (#10942). A set whose membership is partly
     /// accidental cannot be secured by enumerating it.
     Dictionary,
+    /// A function object (`GC_TYPE_CLOSURE`) whose own properties are exactly
+    /// the intrinsic ones (`name`, `length`, `prototype`) and whose
+    /// [[Prototype]] is the intrinsic its body kind names (the shape's
+    /// `proto_id`). Minted in the exotic band: no per-site own-slot cache may
+    /// hold it, because a closure's +16 is not an inline slot.
+    Function,
+    /// A function object that carries anything else (a user property, a
+    /// deleted or redefined intrinsic, an accessor, a recorded
+    /// [[Prototype]]): the answer lives on the object, as for `Dictionary`.
+    FunctionDictionary,
 }
 
 impl ShapeObjectKind {
+    /// A non-`GC_TYPE_OBJECT` receiver kind: minted in the exotic band.
+    #[inline]
+    pub(crate) fn is_exotic(self) -> bool {
+        matches!(self, ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary)
+    }
+
     /// The discriminant `facts_key` folds and `ShapeRecord` stores. Stable:
     /// it is written into a record field, so the values may not be reordered.
     #[inline]
@@ -419,6 +435,8 @@ impl ShapeObjectKind {
             ShapeObjectKind::Ordinary => 0,
             ShapeObjectKind::Class => 1,
             ShapeObjectKind::Dictionary => 2,
+            ShapeObjectKind::Function => 3,
+            ShapeObjectKind::FunctionDictionary => 4,
         }
     }
 }
@@ -432,6 +450,8 @@ const SHAPE_KIND_CACHE_MASK: usize = SHAPE_KIND_CACHE_SIZE - 1;
 const SHAPE_KIND_ORDINARY: u64 = 1;
 const SHAPE_KIND_CLASS: u64 = 2;
 const SHAPE_KIND_DICTIONARY: u64 = 3;
+const SHAPE_KIND_FUNCTION: u64 = 4;
+const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -450,6 +470,8 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_ORDINARY => Some(ShapeObjectKind::Ordinary),
         SHAPE_KIND_CLASS => Some(ShapeObjectKind::Class),
         SHAPE_KIND_DICTIONARY => Some(ShapeObjectKind::Dictionary),
+        SHAPE_KIND_FUNCTION => Some(ShapeObjectKind::Function),
+        SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
         _ => None,
     }
 }
@@ -461,6 +483,8 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::Ordinary => SHAPE_KIND_ORDINARY,
         ShapeObjectKind::Class => SHAPE_KIND_CLASS,
         ShapeObjectKind::Dictionary => SHAPE_KIND_DICTIONARY,
+        ShapeObjectKind::Function => SHAPE_KIND_FUNCTION,
+        ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
@@ -729,6 +753,18 @@ pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 /// shape birth.
 pub(crate) const DICTIONARY_SHAPE_ID_BASE: u32 = 0xB000_0000;
 
+/// The EXOTIC band, `[EXOTIC_SHAPE_ID_BASE, SHAPE_ID_END)`: ShapeIds of
+/// receivers that are not `GC_TYPE_OBJECT` (function objects today; arrays,
+/// Map/Set, ... as their stages land). Like the dictionary band it is outside
+/// `is_site_matchable_shape_id`, so no own-inline-slot site word (read PIC,
+/// store PIC, key-add memo) can ever hold one: those caches load `recv + 16 +
+/// 8*slot`, which is not a slot of these receivers. A consumer that only
+/// needs the shape's IDENTITY (its prototype, its absence of own keys) opts in
+/// explicitly with [`is_exotic_shape_id`].
+pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
+const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < EXOTIC_SHAPE_ID_BASE);
+const _: () = assert!(EXOTIC_SHAPE_ID_BASE < SHAPE_ID_END);
+
 const _: () = assert!(SHAPE_ID_BASE < DICTIONARY_SHAPE_ID_BASE);
 const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
 
@@ -745,6 +781,10 @@ static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
 /// [`DICTIONARY_SHAPE_ID_BASE`]); never reused, parks at `SHAPE_ID_END`.
 static DICTIONARY_SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE);
+
+/// The exotic band's own monotonic counter ([`EXOTIC_SHAPE_ID_BASE`]).
+static EXOTIC_SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(EXOTIC_SHAPE_ID_BASE);
 
 static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -775,7 +815,14 @@ pub(crate) fn is_site_matchable_token(token: u64) -> bool {
 #[cfg(test)]
 #[inline]
 pub(crate) fn is_dictionary_shape_id(v: u32) -> bool {
-    (DICTIONARY_SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+    (DICTIONARY_SHAPE_ID_BASE..EXOTIC_SHAPE_ID_BASE).contains(&v)
+}
+
+/// Is this an exotic-receiver ShapeId ([`EXOTIC_SHAPE_ID_BASE`])? A fact of
+/// the value alone.
+#[inline]
+pub(crate) fn is_exotic_shape_id(v: u32) -> bool {
+    (EXOTIC_SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
 }
 
 /// #6804: classify a WIDENED shape token (`object_shape()`'s usize). Ids
@@ -833,7 +880,12 @@ fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
 
 /// A dictionary-band ShapeId ([`DICTIONARY_SHAPE_ID_BASE`]).
 fn alloc_dictionary_shape_id() -> Result<u32, ShapeIdExhausted> {
-    alloc_shape_id_from(&DICTIONARY_SHAPE_ID_NEXT, SHAPE_ID_END)
+    alloc_shape_id_from(&DICTIONARY_SHAPE_ID_NEXT, EXOTIC_SHAPE_ID_BASE)
+}
+
+/// An exotic-band ShapeId ([`EXOTIC_SHAPE_ID_BASE`]).
+fn alloc_exotic_shape_id() -> Result<u32, ShapeIdExhausted> {
+    alloc_shape_id_from(&EXOTIC_SHAPE_ID_NEXT, SHAPE_ID_END)
 }
 
 /// The band a new shape's id is drawn from is decided by its generation
@@ -866,7 +918,7 @@ pub(crate) fn test_shape_id_counter() -> u32 {
 /// untracked layout; the `Result` stays explicit so the allocator boundary and
 /// its exhaustion tests remain reviewable.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
-fn shape_descriptor_ensure_with_generation(
+pub(crate) fn shape_descriptor_ensure_with_generation(
     keys: *const ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -984,8 +1036,12 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
             }
         }
     }
-    let id = alloc_shape_id_for_generation(semantic_generation)
-        .map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    let id = if object_kind.is_exotic() {
+        alloc_exotic_shape_id()
+    } else {
+        alloc_shape_id_for_generation(semantic_generation)
+    }
+    .map_err(|_| ShapeDescriptorError::IdExhausted)?;
     #[cfg(feature = "shape-mint-diag")]
     if census_on {
         // Every descriptor already indexed under this keys ADDRESS, copied out
@@ -2437,6 +2493,10 @@ const PROTO_ID_TAG_SHIFT: u32 = 62;
 const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_MIXED: u64 = 2 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
+/// The prototype identity of a shape that answers nothing about its receiver
+/// (a dictionary-kind shape shared by many receivers): `UNIQUE | 0`, which
+/// [`fresh_unique_proto_id`] never hands out (its counter starts at 1).
+pub(crate) const PROTO_ID_PER_OBJECT: u64 = PROTO_ID_UNIQUE;
 /// Serial bits a MIXED identity can carry beside a 32-bit class id.
 const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
 

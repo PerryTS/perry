@@ -879,7 +879,7 @@ fn text_encoding_stream_globals_construct_readable_writable_shape() {
             );
 
             let ctor_ptr = ctor.as_pointer::<crate::closure::ClosureHeader>();
-            assert_eq!((*ctor_ptr).type_tag, crate::closure::CLOSURE_MAGIC);
+            assert!(crate::closure::closure_kind_probe(ctor_ptr as usize));
 
             let class_id = match ctor_name {
                 "TextEncoderStream" => crate::object::class_registry::CLASS_ID_TEXT_ENCODER_STREAM,

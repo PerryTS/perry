@@ -187,15 +187,6 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
 
-        // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
-        // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
-        // Without this check, crate::object::object_keys_array(obj) reads capture[0] → corruption/crash.
-        let type_tag_at_12 =
-            *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
-        if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
-            closure_set_field_by_name(obj, key, value);
-            return;
-        }
 
         if super::arguments_object_set_field(obj, key, value) {
             return;

@@ -42,26 +42,21 @@ fn error_cell_exposes_a_meta_edge_like_an_object() {
     }
 }
 
-/// #10956: the four padding bytes after `flags` sit exactly at
-/// `CLOSURE_TYPE_TAG_OFFSET`, and `alloc_error` never wrote them. Arena slots
-/// are recycled without zeroing, so an Error born in the slot a dead 7-capture
-/// closure (also a 72-byte payload) had vacated inherited that closure's
-/// `CLOSURE_MAGIC` — and every bare-magic probe called the Error a function.
-/// In OpenCode that was `typeof err !== "object"` rethrowing an EEXIST its
-/// lock-retry loop existed to swallow.
-///
-/// The slot is recycled the way the sweep recycles it — through the exact-fit
-/// free list — and the test asserts the Error really landed in one of the dead
-/// closures' slots, so a green run cannot mean "fresh zeroed memory".
+/// #10956 (successor): an Error born in the slot a dead closure vacated must
+/// not look like a function. With the magic word gone the question is the
+/// closure's ShapeId word at +4 — an ErrorHeader's `error_kind` — and the
+/// padding after `flags`, which `alloc_error` must scrub. Arena slots are
+/// recycled without zeroing, so both are checked on a slot the test PROVES
+/// was a dead closure's (a green run cannot mean "fresh zeroed memory").
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_magic() {
-    use crate::closure::{js_closure_alloc, CLOSURE_MAGIC, CLOSURE_TYPE_TAG_OFFSET};
+fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_shape() {
+    use crate::closure::js_closure_alloc;
 
     let _lock = crate::gc::global_side_table_test_lock();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     assert_eq!(
-        crate::closure::closure_payload_size(7),
+        crate::closure::closure_payload_size(6),
         std::mem::size_of::<ErrorHeader>(),
         "the fixture needs a closure the exact size of an ErrorHeader"
     );
@@ -69,7 +64,7 @@ fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_magic() {
         // Several dead slots, not one: `alloc_error` allocates its name and
         // frame strings first, and one of those may take a same-size slot.
         let dead: Vec<*mut u8> = (0..8)
-            .map(|_| js_closure_alloc(std::ptr::null(), 7) as *mut u8)
+            .map(|_| js_closure_alloc(std::ptr::null(), 6) as *mut u8)
             .collect();
         {
             let mut free_list = crate::gc::hot_arena_free_list().borrow_mut();
@@ -92,14 +87,13 @@ fn an_error_born_in_a_dead_closure_slot_does_not_inherit_its_magic() {
             dead.contains(&(err as *mut u8)),
             "the Error must reuse a dead closure's slot, or this test proves nothing"
         );
-        let tag = *((err as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
-        assert_ne!(
-            tag, CLOSURE_MAGIC,
-            "a recycled closure's magic leaked into the Error's padding word"
+        let word = *((err as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
+        assert!(
+            !crate::object::shapes::is_shape_id(word),
+            "a recycled closure's ShapeId leaked into the Error's +4 word: {word:#x}"
         );
-        assert_eq!(
-            tag, 0,
-            "the padding word must be scrubbed, not left as garbage"
-        );
+        assert!(!crate::closure::is_closure_ptr(err as usize));
+        let pad = *((err as *const u8).add(12) as *const u32);
+        assert_eq!(pad, 0, "the padding word must be scrubbed, not left as garbage");
     }
 }

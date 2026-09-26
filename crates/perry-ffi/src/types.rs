@@ -126,15 +126,19 @@ pub struct BigIntHeader {
     pub limbs: [u64; BIGINT_LIMBS],
 }
 
-/// Header for a runtime-allocated JS closure.
+/// Header for a runtime-allocated JS closure (a function object). Mirrors
+/// `perry_runtime::closure::ClosureHeader`; wrappers only pass pointers to it
+/// across the ABI and must not read or write its fields.
 #[repr(C)]
 pub struct ClosureHeader {
-    /// Pointer to the compiled closure body.
-    pub func_ptr: *const u8,
     /// Number of captured values, including runtime flag bits.
     pub capture_count: u32,
-    /// Runtime closure type tag.
-    pub type_tag: u32,
+    /// The function object's ShapeId.
+    pub shape_id: u32,
+    /// Pointer to the compiled closure body.
+    pub func_ptr: *const u8,
+    /// The function object's own-property record (runtime-internal).
+    pub props: *mut u8,
 }
 
 /// Opaque runtime-allocated Promise handle.
@@ -313,8 +317,12 @@ mod layout_tests {
             offset_of!(perry_runtime::ClosureHeader, capture_count)
         );
         assert_eq!(
-            offset_of!(ClosureHeader, type_tag),
-            offset_of!(perry_runtime::ClosureHeader, type_tag)
+            offset_of!(ClosureHeader, shape_id),
+            offset_of!(perry_runtime::ClosureHeader, shape_id)
+        );
+        assert_eq!(
+            offset_of!(ClosureHeader, props),
+            offset_of!(perry_runtime::ClosureHeader, props)
         );
     }
 

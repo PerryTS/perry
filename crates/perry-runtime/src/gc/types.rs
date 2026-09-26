@@ -19,6 +19,7 @@ pub const GC_TYPE_ARRAY: u8 = 1;
 pub const GC_TYPE_OBJECT: u8 = 2;
 pub const GC_TYPE_STRING: u8 = 3;
 pub const GC_TYPE_CLOSURE: u8 = 4;
+const _: () = assert!(GC_TYPE_CLOSURE == crate::codegen_abi::GC_TYPE_CLOSURE);
 pub const GC_TYPE_PROMISE: u8 = 5;
 pub const GC_TYPE_BIGINT: u8 = 6;
 pub const GC_TYPE_ERROR: u8 = 7;
@@ -1166,6 +1167,8 @@ pub const GC_FLAG_HAS_SURVIVED: u8 = 0x40;
 /// breaks ABI everywhere; deferred until/unless a future phase
 /// genuinely needs more bits).
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
+const _: () = assert!(GC_FLAG_FORWARDED == crate::codegen_abi::GC_FLAG_FORWARDED);
+const _: () = assert!(GC_HEADER_SIZE == crate::codegen_abi::GC_HEADER_SIZE);
 
 /// Read the forwarding address embedded in a forwarded object's user
 /// payload. Caller must verify `gc_flags & GC_FLAG_FORWARDED` is set;

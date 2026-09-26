@@ -1258,6 +1258,7 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
+    crate::closure::shape::note_function_own_state_changed(obj_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if guard.is_none() {

@@ -207,6 +207,7 @@ pub(crate) unsafe fn set_symbol_accessor_property(
         // gOPD and has-own all consult `SYMBOL_ACCESSOR_PROPERTIES` first,
         // and `clone_symbol_entries_for_obj_ptr` filters accessor-keyed
         // entries out for the raw-entry consumers (formatting, freeze/seal).
+        crate::closure::shape::note_function_own_state_changed(obj_key);
         let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if props.is_none() {
             *props = Some(crate::fast_hash::new_ptr_hash_map());

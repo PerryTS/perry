@@ -761,7 +761,10 @@ pub(super) unsafe fn init_test_closure(ptr: *mut u8) {
     let closure = ptr as *mut crate::closure::ClosureHeader;
     (*closure).func_ptr = std::ptr::null();
     (*closure).capture_count = 0;
-    (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+    (*closure).shape_id = crate::closure::shape::function_base_shape(
+            crate::closure::shape::FunctionProtoKind::Function,
+        );
+        (*closure).props = std::ptr::null_mut();
 }
 
 pub(super) unsafe fn init_test_closure_with_one_capture(
@@ -771,7 +774,10 @@ pub(super) unsafe fn init_test_closure_with_one_capture(
     let closure = ptr as *mut crate::closure::ClosureHeader;
     (*closure).func_ptr = std::ptr::null();
     (*closure).capture_count = 1;
-    (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+    (*closure).shape_id = crate::closure::shape::function_base_shape(
+            crate::closure::shape::FunctionProtoKind::Function,
+        );
+        (*closure).props = std::ptr::null_mut();
     let capture_slot = ptr.add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *mut u64;
     *capture_slot = capture_bits;
     layout_note_slot(ptr as usize, 0, capture_bits);

@@ -15,27 +15,19 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
         if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
             return closure;
         }
-        // #5976: never probe `*(addr + 12)` on a small-handle id (see
+        // #5976: never probe a small-handle id's header (see
         // `get_valid_func_ptr` below and `value::addr_class` for the band map).
         if crate::value::addr_class::is_handle_band(addr as usize) {
-            return closure;
-        }
-        let type_tag = unsafe {
-            std::ptr::read_volatile(
-                (closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32
-            )
-        };
-        if type_tag != CLOSURE_MAGIC {
-            return closure;
-        }
-        if addr < crate::gc::GC_HEADER_SIZE as u64 {
             return closure;
         }
         let header = unsafe {
             (closure as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
         };
         unsafe {
-            if (*header).obj_type != crate::gc::GC_TYPE_CLOSURE
+            // The kind is the GC type byte, which evacuation leaves intact
+            // (it overwrites the first PAYLOAD word with the forwarding
+            // address), so a from-space stub still reads as a closure here.
+            if std::ptr::read_volatile(&(*header).obj_type) != crate::gc::GC_TYPE_CLOSURE
                 || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 return closure;
@@ -53,24 +45,24 @@ pub fn clean_closure_ptr(mut closure: *const ClosureHeader) -> *const ClosureHea
 /// Validate a closure pointer and return its func_ptr if the closure is valid.
 ///
 /// Uses `read_volatile` for type_tag + `compiler_fence` to GUARANTEE that:
-/// 1. CLOSURE_MAGIC is checked BEFORE func_ptr is ever read
-/// 2. The optimizer cannot hoist the func_ptr read before the type_tag check
+/// 1. the GC header's CLOSURE type byte is checked BEFORE func_ptr is ever read
+/// 2. The optimizer cannot hoist the func_ptr read before that check
 ///
 /// Background: `#[inline(never)]` on `is_valid_closure_ptr` is insufficient — LLVM
-/// still speculatively hoists the non-volatile func_ptr load before the CLOSURE_MAGIC
-/// check in the caller. This produces code that only checks CLOSURE_MAGIC when func_ptr==0,
+/// still speculatively hoists the non-volatile func_ptr load before the kind
+/// check in the caller. This produces code that only checks the kind when func_ptr==0,
 /// allowing non-closure heap objects (Box<JSValue>, BigInt structs) to bypass validation
 /// and execute their data as code via `br x1` → SIGBUS.
 ///
-/// Returns null pointer if invalid (address out of range, wrong CLOSURE_MAGIC, bad func_ptr).
+/// Returns null pointer if invalid (address out of range, not a closure cell, bad func_ptr).
 #[inline(always)]
 pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     let addr = closure as u64;
     if !(0x1000..0x0001_0000_0000_0000).contains(&addr) {
         return std::ptr::null();
     }
-    // #5976: reject the small-handle band BEFORE the `*(addr + 12)`
-    // CLOSURE_MAGIC probe. Revocable-proxy ids, Web-Fetch/zlib/net handles and
+    // #5976: reject the small-handle band BEFORE the header
+    // kind probe. Revocable-proxy ids, Web-Fetch/zlib/net handles and
     // the generic stdlib registry ids are all NaN-boxed `POINTER_TAG | <small
     // id>` values, not heap pointers — a real closure is always a GC allocation
     // above the band (`value::addr_class`). The 0x1000 floor above let every
@@ -84,14 +76,21 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     if crate::value::addr_class::is_handle_band(addr as usize) {
         return std::ptr::null();
     }
-    let type_tag = unsafe {
-        std::ptr::read_volatile((closure as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32)
+    // The kind is the GC header's type byte (no payload magic): a live,
+    // un-evacuated closure cell. Volatile + fence keep the func_ptr load
+    // below from being hoisted above this check (the SIGBUS history above).
+    let header = (addr as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let (obj_type, gc_flags) = unsafe {
+        (
+            std::ptr::read_volatile(&(*header).obj_type),
+            std::ptr::read_volatile(&(*header).gc_flags),
+        )
     };
-    if type_tag != CLOSURE_MAGIC {
+    if obj_type != crate::gc::GC_TYPE_CLOSURE || gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return std::ptr::null();
     }
     std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-    let func_ptr = unsafe { std::ptr::read_volatile(closure as *const *const u8) };
+    let func_ptr = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*closure).func_ptr)) };
     let func_ptr_addr = func_ptr as usize;
     if func_ptr_addr == 0 {
         return std::ptr::null();
@@ -119,8 +118,8 @@ pub fn get_valid_func_ptr(closure: *const ClosureHeader) -> *const u8 {
     // macOS ARM64: .text starts at 0x100000000, typically < 0x400000000
     // Windows x86_64: typically 0x7FF7_xxxx_xxxx (ASLR), so we allow up to 0x8000_0000_0000
     // Linux x86_64 PIE: .text is typically in 0x55xxxxxxxxxx range
-    // Skip this check on Linux since PIE addresses vary widely and CLOSURE_MAGIC
-    // already provides strong validation.
+    // Skip this check on Linux since PIE addresses vary widely and the GC
+    // kind byte already provides strong validation.
     #[cfg(target_os = "macos")]
     if !(0x100000000..=0x400000000).contains(&func_ptr_addr) {
         return std::ptr::null();

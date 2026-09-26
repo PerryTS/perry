@@ -372,7 +372,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
     // Look through bound-function wrappers to the ultimate target — the
     // bound `this` is what reaches it, so its strictness decides.
     for _ in 0..8 {
-        if closure.is_null() || unsafe { (*closure).type_tag } != CLOSURE_MAGIC {
+        if closure.is_null() || !is_closure_ptr(closure as usize) {
             return this_arg;
         }
         if std::ptr::eq(unsafe { (*closure).func_ptr }, BOUND_FUNCTION_FUNC_PTR) {
@@ -486,7 +486,7 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
     let target_jv = JSValue::from_bits(target_value.to_bits());
     if target_jv.is_pointer() {
         let target_closure = target_jv.as_pointer::<ClosureHeader>();
-        if !target_closure.is_null() && (*target_closure).type_tag == CLOSURE_MAGIC {
+        if !target_closure.is_null() && is_closure_ptr(target_closure as usize) {
             return crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize)
                 .unwrap_or_default();
         }
@@ -594,7 +594,7 @@ pub unsafe extern "C" fn js_function_bind(
     });
     let target_is_closure = if target_jv.is_pointer() {
         let ptr = target_jv.as_pointer::<ClosureHeader>();
-        if ptr.is_null() || (*ptr).type_tag != CLOSURE_MAGIC {
+        if ptr.is_null() || !is_closure_ptr(ptr as usize) {
             // Preserve the existing conservative pass-through for callable
             // native handles that do not use the closure representation.
             return target_value;

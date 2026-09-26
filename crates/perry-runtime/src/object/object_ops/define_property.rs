@@ -24,7 +24,7 @@ use super::*;
 ///    `field_get_set.rs` / `native_call_method.rs` find it after the regular
 ///    vtable miss.
 unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits: u64) {
-    use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR, CLOSURE_MAGIC};
+    use crate::closure::{ClosureHeader, BOUND_METHOD_FUNC_PTR};
     use crate::object::class_registry::{VTableMethodEntry, CLASS_VTABLE_REGISTRY};
 
     // Reject undefined / null / numeric values up front — those aren't
@@ -45,7 +45,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
     // chain) onto `target_cid`.
     if crate::closure::is_closure_ptr(ptr) {
         let closure = ptr as *const ClosureHeader;
-        if (*closure).type_tag == CLOSURE_MAGIC && (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
+        if (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
             let recv_value = crate::JSValue::from_bits(recv.to_bits());
             let source_cid = super::super::class_ref_id(recv).or_else(|| {

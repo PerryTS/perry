@@ -326,7 +326,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     // globalThis singleton's keys to recover the constructor name —
     // accept the extra hop only when the func_ptr matches.
     unsafe {
-        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+        if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;

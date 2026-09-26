@@ -15,7 +15,7 @@
 //!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
 //!                       h = site.closure ; f = site.func
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
-//!         [v+12] == CLOSURE_MAGIC ; [v] == site.func          else NEXT WAY
+//!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.func      else NEXT WAY
 //!         h = handle(v) ; f = site.func
 //!   CALL: this = recv ; r = f(h, args...) ; restore this
 //!   MISS: js_method_site_miss(slot, feedback_site, recv, method_id, args)
@@ -83,15 +83,14 @@ pub(crate) fn emit_method_site(
     let index_mask = crate::runtime_abi::METHOD_SITE_INDEX_MASK.to_string();
     let entry_size = crate::runtime_abi::METHOD_SITE_ENTRY_SIZE;
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    // `ClosureHeader` (64-bit only here): the code pointer and the type tag
-    // that identifies a closure (`closure::is_closure_ptr`'s selective term).
+    // `ClosureHeader` (64-bit only here): the code pointer, and the GcHeader
+    // (type, flags) half-word in front of the payload that makes a cell a
+    // live function object: type `GC_TYPE_CLOSURE` and not a forwarded stub
+    // (`closure::is_closure_ptr`'s kind term; there is no payload magic).
     let func_offset = crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as i64;
-    let tag_offset = crate::runtime_abi::CLOSURE_TYPE_TAG_OFFSET as i64;
-    debug_assert_eq!(
-        tag_offset as u64,
-        crate::target_layout::closure_type_tag_offset_bytes(ctx.target_triple)
-    );
-    let closure_magic = crate::runtime_abi::CLOSURE_MAGIC.to_string();
+    let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
+    let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
+    let closure_kind = crate::runtime_abi::GC_TYPE_CLOSURE.to_string();
 
     let site_no = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
@@ -289,9 +288,10 @@ pub(crate) fn emit_method_site(
     ctx.current_block = own_fn_idx;
     let (own_handle, own_func, own_end) = {
         let blk = ctx.block();
-        let tp = emit_field_ptr(blk, &own_ub, tag_offset);
-        let tag = blk.load(I32, &tp);
-        let is_closure = blk.icmp_eq(I32, &tag, &closure_magic);
+        let kp = emit_field_ptr(blk, &own_ub, kind_offset);
+        let kind = blk.load(crate::types::I16, &kp);
+        let kind = blk.and(crate::types::I16, &kind, &kind_mask);
+        let is_closure = blk.icmp_eq(crate::types::I16, &kind, &closure_kind);
         let fpp = emit_field_ptr(blk, &own_ub, func_offset);
         let fp = blk.load(I64, &fpp);
         let mf_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_func)]);

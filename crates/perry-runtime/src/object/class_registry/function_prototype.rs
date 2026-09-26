@@ -99,7 +99,7 @@ pub extern "C" fn js_function_prototype_value_for_read(func_value: f64) -> f64 {
         return undef;
     }
     unsafe {
-        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+        if !crate::closure::closure_kind_probe(ptr as usize) {
             return undef;
         }
     }

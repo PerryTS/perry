@@ -72,7 +72,10 @@ fn lock_safe_runtime_scanner_closure() -> (*mut u8, u64, f64) {
         let closure = ptr as *mut crate::closure::ClosureHeader;
         (*closure).func_ptr = test_no_capture_singleton_func as *const u8;
         (*closure).capture_count = 0;
-        (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+        (*closure).shape_id = crate::closure::shape::function_base_shape(
+            crate::closure::shape::FunctionProtoKind::Function,
+        );
+        (*closure).props = std::ptr::null_mut();
         layout_init_pointer_free(ptr);
     }
     let bits = POINTER_TAG | (ptr as u64 & POINTER_MASK);

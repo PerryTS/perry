@@ -144,8 +144,6 @@ const _: () = {
         std::mem::offset_of!(crate::closure::ClosureHeader, func_ptr)
             == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET
     );
-    assert!(crate::closure::CLOSURE_TYPE_TAG_OFFSET == crate::codegen_abi::CLOSURE_TYPE_TAG_OFFSET);
-    assert!(crate::closure::CLOSURE_MAGIC == crate::codegen_abi::CLOSURE_MAGIC);
     assert!(std::mem::offset_of!(MethodEntry, word) == crate::codegen_abi::METHOD_SITE_WORD_OFFSET);
     assert!(std::mem::offset_of!(MethodEntry, slot) == crate::codegen_abi::METHOD_SITE_SLOT_OFFSET);
     assert!(std::mem::offset_of!(MethodEntry, func) == crate::codegen_abi::METHOD_SITE_FUNC_OFFSET);

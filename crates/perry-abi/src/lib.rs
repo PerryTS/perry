@@ -19,13 +19,23 @@ pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;
 /// after `implicit_this` (128), behind fixed-size fields only.
 pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 136;
 
-/// `closure::ClosureHeader` (LP64): the code pointer at 0, the u32 capture
-/// count at 8, the u32 type tag at 12. A value is a closure when its type tag
-/// is [`CLOSURE_MAGIC`] (`closure::is_closure_ptr`'s selective term).
-pub const CLOSURE_FUNC_PTR_OFFSET: usize = 0;
-pub const CLOSURE_TYPE_TAG_OFFSET: usize = 12;
-/// `closure::CLOSURE_MAGIC` ("CLOS").
-pub const CLOSURE_MAGIC: u32 = 0x434C_4F53;
+/// `closure::ClosureHeader` (LP64): the u32 capture count at 0, the ShapeId
+/// at 4 (the same word as `ObjectHeader`), the code pointer at 8, the shaped
+/// own-property record at 16, captures from 24. ILP32 targets shrink the two
+/// pointers: code pointer at 8, props at 12, captures from 16 (derived in
+/// `perry-codegen/src/target_layout.rs`).
+pub const CLOSURE_SHAPE_OFFSET: usize = 4;
+pub const CLOSURE_FUNC_PTR_OFFSET: usize = 8;
+pub const CLOSURE_PROPS_OFFSET: usize = 16;
+pub const CLOSURE_HEADER_SIZE: usize = 24;
+
+/// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
+/// cell a function object. The kind is this byte, never a payload magic.
+pub const GC_TYPE_CLOSURE: u8 = 4;
+/// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
+pub const GC_FLAG_FORWARDED: u8 = 0x80;
+/// `gc::GC_HEADER_SIZE`.
+pub const GC_HEADER_SIZE: usize = 8;
 
 /// `object::method_site::MethodEntry` — the words the emitted method-call site
 /// reads (`perry-codegen/src/expr/method_site.rs`).

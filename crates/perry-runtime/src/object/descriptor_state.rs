@@ -1522,6 +1522,7 @@ fn note_accessor_descriptor_key(key: &str) {
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
+    crate::closure::shape::note_function_own_state_changed(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };
     let previous = if in_keys {
         unsafe { own_accessor(obj, key.as_bytes()) }

@@ -103,9 +103,8 @@ fn temp_rooted_value_survives_a_real_collection() {
         "the NaN-boxed slot must resolve to the same object as the bare slot"
     );
     unsafe {
-        assert_eq!(
-            (*(survivor as *mut crate::closure::ClosureHeader)).type_tag,
-            crate::closure::CLOSURE_MAGIC,
+        assert!(
+            crate::closure::closure_kind_probe(survivor as usize),
             "surviving object must still be intact"
         );
     }
@@ -270,9 +269,8 @@ fn rewriting_a_slot_roots_the_new_value_and_releases_the_replaced_one() {
         "the value a slot was re-aimed at must be marked, not swept (#6971)"
     );
     unsafe {
-        assert_eq!(
-            (*(survivor as *mut crate::closure::ClosureHeader)).type_tag,
-            crate::closure::CLOSURE_MAGIC,
+        assert!(
+            crate::closure::closure_kind_probe(survivor as usize),
             "the surviving accumulator must still be intact"
         );
     }

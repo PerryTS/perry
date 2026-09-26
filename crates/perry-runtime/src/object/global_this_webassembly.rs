@@ -334,7 +334,7 @@ fn webassembly_error_ctor_expected_name(type_ref: f64) -> Option<&'static [u8]> 
         return None;
     }
     unsafe {
-        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+        if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
@@ -406,7 +406,7 @@ fn webassembly_value_ctor_expected_kind(type_ref: f64) -> Option<&'static [u8]> 
         return None;
     }
     unsafe {
-        if (*ptr).type_tag != crate::closure::CLOSURE_MAGIC {
+        if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
         let func_ptr = (*ptr).func_ptr as usize;
@@ -1443,9 +1443,8 @@ mod tests {
             );
             let closure = closure_ptr(member);
             unsafe {
-                assert_eq!(
-                    (*closure).type_tag,
-                    crate::closure::CLOSURE_MAGIC,
+                assert!(
+                    crate::closure::closure_kind_probe(closure as usize),
                     "WebAssembly.{} must be a closure",
                     String::from_utf8_lossy(name)
                 );

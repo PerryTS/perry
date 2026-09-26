@@ -259,9 +259,8 @@ fn bare_address_in_shadow_slot_survives_a_real_collection() {
          slot must be marked, not swept (#6910)"
     );
     unsafe {
-        assert_eq!(
-            (*(survivor as *mut crate::closure::ClosureHeader)).type_tag,
-            crate::closure::CLOSURE_MAGIC,
+        assert!(
+            crate::closure::closure_kind_probe(survivor as usize),
             "surviving object must still be intact"
         );
     }
@@ -322,9 +321,8 @@ fn bare_address_in_global_root_survives_a_real_collection() {
          must come back byte-identical"
     );
     unsafe {
-        assert_eq!(
-            (*(global_slot as *mut crate::closure::ClosureHeader)).type_tag,
-            crate::closure::CLOSURE_MAGIC,
+        assert!(
+            crate::closure::closure_kind_probe(global_slot as usize),
             "surviving object must still be intact"
         );
     }

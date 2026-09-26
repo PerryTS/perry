@@ -248,9 +248,6 @@ fn update_body_record(func_ptr: *const u8, update: impl FnOnce(&mut ClosureBodyR
     });
 }
 
-/// Magic value stored in ClosureHeader._reserved to identify closures at runtime.
-/// Used by js_value_typeof to return "function" instead of "object" for closures.
-pub const CLOSURE_MAGIC: u32 = 0x434C_4F53; // "CLOS" in ASCII
 
 /// Per-call dispatch strategy for a closure body. Derived from the body's
 /// `ClosureBodyRecord` on a miss and memoized in `DISPATCH_RECENT`.
@@ -469,12 +466,10 @@ mod dispatch_recent_tests {
         }
     }
 
-    fn stack_closure(func_ptr: *const u8) -> ClosureHeader {
-        ClosureHeader {
-            func_ptr,
-            capture_count: 0,
-            type_tag: CLOSURE_MAGIC,
-        }
+    /// A real (arena) closure: the kind is its GC header, so a stack-built
+    /// `ClosureHeader` with no header in front of it is not a closure.
+    fn heap_closure(func_ptr: *const u8) -> *mut ClosureHeader {
+        crate::closure::js_closure_alloc(func_ptr, 0)
     }
 
     #[test]
@@ -530,7 +525,8 @@ mod dispatch_recent_tests {
     #[test]
     fn repeated_array_calls_probe_the_body_registry_only_once() {
         let body = add_two as *const u8;
-        let closure = stack_closure(body);
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let closure = heap_closure(body);
         let args = [20.0, 22.0];
         invalidate_dispatch_strategy(body);
         RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
@@ -540,7 +536,7 @@ mod dispatch_recent_tests {
             assert_eq!(
                 unsafe {
                     crate::closure::js_closure_call_array(
-                        &closure as *const ClosureHeader as i64,
+                        closure as i64,
                         args.as_ptr(),
                         args.len() as i64,
                     )
@@ -564,7 +560,8 @@ mod dispatch_recent_tests {
     #[test]
     fn late_rest_registration_invalidates_the_call_array_memo() {
         let body = identify_rest_array as *const u8;
-        let closure = stack_closure(body);
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let closure = heap_closure(body);
         let direct_arg = [0.0];
         invalidate_dispatch_strategy(body);
         RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
@@ -573,7 +570,7 @@ mod dispatch_recent_tests {
         assert_eq!(
             unsafe {
                 crate::closure::js_closure_call_array(
-                    &closure as *const ClosureHeader as i64,
+                    closure as i64,
                     direct_arg.as_ptr(),
                     direct_arg.len() as i64,
                 )
@@ -590,7 +587,7 @@ mod dispatch_recent_tests {
             assert_eq!(
                 unsafe {
                     crate::closure::js_closure_call_array(
-                        &closure as *const ClosureHeader as i64,
+                        closure as i64,
                         rest_args.as_ptr(),
                         rest_args.len() as i64,
                     )
@@ -664,6 +661,8 @@ pub extern "C" fn js_register_closure_async_function(func_ptr: *const u8) {
         return;
     }
     update_body_record(func_ptr, |record| record.flags |= body_flags::ASYNC);
+    // The body's [[Prototype]] kind changed: its next birth re-reads it.
+    super::shape::forget_body_classification(func_ptr);
 }
 
 #[inline(always)]
@@ -969,6 +968,8 @@ pub extern "C" fn js_register_closure_generator_function(func_ptr: *const u8) {
         return;
     }
     update_body_record(func_ptr, |record| record.flags |= body_flags::GENERATOR);
+    // The body's [[Prototype]] kind changed: its next birth re-reads it.
+    super::shape::forget_body_classification(func_ptr);
 }
 
 #[inline(always)]
@@ -987,6 +988,8 @@ pub extern "C" fn js_register_closure_async_generator_function(func_ptr: *const 
     update_body_record(func_ptr, |record| {
         record.flags |= body_flags::ASYNC_GENERATOR | body_flags::ASYNC;
     });
+    // The body's [[Prototype]] kind changed: its next birth re-reads it.
+    super::shape::forget_body_classification(func_ptr);
 }
 
 #[inline(always)]

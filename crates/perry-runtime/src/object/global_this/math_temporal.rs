@@ -762,10 +762,10 @@ pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::Tempo
     if closure.is_null() {
         return None;
     }
-    let (tag, fp) = unsafe { ((*closure).type_tag, (*closure).func_ptr) };
-    if tag != crate::closure::CLOSURE_MAGIC {
+    if !crate::closure::is_closure_ptr(closure as usize) {
         return None;
     }
+    let fp = unsafe { (*closure).func_ptr };
     let fp = fp as usize;
     let table: [(*const u8, TemporalKind); 8] = [
         (

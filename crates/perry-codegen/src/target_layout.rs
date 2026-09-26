@@ -141,8 +141,8 @@ pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
 /// (`fields = obj + object_header_size_bytes`). It MUST equal the runtime's
 /// `size_of::<ObjectHeader>()`, or inline-constructed objects and runtime-FFI
 /// field access diverge and every property read/write is corrupt. (The closure
-/// header `type_tag` offset has the analogous problem; that one is handled
-/// runtime-side via `perry_runtime::closure::CLOSURE_TYPE_TAG_OFFSET` /
+/// header's field offsets have the analogous problem; those are handled
+/// via `perry_abi::CLOSURE_*` /
 /// `offset_of!`.)
 ///
 /// The value stays an 8-BYTE MULTIPLE, which the f64 field region depends on.
@@ -176,28 +176,25 @@ pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
 pub const ARRAY_HEADER_SIZE_BYTES: u64 = 8;
 
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
-/// target.
-///
-/// `ClosureHeader` is `repr(C)` and contains a pointer followed by two `u32`
-/// fields. It is therefore 16 bytes on LP64 and 12 bytes on ILP32. Trusted
-/// exact-arrow bodies use this offset to read compiler-installed raw box
-/// capture pointers directly from their immutable capture slots. Keep the
-/// target derivation here: using the compiler host's pointer width would make
-/// cross-compiled arm64_32 watchOS closures read four bytes past the slot.
-/// Byte offset of `ClosureHeader::type_tag` (the `CLOSURE_MAGIC` slot) for
-/// the target: the header's last 4 bytes (`func_ptr` + `capture_count`
-/// precede it), i.e. 12 on LP64 and 8 on ILP32 — the codegen mirror of the
-/// runtime's `offset_of!`-derived `CLOSURE_TYPE_TAG_OFFSET`.
-pub fn closure_type_tag_offset_bytes(target_triple: &str) -> u64 {
-    closure_header_size_bytes(target_triple) - 4
-}
-
+/// target: `{capture_count: u32, shape_id: u32, func_ptr, props}` — 24 bytes
+/// on LP64 and 16 on ILP32 (`perry_abi::CLOSURE_HEADER_SIZE` is the LP64
+/// value the runtime asserts). Trusted exact-arrow bodies use this offset to
+/// read compiler-installed raw box capture pointers directly from their
+/// immutable capture slots. Keep the target derivation here: using the
+/// compiler host's pointer width would make cross-compiled arm64_32 watchOS
+/// closures read past the slot.
 pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
     if target_is_ilp32(target_triple) {
-        12
-    } else {
         16
+    } else {
+        crate::runtime_abi::CLOSURE_HEADER_SIZE as u64
     }
+}
+
+/// Byte offset of `ClosureHeader::func_ptr` (8 on every target: the u32
+/// capture count and u32 ShapeId precede it).
+pub fn closure_func_ptr_offset_bytes(_target_triple: &str) -> u64 {
+    crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as u64
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY
@@ -344,10 +341,10 @@ mod tests {
 
     #[test]
     fn closure_header_size_tracks_target_pointer_width() {
-        assert_eq!(closure_header_size_bytes("aarch64-apple-darwin"), 16);
-        assert_eq!(closure_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
-        assert_eq!(closure_header_size_bytes("arm64_32-apple-watchos"), 12);
-        assert_eq!(closure_header_size_bytes("wasm32-unknown-unknown"), 12);
+        assert_eq!(closure_header_size_bytes("aarch64-apple-darwin"), 24);
+        assert_eq!(closure_header_size_bytes("x86_64-unknown-linux-gnu"), 24);
+        assert_eq!(closure_header_size_bytes("arm64_32-apple-watchos"), 16);
+        assert_eq!(closure_header_size_bytes("wasm32-unknown-unknown"), 16);
     }
 
     #[test]

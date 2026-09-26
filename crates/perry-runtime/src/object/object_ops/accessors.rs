@@ -145,12 +145,6 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
             return f64::from_bits(TAG_UNDEF);
         }
-        // Skip closures sharing the GC_TYPE_OBJECT slot (CLOSURE_MAGIC at +12).
-        let type_tag_at_12 =
-            *((obj as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
-        if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
-            return f64::from_bits(TAG_UNDEF);
-        }
         let keys_view = crate::object::object_keys(obj);
         let keys = keys_view.arr();
         if keys.is_null() {

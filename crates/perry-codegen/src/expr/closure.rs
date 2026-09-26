@@ -380,6 +380,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && auto_captures.iter().all(|cap_id| {
                     !ctx.boxed_vars.contains(cap_id) || uncounted_box_capture(cap_id)
                 });
+            // Register an `async function(){}` *expression* closure (one with
+            // no `await` — bodies that await are rewritten to a state machine
+            // upstream and arrive with `is_async: false`) in the async-function
+            // registry so `IsConstructor`/`util.types.isAsyncFunction` recognize
+            // it. Generators are hoisted to top-level and registered elsewhere.
+            // (Test262 subclass/superclass-async-function.) BEFORE the
+            // allocation: the closure's ShapeId names its [[Prototype]]
+            // (%AsyncFunction.prototype%), which the runtime reads off the
+            // body registry at birth.
+            if *is_async {
+                ctx.block()
+                    .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
+            }
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
                 blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &func_ref)])
@@ -449,16 +462,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 )
             };
 
-            // Register an `async function(){}` *expression* closure (one with
-            // no `await` — bodies that await are rewritten to a state machine
-            // upstream and arrive with `is_async: false`) in the async-function
-            // registry so `IsConstructor`/`util.types.isAsyncFunction` recognize
-            // it. Generators are hoisted to top-level and registered elsewhere.
-            // (Test262 subclass/superclass-async-function.)
-            if *is_async {
-                ctx.block()
-                    .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
-            }
 
             // The captured-singleton helper writes captures internally. Boxed
             // slots still take the dedicated, idempotent setter afterward so

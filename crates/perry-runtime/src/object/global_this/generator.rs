@@ -134,6 +134,13 @@ fn build_async_function_tower() {
     );
     set_intrinsic_to_string_tag(proto, "AsyncFunction");
 
+    // SAFETY: `proto` is the live, just-built intrinsic prototype.
+    unsafe {
+        crate::object::proto_validity::assign_intrinsic_prototype_serial(
+            proto as usize,
+            crate::closure::shape::INTRINSIC_SERIAL_ASYNC_FUNCTION,
+        );
+    }
     crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
 }
@@ -862,6 +869,17 @@ fn build_generator_tower(
     }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
+    // SAFETY: `proto` is the live, just-built %(Async)GeneratorFunction.prototype%.
+    unsafe {
+        crate::object::proto_validity::assign_intrinsic_prototype_serial(
+            proto as usize,
+            if is_async {
+                crate::closure::shape::INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION
+            } else {
+                crate::closure::shape::INTRINSIC_SERIAL_GENERATOR_FUNCTION
+            },
+        );
+    }
     ctor_slot.store(ctor as i64, Ordering::Release);
     proto_slot.store(proto as i64, Ordering::Release);
     gen_proto_slot.store(gen_proto as i64, Ordering::Release);

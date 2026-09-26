@@ -352,30 +352,42 @@ fn capture_fingerprint(captures: &[u64]) -> u64 {
     hash
 }
 
-/// Header for heap-allocated closures
+/// Header for heap-allocated closures (a function object).
+///
+/// The ShapeId sits at payload +4, the word an `ObjectHeader` keeps its
+/// ShapeId in, so ONE header compare names any receiver's shape. What a cell
+/// IS comes from its `GcHeader` type byte; there is no magic word.
 #[repr(C)]
 pub struct ClosureHeader {
-    /// Function pointer (the actual compiled function)
-    pub func_ptr: *const u8,
-    /// Number of captured values
+    /// Number of captured values; the two high bits are `CAPTURES_THIS_FLAG`
+    /// and `NO_THIS_REBIND_FLAG` (see `real_capture_count`).
     pub capture_count: u32,
-    /// Type tag: set to CLOSURE_MAGIC to identify closures at runtime
-    pub type_tag: u32,
+    /// The function object's ShapeId (`closure::shape`): a
+    /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
+    pub shape_id: u32,
+    /// Function pointer (the actual compiled function).
+    pub func_ptr: *const u8,
+    /// Reserved for the function object's shaped own-property record (D1).
+    /// ALWAYS NULL in this stage and not yet enumerated by the collector:
+    /// the stage that first writes it must make it a traced, rewritten
+    /// raw-pointer child edge (and barrier the store) in the same change.
+    pub props: *mut crate::object::ObjectHeader,
 }
 
-/// Byte offset of `type_tag` (the `CLOSURE_MAGIC` slot) within `ClosureHeader`.
-///
-/// On 64-bit targets this is 12 (`func_ptr` 8 bytes + `capture_count` 4 bytes);
-/// on arm64_32 / wasm32 (32-bit pointers) `func_ptr` is 4 bytes, so it is 8.
-/// Every site that probes a heap pointer for `CLOSURE_MAGIC` MUST read at this
-/// offset, never a hardcoded `12`: that literal was correct only for 64-bit and
-/// was the arm64_32 watchOS startup-crash root cause. On a 32-bit watch every
-/// real closure failed the magic probe (the read landed 4 bytes past
-/// `type_tag`), so a getter/function value was judged non-callable and the
-/// resulting `TypeError` value-coercion dereferenced the closure as an
-/// `ObjectHeader` → `EXC_BAD_ACCESS` before the first frame rendered.
-/// `offset_of!` tracks the real per-target layout, so this is a no-op on 64-bit.
-pub const CLOSURE_TYPE_TAG_OFFSET: usize = std::mem::offset_of!(ClosureHeader, type_tag);
+const _: () = {
+    assert!(std::mem::offset_of!(ClosureHeader, capture_count) == 0);
+    assert!(std::mem::offset_of!(ClosureHeader, shape_id) == crate::codegen_abi::CLOSURE_SHAPE_OFFSET);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert!(std::mem::offset_of!(ClosureHeader, func_ptr) == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET);
+        assert!(std::mem::offset_of!(ClosureHeader, props) == crate::codegen_abi::CLOSURE_PROPS_OFFSET);
+        assert!(std::mem::size_of::<ClosureHeader>() == crate::codegen_abi::CLOSURE_HEADER_SIZE);
+    }
+};
+
+/// Byte offset of the ShapeId word within `ClosureHeader` (4 on every target:
+/// the u32 capture count precedes it).
+pub const CLOSURE_SHAPE_OFFSET: usize = std::mem::offset_of!(ClosureHeader, shape_id);
 
 #[inline]
 pub fn closure_payload_size(actual_count: usize) -> usize {
@@ -443,6 +455,9 @@ pub extern "C" fn js_closure_alloc_init(
     // the heap moved. The collecting fallback may have moved what those bits
     // point at, so it re-reads them through roots — exactly the original
     // per-setter path's contract, kept by taking that path.
+    // Resolved BEFORE the storage exists: minting a base shape touches only
+    // the shape table, never the GC heap.
+    let shape_id = super::shape::birth_shape_for_body(func_ptr);
     let raw = match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => raw,
         None => {
@@ -455,9 +470,11 @@ pub extern "C" fn js_closure_alloc_init(
     };
     let ptr = raw as *mut ClosureHeader;
     unsafe {
-        (*ptr).func_ptr = func_ptr;
         (*ptr).capture_count = capture_count;
-        (*ptr).type_tag = CLOSURE_MAGIC;
+        (*ptr).shape_id = shape_id;
+        (*ptr).func_ptr = func_ptr;
+        // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
+        (*ptr).props = std::ptr::null_mut();
         let slots = closure_capture_slots_mut(ptr);
         // A handful of captures is the common case; a counted store loop
         // beats the `memcpy` PLT call the runtime-length copy compiles to
@@ -554,14 +571,17 @@ pub(crate) unsafe fn gc_capture_slot_range(
 pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
     let actual_count = real_capture_count(capture_count) as usize;
+    let shape_id = super::shape::birth_shape_for_body(func_ptr);
 
     let raw = closure_alloc_storage(actual_count);
     let ptr = raw as *mut ClosureHeader;
 
     unsafe {
-        (*ptr).func_ptr = func_ptr;
         (*ptr).capture_count = capture_count; // Preserve flag in high bit
-        (*ptr).type_tag = CLOSURE_MAGIC;
+        (*ptr).shape_id = shape_id;
+        (*ptr).func_ptr = func_ptr;
+        // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
+        (*ptr).props = std::ptr::null_mut();
         // #7154: a fresh closure's capture slots are raw recycled arena bytes.
         // They are invisible to the collector while the layout says
         // POINTER_FREE, but any code path (conservative scan, diagnostic

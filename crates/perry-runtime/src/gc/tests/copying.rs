@@ -187,7 +187,10 @@ fn test_old_managed_closure_capture_write_dirties_old_page() {
     unsafe {
         (*closure).func_ptr = test_captured_singleton_func as *const u8;
         (*closure).capture_count = 1;
-        (*closure).type_tag = crate::closure::CLOSURE_MAGIC;
+        (*closure).shape_id = crate::closure::shape::function_base_shape(
+            crate::closure::shape::FunctionProtoKind::Function,
+        );
+        (*closure).props = std::ptr::null_mut();
         layout_init_pointer_free(closure as *mut u8);
     }
     let slot = unsafe {
@@ -618,7 +621,7 @@ fn test_copying_minor_marks_array_growth_forwarding_target() {
         unsafe { (closure_after as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader };
     let capture_after_bits = unsafe {
         let closure = closure_after as *const crate::closure::ClosureHeader;
-        assert_eq!((*closure).type_tag, crate::closure::CLOSURE_MAGIC);
+        assert!(crate::closure::closure_kind_probe(closure as usize));
         let slot = (closure as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>())
             as *const u64;
         *slot

@@ -946,41 +946,31 @@ mod rel_numeric_fastpath_tests {
         }
     }
 
-    /// #10956: four bytes that spell `CLOSURE_MAGIC` at the closure tag offset
-    /// do not make a cell a function. That offset is padding in an
-    /// `ErrorHeader` and element data in an array, and arena slots are
-    /// recycled without zeroing, so `typeof` must ask the GC header.
+    /// #10956 (successor): a cell is a function only if its GC header says
+    /// CLOSURE. A non-closure cell whose +4 word holds a Function ShapeId —
+    /// forged here; recycled arena bytes can hold anything — must still be
+    /// an object: `typeof` asks the header, and `is_closure_ptr` proves the
+    /// header before trusting the word.
     #[test]
-    fn typeof_ignores_closure_magic_in_a_non_closure_cell() {
-        use crate::closure::{CLOSURE_MAGIC, CLOSURE_TYPE_TAG_OFFSET};
+    fn typeof_ignores_a_function_shape_word_in_a_non_closure_cell() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         unsafe {
-            // An Error whose tag-offset word (padding on 64-bit) still holds a
-            // dead closure's tag.
-            let err = crate::error::js_error_new() as *mut u8;
-            // GC_STORE_AUDIT(POINTER_FREE): plants the u32 magic in a non-pointer word.
-            (err.add(CLOSURE_TYPE_TAG_OFFSET) as *mut u32).write(CLOSURE_MAGIC);
-            let err = crate::value::js_nanbox_pointer(err as i64);
-            assert_eq!(classify_value_typeof(err), ValueTypeofTag::Object);
-            assert_eq!(js_value_typeof_tag(err), ValueTypeofTag::Object as u32);
-
-            // Element 0 carries "CLOS" in whichever of its words sits at the tag
-            // offset: the high word on 64-bit (`[15937034497556480]`), the low
-            // word where the offset is 8.
-            let shift =
-                (CLOSURE_TYPE_TAG_OFFSET - std::mem::size_of::<crate::array::ArrayHeader>()) * 8;
-            let bits = (CLOSURE_MAGIC as u64) << shift;
-            assert!(cfg!(not(target_pointer_width = "64")) || bits == 0x434C_4F53_0000_0000);
-            let arr = crate::array::js_array_alloc(1);
-            let arr = crate::array::js_array_push_f64(arr, f64::from_bits(bits));
-            let arr_ptr = arr as *const u8;
-            assert_eq!(
-                *(arr_ptr.add(CLOSURE_TYPE_TAG_OFFSET) as *const u32),
-                CLOSURE_MAGIC
+            let fn_shape = crate::closure::shape::function_base_shape(
+                crate::closure::shape::FunctionProtoKind::Function,
             );
-            let arr = crate::value::js_nanbox_pointer(arr as i64);
-            assert_eq!(classify_value_typeof(arr), ValueTypeofTag::Object);
+            assert!(crate::object::shapes::is_exotic_shape_id(fn_shape));
+            let err = crate::error::js_error_new() as *mut u8;
+            let word = err.add(crate::closure::CLOSURE_SHAPE_OFFSET) as *mut u32;
+            let saved = word.read();
+            // GC_STORE_AUDIT(POINTER_FREE): plants a u32 ShapeId in a non-pointer word.
+            word.write(fn_shape);
+            assert!(!crate::closure::is_closure_ptr(err as usize));
+            let err_v = crate::value::js_nanbox_pointer(err as i64);
+            assert_eq!(classify_value_typeof(err_v), ValueTypeofTag::Object);
+            assert_eq!(js_value_typeof_tag(err_v), ValueTypeofTag::Object as u32);
+            // GC_STORE_AUDIT(POINTER_FREE): restores the scalar word.
+            word.write(saved);
 
             // A real closure is still a function.
             let func = crate::closure::js_closure_alloc(std::ptr::null(), 7);

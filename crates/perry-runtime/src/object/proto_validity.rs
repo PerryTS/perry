@@ -190,9 +190,40 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
     None
 }
 
-/// Next prototype serial. Starts at 1 so 0 can mean "none assigned"; a `u64`
-/// counter cannot be exhausted by any real program.
-static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Serials below this are reserved for INTRINSIC prototypes, assigned at
+/// creation (`assign_intrinsic_prototype_serial`) so a receiver kind's base
+/// shape can name its prototype before that object exists
+/// (`closure::shape::INTRINSIC_SERIAL_*`).
+pub(crate) const FIRST_DYNAMIC_PROTOTYPE_SERIAL: u64 = 64;
+
+/// Next prototype serial. 0 means "none assigned"; `1..64` are intrinsic; a
+/// `u64` counter cannot be exhausted by any real program.
+static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+
+/// Mark the freshly created intrinsic prototype `obj` and give it the
+/// reserved `serial` (below [`FIRST_DYNAMIC_PROTOTYPE_SERIAL`]). Every shape
+/// minted for a receiver inheriting from it — a base Function shape minted
+/// before `obj` existed, or an ordinary object whose `meta.prototype` is
+/// `obj` — then names the same `proto_id`.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader` with no serial assigned yet.
+pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) {
+    debug_assert!(serial != 0 && serial < FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+    if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
+        ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+        // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
+        (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
+        debug_assert!(
+            (*meta).proto_serial == 0 || (*meta).proto_serial == serial,
+            "intrinsic prototype already carried serial {}",
+            (*meta).proto_serial
+        );
+        // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
+        (*meta).proto_serial = serial;
+    }
+}
 
 /// The serial a `[[Prototype]]` of NULL stands for. Distinct from every
 /// assigned serial, and from 0 ("none").

@@ -32,7 +32,9 @@
 //! 32-byte slab record with one 24-byte family bucket per keys array is the
 //! same information at a fraction of the bytes.
 
-use super::{ShapeDescriptor, ShapeObjectKind, DICTIONARY_SHAPE_ID_BASE, SHAPE_ID_BASE};
+use super::{
+    ShapeDescriptor, ShapeObjectKind, DICTIONARY_SHAPE_ID_BASE, EXOTIC_SHAPE_ID_BASE, SHAPE_ID_BASE,
+};
 use std::cell::UnsafeCell;
 
 pub(super) const RECORD_FLAG_PRESENT: u8 = 1 << 0;
@@ -68,12 +70,13 @@ pub(crate) struct ShapeRecord {
     pub(super) logical_key_count: u32,
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
-    /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-9: the `ShapeObjectKind`
-    /// discriminant. Bits 10-15: the births a keyless birth shape served while
-    /// tracking its width (#10905). Bits 16-23: the attribute SUMMARY byte
-    /// (`key_attrs::SUMMARY_*`), an identity fact. Bits 24-31: the inline
-    /// width a keyless birth shape's descendants grow to (#10905). The two
-    /// #10905 fields are learned facts of the record, never identity.
+    /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
+    /// discriminant. Bits 11-14: the births a keyless birth shape served while
+    /// tracking its width (#10905). Bit 15: reserved. Bits 16-23: the
+    /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
+    /// Bits 24-31: the inline width a keyless birth shape's descendants grow
+    /// to (#10905). The two #10905 fields are learned facts of the record,
+    /// never identity.
     ///
     /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
     /// same four bytes in the same place, so the record stays 32 bytes and
@@ -83,7 +86,7 @@ pub(crate) struct ShapeRecord {
 }
 
 const RECORD_KIND_SHIFT: u32 = 8;
-const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
+const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
 /// whose keys are all default answers without touching its keys. Derived
@@ -93,13 +96,39 @@ const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
 /// summary here instead.
 const RECORD_SUMMARY_SHIFT: u32 = 16;
 const RECORD_SUMMARY_MASK: u32 = 0xFF << RECORD_SUMMARY_SHIFT;
+const _: () = assert!(RECORD_KIND_MASK & RECORD_SUMMARY_MASK == 0);
+const _: () = assert!(RECORD_KIND_MASK & 0xFF == 0);
 
-/// #10905 (`shapes_birth_width`): births served while tracking, bits 10-15.
-const RECORD_BIRTHS_SHIFT: u32 = 10;
-const RECORD_BIRTHS_MASK: u32 = 0x3F << RECORD_BIRTHS_SHIFT;
+/// #10905 (`shapes_birth_width`): births served while tracking, bits 11-14.
+/// Four bits hold every count the tracker stores (it stops at
+/// `TRACKING_BIRTHS`, asserted below).
+const RECORD_BIRTHS_SHIFT: u32 = 11;
+const RECORD_BIRTHS_MASK: u32 = 0xF << RECORD_BIRTHS_SHIFT;
 /// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-31.
 const RECORD_WIDTH_SHIFT: u32 = 24;
 const RECORD_WIDTH_MASK: u32 = 0xFF << RECORD_WIDTH_SHIFT;
+// The fields of `flags_and_kind` are pairwise disjoint.
+const _: () = {
+    let fields = [
+        0xFF,
+        RECORD_KIND_MASK,
+        RECORD_BIRTHS_MASK,
+        RECORD_SUMMARY_MASK,
+        RECORD_WIDTH_MASK,
+    ];
+    let mut i = 0;
+    while i < fields.len() {
+        let mut j = i + 1;
+        while j < fields.len() {
+            assert!(fields[i] & fields[j] == 0);
+            j += 1;
+        }
+        i += 1;
+    }
+};
+const _: () = assert!(
+    super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MASK >> RECORD_BIRTHS_SHIFT
+);
 
 const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 40);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
@@ -197,6 +226,8 @@ impl ShapeRecord {
         match (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT {
             1 => ShapeObjectKind::Class,
             2 => ShapeObjectKind::Dictionary,
+            3 => ShapeObjectKind::Function,
+            4 => ShapeObjectKind::FunctionDictionary,
             _ => ShapeObjectKind::Ordinary,
         }
     }
@@ -445,6 +476,8 @@ fn new_page() -> Page {
 pub(crate) struct ShapeSlab {
     pages: Vec<Option<Page>>,
     dict_pages: Vec<Option<Page>>,
+    /// The exotic-receiver band (`shapes::EXOTIC_SHAPE_ID_BASE`).
+    exotic_pages: Vec<Option<Page>>,
     /// Present records.
     len: usize,
 }
@@ -454,47 +487,51 @@ impl ShapeSlab {
         ShapeSlab {
             pages: Vec::new(),
             dict_pages: Vec::new(),
+            exotic_pages: Vec::new(),
             len: 0,
         }
     }
 
-    /// `(dictionary band?, index within that band's directory)`.
+    /// `(band, index within that band's directory)`: band 0 is ordinary,
+    /// 1 dictionary, 2 exotic receivers.
     #[inline]
-    fn index_of(id: u32) -> Option<(bool, usize)> {
+    fn index_of(id: u32) -> Option<(u8, usize)> {
         if !super::is_shape_id(id) {
             return None;
         }
-        Some(if id >= DICTIONARY_SHAPE_ID_BASE {
-            (true, (id - DICTIONARY_SHAPE_ID_BASE) as usize)
+        Some(if id >= EXOTIC_SHAPE_ID_BASE {
+            (2, (id - EXOTIC_SHAPE_ID_BASE) as usize)
+        } else if id >= DICTIONARY_SHAPE_ID_BASE {
+            (1, (id - DICTIONARY_SHAPE_ID_BASE) as usize)
         } else {
-            (false, (id - SHAPE_ID_BASE) as usize)
+            (0, (id - SHAPE_ID_BASE) as usize)
         })
     }
 
     #[inline]
-    fn id_of(dict: bool, index: usize) -> u32 {
-        if dict {
-            DICTIONARY_SHAPE_ID_BASE + index as u32
-        } else {
-            SHAPE_ID_BASE + index as u32
+    fn id_of(band: u8, index: usize) -> u32 {
+        match band {
+            0 => SHAPE_ID_BASE + index as u32,
+            1 => DICTIONARY_SHAPE_ID_BASE + index as u32,
+            _ => EXOTIC_SHAPE_ID_BASE + index as u32,
         }
     }
 
     #[inline]
-    fn dir(&self, dict: bool) -> &Vec<Option<Page>> {
-        if dict {
-            &self.dict_pages
-        } else {
-            &self.pages
+    fn dir(&self, band: u8) -> &Vec<Option<Page>> {
+        match band {
+            0 => &self.pages,
+            1 => &self.dict_pages,
+            _ => &self.exotic_pages,
         }
     }
 
     #[inline]
-    fn dir_mut(&mut self, dict: bool) -> &mut Vec<Option<Page>> {
-        if dict {
-            &mut self.dict_pages
-        } else {
-            &mut self.pages
+    fn dir_mut(&mut self, band: u8) -> &mut Vec<Option<Page>> {
+        match band {
+            0 => &mut self.pages,
+            1 => &mut self.dict_pages,
+            _ => &mut self.exotic_pages,
         }
     }
 
@@ -587,7 +624,7 @@ impl ShapeSlab {
     /// Visit every present record in id order. The callback may write
     /// through the record pointer; it must not insert or remove.
     pub(super) fn for_each(&self, mut f: impl FnMut(u32, *mut ShapeRecord)) {
-        for dict in [false, true] {
+        for dict in [0u8, 1, 2] {
             for (page_index, page) in self.dir(dict).iter().enumerate() {
                 let Some(page) = page else {
                     continue;
@@ -622,7 +659,7 @@ impl ShapeSlab {
     /// retirement is monotonic in id order for the common workload, so the
     /// oldest chunks empty first.
     pub(super) fn release_empty_chunks(&mut self) {
-        for dict in [false, true] {
+        for dict in [0u8, 1, 2] {
             let dir = self.dir_mut(dict);
             for page in dir.iter_mut() {
                 let Some(chunks) = page.as_mut() else {
@@ -655,6 +692,7 @@ impl ShapeSlab {
     pub(super) fn clear(&mut self) {
         self.pages.clear();
         self.dict_pages.clear();
+        self.exotic_pages.clear();
         self.len = 0;
     }
 
@@ -663,11 +701,11 @@ impl ShapeSlab {
     pub(super) fn estimated_bytes(&self) -> usize {
         let mut pages = 0usize;
         let mut chunks = 0usize;
-        for page in self.pages.iter().chain(self.dict_pages.iter()).flatten() {
+        for page in self.pages.iter().chain(self.dict_pages.iter()).chain(self.exotic_pages.iter()).flatten() {
             pages += 1;
             chunks += page.iter().filter(|c| c.is_some()).count();
         }
-        (self.pages.capacity() + self.dict_pages.capacity()) * std::mem::size_of::<Option<Page>>()
+        (self.pages.capacity() + self.dict_pages.capacity() + self.exotic_pages.capacity()) * std::mem::size_of::<Option<Page>>()
             + pages * PAGE_LEN * std::mem::size_of::<Option<Chunk>>()
             + chunks * CHUNK_LEN * std::mem::size_of::<ShapeRecord>()
     }
@@ -678,6 +716,7 @@ impl ShapeSlab {
         self.pages
             .iter()
             .chain(self.dict_pages.iter())
+            .chain(self.exotic_pages.iter())
             .flatten()
             .map(|page| page.iter().filter(|c| c.is_some()).count())
             .sum()

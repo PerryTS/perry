@@ -218,11 +218,6 @@ unsafe fn private_plain_receiver_shape(obj: f64) -> Option<(*const ObjectHeader,
     {
         return None;
     }
-    if *((addr as *const u8).add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32)
-        == crate::closure::CLOSURE_MAGIC
-    {
-        return None;
-    }
     let object = addr as *const ObjectHeader;
     let shape_id = crate::object::shapes::object_shape_stamp(object);
     (shape_id != 0).then_some((object, shape_id))

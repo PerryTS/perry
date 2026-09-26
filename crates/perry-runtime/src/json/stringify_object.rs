@@ -435,19 +435,17 @@ unsafe fn stringify_object_walk(
             // #2154 — a POINTER_TAG field can be a native *handle id* (a small
             // integer, e.g. an `http.Agent` in an object literal, a fetch/zlib/
             // stream handle, or a revocable-Proxy id), not a real heap pointer.
-            // Reading the CLOSURE_MAGIC tag at offset 12 of such a value
+            // Reading the GC header of such a value
             // segfaults. Skip the whole small-handle band `[0, 0x100000)` — not
             // just the `< 0x1000` low guard (#4904/#1843 — a Proxy id at 0xF000D
             // in a Next.js render object crashed exactly here). Real closures
             // live far above the band.
             if crate::value::addr_class::is_above_handle_band(ptr_candidate as usize) {
-                let type_tag =
-                    *(ptr_candidate.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32);
                 // A Symbol-valued field must also be dropped (test262
                 // JSON/stringify/value-symbol): a Symbol is POINTER_TAG'd but
                 // not a closure, so it needs its own probe alongside the
-                // CLOSURE_MAGIC check.
-                if type_tag == crate::closure::CLOSURE_MAGIC
+                // closure kind check.
+                if crate::closure::closure_kind_probe(ptr_candidate as usize)
                     || crate::symbol::is_registered_symbol(ptr_candidate as usize)
                 {
                     found = true;
