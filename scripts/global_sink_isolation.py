@@ -595,9 +595,9 @@ def self_test() -> int:
         if "test_clear_closure_side_tables" not in helpers:
             failures.append("the real clear list is missing a helper it certainly calls: %r" % (helpers,))
         sources = rust_sources()
-        kind, _ = declaration_kind(sources, "CLOSURE_PROPS")
+        kind, _ = declaration_kind(sources, "WASM_FUNCREF_EXTERNALS")
         if kind != "per_test":
-            failures.append("CLOSURE_PROPS classified as %r on the real tree" % (kind,))
+            failures.append("WASM_FUNCREF_EXTERNALS classified as %r on the real tree" % (kind,))
         kind, _ = declaration_kind(sources, "ARGUMENTS_KEYS")
         if kind != "thread_local":
             failures.append("ARGUMENTS_KEYS classified as %r on the real tree" % (kind,))
