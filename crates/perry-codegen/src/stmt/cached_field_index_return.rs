@@ -245,7 +245,10 @@ pub(super) fn try_emit_cached_field_index_return(
     let array_descriptor_bits = ctx.block().and(I16, &array_reserved, "1024");
     let array_no_descriptors = ctx.block().icmp_eq(I16, &array_descriptor_bits, "0");
     // #10593: the process-wide byte AND this array's own custom-proto bit.
-    let default_prototypes = crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &array_reserved);
+    let default_prototypes = crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+        ctx.block(),
+        &array_reserved,
+    );
     let array_ptr = ctx.block().inttoptr(I64, &array_raw);
     let length = ctx.block().load(I32, &array_ptr);
     let capacity_addr = ctx.block().add(I64, &array_raw, "4");

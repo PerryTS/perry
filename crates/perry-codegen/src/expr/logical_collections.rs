@@ -235,7 +235,8 @@ fn lower_captureless_some_inline(
             let descriptors = blk.and(I16, &reserved, "1024"); // OBJ_FLAG_ARRAY_DESCRIPTORS
             let no_descriptors = blk.icmp_eq(I16, &descriptors, "0");
             // #10593: the process-wide byte AND this array's own custom-proto bit.
-            let prototype_clean = crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+            let prototype_clean =
+                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
             let len_ptr = blk.inttoptr(I64, &raw);
             let length = blk.load(I32, &len_ptr);
             let cap_addr = blk.add(I64, &raw, "4");

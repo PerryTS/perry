@@ -391,7 +391,8 @@ mod tests {
         );
         assert!(
             hdr.lines()
-                .any(|line| line.contains("and i16") && line.trim_end().ends_with(&custom_proto_mask)),
+                .any(|line| line.contains("and i16")
+                    && line.trim_end().ends_with(&custom_proto_mask)),
             "{what}: the header gate must test the receiver's own custom-prototype \
              bit, not only the process-wide latch (#10593):\n{hdr}"
         );

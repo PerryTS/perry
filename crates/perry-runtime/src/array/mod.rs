@@ -2,6 +2,9 @@
 mod alloc;
 mod buffer_receiver;
 mod concat_reverse;
+/// #10593: a retargeted array's prototype is a per-array fact.
+#[cfg(test)]
+mod custom_proto_scope_tests;
 mod element_shape;
 mod fill_extend;
 mod flat_clone;
@@ -13,9 +16,6 @@ mod header;
 mod header_gc_slots;
 mod immutable;
 mod indexing;
-/// #10593: a retargeted array's prototype is a per-array fact.
-#[cfg(test)]
-mod custom_proto_scope_tests;
 /// Keys-array length-cap bounds tests, split out of `indexing.rs` for the
 /// 2000-line cap.
 #[cfg(test)]
@@ -167,8 +167,8 @@ pub use self::immutable::{
 };
 pub(crate) use self::indexing::{
     array_custom_prototype, array_has_own_index, array_iteration_is_exotic,
-    array_iteration_is_exotic_cleaned, array_iteration_is_exotic_resolved,
-    array_spec_get, array_spec_has_index, array_spec_set,
+    array_iteration_is_exotic_cleaned, array_iteration_is_exotic_resolved, array_spec_get,
+    array_spec_has_index, array_spec_set,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
@@ -183,10 +183,9 @@ pub(crate) use self::indexing::{
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{
-    array_index_fast_path_invalid_for, array_iteration_not_pristine,
-    array_proto_iterator_modified, invalidate_array_index_fast_path,
-    keys_array_len_capped_to_capacity, keys_array_slot, note_array_index_write,
-    note_array_iteration_not_pristine, note_array_proto_iterator_write,
+    array_index_fast_path_invalid_for, array_iteration_not_pristine, array_proto_iterator_modified,
+    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
+    note_array_index_write, note_array_iteration_not_pristine, note_array_proto_iterator_write,
     note_object_prototype_index_write, object_prototype_has_index_flag,
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };

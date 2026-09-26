@@ -1311,7 +1311,10 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // Such a property can intercept push with an inherited
                     // setter, so the raw append is valid only while the
                     // receiver's prototype chain remains pristine.
-                    let prototype_clean = crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &obj_flags);
+                    let prototype_clean =
+                        crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+                            blk, &obj_flags,
+                        );
                     let clean = blk.and(I1, &clean, &prototype_clean);
                     let length = blk.safe_load_i32_from_ptr(&payload);
                     let cap_addr = blk.add(I64, &payload, "4");

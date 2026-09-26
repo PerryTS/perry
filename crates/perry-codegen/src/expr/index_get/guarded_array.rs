@@ -348,7 +348,8 @@ pub(super) fn lower_guarded_array_index_get(
             let no_descriptors = blk.icmp_eq(I16, &descriptor_bits, "0");
 
             // #10593: the process-wide byte AND this array's own custom-proto bit.
-            let default_prototype_chain = crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+            let default_prototype_chain =
+                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
 
             let arr_ptr = blk.inttoptr(I64, &live_handle);
             let length = blk.load(I32, &arr_ptr);
