@@ -310,9 +310,61 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     if id == function_dictionary_shape() {
         return false;
     }
-    let Some(record) = shapes::shape_record_by_id(id) else {
-        return false;
+    // A keyed shape: its verdict for the three Function.prototype intrinsics
+    // is a fact of the (immutable) ShapeId, cached per agent.
+    let bit = match key {
+        b"bind" => VERDICT_BIND,
+        b"call" => VERDICT_CALL,
+        b"apply" => VERDICT_APPLY,
+        _ => return keyed_shape_lacks_key(id, key),
     };
+    let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
+    let cached = VERDICT_CACHE.with(|c| c.get()[slot]);
+    let mask = if cached.0 == id {
+        cached.1
+    } else {
+        let mask = VERDICT_KNOWN
+            | if keyed_shape_lacks_key(id, b"bind") {
+                VERDICT_BIND
+            } else {
+                0
+            }
+            | if keyed_shape_lacks_key(id, b"call") {
+                VERDICT_CALL
+            } else {
+                0
+            }
+            | if keyed_shape_lacks_key(id, b"apply") {
+                VERDICT_APPLY
+            } else {
+                0
+            };
+        VERDICT_CACHE.with(|c| {
+            let mut all = c.get();
+            all[slot] = (id, mask);
+            c.set(all);
+        });
+        mask
+    };
+    mask & bit != 0
+}
+
+const VERDICT_KNOWN: u8 = 1;
+const VERDICT_BIND: u8 = 2;
+const VERDICT_CALL: u8 = 4;
+const VERDICT_APPLY: u8 = 8;
+const VERDICT_CACHE_LEN: usize = 64;
+
+crate::perry_thread_local! {
+    /// Per-agent cache of keyed Function ShapeIds' verdicts for the
+    /// Function.prototype intrinsics (ShapeIds are never reused, so an entry
+    /// can only go unused, never wrong).
+    static VERDICT_CACHE: std::cell::Cell<[(u32, u8); VERDICT_CACHE_LEN]> =
+        const { std::cell::Cell::new([(0, 0); VERDICT_CACHE_LEN]) };
+}
+
+/// A keyed Function shape naming Function.prototype whose key list lacks `key`.
+fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
     let Some(descriptor) = shapes::shape_descriptor_by_id(id) else {
         return false;
     };
@@ -321,14 +373,13 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     {
         return false;
     }
-    let keys = record.keys();
-    if keys == 0 || descriptor.logical_key_count == 0 {
+    if descriptor.keys == 0 || descriptor.logical_key_count == 0 {
         return true;
     }
     // SAFETY: a live slab record's keys array.
     unsafe {
         crate::object::keys_find_slot_by_bytes_resolved(
-            keys as usize as *const crate::array::ArrayHeader,
+            descriptor.keys as usize as *const crate::array::ArrayHeader,
             descriptor.logical_key_count,
             key,
         )

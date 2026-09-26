@@ -56,6 +56,23 @@ unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
 
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.
 unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
+    // One shape lookup for an ordinary bag: keys, count and inline bound all
+    // come from the same descriptor.
+    if let Some(d) = crate::object::shapes::object_shape_descriptor(obj) {
+        if d.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary && d.keys != 0 {
+            let slot = crate::object::keys_find_slot_by_bytes_resolved(
+                d.keys as usize as *const crate::array::ArrayHeader,
+                d.logical_key_count,
+                key,
+            )?;
+            let value =
+                crate::object::object_field_at_with_live(obj, slot, d.live_inline_slot_count);
+            if value.bits() == crate::value::TAG_HOLE {
+                return None;
+            }
+            return Some(f64::from_bits(value.bits()));
+        }
+    }
     let keys = crate::object::object_keys(obj);
     let arr = keys.arr();
     if arr.is_null() {
