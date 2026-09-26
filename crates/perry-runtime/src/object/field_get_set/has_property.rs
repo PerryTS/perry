@@ -6,7 +6,7 @@ use super::*;
 /// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
 /// (#6160). Covers the registration schemes the generic symbol resolver
 /// (`js_object_get_symbol_property`, which only reads the data-valued
-/// CLASS_STATIC_SYMBOLS table) skips:
+/// class function object's static symbols) skips:
 ///   * user computed-symbol methods/accessors (`static [S]() {}`,
 ///     `static get [S]()`) → CLASS_SYMBOL_METHODS / CLASS_SYMBOL_ACCESSORS;
 ///   * `static [Symbol.hasInstance]` → the lifted per-class has-instance hook;
@@ -370,7 +370,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // #6160: `Symbol in Class` where the member is a Symbol-keyed STATIC member
     // that registers through a scheme the generic symbol resolver below
     // (`js_object_get_symbol_property`) does not consult — it only sees the
-    // data-valued CLASS_STATIC_SYMBOLS table. `class_ref_has_symbol_member`
+    // data-valued class static symbols. `class_ref_has_symbol_member`
     // presence-checks the method/accessor and well-known static registrations,
     // so `sym in Class` matches Node even though those members dispatch through
     // dedicated call paths. Presence-only: `in` is [[HasProperty]], never [[Get]].
@@ -407,13 +407,18 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     }
 
     // Refs #420 / #618: `Symbol in ClassRef` — drizzle's `entityKind in cls`.
-    // Class refs are INT32-tagged. Check CLASS_STATIC_SYMBOLS for symbol
+    // Class refs are INT32-tagged. Check the class's static symbols for symbol
     // keys and CLASS_DYNAMIC_PROPS for string keys.
     {
         let bits = obj.to_bits();
         if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
             // Symbol key path.
-            if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
+            let found = if crate::object::class_prototype_ref_id(obj).is_some() {
+                crate::symbol::class_static_symbol_lookup(class_id, key)
+            } else {
+                crate::symbol::class_static_symbol_lookup_in_chain(class_id, key)
+            };
+            if found.is_some() {
                 return nanbox_true;
             }
             // #6149: string key on a class ref (`"prototype" in C`,
