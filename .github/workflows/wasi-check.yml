@@ -33,6 +33,16 @@ on:
     paths:
       - "crates/perry-runtime/**"
       - "crates/perry-dispatch/**"
+      # The ABI table is built from the runtime, stdlib and ext crates, and
+      # the codegen job builds the perry driver and compiles gap programs.
+      - "crates/perry-stdlib/**"
+      - "crates/perry-ext-*/**"
+      - "crates/perry/**"
+      - "crates/perry-codegen/Cargo.toml"
+      - "test-files/test_gap_*.ts"
+      - ".github/actions/setup-llvm22/**"
+      - "Cargo.toml"
+      - ".cargo/**"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/wasi_check.sh"
