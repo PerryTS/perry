@@ -850,8 +850,9 @@ pub use process_streams::{
     disable_process_stdin_keypress_events, enable_process_stdin_keypress_events,
     ensure_process_stdin_reader, is_process_stdin_handle, js_process_stderr, js_process_stdin,
     js_process_stdout, mark_process_stdin_destroyed, pump_process_stdin,
-    scan_process_stream_singleton_roots_mut, set_process_stdin_raw_state, stdin_chunk_jsvalue,
-    stdin_chunk_jsvalue_opt, stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
+    reset_process_stdin_liveness_for_tests, scan_process_stream_singleton_roots_mut,
+    set_process_stdin_raw_state, stdin_chunk_jsvalue, stdin_chunk_jsvalue_opt,
+    stdin_encoding_flush_jsvalue, stdin_has_encoding, stdin_is_detached,
     stdin_keypress_events_enabled, stdin_listeners_keep_loop_alive, stdin_push_bytes,
 };
 

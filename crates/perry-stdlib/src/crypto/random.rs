@@ -943,6 +943,41 @@ mod tests {
         boxed_ptr(closure as *const u8)
     }
 
+    /// Drive this thread's event loop — pool turns plus the timer phases —
+    /// until the recorded callback fires, bounded so a lost completion fails
+    /// the test instead of hanging it. Leaving the callback queued would also
+    /// leak it into whichever later test next ticks the shared timer store,
+    /// after this thread (and the closure's heap) is gone.
+    fn pump_event_loop_until_fired() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !CB_FIRED.with(|f| f.get()) && std::time::Instant::now() < deadline {
+            perry_runtime::turnloop_pool::turn(10);
+            perry_runtime::timer::js_callback_timer_tick();
+        }
+    }
+
+    /// Runs the test body as its own agent, the way a `perry/thread` worker
+    /// runs (#11417). Unclaimed libtest threads all resolve to the PRIMARY
+    /// agent, so they share one timer store and one event-loop route: a
+    /// concurrent test's tick ran this test's callback on ITS thread (the
+    /// thread-local record here never saw it), and the pool submission claimed
+    /// the primary route for this thread's life, declining every test that
+    /// must own that loop. Retiring the agent on drop shuts its loop down and
+    /// purges anything it left queued.
+    struct OwnAgent(perry_runtime::agent::AgentId);
+
+    impl OwnAgent {
+        fn enter() -> Self {
+            Self(perry_runtime::agent::enter_worker_agent())
+        }
+    }
+
+    impl Drop for OwnAgent {
+        fn drop(&mut self) {
+            perry_runtime::agent::retire_agent(self.0);
+        }
+    }
+
     fn reset_record() {
         CB_FIRED.with(|f| f.set(false));
         CB_ERR_NULLISH.with(|f| f.set(false));
@@ -956,6 +991,7 @@ mod tests {
 
     #[test]
     fn native_dispatch_pbkdf2_value_form_fires_callback() {
+        let _agent = OwnAgent::enter();
         reset_record();
         let cb = make_record_callback();
         // pbkdf2(password, salt, iterations, keylen, digest, callback)
@@ -984,13 +1020,16 @@ mod tests {
         );
         // The scheduled completion must keep the event loop alive, otherwise a
         // real caller (`util.promisify(crypto.pbkdf2)`) would exit before the
-        // callback ran and the awaiting Promise would never settle.
-        assert_ne!(
-            perry_runtime::timer::js_callback_timer_has_pending(),
-            0,
+        // callback ran and the awaiting Promise would never settle. Since
+        // turnloop P4 the derivation runs on the turnloop pool, whose
+        // outstanding job is the keep-alive; a thread the pool refuses derives
+        // inline and holds a ref'd poll-phase callback instead.
+        assert!(
+            perry_runtime::turnloop_pool::has_pending_jobs()
+                || perry_runtime::timer::js_callback_timer_has_pending() != 0,
             "pbkdf2 completion must be a pending, ref'd event-loop handle"
         );
-        perry_runtime::timer::js_callback_timer_tick();
+        pump_event_loop_until_fired();
         assert!(CB_FIRED.with(|f| f.get()), "pbkdf2 callback must fire");
         assert!(
             CB_ERR_NULLISH.with(|f| f.get()),
@@ -1004,6 +1043,7 @@ mod tests {
 
     #[test]
     fn native_dispatch_random_bytes_value_form_fires_callback() {
+        let _agent = OwnAgent::enter();
         reset_record();
         let cb = make_record_callback();
         // randomBytes(size, callback)
@@ -1019,6 +1059,21 @@ mod tests {
         assert!(
             !CB_FIRED.with(|f| f.get()),
             "randomBytes callback must not fire synchronously"
+        );
+        assert_ne!(
+            perry_runtime::timer::js_callback_timer_has_pending(),
+            0,
+            "randomBytes completion must be a pending, ref'd event-loop handle"
+        );
+        // A native completion is a POLL-phase callback, and one queued before a
+        // poll phase is not eligible in that phase — it runs in the next
+        // iteration's (timer/store.rs `promote_pending`, matching Node, where a
+        // `setImmediate` queued beside the call runs first). So one iteration
+        // must not deliver it and the second must.
+        perry_runtime::timer::js_callback_timer_tick();
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "randomBytes callback must wait for the next poll phase"
         );
         perry_runtime::timer::js_callback_timer_tick();
         assert!(CB_FIRED.with(|f| f.get()), "randomBytes callback must fire");

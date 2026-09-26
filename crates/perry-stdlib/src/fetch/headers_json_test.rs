@@ -12,6 +12,7 @@ use super::*;
 /// to `{}`.
 #[test]
 fn headers_fetch_object_json_serializes_registry_store() {
+    let _band = crate::fetch::handle_band_test_lock();
     let mut store = HeadersStore::default();
     store.set("Content-Type", "application/json");
     store.set("X-Api-Key", "secret");

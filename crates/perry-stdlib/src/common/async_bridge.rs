@@ -638,9 +638,31 @@ pub unsafe fn reject_promise_later(promise_ptr: *mut u8, message: String) {
     queue_rejection_string(ptr, message);
 }
 
+/// Serializes the unit tests that populate or drain `PENDING_RESOLUTIONS` /
+/// `PENDING_DEFERRED` (#11417). Both queues are process-global and every pump
+/// drains all of them, so a concurrent test's `clear_pending()` or pump takes
+/// entries another test just queued — the resolution then settles (or is
+/// scanned) on the wrong thread, or not at all.
+#[cfg(test)]
+static PENDING_QUEUE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn pending_queue_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    PENDING_QUEUE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Take the queues for this test and start it from empty.
+    fn own_pending_queues() -> std::sync::MutexGuard<'static, ()> {
+        let guard = pending_queue_test_lock();
+        clear_pending();
+        guard
+    }
 
     fn clear_pending() {
         let mut resolutions = PENDING_RESOLUTIONS.lock().unwrap();
@@ -654,7 +676,7 @@ mod tests {
 
     #[test]
     fn stdlib_pump_releases_the_native_async_token_of_a_deferred_resolution() {
-        clear_pending();
+        let _queues = own_pending_queues();
         // perry-ffi's `JsPromise::new()` mints the promise through this shim,
         // which registers a native async token keyed by the promise address.
         let promise = crate::perry_ffi_async::perry_ffi_promise_new();
@@ -679,7 +701,7 @@ mod tests {
     /// with the message as a JS string — instead of a spawned tokio task.
     #[test]
     fn reject_promise_later_rejects_with_the_message_on_the_next_pump() {
-        clear_pending();
+        let _queues = own_pending_queues();
         let promise = perry_runtime::js_promise_new_cross_thread();
         unsafe { reject_promise_later(promise as *mut u8, "Invalid password".to_string()) };
         assert_eq!(
@@ -724,7 +746,7 @@ mod tests {
 
     #[test]
     fn async_bridge_pending_resolution_scanner_emits_promise_and_result_roots() {
-        clear_pending();
+        let _queues = own_pending_queues();
         let promise_ptr = 0x1234_5000usize;
         let deferred_promise_ptr = 0x1234_6000usize;
         let result_bits = 0x7FFD_0000_1234_7000u64;

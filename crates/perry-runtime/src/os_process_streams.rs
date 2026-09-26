@@ -1268,6 +1268,19 @@ extern "C" fn process_stdin_read(_closure: *const crate::closure::ClosureHeader,
     f64::from_bits(crate::value::STRING_TAG | (sh as u64 & crate::value::POINTER_MASK))
 }
 
+/// Put the process-global stdin liveness latches back to their startup state.
+///
+/// `destroy()` (`mark_process_stdin_destroyed`) and `unref()` set them for the
+/// life of the process, which is right for a program and wrong for a test
+/// binary: one readline test that destroys stdin made
+/// `js_readline_has_active()` answer 0 for every later test in the process
+/// (#11417). Test fixtures call this from their reset; programs never do.
+#[doc(hidden)]
+pub fn reset_process_stdin_liveness_for_tests() {
+    STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
+    STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
+}
+
 /// `process.stdin.resume()` — flowing mode. Clears any prior detach (from
 /// `pause`/`destroy`) and any prior `unref()`, and (re)starts the reader, so a
 /// paused stdin can resume.

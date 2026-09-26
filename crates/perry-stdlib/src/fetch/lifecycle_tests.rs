@@ -94,6 +94,7 @@ fn response_reader_case(read: fn(usize)) {
 
 #[test]
 fn response_string_readers_survive_a_full_trace_in_their_allocation() {
+    let _band = crate::fetch::handle_band_test_lock();
     run_without_deadlock("js_fetch_response_url", || {
         response_reader_case(|id| {
             js_fetch_response_url(handle_to_f64(id));
@@ -125,6 +126,7 @@ fn response_string_readers_survive_a_full_trace_in_their_allocation() {
 /// so these cases leave one old, unreachable id of the right kind behind.
 #[test]
 fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
+    let _band = crate::fetch::handle_band_test_lock();
     run_without_deadlock("js_headers_setheaders_entries_json", || {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let headers = js_headers_new();
@@ -183,6 +185,7 @@ fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
 /// whichever handle reused the number.
 #[test]
 fn object_url_keeps_its_blob_until_revoked() {
+    let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| unsafe {
         perry_runtime::gc::gc_init();
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -215,6 +218,7 @@ fn object_url_keeps_its_blob_until_revoked() {
 /// values its record owns — must survive the first full trace after birth.
 #[test]
 fn a_young_id_and_its_edges_survive_the_first_full_trace() {
+    let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| {
         perry_runtime::gc::gc_init();
         let id = handle_id(js_headers_new());
@@ -252,6 +256,7 @@ fn a_young_id_and_its_edges_survive_the_first_full_trace() {
 /// owned set to double, instead of firing every fixed number of allocations.
 #[test]
 fn full_trace_requests_scale_with_the_surviving_handle_count() {
+    let _band = crate::fetch::handle_band_test_lock();
     std::thread::spawn(|| {
         perry_runtime::gc::gc_init();
         let scope = perry_runtime::gc::RuntimeHandleScope::new();

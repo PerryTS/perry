@@ -91,5 +91,8 @@ pub(super) fn reset() -> MutexGuard<'static, ()> {
     READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
     NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
     READER_STARTED.store(false, Ordering::Release);
+    // `js_readline_stdin_destroy` also latches the runtime's process-global
+    // stdin detach flag, which `js_readline_has_active` consults first.
+    perry_runtime::os::reset_process_stdin_liveness_for_tests();
     guard
 }
