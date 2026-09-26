@@ -9,8 +9,8 @@
 # Linking a `.wasm` is phase 4 (#11379), so the compile is expected to fail
 # at the link step for now; what this checks is the codegen output, which
 # `PERRY_SAVE_LL` captures before that. A program that produces no IR fails,
-# and so does one whose objects fail to compile ("Error compiling module"):
-# only the link may fail.
+# and so does one whose objects fail to compile ("Error compiling module") or
+# whose compile times out or is killed: only the link may fail.
 #
 # Liveness: every saved module must carry the wasm32 triple (a host compile
 # would pass the ABI check vacuously against nothing) and the ABI check must
@@ -58,8 +58,16 @@ for name in "${SAMPLES[@]}"; do
   dir="$OUT/$name"
   mkdir -p "$dir"
   # The link step fails until #11379; the IR is saved before it runs.
+  status=0
   ( cd "$dir" && PERRY_SAVE_LL="$dir" PERRY_NO_AUTO_OPTIMIZE=1 PERRY_NO_CACHE=1 \
-      timeout 300 "$PERRY" compile "$src" -o "$dir/out" --target wasi >"$dir/log.txt" 2>&1 ) || true
+      timeout 300 "$PERRY" compile "$src" -o "$dir/out" --target wasi >"$dir/log.txt" 2>&1 ) || status=$?
+  # A link failure is an ordinary error exit; a timeout (124) or a death by
+  # signal (128+N) can land after the IR is saved and before objects exist.
+  if ((status == 124 || status >= 128)); then
+    echo "::error::$name compile did not finish (exit $status)" >&2
+    tail -20 "$dir/log.txt" >&2
+    exit 1
+  fi
   if ! compgen -G "$dir/*.ll" >/dev/null; then
     echo "::error::$name produced no IR" >&2
     tail -20 "$dir/log.txt" >&2
