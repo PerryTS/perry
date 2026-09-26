@@ -33,6 +33,7 @@ pub use static_dispatch::js_instanceof;
 /// representation: heap closures (declarations / expressions / arrows /
 /// methods / bound functions / built-in constructors, all carrying
 /// `CLOSURE_MAGIC`) and small native function handles.
+#[inline]
 pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
