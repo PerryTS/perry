@@ -942,6 +942,9 @@ fn tls_import_routes_net_wrapper() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_module_imports.insert("node:tls".to_string());
+    // `well_known_iteration_set` reads PERRY_FORCE_WELL_KNOWN, which other
+    // tests in this binary mutate; hold the env lock across the read.
+    let _guard = env_lock();
     assert!(well_known_iteration_set(&ctx).contains("net"));
 }
 
