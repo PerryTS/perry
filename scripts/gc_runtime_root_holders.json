@@ -125,12 +125,6 @@
       "why": "Per-connection PROTOCOL state, keyed by the crate's own ws id. A `WsConnection` is `transport: WsTransport`, `messages: Vec<WsPayload>` and three bools. Rule S fires on `WsTransport::Turnloop(i64)`; that i64 is the HOST's connection id, not an address \u2014 it is minted by the turnloop client adoption path (`attach_turnloop_client`) and its only use is as the first argument of `replay_command(conn_id, ..)`, which looks the connection up in the host registry. It is never cast to a pointer and never dereferenced. The other variant, `Connecting(Vec<WsCommand>)`, holds `Send(WsOutgoing)` / `Close(Option<u16>, String)` / `Terminate`, and `WsOutgoing` is `Text(String)` / `Binary|Ping|Pong(Vec<u8>)` \u2014 Rust-owned bytes throughout, as is `WsPayload`. No NaN-boxed value and no heap pointer enters this map. The JS callbacks for these connections live in `WS_CLIENT_LISTENERS` (`HashMap<String, Vec<i64>>` of closure pointers), which is exactly what the registered `scan_ws_roots` visits \u2014 the split is deliberate. Newly uncovered because turnloop replaced the transport variant that held a tokio task's command channel with this bare id, which is what made rule S look at it."
     },
     {
-      "file": "crates/perry-runtime/src/agent.rs",
-      "name": "CURRENT_AGENT",
-      "verdict": "not_a_gc_pointer",
-      "why": "The calling thread's JS-agent id, an integer (Cell<Option<AgentId>>, AgentId = u64) set once at worker entry and never cleared (agent.rs:75). It names a heap; it never holds a pointer into one. It stopped being reached incidentally by a registered scanner when turnloop P3 moved the timer root walk behind timer::store::with_current, whose generic closure the call-graph walk does not follow -- the holder itself did not change."
-    },
-    {
       "file": "crates/perry-runtime/src/alloc_census.rs",
       "name": "CREDIT",
       "verdict": "not_a_gc_pointer",
@@ -1410,6 +1404,12 @@
       "name": "NEXT_DRAFT",
       "verdict": "not_a_gc_pointer",
       "why": "turnloop P6. A monotonic i64 draft-id counter for the SMTP C seam; it contains only a tally."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_PARENT_AGENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11433: the JS-agent id (AgentId = u64) of the agent that created the in-process Worker running on this thread, set once at Worker entry and used only to tag Worker-to-parent events. It names a heap; it never holds a pointer into one."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
