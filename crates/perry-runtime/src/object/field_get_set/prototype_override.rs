@@ -16,12 +16,24 @@ pub(super) enum InheritedRead {
     Missed,
     /// No walk happened; the caller's fallbacks run unchanged.
     NotWalked,
+    /// #11391: the recorded chain was walked and does not carry the key, AND
+    /// it is not the chain the receiver's class id names any more, so the
+    /// class-id prototype arms must not answer either. See
+    /// `prototype_chain::class_default_prototype_superseded`.
+    Superseded,
 }
 
 impl InheritedRead {
     /// Whether the recorded prototype chain has already been walked.
     pub(super) fn walked(&self) -> bool {
         !matches!(self, InheritedRead::NotWalked)
+    }
+
+    /// Whether the class-id prototype walk may still answer this read: false
+    /// once the receiver's own `[[Prototype]]` has replaced the object that
+    /// walk reads (#11391).
+    pub(super) fn class_prototype_answers(&self) -> bool {
+        !matches!(self, InheritedRead::Superseded)
     }
 }
 
@@ -64,10 +76,16 @@ pub(super) fn inherited_field_if_overridden(
     if key.is_null() {
         return InheritedRead::NotWalked;
     }
-    if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize) {
+    // #11391: a class-default link is authoritative too, once the class id no
+    // longer names the object it links to.
+    let individual =
+        crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize);
+    let superseded = !individual
+        && crate::object::prototype_chain::class_default_prototype_superseded(obj as usize);
+    if !individual && !superseded {
         return InheritedRead::NotWalked;
     }
-    if class_prototype_declares_own_getter(obj, key) {
+    if individual && class_prototype_declares_own_getter(obj, key) {
         return InheritedRead::NotWalked;
     }
     if let Some(value) = crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
@@ -90,6 +108,9 @@ pub(super) fn inherited_field_if_overridden(
     // helpers), and swallowing those made them unreachable.
     if crate::object::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
         return InheritedRead::Hit(JSValue::undefined());
+    }
+    if superseded {
+        return InheritedRead::Superseded;
     }
     InheritedRead::Missed
 }

@@ -1237,10 +1237,10 @@ pub(crate) fn get_field_by_name_object_tail(
             // #9131; see `prototype_override::inherited_field_if_overridden`.
             // A miss is not a `Hit` so the synthesized arms below stay
             // reachable (#9244).
-            let chain_walked =
+            let (chain_walked, class_walk) =
                 match super::prototype_override::inherited_field_if_overridden(obj, key) {
                     super::prototype_override::InheritedRead::Hit(v) => return v,
-                    read => read.walked(),
+                    read => (read.walked(), read.class_prototype_answers()),
                 };
             // #809: an object with no own keys (e.g. an `Object.create(proto)`
             // result, or a `Function.prototype = obj` instance) still has to
@@ -1252,13 +1252,18 @@ pub(crate) fn get_field_by_name_object_tail(
             if class_id != 0 {
                 let receiver =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                if let Some(v) = super::super::class_registry::resolve_proto_chain_field_noting_miss(
-                    class_id,
-                    key,
-                    receiver,
-                    &mut proto_read_miss,
-                ) {
-                    return v;
+                // #11391: not when the recorded chain replaced this walk's.
+                if class_walk {
+                    if let Some(v) =
+                        super::super::class_registry::resolve_proto_chain_field_noting_miss(
+                            class_id,
+                            key,
+                            receiver,
+                            &mut proto_read_miss,
+                        )
+                    {
+                        return v;
+                    }
                 }
                 let key_bytes = std::slice::from_raw_parts(
                     (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
@@ -1275,7 +1280,10 @@ pub(crate) fn get_field_by_name_object_tail(
                 // `CLASS_PROTOTYPE_METHODS` walk reached further down
                 // — see the matching arm at line ~4083.
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
-                    if let Some(v) = lookup_prototype_method(class_id, name) {
+                    if let Some(v) = class_walk
+                        .then(|| lookup_prototype_method(class_id, name))
+                        .flatten()
+                    {
                         return JSValue::from_bits(v.to_bits());
                     }
                     // Native class vtable accessors and methods are exposed
@@ -1637,11 +1645,11 @@ pub(crate) fn get_field_by_name_object_tail(
         }
 
         // Shaped-receiver own-key miss; same rule as the keyless arm above.
-        let chain_walked = match super::prototype_override::inherited_field_if_overridden(obj, key)
-        {
-            super::prototype_override::InheritedRead::Hit(v) => return v,
-            read => read.walked(),
-        };
+        let (chain_walked, class_walk) =
+            match super::prototype_override::inherited_field_if_overridden(obj, key) {
+                super::prototype_override::InheritedRead::Hit(v) => return v,
+                read => (read.walked(), read.class_prototype_answers()),
+            };
         // Set by the class-chain walk below; see `static_prototype_already_read`.
         let mut proto_read_miss = 0u64;
 
@@ -1697,7 +1705,7 @@ pub(crate) fn get_field_by_name_object_tail(
             // found, the method is an own-property of the proto
             // object — return its value directly. `pipe`, `[Equal.symbol]`,
             // etc. on Effect's EffectPrototype reach here.
-            {
+            if class_walk {
                 let receiver =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
                 if let Some(v) = super::super::class_registry::resolve_proto_chain_field_noting_miss(
@@ -1718,7 +1726,10 @@ pub(crate) fn get_field_by_name_object_tail(
             // this arm covers methods that only exist as prototype
             // assignments (never declared inside the `class` block).
             if let Ok(name) = std::str::from_utf8(key_bytes) {
-                if let Some(v) = lookup_prototype_method(class_id, name) {
+                if let Some(v) = class_walk
+                    .then(|| lookup_prototype_method(class_id, name))
+                    .flatten()
+                {
                     return JSValue::from_bits(v.to_bits());
                 }
                 if class_id == crate::builtins::CONSOLE_INSTANCE_CLASS_ID

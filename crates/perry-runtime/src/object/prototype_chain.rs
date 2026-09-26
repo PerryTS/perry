@@ -818,6 +818,38 @@ pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
     )
 }
 
+/// #11391: `new F()` records F's `.prototype` of that moment as the instance's
+/// `[[Prototype]]` (a class-default link, so no override flag) and also stamps
+/// F's synthetic class id. The class-id walk reads F's CURRENT `.prototype`
+/// (`CLASS_PROTOTYPE_OBJECTS[F]`). After `F.prototype = other` the two name
+/// different objects, and only the recorded one is on the instance's chain:
+/// `o.b` answered from `other`, an object `o` does not inherit from.
+///
+/// True exactly when they differ. When they name the same object the class-id
+/// walk reads the right one, and its arms (decl-proto accessors, evaluated
+/// parents) stay in charge. Declared class ids are excluded by
+/// `synthetic_class_prototype_object`: their entry is a parent class object,
+/// never a prototype, so the comparison would be meaningless.
+pub(crate) fn class_default_prototype_superseded(obj_ptr: usize) -> bool {
+    let Some(recorded) = object_static_prototype(obj_ptr) else {
+        return false;
+    };
+    // Only an ordinary object carries a class id at the `ObjectHeader` offset.
+    let Some(obj) = (unsafe { meta_capable_object(obj_ptr) }) else {
+        return false;
+    };
+    let class_id = unsafe { (*obj).class_id };
+    if class_id == 0 {
+        return false;
+    }
+    let recorded = crate::value::JSValue::from_bits(recorded);
+    if !recorded.is_pointer() {
+        return false;
+    }
+    let current = crate::object::class_registry::synthetic_class_prototype_object(class_id);
+    !current.is_null() && current as usize != recorded.as_pointer::<u8>() as usize
+}
+
 pub(crate) fn default_object_prototype_bits() -> Option<u64> {
     let object_ctor = super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let ctor_bits = object_ctor.to_bits();
