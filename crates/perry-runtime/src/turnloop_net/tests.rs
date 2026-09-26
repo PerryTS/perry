@@ -357,12 +357,24 @@ fn queued_writes_report_backpressure_and_drain_in_order() {
     );
     assert_eq!(super::queued_bytes(client), 0, "the queue drained");
 
-    assert!(pump_until(|e| e
-        .iter()
-        .any(|e| e.kind == NET_DATA && e.id == conn)));
+    // TCP is a byte stream: completed writes can arrive in several NET_DATA
+    // events. Sender-side NET_WROTE completions do not mean the receiver has
+    // observed every byte yet (#11365). Wait for the full payload, keeping the
+    // exact-content assertion below so excess, reordered or corrupt bytes fail.
+    let expected = b"aaabbc";
+    assert!(
+        pump_until(|e| e
+            .iter()
+            .filter(|e| e.kind == NET_DATA && e.id == conn)
+            .map(|e| e.data.len())
+            .sum::<usize>()
+            >= expected.len()),
+        "the peer must receive all queued bytes: {:?}",
+        events()
+    );
     let received = payload(NET_DATA, conn);
     assert_eq!(
-        received, b"aaabbc",
+        received, expected,
         "ordered writes arrive as one ordered stream"
     );
 
