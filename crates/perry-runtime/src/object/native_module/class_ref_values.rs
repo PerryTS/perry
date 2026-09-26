@@ -66,15 +66,26 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Wall 10 — `name in instance` for a class instance: true when `name` is a
-/// prototype METHOD, GETTER, or SETTER anywhere in the instance's class chain.
-/// Class instance methods/accessors live in `CLASS_VTABLE_REGISTRY` (the
-/// instance carries no recorded `[[Prototype]]` object with a `keys_array`), so
-/// the ordinary own-key + recorded-prototype walk in `js_object_has_property`
-/// misses them — making `'method' in instance` wrongly `false`. NestJS's app
-/// Proxy gates routing on `'listen' in receiver`; the false result misrouted
-/// `app.listen`, so the server never bound. Walk the class parent chain here.
+/// Does the class chain rooted at `class_id` DECLARE a prototype method,
+/// getter or setter named `name` (one `delete` has not removed)? A filter over
+/// class metadata ("may this chain resolve `name`?") for paths that must not
+/// materialize a prototype; it never answers a property query itself.
 pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
+    class_chain_declares(class_id, name, true)
+}
+
+/// Wall 10 — `name in instance` for a class instance whose walk found nothing:
+/// true when `name` is a prototype METHOD anywhere in the instance's class
+/// chain. Methods registered in `CLASS_VTABLE_REGISTRY` may have no physical
+/// key the ordinary own-key + prototype walk in `js_object_has_property` can
+/// see, which made `'method' in instance` wrongly `false` (NestJS's app Proxy
+/// gates routing on `'listen' in receiver`). Accessors are not consulted: they
+/// are real properties of the class prototype, which that walk visits.
+pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
+    class_chain_declares(class_id, name, false)
+}
+
+fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
     if class_id == 0 {
         return false;
     }
@@ -93,8 +104,7 @@ pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
             // from `'m' in new C()`, matching the descriptor/static lookup paths.
             if !super::class_registry::class_is_key_deleted(cid, name)
                 && (vtable.methods.contains_key(name)
-                    || vtable.getters.contains_key(name)
-                    || vtable.setters.contains_key(name))
+                    || (accessors && vtable.accessor_decl(name).is_some()))
             {
                 return true;
             }

@@ -326,11 +326,71 @@ pub struct VTableMethodEntry {
     pub has_rest: bool,
 }
 
-/// Per-class vtable with methods, getters, and setters
+/// The compiled halves of one declared accessor, each 0 when that half is
+/// absent: `get` is `fn(this) -> f64`, `set` is `fn(this, value) -> f64`.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct AccessorDecl {
+    pub get: usize,
+    pub set: usize,
+}
+
+/// Per-class vtable: the method dispatch table plus the class's accessor
+/// DECLARATIONS.
+///
+/// `accessors` is class metadata, not a property store. A public instance
+/// accessor is a real accessor property of the class's decl prototype
+/// (`decl_accessors.rs`); this record says what the ClassBody declared so the
+/// prototype installer can build that property and the "does this class chain
+/// declare an accessor named X" filters can answer without materializing a
+/// prototype. No property read or write resolves through it — they go through
+/// the prototype's real property, which `defineProperty` / `delete` may have
+/// changed since.
+///
+/// `private_accessors` holds `#x` accessors. They are never properties and
+/// are not reachable by name: only the private-name get/set paths of their
+/// lexical class read them.
+#[derive(Default)]
 pub struct ClassVTable {
     pub methods: HashMap<String, VTableMethodEntry>,
-    pub getters: HashMap<String, usize>, // getter func_ptr (signature: fn(this_f64) -> f64)
-    pub setters: HashMap<String, usize>, // setter func_ptr (signature: fn(this_f64, value_f64) -> f64)
+    pub accessors: HashMap<String, AccessorDecl>,
+    pub private_accessors: HashMap<String, AccessorDecl>,
+}
+
+impl ClassVTable {
+    /// Record one compiled half of the accessor `name` (`#x` goes to the
+    /// private record). A zero pointer records nothing.
+    pub(crate) fn declare_accessor_half(&mut self, name: &str, func_ptr: usize, is_setter: bool) {
+        if func_ptr == 0 {
+            return;
+        }
+        let table = if name.starts_with('#') {
+            &mut self.private_accessors
+        } else {
+            &mut self.accessors
+        };
+        let decl = table.entry(name.to_string()).or_default();
+        if is_setter {
+            decl.set = func_ptr;
+        } else {
+            decl.get = func_ptr;
+        }
+    }
+
+    /// The declared public accessor `name`, if any.
+    #[inline]
+    pub(crate) fn accessor_decl(&self, name: &str) -> Option<AccessorDecl> {
+        self.accessors.get(name).copied()
+    }
+
+    #[inline]
+    pub(crate) fn declares_getter(&self, name: &str) -> bool {
+        self.accessor_decl(name).is_some_and(|d| d.get != 0)
+    }
+
+    #[inline]
+    pub(crate) fn declares_setter(&self, name: &str) -> bool {
+        self.accessor_decl(name).is_some_and(|d| d.set != 0)
+    }
 }
 
 /// Vtable registry of the calling thread's image (#8546 — see
@@ -942,8 +1002,7 @@ pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> V
     } else if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(vtable) = registry.as_ref().and_then(|all| all.get(&class_id)) {
             names.extend(vtable.methods.keys().cloned());
-            names.extend(vtable.getters.keys().cloned());
-            names.extend(vtable.setters.keys().cloned());
+            names.extend(vtable.accessors.keys().cloned());
         }
     }
     names.retain(|name| !name.starts_with('#'));
@@ -990,21 +1049,21 @@ pub(super) fn install_class_decl_prototype_method_field(
 /// with whether it is an accessor (else a method).
 pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
     let mut names = Vec::new();
+    let mut accessors = Vec::new();
     if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
             names.extend(vtable.methods.keys().cloned());
-            names.extend(vtable.getters.keys().cloned());
-            names.extend(vtable.setters.keys().cloned());
+            accessors.extend(vtable.accessors.keys().cloned());
         }
     }
+    names.extend(accessors.iter().cloned());
     order_class_string_member_names(class_id, false, &mut names);
     names
         .into_iter()
         // A private `#x` member is never a property of the prototype.
         .filter(|name| !name.starts_with('#'))
         .map(|name| {
-            let is_accessor =
-                super::registration::class_own_accessor_ptrs(class_id, &name).is_some();
+            let is_accessor = accessors.contains(&name);
             (name, is_accessor)
         })
         .collect()

@@ -512,31 +512,22 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         );
                     }
                 }
-                // Class accessors reflect as accessor descriptors: instance
-                // `get x(){}` is an own property of `C.prototype`, a static
-                // accessor an own property of `C` itself. The raw vtable
-                // func_ptrs are wrapped as callable function values.
-                if super::class_prototype_ref_id(obj_value).is_some()
-                    && super::class_registry::class_own_accessor_ptrs(class_id, &method_name)
-                        .is_some()
-                {
-                    // S2: an instance accessor is a real accessor property of
-                    // the declared prototype object; reflect that object.
-                    let proto = super::class_registry::class_decl_prototype_value(class_id);
-                    if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+                // Class accessors reflect as accessor descriptors. An instance
+                // `get x(){}` is a real accessor property of the declared
+                // prototype object, so a `C.prototype` ref reflects that
+                // object. A static accessor is an own property of `C` itself,
+                // whose raw func_ptrs are wrapped as callable function values.
+                if super::class_prototype_ref_id(obj_value).is_some() {
+                    if let Some(proto) =
+                        super::class_registry::decl_prototype_own_accessor(class_id, &method_name)
+                    {
                         return js_object_get_own_property_descriptor(proto, key_value);
                     }
-                }
-                let accessor = if super::class_prototype_ref_id(obj_value).is_some() {
-                    None
-                } else {
+                } else if let Some((g, s)) =
                     super::class_registry::class_own_static_accessor_ptrs(class_id, &method_name)
-                };
-                if let Some((g, s)) = accessor {
-                    let is_static = super::class_prototype_ref_id(obj_value).is_none();
-                    return super::class_registry::class_accessor_descriptor(
+                {
+                    return super::class_registry::static_accessor_descriptor(
                         class_id,
-                        is_static,
                         &method_name,
                         g,
                         s,

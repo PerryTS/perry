@@ -463,7 +463,9 @@ pub(crate) fn class_object_own_field_bytes(
             if !crate::string::js_string_key_matches_bytes(k, want) {
                 continue;
             }
-            let v = crate::object::js_object_get_field(obj, i as u32);
+            // An own ACCESSOR's slot holds its pair, not a value: it reads as
+            // absent here, and the caller's `[[Get]]` runs the getter.
+            let v = crate::object::key_attrs::object_slot_data(obj, i as u32);
             if v.bits() == TAG_UNDEFINED {
                 return None;
             }
@@ -718,15 +720,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 if registry.is_none() {
                     *registry = Some(crate::fast_hash::new_ptr_hash_map());
                 }
-                let vtable = registry
-                    .as_mut()
-                    .unwrap()
-                    .entry(class_id)
-                    .or_insert_with(|| ClassVTable {
-                        methods: HashMap::new(),
-                        getters: HashMap::new(),
-                        setters: HashMap::new(),
-                    });
+                let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
                 vtable.methods.insert(
                     method_name.to_string(),
                     VTableMethodEntry {
@@ -770,15 +764,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         if registry.is_none() {
             *registry = Some(crate::fast_hash::new_ptr_hash_map());
         }
-        let vtable = registry
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_insert_with(|| ClassVTable {
-                methods: HashMap::new(),
-                getters: HashMap::new(),
-                setters: HashMap::new(),
-            });
+        let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
         vtable.methods.insert(
             name.clone(),
             VTableMethodEntry {
@@ -861,21 +847,9 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             if registry.is_none() {
                 *registry = Some(crate::fast_hash::new_ptr_hash_map());
             }
-            let vtable = registry
-                .as_mut()
-                .unwrap()
-                .entry(class_id)
-                .or_insert_with(|| ClassVTable {
-                    methods: HashMap::new(),
-                    getters: HashMap::new(),
-                    setters: HashMap::new(),
-                });
-            if getter_ptr != 0 {
-                vtable.getters.insert(name.clone(), getter_ptr as usize);
-            }
-            if setter_ptr != 0 {
-                vtable.setters.insert(name.clone(), setter_ptr as usize);
-            }
+            let vtable = registry.as_mut().unwrap().entry(class_id).or_default();
+            vtable.declare_accessor_half(&name, getter_ptr as usize, false);
+            vtable.declare_accessor_half(&name, setter_ptr as usize, true);
             drop(registry);
             super::decl_accessors::note_instance_accessor_registered(class_id, &name);
         } else {
@@ -1283,7 +1257,7 @@ pub(crate) fn class_has_instance_getter(class_id: u32, name: &str) -> bool {
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
         if let Some(vt) = reg.get(&cid) {
-            if vt.getters.contains_key(name) {
+            if vt.declares_getter(name) {
                 return true;
             }
         }
@@ -1317,7 +1291,7 @@ pub(crate) fn class_chain_has_instance_accessor(class_id: u32, name: &str) -> bo
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
         if let Some(vt) = reg.get(&cid) {
-            if vt.getters.contains_key(name) || vt.setters.contains_key(name) {
+            if vt.accessor_decl(name).is_some() {
                 return true;
             }
         }

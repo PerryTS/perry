@@ -604,18 +604,15 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         }
     }
 
-    // Check vtable for a registered getter or method before falling back to field lookup
+    // Check the vtable for a method before falling back to field lookup. A
+    // class accessor is a real accessor property of the class's prototype, so
+    // the ordinary `[[Get]]` below finds it (an own data property shadowing it
+    // included).
     let class_id = (*obj_header).class_id;
     if class_id != 0 {
         if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
             if let Some(ref reg) = *registry {
                 if let Some(vtable) = reg.get(&class_id) {
-                    if let Some(&getter_ptr) = vtable.getters.get(property_name) {
-                        // Methods take `this` as f64 (NaN-boxed), not i64.
-                        // On Windows x64 ABI, i64 and f64 use different registers.
-                        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                        return f(obj_value);
-                    }
                     if vtable.methods.contains_key(property_name) {
                         let heap_name = {
                             let layout =

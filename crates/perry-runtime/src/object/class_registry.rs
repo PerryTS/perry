@@ -43,7 +43,6 @@ pub use super::class_handles::{
 };
 use super::*;
 
-mod accessor_attrs;
 mod builtin_alias_construct;
 mod class_meta;
 mod construct;
@@ -52,7 +51,8 @@ pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 mod decl_accessors;
 pub(crate) use decl_accessors::{
-    class_chain_getter_value, class_chain_setter_apply, install_decl_prototype_accessor,
+    class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
+    install_decl_prototype_accessor,
 };
 pub mod decl_prototype_table;
 mod dispatch;
@@ -68,15 +68,15 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
+mod static_accessor_attrs;
 pub(crate) mod verdict_classes;
 mod vm_brand;
 
-// ── accessor_attrs.rs ───────────────────────────────────────────────────────
-pub(crate) use accessor_attrs::{
-    class_accessor_attrs, class_accessor_attrs_in_use, class_accessor_descriptor,
-    class_declared_accessor_ptrs, class_enumerable_accessor_names,
-    class_prototype_enumerable_accessor, class_set_accessor_attrs,
-    decl_prototype_enumerable_key_snapshot, decl_prototype_keys_with_enumerable_accessors,
+// ── static_accessor_attrs.rs ────────────────────────────────────────────────
+pub(crate) use static_accessor_attrs::{
+    set_static_accessor_attrs, static_accessor_attrs, static_accessor_attrs_in_use,
+    static_accessor_descriptor, static_declared_accessor_ptrs, static_enumerable_accessor_names,
+    CLASS_ACCESSOR_DEFAULT_ATTRS,
 };
 
 // ── state.rs ────────────────────────────────────────────────────────────────
@@ -103,12 +103,13 @@ pub(crate) use state::{
     throw_non_constructable_builtin_function,
 };
 pub use state::{
-    ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
-    CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES,
-    CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS,
-    CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STATIC_PROTOTYPES,
-    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
-    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
+    AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS,
+    CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
+    CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS,
+    CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS,
+    CLASS_STATIC_PROTOTYPES, CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS,
+    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS,
+    REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -258,11 +259,17 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             let mut entries = 0usize;
             let mut inner = 0usize;
             for vt in m.values() {
-                entries += vt.methods.len() + vt.getters.len() + vt.setters.len();
-                inner += map_bytes(&vt.methods) + map_bytes(&vt.getters) + map_bytes(&vt.setters);
+                entries += vt.methods.len() + vt.accessors.len() + vt.private_accessors.len();
+                inner += map_bytes(&vt.methods)
+                    + map_bytes(&vt.accessors)
+                    + map_bytes(&vt.private_accessors);
                 inner += vt.methods.keys().map(|k| k.capacity()).sum::<usize>();
-                inner += vt.getters.keys().map(|k| k.capacity()).sum::<usize>();
-                inner += vt.setters.keys().map(|k| k.capacity()).sum::<usize>();
+                inner += vt.accessors.keys().map(|k| k.capacity()).sum::<usize>();
+                inner += vt
+                    .private_accessors
+                    .keys()
+                    .map(|k| k.capacity())
+                    .sum::<usize>();
             }
             rows.push((
                 "class.vtables(methods+accessors)",

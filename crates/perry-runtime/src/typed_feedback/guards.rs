@@ -176,7 +176,7 @@ fn class_setter_in_chain(class_id: u32, key_name: &str) -> bool {
     for _ in 0..32 {
         if registry
             .get(&cid)
-            .map(|vtable| vtable.setters.contains_key(key_name))
+            .map(|vtable| vtable.declares_setter(key_name))
             .unwrap_or(false)
         {
             return true;
@@ -203,7 +203,7 @@ fn class_getter_in_chain(class_id: u32, key_name: &str) -> bool {
     for _ in 0..32 {
         if registry
             .get(&cid)
-            .map(|vtable| vtable.getters.contains_key(key_name))
+            .map(|vtable| vtable.declares_getter(key_name))
             .unwrap_or(false)
         {
             return true;

@@ -167,15 +167,6 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         // that. Enumerability is likewise re-evaluated per key in the read phase
         // (an earlier getter can create a descriptor or flip a future key's
         // enumerability), so we deliberately do NOT filter it during the snapshot.
-        // #10480: a declared-class prototype's enumerable ClassBody accessors
-        // have no physical key, so the keys-array walk cannot see them. The
-        // probe runs `Object.keys`, which allocates, so the receiver is rooted
-        // across it and re-read.
-        let accessor_scope = crate::gc::RuntimeHandleScope::new();
-        let obj_handle = accessor_scope.root_raw_const_ptr(obj);
-        let (class_accessor_keys, obj) = obj_handle.across_const::<ObjectHeader, _>(|| {
-            super::super::class_registry::decl_prototype_enumerable_key_snapshot(obj)
-        });
         let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
@@ -191,9 +182,6 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 snapshot_keys.push(bytes.to_vec());
             }
         }
-        if let Some(merged) = class_accessor_keys {
-            snapshot_keys = merged;
-        }
 
         for key_bytes in snapshot_keys {
             let key_str =
@@ -207,19 +195,11 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
             // hidden a key that was in the initial snapshot (test262
             // entries/getter-removing-future-key, getter-making-future-key-
             // nonenumerable).
-            let class_accessor = std::str::from_utf8(&key_bytes).is_ok_and(|name| {
-                super::super::class_registry::class_prototype_enumerable_accessor(
-                    obj as usize,
-                    name,
-                )
-            });
-            if !class_accessor {
-                if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
-                    continue;
-                }
-                if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
-                    continue;
-                }
+            if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
+                continue;
+            }
+            if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
+                continue;
             }
             // Create a pair array [key, value].
             let pair = crate::array::js_array_alloc(2);
