@@ -136,10 +136,14 @@ pub struct ShadowStackState {
 /// Byte offset of [`ShadowStackState::ptr`]. Part of the codegen contract.
 pub const SHADOW_STATE_PTR_OFFSET: usize = 0;
 /// Byte offset of [`ShadowStackState::len`]. Part of the codegen contract.
-pub const SHADOW_STATE_LEN_OFFSET: usize = 8;
+///
+/// One pointer word per preceding field: 8/24 on LP64, 4/12 on ILP32
+/// (wasm32, arm64_32). Codegen's copy is the LP64 value; ILP32 codegen is
+/// refused until #11378 makes it target-derived.
+pub const SHADOW_STATE_LEN_OFFSET: usize = std::mem::size_of::<usize>();
 /// Byte offset of [`ShadowStackState::frame_top`]. Part of the codegen
 /// contract.
-pub const SHADOW_STATE_FRAME_TOP_OFFSET: usize = 24;
+pub const SHADOW_STATE_FRAME_TOP_OFFSET: usize = 3 * std::mem::size_of::<usize>();
 /// Size of one [`ShadowEntry`]. Part of the codegen contract: generated code
 /// indexes the buffer by shifting, so this must stay a power of two.
 pub const SHADOW_ENTRY_SIZE: usize = 16;

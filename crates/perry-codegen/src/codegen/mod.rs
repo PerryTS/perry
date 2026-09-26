@@ -431,6 +431,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let hir = live_cjs_hir.as_ref();
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
+    if let Some(refusal) = crate::target_layout::ilp32_codegen_refusal(&triple) {
+        anyhow::bail!(refusal);
+    }
     // `PERRY_REGION_DIAG=1`: report step 4b's regions and the statement-level
     // runs it does not reach, when this module's codegen ends.
     let _region_diag = crate::expr::region_guard::ModuleDiag::start(hir);

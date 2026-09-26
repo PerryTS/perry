@@ -98,8 +98,9 @@ fn class_of(size: usize) -> usize {
 #[inline]
 fn filter_slot(ptr: usize) -> usize {
     // The low four bits are always zero for mimalloc's alignment; mix the rest.
-    let h = (ptr >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    (h >> (64 - FILTER_BITS)) & (FILTER_LEN - 1)
+    // Hashed in `u64` so ILP32 targets get the same 64-bit mix.
+    let h = ((ptr >> 4) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> (64 - FILTER_BITS)) as usize & (FILTER_LEN - 1)
 }
 
 #[inline]

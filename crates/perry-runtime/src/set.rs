@@ -521,6 +521,7 @@ pub struct SetHeader {
     pub compaction_epoch: u32,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(std::mem::offset_of!(SetHeader, size) == 0);
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
@@ -528,6 +529,17 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
     assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
     assert!(std::mem::size_of::<SetHeader>() == 32);
+};
+
+// ILP32 (wasm32, arm64_32): the two pointer fields are 4 bytes.
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(std::mem::offset_of!(SetHeader, size) == 0);
+    assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
+    assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, used) == 16);
+    assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 20);
+    assert!(std::mem::size_of::<SetHeader>() == 24);
 };
 
 /// The tombstone a deleted element's slot takes — same reserved marker as the
