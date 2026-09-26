@@ -40,6 +40,9 @@ pub(crate) const BY_NAME_RUNTIME: usize = 11;
 pub(crate) const BY_NAME_PUT_VALUE: usize = 12;
 /// Key-add inline hit that first retired the receiver's layout record.
 pub(crate) const ADD_LAYOUT_FORGET: usize = 13;
+/// Key-add inline hit on one of the runtime block's first ways (counted on
+/// its own edge, then also as [`ADD_HIT`]).
+pub(crate) const ADD_WAY_HIT: usize = 14;
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

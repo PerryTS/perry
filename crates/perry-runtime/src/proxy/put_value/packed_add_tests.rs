@@ -22,6 +22,36 @@ fn packed_set_site_layout_matches_codegen() {
         8 * ADD_GUARD_WORD
     );
     assert_eq!((ADD_SHAPES_WORD, ADD_GUARD_WORD, ADD_SLOT_BITS), (1, 2, 16));
+    // ADD_WAYS_WORD, ADD_WAY_WORDS, ADD_WAYS_LOG2, ADD_WAY_HASH: the emitted
+    // hit reads way `add_way_home(sid)` at `block + 8 * ADD_WAY_WORDS * i`,
+    // the primary pair through the same pointer arithmetic from
+    // `ADD_SHAPES_WORD`.
+    assert_eq!(
+        std::mem::offset_of!(PackedSetSite, add_ways),
+        8 * ADD_WAYS_WORD
+    );
+    assert_eq!(std::mem::size_of::<AddWay>(), 8 * ADD_WAY_WORDS);
+    assert_eq!(std::mem::offset_of!(AddWay, shapes), 0);
+    assert_eq!(
+        std::mem::offset_of!(AddWay, guard),
+        std::mem::offset_of!(PackedSetSite, add_guard)
+            - std::mem::offset_of!(PackedSetSite, add_shapes)
+    );
+    assert_eq!(
+        (ADD_WAYS_WORD, ADD_WAY_WORDS, ADD_WAYS_LOG2, ADD_WAY_HASH),
+        (3, 2, 6, 0x9E37_79B1)
+    );
+    // ADD_WAY_PROBES: the home and the next way.
+    assert_eq!(ADD_WAY_PROBES, 2);
+    assert_eq!(ADD_WAYS, 1 << ADD_WAYS_LOG2);
+    // The home is a way of the block for every ShapeId.
+    for sid in [0u32, 1, 0x8000_0000, 0x8000_0001, u32::MAX] {
+        assert!(add_way_home(sid) < ADD_WAYS);
+    }
+    assert_eq!(
+        add_way_home(0x8000_0001),
+        (0x8000_0001u32.wrapping_mul(0x9E37_79B1) >> 26) as usize
+    );
     // An empty site's pre half is unmatchable.
     let empty = PackedSetSite::empty();
     assert!(empty.add_shapes.load(Ordering::Relaxed) as u32 >= crate::object::shapes::SHAPE_ID_END);
@@ -163,4 +193,50 @@ fn a_published_memo_owns_both_shapes_across_a_full_trace() {
         carrier(pre) && carrier(post),
         "a published memo must own its pre- and post-shape"
     );
+}
+
+/// A polymorphic site's displaced memos sit at their pre-shape's HOME way —
+/// the one way the emitted hit compares — unless that way was already
+/// taken, and the runtime serves every memo wherever it sits. Sabotage:
+/// placement in arrival order (way 0, 1, ...) -> a home way stays empty
+/// while its memo sits elsewhere.
+#[test]
+fn a_displaced_memo_sits_at_its_home_way() {
+    let key = interned(b"added_home");
+    let srcs: [&[u8]; 6] = [
+        b"{\"h0\":1}",
+        b"{\"h1\":1}",
+        b"{\"h2\":1}",
+        b"{\"h3\":1}",
+        b"{\"h4\":1}",
+        b"{\"h5\":1}",
+    ];
+    let site = leaked_site();
+    let mut pres = Vec::new();
+    for src in srcs {
+        let first = parsed(src);
+        pres.push(stamp(first));
+        miss(site, first, key, 1.0);
+    }
+    let ways = unsafe { site_ways(site) }.expect("a polymorphic site has ways");
+    let primary = site.add_shapes.load(Ordering::Relaxed) as u32;
+    assert_eq!(primary, *pres.last().unwrap(), "the newest memo is primary");
+    for &pre in &pres[..pres.len() - 1] {
+        let at_home = ways[add_way_home(pre)].shapes.load(Ordering::Relaxed);
+        assert!(
+            at_home as u32 == pre || at_home != PACKED_SET_EMPTY,
+            "memo {pre:#x}: its home way {} is empty, so it must sit there",
+            add_way_home(pre)
+        );
+    }
+    for (i, src) in srcs.iter().enumerate() {
+        let next = parsed(src);
+        assert_eq!(stamp(next), pres[i]);
+        let served = if pres[i] == primary {
+            Some(2.0)
+        } else {
+            unsafe { packed_add_try(site, next, 2.0) }
+        };
+        assert_eq!(served, Some(2.0), "memo {i} must be served");
+    }
 }
