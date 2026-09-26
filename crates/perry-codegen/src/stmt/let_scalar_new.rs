@@ -171,17 +171,15 @@ pub(super) fn try_lower_scalar_replaced_new(
                 // (`INT32_TAG | class_id`). Without this a `new.target` read in
                 // the ctor (notably `const t = new.target`) fell through to the
                 // runtime cell, which this path never sets, yielding undefined.
-                let new_target_bits = ctx
-                    .class_ids
-                    .get(class_name)
-                    .map(|&cid| crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF))
-                    .unwrap_or(crate::nanbox::TAG_UNDEFINED);
+                let new_target_value = match ctx.class_ids.get(class_name).copied() {
+                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    None => {
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    }
+                };
                 let new_target_slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.block().store(
-                    DOUBLE,
-                    &crate::nanbox::double_literal(f64::from_bits(new_target_bits)),
-                    &new_target_slot,
-                );
+                ctx.block()
+                    .store(DOUBLE, &new_target_value, &new_target_slot);
                 ctx.new_target_stack.push(new_target_slot);
 
                 // Stage field initializers around any parent body chain.

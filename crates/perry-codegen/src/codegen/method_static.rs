@@ -88,12 +88,9 @@ pub(in crate::codegen) fn compile_static_method(
     // path. (Previously `this` fell through to `js_implicit_this_get` and
     // read back `undefined`.)
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
-    let class_ref_lit = {
-        let bits = crate::nanbox::INT32_TAG | (class_ref_cid as u64 & 0xFFFF_FFFF);
-        crate::nanbox::double_literal(f64::from_bits(bits))
-    };
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
+        let class_ref_lit = crate::expr::emit_class_value(blk, class_ref_cid);
         let this_slot = blk.alloca(DOUBLE);
         // Receiver-sensitive `this`: dynamic dispatch paths (inherited
         // `D.m()`, `C.m.call(x)` / `.apply(x)`) arm a one-shot override that

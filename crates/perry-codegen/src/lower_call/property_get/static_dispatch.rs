@@ -134,9 +134,14 @@ pub(crate) fn try_lower_static_dispatch(
                     Expr::LocalGet(_) => lower_expr(ctx, object)?,
                     _ => {
                         // Synthesize a ClassRef NaN-box from the resolved class.
-                        let cid = ctx.class_ids.get(&cls_name).copied().unwrap_or(0);
-                        let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                        crate::nanbox::double_literal(f64::from_bits(bits))
+                        match ctx.class_ids.get(&cls_name).copied() {
+                            Some(cid) if cid != 0 => {
+                                crate::expr::emit_class_value(ctx.block(), cid)
+                            }
+                            _ => crate::nanbox::double_literal(f64::from_bits(
+                                crate::nanbox::TAG_UNDEFINED,
+                            )),
+                        }
                     }
                 };
                 // `has_rest` unconditionally allocates the synthesized array

@@ -13,6 +13,17 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
 
 use crate::block::LlBlock;
+
+/// A class constructor as a VALUE (#11414): the class's per-agent function
+/// object. `js_class_value` never collects (`gc_call_effects`) and the object
+/// is pinned for the agent's life, so the result needs no root.
+pub(crate) fn emit_class_value(blk: &mut LlBlock, class_id: u32) -> String {
+    blk.call(
+        DOUBLE,
+        "js_class_value",
+        &[(I32, &(class_id as i32).to_string())],
+    )
+}
 use crate::codegen::AppMetadata;
 use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;

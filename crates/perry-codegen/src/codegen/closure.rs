@@ -783,9 +783,7 @@ pub(super) fn compile_closure(
             // closure's synthetic this slot with the enclosing ClassRef rather
             // than the old 0.0 sentinel so arrows in static fields retain the
             // class constructor as their SuperProperty receiver.
-            let class_ref = crate::nanbox::double_literal(f64::from_bits(
-                crate::nanbox::INT32_TAG | class_id as u64,
-            ));
+            let class_ref = crate::expr::emit_class_value(blk, class_id);
             blk.store(DOUBLE, &class_ref, &slot);
         } else if entry_bound_this {
             // A valid non-pointer until the prologue's receiver read below

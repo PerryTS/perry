@@ -338,8 +338,7 @@ pub(super) fn init_static_fields_late(
                 // class-ref NaN-box a static method binds (see
                 // `compile_static_method`) for the init's duration.
                 let seeded_this = ctx.class_ids.get(&c.name).copied().map(|cid| {
-                    let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                    let class_ref_lit = crate::nanbox::double_literal(f64::from_bits(bits));
+                    let class_ref_lit = crate::expr::emit_class_value(ctx.block(), cid);
                     let this_slot = ctx.func.alloca_entry(DOUBLE);
                     ctx.block().store(DOUBLE, &class_ref_lit, &this_slot);
                     ctx.this_stack.push(this_slot);

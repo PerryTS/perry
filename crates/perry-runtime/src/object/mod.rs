@@ -96,7 +96,7 @@ pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
 pub(crate) use class_value::class_value_id;
-pub use class_value::{class_closure_id, js_class_constructor_called};
+pub use class_value::{class_closure_id, js_class_constructor_called, js_class_value};
 pub(crate) mod canonical_keys;
 mod census;
 pub(crate) mod key_attrs;
@@ -1557,6 +1557,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // holding it is a real GC root that a moving collection must rewrite.
     null_stub::scan_null_stub_roots_mut(visitor);
     crate::closure::shape::scan_function_prototype_roots_mut(visitor);
+    class_value::scan_class_value_roots_mut(visitor);
     #[cfg(feature = "regex-engine")]
     regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }

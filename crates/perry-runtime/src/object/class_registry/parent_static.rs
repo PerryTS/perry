@@ -91,6 +91,9 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
                 _ => 0,
             }
         }
+    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+        // A class function object names its class.
+        class_id
     } else if tag == POINTER_TAG {
         // Object instance: read class_id from the ObjectHeader.
         let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
@@ -500,7 +503,6 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 /// the constructor currently running inherits.
 pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -524,7 +526,7 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     // snapshot caps by the signature split.
     if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
         if parent_cid != 0 {
-            return f64::from_bits(INT32_TAG | parent_cid as u64);
+            return crate::object::class_value::class_value(parent_cid);
         }
     }
     f64::from_bits(TAG_UNDEFINED)

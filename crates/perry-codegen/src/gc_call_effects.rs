@@ -338,7 +338,11 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // raw clear, TLS free-list push) or a TLS pending-map insert.
         | "js_box_scope_release"
         | "js_i32_box_scope_release"
-        | "js_bool_box_scope_release" => GcCallEffect::CannotCollect,
+        | "js_bool_box_scope_release"
+        // A class's function object: an indexed per-agent table load; the
+        // first use allocates it in the old arena under a GcSuppressScope, so
+        // it never collects and calls no user code.
+        | "js_class_value" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
         // and accessor dispatch — none present. The forced-evacuation probe

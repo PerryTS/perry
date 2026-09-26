@@ -10,8 +10,16 @@
 // away from the top of a module.
 pub(crate) const CLASS_PROTOTYPE_REF_FLAG: u64 = 1u64 << 32;
 
+/// The VALUE of class `class_id`'s constructor: its function object.
 pub(crate) fn class_constructor_ref_value(class_id: u32) -> f64 {
-    f64::from_bits(0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF))
+    super::class_value::class_value(class_id)
+}
+
+/// A stable, non-moving KEY for class `class_id`'s constructor, for side
+/// tables that key by value bits (the legacy immediate's bits; never a value
+/// handed to user code).
+pub(crate) fn class_constructor_key_bits(class_id: u32) -> u64 {
+    0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF)
 }
 
 pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {

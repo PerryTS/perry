@@ -120,14 +120,19 @@ pub extern "C" fn js_reflect_delete_metadata(key: f64, target: f64, property_key
 fn normalize_target_bits(target: f64) -> u64 {
     // Synthetic class-prototype ref → fold onto the class constructor key.
     if let Some(cid) = crate::object::class_prototype_ref_id(target) {
-        return crate::object::class_constructor_ref_value(cid).to_bits();
+        return crate::object::class_constructor_key_bits(cid);
+    }
+    // A class constructor (either form) -> its stable key: the function object
+    // is a heap cell whose address is not a durable key.
+    if let Some(cid) = crate::object::class_value_id(target) {
+        return crate::object::class_constructor_key_bits(cid);
     }
     // Live decl-prototype heap object → fold onto the class constructor key.
     let bits = target.to_bits();
     if (bits >> 48) == (POINTER_TAG >> 48) {
         let ptr = (bits & POINTER_MASK) as usize;
         if let Some(cid) = crate::object::class_id_for_decl_prototype_object(ptr) {
-            return crate::object::class_constructor_ref_value(cid).to_bits();
+            return crate::object::class_constructor_key_bits(cid);
         }
     }
     bits

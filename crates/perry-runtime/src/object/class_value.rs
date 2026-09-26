@@ -111,3 +111,124 @@ pub(crate) fn boxed_class_word(bits: u64) -> f64 {
         f64::from_bits(bits)
     }
 }
+
+// ---------------------------------------------------------------------------
+// The function object for each class: one per agent per class id.
+// ---------------------------------------------------------------------------
+
+/// Class ids per table page (log2). Class ids are dense per program plus a few
+/// high reserved ids for built-in classes, so a two-level table keeps the
+/// lookup a pair of indexed loads without a large flat array.
+const CLASS_VALUE_PAGE_SHIFT: u32 = 8;
+const CLASS_VALUE_PAGE_LEN: usize = 1 << CLASS_VALUE_PAGE_SHIFT;
+
+type ClassValuePage = Box<[*mut ClosureHeader; CLASS_VALUE_PAGE_LEN]>;
+
+crate::perry_thread_local! {
+    /// This agent's class function objects, indexed by class id. A GC root
+    /// (rewritten on a move) via [`scan_class_value_roots_mut`].
+    static CLASS_VALUES: std::cell::RefCell<Vec<Option<ClassValuePage>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[inline]
+fn class_value_cached(class_id: u32) -> Option<*mut ClosureHeader> {
+    let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
+    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
+    CLASS_VALUES.with(|t| {
+        let t = t.borrow();
+        let p = t.get(page)?.as_ref()?;
+        let c = p[index];
+        (!c.is_null()).then_some(c)
+    })
+}
+
+/// Allocate the class function object for `class_id`: a closure born in the
+/// old generation and pinned (it lives as long as the agent and never moves),
+/// code pointer
+/// [`js_class_constructor_called`], capture slot 0 = the class id as INT32.
+///
+/// Never collects: callers hold raw receiver pointers across the lookup, so
+/// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
+#[cold]
+#[inline(never)]
+fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    let payload = crate::closure::closure_payload_size(1);
+    let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
+        payload,
+        std::mem::align_of::<ClosureHeader>(),
+        crate::gc::GC_TYPE_CLOSURE,
+    ) as *mut ClosureHeader;
+    unsafe {
+        // GC_STORE_AUDIT(INIT): fresh class function object; the one capture
+        // is an INT32 class id and the props edge is null — pointer-free.
+        (*ptr).capture_count = 1;
+        (*ptr).shape_id = crate::closure::shape::function_dictionary_shape();
+        (*ptr).func_ptr = js_class_constructor_called as *const u8;
+        (*ptr).props = std::ptr::null_mut();
+        std::ptr::write(
+            crate::closure::closure_capture_slots_mut(ptr),
+            crate::value::INT32_TAG | class_id as u64,
+        );
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        // Born old AND pinned: the address is the class's identity for the
+        // agent's life (compiled code keeps it in registers and allocas, the
+        // metadata and weak tables compare it), so no collector may move it.
+        crate::gc::pin_object_non_young(
+            (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+        );
+    }
+    let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
+    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
+    CLASS_VALUES.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.len() <= page {
+            t.resize_with(page + 1, || None);
+        }
+        t[page].get_or_insert_with(|| Box::new([std::ptr::null_mut(); CLASS_VALUE_PAGE_LEN]))
+            [index] = ptr;
+    });
+    crate::gc::runtime_write_barrier_root_heap_word(ptr as u64);
+    ptr
+}
+
+/// The class function object for `class_id` on this agent (minted on first
+/// use). `class_id` must be a registered class.
+#[inline]
+pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
+    match class_value_cached(class_id) {
+        Some(c) => c,
+        None => class_value_mint(class_id),
+    }
+}
+
+/// The VALUE of class `class_id`'s constructor: its function object, NaN-boxed.
+#[inline]
+pub(crate) fn class_value(class_id: u32) -> f64 {
+    f64::from_bits(crate::value::POINTER_TAG | (class_value_ptr(class_id) as u64))
+}
+
+/// Emitted for every `Expr::ClassRef` and every place compiled code names a
+/// class as a value (static `this`, `new.target`, `ns.C`): the class's
+/// function object. A per-agent indexed load; never allocates after the
+/// first use and never collects.
+#[no_mangle]
+pub extern "C" fn js_class_value(class_id: i32) -> f64 {
+    class_value(class_id as u32)
+}
+
+/// GC root scan for [`CLASS_VALUES`]; registered from
+/// `object::scan_object_cache_roots_mut`.
+pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CLASS_VALUES.with(|t| {
+        let mut t = t.borrow_mut();
+        for page in t.iter_mut().flatten() {
+            for slot in page.iter_mut() {
+                if !slot.is_null() {
+                    visitor.visit_raw_mut_ptr_slot(slot);
+                }
+            }
+        }
+    });
+}

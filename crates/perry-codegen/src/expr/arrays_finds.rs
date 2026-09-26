@@ -1449,8 +1449,7 @@ pub(crate) fn lower(
         // class_ids (legacy callers checking truthiness). Refs #420.
         Expr::ClassRef(name) => {
             if let Some(&cid) = ctx.class_ids.get(name) {
-                let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                Ok(double_literal(f64::from_bits(bits)))
+                Ok(super::emit_class_value(ctx.block(), cid))
             } else {
                 Ok(double_literal(0.0))
             }

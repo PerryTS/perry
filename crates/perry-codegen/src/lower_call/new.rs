@@ -700,9 +700,7 @@ fn lower_new_impl_inner<'a>(
         // rewrites — so it goes in a temp root, not a bare register.
         let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
             ctx.class_ids.get(class_name).copied().map(|cid| {
-                let class_ref = double_literal(f64::from_bits(
-                    crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
-                ));
+                let class_ref = crate::expr::emit_class_value(ctx.block(), cid);
                 crate::rooting::new_target_save(ctx, &class_ref)
             })
         } else {
@@ -1005,17 +1003,13 @@ fn lower_new_impl_inner<'a>(
     // `INT32_TAG | class_id`, the same value `Expr::ClassRef` produces, so
     // `new.target === C`, `new.target.name`, and `new.target.prototype` all
     // work. Falls back to `undefined` if the class id is somehow unresolved.
-    let new_target_bits = ctx
-        .class_ids
-        .get(class_name)
-        .map(|&cid| crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF))
-        .unwrap_or(crate::nanbox::TAG_UNDEFINED);
+    let new_target_value = match ctx.class_ids.get(class_name).copied() {
+        Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    };
     let new_target_slot = ctx.func.alloca_entry(DOUBLE);
-    ctx.block().store(
-        DOUBLE,
-        &double_literal(f64::from_bits(new_target_bits)),
-        &new_target_slot,
-    );
+    ctx.block()
+        .store(DOUBLE, &new_target_value, &new_target_slot);
     ctx.new_target_stack.push(new_target_slot);
 
     // Set up the inline-constructor return target. An explicit `return`
@@ -1719,7 +1713,10 @@ fn lower_new_impl_inner<'a>(
                 // 'type')`, or silently set `type = undefined` → the auth error
                 // was mis-categorized and the login redirect fell back to
                 // `?error=Configuration`.
-                let nt_ref = double_literal(f64::from_bits(new_target_bits));
+                let nt_ref = match ctx.class_ids.get(class_name).copied() {
+                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 crate::rooting::new_target_restore(ctx, &nt_save);
@@ -1754,7 +1751,10 @@ fn lower_new_impl_inner<'a>(
                 // new.target cross-module: bind the runtime cell to the leaf
                 // class ref around the imported ctor call (see the ANCESTOR arm
                 // above for why). This is the direct `new ImportedClass()` case.
-                let nt_ref = double_literal(f64::from_bits(new_target_bits));
+                let nt_ref = match ctx.class_ids.get(class_name).copied() {
+                    Some(cid) => crate::expr::emit_class_value(ctx.block(), cid),
+                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                };
                 let nt_save = crate::rooting::new_target_save(ctx, &nt_ref);
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 crate::rooting::new_target_restore(ctx, &nt_save);
