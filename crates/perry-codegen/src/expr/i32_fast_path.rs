@@ -40,6 +40,29 @@ use native_narrow::{
 pub(crate) fn is_known_i32_range(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     super::range_facts::int_range_expr(ctx, e)
         .is_some_and(|range| range.min >= i64::from(i32::MIN) && range.max <= i64::from(i32::MAX))
+        || is_int32_bitwise_result(ctx, e)
+}
+
+/// `&`, `|`, `^`, `<<` and `>>` compute a BigInt only when BOTH operands are
+/// BigInts (a mixed pair throws) and otherwise return a ToInt32 result, so
+/// once either operand provably is not a BigInt the value is an int32 Number
+/// whatever the other one holds (#10511). The operand itself may be unproven:
+/// `(B & C) ^ ((B ^ -1) & D)` over destructured locals is an int32 because
+/// `-1` is a Number.
+///
+/// Deliberately an i32 fact rather than an `int_range_expr` range: range
+/// consumers such as the integer typed-array store may lower an in-range
+/// expression natively, operands included, which an unproven operand must
+/// not be. `>>>` yields a Uint32 and is left to the range walk.
+fn is_int32_bitwise_result(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::Binary { op, left, right } = e else {
+        return false;
+    };
+    matches!(
+        op,
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+    ) && (crate::type_analysis::is_provably_not_bigint(ctx, left)
+        || crate::type_analysis::is_provably_not_bigint(ctx, right))
 }
 
 /// (Issue #50) If `IndexGet { object, index }` is a flat-const access

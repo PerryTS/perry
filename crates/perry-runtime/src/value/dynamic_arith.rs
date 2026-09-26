@@ -794,26 +794,66 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
 }
 
 /// ES ToInt32 (7.1.6): truncate toward zero, reduce modulo 2^32, reinterpret as
-/// signed. NaN / ±0 / ±Infinity map to 0. `v as i64 as i32` is WRONG — Rust's
-/// float→int cast SATURATES for |v| >= 2^63, so e.g. ToInt32(1e20) came out as
-/// -1 instead of 1661992960 (#6079).
+/// signed. NaN / ±0 / ±Infinity map to 0.
+///
+/// No floating-point remainder (#10511). The previous body,
+/// `v.trunc().rem_euclid(2^32)`, was exact but linked a software `fmod` (a
+/// bit-loop remainder whose cost grows with |v| / 2^32) and a software `trunc`
+/// into every bitwise operator's plain-double fast path — 38 % of a
+/// sha256-style round, even for operands that were already int32.
+///
+/// - |v| < 2^63, which is every int32 and nearly every real operand:
+///   truncating to i64 is exact, and the i64 -> i32 `as` keeps the low 32
+///   bits, which IS the reduction modulo 2^32. One `cvttsd2si`.
+/// - Everything else goes to [`to_int32_beyond_i64`].
+///
+/// A bare `v as i64 as i32` is WRONG — Rust's float -> int cast SATURATES for
+/// |v| >= 2^63, so ToInt32(1e20) came out as -1 instead of 1661992960 (#6079).
+/// The range test below is what keeps the cast inside its exact domain.
 #[inline]
 fn dyn_to_int32(v: f64) -> i32 {
-    if !v.is_finite() {
-        0
-    } else {
-        (v.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if v.abs() < TWO_POW_63 {
+        // SAFETY: a NaN fails the comparison, and |v| < 2^63 truncates to a
+        // value in (-2^63, 2^63), which i64 represents.
+        return unsafe { v.to_int_unchecked::<i64>() } as i32;
     }
+    to_int32_beyond_i64(v)
 }
 
-/// ES ToUint32 (7.1.7): as ToInt32 but reinterpreted as unsigned.
+/// ToInt32 for |v| >= 2^63 and the non-finite values, from the f64 bits.
+///
+/// NaN and ±Infinity (biased exponent 0x7FF) map to 0. Any other double this
+/// large is an integer `±mant × 2^e` with a 53-bit `mant` and `e >= 11`, so
+/// its low 32 bits are `mant << e` (mod 2^32) — zero once `e >= 32` — negated
+/// modulo 2^32 for a negative sign.
+#[cold]
+#[inline(never)]
+fn to_int32_beyond_i64(v: f64) -> i32 {
+    let bits = v.to_bits();
+    let biased_exp = (bits >> 52) & 0x7ff;
+    if biased_exp == 0x7ff {
+        return 0;
+    }
+    // |v| >= 2^63 means biased_exp >= 1023 + 63, so this cannot underflow.
+    let e = biased_exp - 1075;
+    if e >= 32 {
+        return 0;
+    }
+    let mant = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+    let low = (mant << e) as u32;
+    let wrapped = if v.is_sign_negative() {
+        low.wrapping_neg()
+    } else {
+        low
+    };
+    wrapped as i32
+}
+
+/// ES ToUint32 (7.1.7): ToInt32's 32 bits, reinterpreted as unsigned.
 #[inline]
 fn dyn_to_uint32(v: f64) -> u32 {
-    if !v.is_finite() {
-        0
-    } else {
-        v.trunc().rem_euclid(4_294_967_296.0) as u32
-    }
+    dyn_to_int32(v) as u32
 }
 
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
@@ -1134,6 +1174,127 @@ mod tests {
             // `%` keeps the sign of the dividend: -1 % -1 is -0.
             assert!(js_dynamic_mod(-1.0, -1.0).is_sign_negative());
         }
+    }
+
+    /// The pre-#10511 ToInt32 body, kept as the oracle: exact, but through a
+    /// floating-point remainder.
+    fn reference_to_int32(v: f64) -> i32 {
+        if !v.is_finite() {
+            0
+        } else {
+            (v.trunc().rem_euclid(4_294_967_296.0) as u32) as i32
+        }
+    }
+
+    // #10511: ToInt32 dropped `fmod`. Spec values first (from Node), so the
+    // sweep below cannot pass on an oracle that is wrong too; then every
+    // exponent the integer arms split on, then raw bit patterns.
+    #[test]
+    fn to_int32_without_fmod_matches_the_modular_reference() {
+        let two_63 = 9_223_372_036_854_775_808.0;
+        let known: &[(f64, i32)] = &[
+            (0.0, 0),
+            (-0.0, 0),
+            (0.9, 0),
+            (-0.9, 0),
+            (1.5, 1),
+            (-1.5, -1),
+            (f64::MIN_POSITIVE, 0),
+            (f64::NAN, 0),
+            (f64::INFINITY, 0),
+            (f64::NEG_INFINITY, 0),
+            (2_147_483_647.0, i32::MAX),
+            (2_147_483_648.0, i32::MIN),
+            (-2_147_483_649.0, i32::MAX),
+            (4_294_967_295.0, -1),
+            (4_294_967_295.5, -1),
+            (4_294_967_296.0, 0),
+            (4_294_967_301.0, 5),
+            (1e20, 1_661_992_960),
+            (-1e20, -1_661_992_960),
+            (two_63, 0),
+            (-two_63, 0),
+            (two_63 + 2048.0, 2048),
+            // (2^52 + 1) * 2^31: the largest shift that still reaches bit 31.
+            (9.671_406_556_917_036e24, i32::MIN),
+            (f64::MAX, 0),
+        ];
+        for &(v, expected) in known {
+            assert_eq!(reference_to_int32(v), expected, "oracle ToInt32({v:e})");
+            assert_eq!(dyn_to_int32(v), expected, "ToInt32({v:e})");
+            assert_eq!(dyn_to_uint32(v), expected as u32, "ToUint32({v:e})");
+        }
+
+        let mut cases = Vec::new();
+        for biased_exp in 0u64..=0x7ff {
+            for frac in [
+                0u64,
+                1,
+                0x8_0000_0000_0000,
+                0xf_ffff_ffff_ffff,
+                0x5_5555_5555_5555,
+            ] {
+                for sign in [0u64, 1u64 << 63] {
+                    cases.push(f64::from_bits(sign | (biased_exp << 52) | frac));
+                }
+            }
+        }
+        for k in 0..64 {
+            let p = (k as f64).exp2();
+            for d in [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5] {
+                cases.push(p + d);
+                cases.push(-(p + d));
+            }
+        }
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            cases.push(f64::from_bits(x));
+        }
+        for v in cases {
+            let expected = reference_to_int32(v);
+            assert_eq!(
+                dyn_to_int32(v),
+                expected,
+                "ToInt32({v:e}) bits={:#x}",
+                v.to_bits()
+            );
+            assert_eq!(dyn_to_uint32(v), expected as u32, "ToUint32({v:e})");
+        }
+    }
+
+    // The operators, on the plain-double fast path the codegen cold arm
+    // reaches: `x & -1`, `x | 0`, `x >>> 0` and `~x` are ToInt32/ToUint32.
+    #[test]
+    fn bitwise_operators_wrap_large_operands_without_fmod() {
+        for v in [
+            1e20,
+            -1e20,
+            2.0f64.powi(48) * 3.0 + 7.0,
+            -4_294_967_297.0,
+            1.7976931348623157e308,
+        ] {
+            let i = reference_to_int32(v);
+            unsafe {
+                assert_eq!(js_dynamic_bitand(v, -1.0), i as f64, "{v:e} & -1");
+                assert_eq!(js_dynamic_bitor(v, 0.0), i as f64, "{v:e} | 0");
+                assert_eq!(js_dynamic_bitxor(v, 0.0), i as f64, "{v:e} ^ 0");
+                assert_eq!(js_dynamic_shl(v, 0.0), i as f64, "{v:e} << 0");
+                assert_eq!(js_dynamic_shr(v, 32.0), i as f64, "{v:e} >> 32");
+                assert_eq!(js_dynamic_ushr(v, 0.0), (i as u32) as f64, "{v:e} >>> 0");
+                assert_eq!(js_dynamic_bitnot(v), (!i) as f64, "~{v:e}");
+            }
+        }
+        // The shift count is ToUint32 & 31, so 2^32 + 33 shifts by 1.
+        assert_eq!(unsafe { js_dynamic_shl(1.0, 4_294_967_329.0) }, 2.0);
+        // jsbn `am1`'s `v & 0x3ffffff` with |v| near 2^48.
+        let v = 67_108_863.0 * 4_194_301.0 + 7.0;
+        assert_eq!(
+            unsafe { js_dynamic_bitand(v, 67_108_863.0) },
+            (v % 67_108_864.0).trunc()
+        );
     }
 
     #[test]

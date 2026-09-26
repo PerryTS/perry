@@ -197,3 +197,82 @@ fn unproven_bitwise_operands_take_a_guarded_int32_arm() {
         }
     }
 }
+
+/// `toint32_wrap` in the IR: its exponent/mantissa tower, or the one-instruction
+/// `fjcvtzs` form on targets that have it.
+fn has_toint32_wrap(ir: &str) -> bool {
+    ir.contains("sub i64 1075,") || ir.contains("fjcvtzs")
+}
+
+/// #10511: the guarded arm's test is `|v| < 2^63`, which rejects every
+/// NaN-boxed tag and licenses a one-instruction ToInt32, so the numeric arm
+/// carries no `toint32_wrap`.
+#[test]
+fn guarded_bitwise_arm_is_range_tested_and_converts_with_fptosi() {
+    for op in [
+        BinaryOp::BitAnd,
+        BinaryOp::BitOr,
+        BinaryOp::BitXor,
+        BinaryOp::Shl,
+        BinaryOp::Shr,
+        BinaryOp::UShr,
+    ] {
+        let ir = function_ir(
+            "range_guarded_bitwise",
+            vec![param(A, Type::Any), param(B, Type::Any)],
+            vec![Stmt::Return(Some(bin(
+                op,
+                Expr::LocalGet(A),
+                Expr::LocalGet(B),
+            )))],
+        );
+        assert!(
+            ir.contains("call double @llvm.fabs.f64(") && ir.contains(", 0x43E0000000000000"),
+            "{op:?} should guard on |v| < 2^63:\n{ir}"
+        );
+        assert!(
+            ir.contains("fptosi double"),
+            "{op:?} should convert with fptosi under the guard:\n{ir}"
+        );
+        assert!(
+            !has_toint32_wrap(&ir),
+            "{op:?} under the range guard needs no ToInt32 tower:\n{ir}"
+        );
+    }
+}
+
+/// #10511: `x ^ 3` is an int32 Number whatever `x` holds (a BigInt `x`
+/// throws), so a bitwise operator consuming it converts with `fptosi` rather
+/// than `toint32_wrap`. `Number(a)` is a Number of any magnitude and keeps
+/// the tower — the control that the detector above can still fire.
+#[test]
+fn bitwise_result_with_a_number_operand_is_an_int32_operand() {
+    let masked = |id: u32, k: i64| bin(BinaryOp::BitXor, Expr::LocalGet(id), Expr::Integer(k));
+    let int32_operands = function_ir(
+        "int32_bitwise_operands",
+        vec![param(A, Type::Any), param(B, Type::Any)],
+        vec![Stmt::Return(Some(bin(
+            BinaryOp::BitOr,
+            masked(A, 3),
+            masked(B, 5),
+        )))],
+    );
+    assert!(
+        !has_toint32_wrap(&int32_operands),
+        "`(a ^ 3) | (b ^ 5)` converts int32 operands:\n{int32_operands}"
+    );
+
+    let number_operands = function_ir(
+        "number_bitwise_operands",
+        vec![param(A, Type::Any), param(B, Type::Any)],
+        vec![Stmt::Return(Some(bin(
+            BinaryOp::BitOr,
+            Expr::NumberCoerce(Box::new(Expr::LocalGet(A))),
+            Expr::NumberCoerce(Box::new(Expr::LocalGet(B))),
+        )))],
+    );
+    assert!(
+        has_toint32_wrap(&number_operands),
+        "`Number(a) | Number(b)` must still wrap an arbitrary Number:\n{number_operands}"
+    );
+}
