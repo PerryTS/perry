@@ -70,6 +70,9 @@ fn minimal_auto_workspace(dir: &Path) {
     );
 }
 
+mod cache_compat;
+use cache_compat::matching_runtime_archive;
+
 #[test]
 fn auto_optimized_archives_are_fresh_when_newer_than_sources() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -82,7 +85,7 @@ fn auto_optimized_archives_are_fresh_when_newer_than_sources() {
     let stdlib = dir
         .path()
         .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, b"!<arch>\n");
+    write_file(&runtime, &matching_runtime_archive());
     write_file(&stdlib, b"!<arch>\n");
     let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
     write_file(&stamp, b"test-stamp");
@@ -146,7 +149,7 @@ fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
     let stdlib = release_dir.join("libperry_stdlib.a");
     std::fs::create_dir_all(&release_dir).expect("mkdir release dir");
     std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(&runtime, b"!<arch>\n");
+    write_file(&runtime, &matching_runtime_archive());
     write_file(&stdlib, b"!<arch>\n");
     let cross_features = auto_optimized_cross_features(&ctx, &features, &[]);
     let source_fingerprint = auto_optimized_source_fingerprint(&workspace_root, &[]);
@@ -183,7 +186,7 @@ fn auto_optimized_archives_are_stale_when_runtime_source_is_newer() {
     let stdlib = dir
         .path()
         .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, b"!<arch>\n");
+    write_file(&runtime, &matching_runtime_archive());
     write_file(&stdlib, b"!<arch>\n");
     let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
     write_file(&stamp, b"test-stamp");
@@ -214,7 +217,7 @@ fn auto_optimized_freshness_ignores_nested_target_dirs() {
     let stdlib = dir
         .path()
         .join("target/perry-auto/release/libperry_stdlib.a");
-    write_file(&runtime, b"!<arch>\n");
+    write_file(&runtime, &matching_runtime_archive());
     write_file(&stdlib, b"!<arch>\n");
     let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
     write_file(&stamp, b"test-stamp");
@@ -449,7 +452,7 @@ fn runtime_source_edit_rotates_build_stamp_and_fails_freshness() {
         .join("target/perry-auto/release/libperry_stdlib.a");
     let stamp_path = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
     std::thread::sleep(std::time::Duration::from_millis(10));
-    write_file(&runtime, b"!<arch>\n");
+    write_file(&runtime, &matching_runtime_archive());
     write_file(&stdlib, b"!<arch>\n");
     write_file(&stamp_path, stamp_before.as_bytes());
 

@@ -32,6 +32,16 @@ pub(crate) fn auto_optimized_archives_are_fresh(
         _ => return false,
     }
 
+    // A matching cache sidecar does not prove the archive belongs to this
+    // compiler (e.g. another build restored/replaced the archive). Use the
+    // linker's exact compatibility check before taking the reuse fast path.
+    if !matches!(
+        super::super::runtime_compat::runtime_library_status(runtime_path),
+        super::super::runtime_compat::RuntimeLibraryStatus::Compatible(_)
+    ) {
+        return false;
+    }
+
     let Ok(runtime_mtime) = file_modified(runtime_path) else {
         return false;
     };
