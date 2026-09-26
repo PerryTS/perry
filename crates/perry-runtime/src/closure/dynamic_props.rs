@@ -881,9 +881,13 @@ fn scan_closure_owner(
 ///    below the ShapeId range, while an `ObjectHeader`'s +4 is an ordinary- or
 ///    dictionary-band id — so arrays, strings, Maps, plain objects and class
 ///    instances all fail here with one load, the job the old "CLOS" magic did;
-/// 2. `try_read_tracked_gc_header` proves the address is the start of a
-///    tracked allocation (arena page or malloc registry) and its type byte
-///    says CLOSURE — the authoritative kind, never payload bytes.
+/// 2. ownership, then the authoritative kind byte: arena page membership
+///    (`classify_heap_generation`, the page-class table — the same proof the
+///    pre-shape predicate used) or, for a cell in no arena, an exact
+///    malloc-registry hit (`try_read_tracked_gc_header`); then the GcHeader
+///    type byte says CLOSURE and the cell is not an evacuated stub. The
+///    general tracked resolver's range search measured 17% of a `fn.length`
+///    read, which is why the arena case does not take it.
 pub fn is_closure_ptr(ptr: usize) -> bool {
     // Reject the native / Web-Fetch small-handle band (see `value::addr_class`)
     // and anything outside the platform heap range BEFORE the +4 load: fetch
@@ -901,13 +905,23 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if !crate::object::shapes::is_exotic_shape_id(shape) {
         return false;
     }
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr) })
-    else {
-        return false;
+    let (obj_type, gc_flags) = if matches!(
+        crate::arena::classify_heap_generation(ptr),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr) })
+        else {
+            return false;
+        };
+        let header = unsafe { header.as_ref() };
+        (header.obj_type, header.gc_flags)
+    } else {
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
+            return false;
+        };
+        (header.obj_type, header.gc_flags)
     };
-    let header = unsafe { header.as_ref() };
-    header.obj_type == crate::gc::GC_TYPE_CLOSURE
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    obj_type == crate::gc::GC_TYPE_CLOSURE && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
 
 /// C-ABI predicate: returns 1 when `value_bits` (a NaN-boxed JSValue passed as
