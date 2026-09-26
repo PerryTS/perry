@@ -2410,41 +2410,9 @@ fn class_super_accessor_set(
     receiver: f64,
 ) -> Option<bool> {
     let key_name = property_key_to_rust_string(key)?;
-    let registry = crate::object::CLASS_VTABLE_REGISTRY.read().ok()?;
-    let reg = registry.as_ref()?;
-    let mut cid = parent_class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(vtable) = reg.get(&cid) {
-            let setter_alias = format!("__set_{}", key_name);
-            if let Some(&setter_ptr) = vtable
-                .setters
-                .get(&key_name)
-                .or_else(|| vtable.setters.get(&setter_alias))
-            {
-                let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(setter_ptr) };
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let prev_this =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let _ = f(receiver, value);
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-                return Some(true);
-            }
-            let getter_alias = format!("__get_{}", key_name);
-            if vtable.getters.contains_key(&key_name) || vtable.getters.contains_key(&getter_alias)
-            {
-                return Some(false);
-            }
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => {
-                cid = parent;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    None
+    // Charter step 3: the accessor is a property of the parent's prototype
+    // chain. `Some(false)`: getter-only, the write is refused.
+    unsafe { crate::object::class_chain_setter_apply(parent_class_id, &key_name, receiver, value) }
 }
 
 fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {

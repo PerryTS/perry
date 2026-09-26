@@ -457,36 +457,12 @@ pub unsafe extern "C" fn js_super_accessor_get(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if let Some(key_name) = key_name {
-        if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
-            if let Some(reg) = registry.as_ref() {
-                let mut cid = parent_class_id;
-                let mut depth = 0usize;
-                while cid != 0 && depth < 32 {
-                    if let Some(vtable) = reg.get(&cid) {
-                        let getter_alias = format!("__get_{}", key_name);
-                        if let Some(&getter_ptr) = vtable
-                            .getters
-                            .get(&key_name)
-                            .or_else(|| vtable.getters.get(&getter_alias))
-                        {
-                            let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                            let prev = this_scope
-                                .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                            let r = f(receiver);
-                            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                            return r;
-                        }
-                    }
-                    match crate::object::get_parent_class_id(cid) {
-                        Some(parent) if parent != 0 && parent != cid => {
-                            cid = parent;
-                            depth += 1;
-                        }
-                        _ => break,
-                    }
-                }
-            }
+        // Charter step 3: a class accessor is a property of the parent's
+        // prototype chain; `this` is the receiver.
+        if let Some((v, _)) =
+            crate::object::class_chain_getter_value(parent_class_id, &key_name, || receiver)
+        {
+            return f64::from_bits(v.bits());
         }
     }
     // Prefer the *declared* prototype object (stable heap identity). A dynamic

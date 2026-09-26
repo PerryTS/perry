@@ -51,7 +51,9 @@ mod construct;
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 mod decl_accessors;
-pub(crate) use decl_accessors::{class_chain_getter_value, install_decl_prototype_accessor};
+pub(crate) use decl_accessors::{
+    class_chain_getter_value, class_chain_setter_apply, install_decl_prototype_accessor,
+};
 pub mod decl_prototype_table;
 mod dispatch;
 pub(crate) mod evaluation_heritage;

@@ -78,7 +78,7 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
 pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
     // A specialization shares its generic's prototype, whose accessors are
     // the generic's own registrations.
-    if decl_prototype_identity_id(class_id) != class_id {
+    if decl_prototype_identity_id(class_id) != class_id || name.starts_with('#') {
         return;
     }
     let proto = class_decl_prototype_object(class_id);
@@ -148,14 +148,62 @@ pub(crate) unsafe fn class_chain_getter_value(
     }
     let (_holder, acc) = class_proto_accessor(class_id, name)?;
     if acc.raw_get != 0 {
-        let this = this_of();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let this = scope.root_nanbox_f64(this_of());
+        // The compiled getter reads `this` from its parameter; nested code it
+        // calls may read the implicit `this`, so publish the receiver too.
+        let prev =
+            scope.root_nanbox_f64(crate::object::js_implicit_this_set(this.get_nanbox_f64()));
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
         let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
-        return Some((crate::JSValue::from_bits(f(this).to_bits()), acc.raw_get));
+        let v = f(this.get_nanbox_f64());
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+        return Some((crate::JSValue::from_bits(v.to_bits()), acc.raw_get));
     }
     if acc.get != 0 {
         let this = this_of();
         return Some((crate::object::invoke_accessor_getter(acc.get, this), 0));
     }
     Some((crate::JSValue::undefined(), 0))
+}
+
+/// `[[Set]]` of `name` on an instance of `class_id` when the class chain
+/// declares an accessor for it: `None` when no accessor answers (the caller
+/// keeps resolving), `Some(true)` when a setter ran, `Some(false)` when the
+/// accessor has no setter — the write must not create a data property.
+/// `this` is the receiver the setter sees, also published as the implicit
+/// `this` for the duration of the call.
+///
+/// # Safety
+/// `this` and `value` are live values.
+pub(crate) unsafe fn class_chain_setter_apply(
+    class_id: u32,
+    name: &str,
+    this: f64,
+    value: f64,
+) -> Option<bool> {
+    if !super::parent_static::class_chain_has_instance_accessor(class_id, name) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let value_h = scope.root_nanbox_f64(value);
+    let (_holder, acc) = class_proto_accessor(class_id, name)?;
+    if acc.raw_set != 0 {
+        let prev =
+            scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_h.get_nanbox_f64()));
+        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let _ = f(this_h.get_nanbox_f64(), value_h.get_nanbox_f64());
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+        return Some(true);
+    }
+    if acc.set != 0 {
+        crate::object::invoke_accessor_setter(
+            acc.set,
+            this_h.get_nanbox_f64(),
+            value_h.get_nanbox_f64(),
+        );
+        return Some(true);
+    }
+    Some(false)
 }
