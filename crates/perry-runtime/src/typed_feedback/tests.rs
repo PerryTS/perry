@@ -1812,6 +1812,8 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
     let bare_class_id = 0x7EED_0033;
     let (bare, _, _, _) = class_instance(bare_class_id, b"other");
     unsafe {
+        // A declared class: its accessors are properties of its prototype.
+        crate::object::js_register_class_name(bare_class_id, b"Bare".as_ptr(), 4);
         crate::object::js_register_class_setter(
             bare_class_id as i64,
             b"x".as_ptr(),

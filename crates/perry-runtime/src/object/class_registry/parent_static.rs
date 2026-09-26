@@ -1338,34 +1338,8 @@ pub(crate) unsafe fn class_instance_setter_apply(
     receiver: f64,
     value: f64,
 ) -> bool {
-    let guard = match CLASS_VTABLE_REGISTRY.read() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let Some(reg) = guard.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(vtable) = reg.get(&cid) {
-            if let Some(&setter_ptr) = vtable.setters.get(name) {
-                if setter_ptr != 0 {
-                    let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter_ptr);
-                    let _ = f(receiver, value);
-                }
-                return true;
-            }
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
+    // Charter step 3: the accessor is a property of the class prototype chain.
+    super::decl_accessors::class_chain_setter_apply(class_id, name, receiver, value).is_some()
 }
 
 /// Spec `Function.prototype.length` for a class method named `name` — the

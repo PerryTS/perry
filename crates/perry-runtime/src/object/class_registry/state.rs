@@ -1000,6 +1000,8 @@ pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)>
     order_class_string_member_names(class_id, false, &mut names);
     names
         .into_iter()
+        // A private `#x` member is never a property of the prototype.
+        .filter(|name| !name.starts_with('#'))
         .map(|name| {
             let is_accessor =
                 super::registration::class_own_accessor_ptrs(class_id, &name).is_some();

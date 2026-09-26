@@ -358,47 +358,23 @@ pub(crate) fn set_field_by_name_object_tail(
         {
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                    if let Some(ref reg) = *registry {
-                        let key_bytes = {
-                            let name_ptr =
-                                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                            let name_len = (*key).byte_len as usize;
-                            std::slice::from_raw_parts(name_ptr, name_len)
-                        };
-                        let mut cid = class_id;
-                        let mut depth = 0usize;
-                        while depth < 32 {
-                            if let Some(vtable) = reg.get(&cid) {
-                                if let Ok(name) = std::str::from_utf8(key_bytes) {
-                                    if let Some(&setter_ptr) = vtable.setters.get(name) {
-                                        // Setters take `(this_f64, value_f64)`
-                                        // matching the codegen calling
-                                        // convention for class methods (this
-                                        // = NaN-boxed POINTER_TAG of the
-                                        // receiver).
-                                        let this_f64: f64 = f64::from_bits(
-                                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
-                                        );
-                                        let f: extern "C" fn(f64, f64) -> f64 =
-                                            std::mem::transmute(setter_ptr);
-                                        // #10498: see `class_accessor_cache`.
-                                        super::class_accessor_cache::note_class_setter(
-                                            obj, key, setter_ptr,
-                                        );
-                                        let _ = f(this_f64, value);
-                                        return;
-                                    }
-                                }
-                            }
-                            match get_parent_class_id(cid) {
-                                Some(p) if p != 0 && p != cid => {
-                                    cid = p;
-                                    depth += 1;
-                                }
-                                _ => break,
-                            }
-                        }
+                let key_bytes = {
+                    let name_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    std::slice::from_raw_parts(name_ptr, (*key).byte_len as usize)
+                };
+                if let Ok(name) = std::str::from_utf8(key_bytes) {
+                    // Class accessors are properties of the class prototype
+                    // chain (charter step 3). A getter-only accessor refuses
+                    // the write: no data property is created.
+                    let this_f64: f64 =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    if super::class_registry::class_chain_setter_apply(
+                        class_id, name, this_f64, value,
+                    )
+                    .is_some()
+                    {
+                        return;
                     }
                 }
             }
