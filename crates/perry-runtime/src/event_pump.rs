@@ -280,7 +280,19 @@ pub fn js_loop_turn_bounded(budget_ms: u64) {
         return;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
-    let _ = agent_loop::park_until(deadline);
+    if agent_loop::park_until(deadline) == agent_loop::Park::Notified {
+        // #11417: the park declines to WAIT when a main-thread notify is
+        // pending or tokio-owned work appeared, and leaves the flag for
+        // `js_wait_for_event` — but it also skips the turn, and a turn is the
+        // only thing that collects a completion. A caller of this function is
+        // not `js_wait_for_event`: it is a native API (or a pool waiter) that
+        // loops on it until its own completion lands, and nothing in that loop
+        // consumes the flag. So every call returned without turning, and the
+        // caller spun until someone else happened to clear a process-global
+        // flag — for ever, on a thread that is not the primary agent's. Still
+        // do not block (the pending wake is real), but collect what is ready.
+        agent_loop::settle_turn();
+    }
 }
 
 /// Test-only: install an unrouted net-profile loop on this thread.
