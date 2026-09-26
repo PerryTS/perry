@@ -144,25 +144,64 @@ pub(crate) fn boxed_class_word(bits: u64) -> f64 {
 const CLASS_VALUE_PAGE_SHIFT: u32 = 8;
 const CLASS_VALUE_PAGE_LEN: usize = 1 << CLASS_VALUE_PAGE_SHIFT;
 
-type ClassValuePage = Box<[*mut ClosureHeader; CLASS_VALUE_PAGE_LEN]>;
+type ClassValuePage = [*mut ClosureHeader; CLASS_VALUE_PAGE_LEN];
 
 crate::perry_thread_local! {
-    /// This agent's class function objects, indexed by class id. A GC root
-    /// (rewritten on a move) via [`scan_class_value_roots_mut`].
-    static CLASS_VALUES: std::cell::RefCell<Vec<Option<ClassValuePage>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    /// This agent's class function objects, indexed by class id: a page
+    /// directory (`pages`, `len` pages) whose pages are leaked for the agent's
+    /// life. Read without a borrow flag — the hot path is a TLS read, a bounds
+    /// check and two loads. A GC root (rewritten on a move) via
+    /// [`scan_class_value_roots_mut`].
+    static CLASS_VALUES: std::cell::Cell<(*mut *mut ClassValuePage, usize)> =
+        const { std::cell::Cell::new((std::ptr::null_mut(), 0)) };
 }
 
 #[inline]
 fn class_value_cached(class_id: u32) -> Option<*mut ClosureHeader> {
     let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
     let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
-    CLASS_VALUES.with(|t| {
-        let t = t.borrow();
-        let p = t.get(page)?.as_ref()?;
-        let c = p[index];
+    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    if page >= len {
+        return None;
+    }
+    // SAFETY: `pages` holds `len` page pointers (null or a live leaked page).
+    unsafe {
+        let p = *pages.add(page);
+        if p.is_null() {
+            return None;
+        }
+        let c = (*p)[index];
         (!c.is_null()).then_some(c)
-    })
+    }
+}
+
+/// The table slot for `class_id`, growing the directory / minting the page.
+fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
+    let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
+    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
+    let (mut pages, mut len) = CLASS_VALUES.with(std::cell::Cell::get);
+    if page >= len {
+        let new_len = (page + 1).next_power_of_two().max(4);
+        let mut dir: Vec<*mut ClassValuePage> = vec![std::ptr::null_mut(); new_len];
+        if !pages.is_null() {
+            // SAFETY: the old directory holds `len` entries.
+            unsafe { dir[..len].copy_from_slice(std::slice::from_raw_parts(pages, len)) };
+            // The old directory is leaked: a concurrent reader on this agent
+            // cannot exist (single-threaded agent), but the few bytes are not
+            // worth a free/reuse protocol.
+        }
+        pages = Box::leak(dir.into_boxed_slice()).as_mut_ptr();
+        len = new_len;
+        CLASS_VALUES.with(|c| c.set((pages, len)));
+    }
+    // SAFETY: `page < len`.
+    unsafe {
+        let slot = pages.add(page);
+        if (*slot).is_null() {
+            *slot = Box::leak(Box::new([std::ptr::null_mut(); CLASS_VALUE_PAGE_LEN]));
+        }
+        (**slot).as_mut_ptr().add(index)
+    }
 }
 
 /// Allocate the class function object for `class_id`: a closure born in the
@@ -199,16 +238,8 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // metadata and weak tables compare it), so no collector may move it.
         crate::gc::pin_user_ptr_non_young(ptr as *mut u8);
     }
-    let page = (class_id >> CLASS_VALUE_PAGE_SHIFT) as usize;
-    let index = class_id as usize & (CLASS_VALUE_PAGE_LEN - 1);
-    CLASS_VALUES.with(|t| {
-        let mut t = t.borrow_mut();
-        if t.len() <= page {
-            t.resize_with(page + 1, || None);
-        }
-        t[page].get_or_insert_with(|| Box::new([std::ptr::null_mut(); CLASS_VALUE_PAGE_LEN]))
-            [index] = ptr;
-    });
+    // SAFETY: the slot is this agent's table entry for `class_id`.
+    unsafe { *class_value_slot(class_id) = ptr };
     crate::gc::runtime_write_barrier_root_heap_word(ptr as u64);
     ptr
 }
@@ -241,16 +272,20 @@ pub extern "C" fn js_class_value(class_id: i32) -> f64 {
 /// GC root scan for [`CLASS_VALUES`]; registered in `gc::mod`'s runtime
 /// scanner list.
 pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    CLASS_VALUES.with(|t| {
-        let mut t = t.borrow_mut();
-        for page in t.iter_mut().flatten() {
-            for slot in page.iter_mut() {
-                if !slot.is_null() {
-                    visitor.visit_raw_mut_ptr_slot(slot);
-                }
+    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    for i in 0..len {
+        // SAFETY: `pages` holds `len` page pointers (null or a live page).
+        let page = unsafe { *pages.add(i) };
+        if page.is_null() {
+            continue;
+        }
+        // SAFETY: a live leaked page of this agent.
+        for slot in unsafe { (*page).iter_mut() } {
+            if !slot.is_null() {
+                visitor.visit_raw_mut_ptr_slot(slot);
             }
         }
-    });
+    }
 }
 
 // ---------------------------------------------------------------------------

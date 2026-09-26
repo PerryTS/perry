@@ -41,6 +41,18 @@ pub(in crate::codegen) fn compile_static_method(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
+    // The prologue's cache of this class's function object (see
+    // `js_static_this_resolve_class`); thread-local when workers exist, so
+    // each agent caches its own.
+    let class_value_slot = format!("@{llvm_name}__classval");
+    llmod.add_raw_global(format!(
+        "{class_value_slot} = private {}global double 0.0, align 8",
+        if crate::codegen::program_has_worker() {
+            "thread_local "
+        } else {
+            ""
+        }
+    ));
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
 
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
@@ -100,7 +112,10 @@ pub(in crate::codegen) fn compile_static_method(
         let resolved_this = blk.call(
             DOUBLE,
             "js_static_this_resolve_class",
-            &[(I32, &(class_ref_cid as i32).to_string())],
+            &[
+                (I32, &(class_ref_cid as i32).to_string()),
+                (PTR, &class_value_slot),
+            ],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
         if crate::codegen::helpers::precise_root_analysis_enabled() {

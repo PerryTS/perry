@@ -85,6 +85,395 @@ pub extern "C" fn js_object_get_field_by_name(
     get_field_by_name_past_inherited_cache(obj, key)
 }
 
+/// `C.key` for a class constructor value (its function object, or the legacy
+/// INT32 immediate / `C.prototype` reference): the class-static lookup. Split
+/// out so a class function object is routed here BEFORE the closure arms of
+/// the generic read (`get_field_by_name_past_inherited_cache`), which it
+/// would otherwise walk end to end first.
+#[inline(never)]
+pub(crate) fn class_value_get_field(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    bits: u64,
+    class_id: u32,
+) -> JSValue {
+    let class_value = crate::object::class_value::boxed_class_word(bits);
+    let is_prototype_ref = super::super::class_prototype_ref_id(class_value).is_some();
+    unsafe {
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key).byte_len as usize;
+        let name =
+            std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).unwrap_or("");
+        // v0.5.752: class_ref.constructor synthesizes back to the
+        // same class ref so drizzle's
+        // `Object.getPrototypeOf(value).constructor === Class` chain
+        // collapses correctly (with v0.5.751's getPrototypeOf
+        // returning the class ref for instance receivers). Refs
+        // #420 / #618 followup.
+        if is_prototype_ref
+            && name == "constructor"
+            && class_id != 0
+            && class_has_own_method(class_id, name)
+        {
+            let value = class_prototype_method_value_for_name(class_id, name);
+            return JSValue::from_bits(value.to_bits());
+        }
+        if name == "constructor"
+            && is_prototype_ref
+            && class_id != 0
+            && is_class_id_registered(class_id)
+        {
+            let value = if is_prototype_ref {
+                super::super::class_constructor_ref_value(class_id)
+            } else {
+                class_value
+            };
+            return JSValue::from_bits(value.to_bits());
+        }
+        if name == "prototype"
+            && class_id != 0
+            && is_class_id_registered(class_id)
+            && !is_prototype_ref
+        {
+            let value = super::super::class_registry::class_decl_prototype_value(class_id);
+            if value.to_bits() == crate::value::TAG_UNDEFINED {
+                let value = super::super::class_prototype_ref_value(class_id);
+                return JSValue::from_bits(value.to_bits());
+            }
+            return JSValue::from_bits(value.to_bits());
+        }
+        // A capture-carrying class declaration is materialized as a
+        // heap class object (`ClassExprFresh`).  References that were
+        // lowered before the declaration's runtime binding existed
+        // (the class constructor itself and earlier helper closures)
+        // still carry the template `ClassRef`.  Runtime additions such
+        // as `Object.defineProperty(C, "OPEN", { value: 1 })` live on
+        // the materialized object, so consulting only the template
+        // tables makes `C.OPEN` undefined in those bodies even though
+        // the same expression at the declaration site reads `1`.
+        //
+        // `CLASS_OBJECT_VALUES` is already the runtime identity used
+        // by `instance.constructor`.  Read that same current
+        // evaluation first, preserving its own-property and pinned
+        // static-parent semantics; a miss continues through the
+        // ordinary ClassRef registry path below.
+        if !is_prototype_ref {
+            if let Some(class_object) =
+                super::super::class_registry::class_object_value_for_cid(class_id)
+            {
+                let class_object = JSValue::from_bits(class_object.to_bits());
+                if class_object.is_pointer() {
+                    let class_object = class_object.as_pointer::<ObjectHeader>();
+                    if !class_object.is_null() && class_object as usize != obj as usize {
+                        let value = js_object_get_field_by_name(class_object, key);
+                        if !value.is_undefined() {
+                            return value;
+                        }
+                    }
+                }
+            }
+        }
+        // Instance (prototype) methods must only resolve when reading
+        // off the prototype ref (`C.prototype.m`), NOT off the class ref
+        // itself (`C.m`). In JS a class object does not expose its
+        // prototype methods as static members: `class C { m(){} }` has
+        // `C.m === undefined` (the method lives on `C.prototype`). The
+        // earlier unconditional lookup leaked instance methods onto the
+        // class ref, so `C.m` returned a (mis-bound) function. This
+        // broke NestJS interceptor/guard/pipe resolution: its
+        // `getInterceptorInstance` duck-types `!!metatype.intercept` to
+        // decide "is this a class or an already-built instance"; a
+        // truthy `Class.intercept` made it treat the CLASS as the
+        // instance, so `intercept()` ran with a broken receiver and
+        // returned `{}`, which rxjs `innerFrom` then rejected. Real
+        // static methods are resolved below via
+        // `lookup_static_method_in_chain`.
+        if is_prototype_ref && class_id != 0 && class_has_own_method(class_id, name) {
+            let value = class_prototype_method_value_for_name(class_id, name);
+            return JSValue::from_bits(value.to_bits());
+        }
+        if is_prototype_ref {
+            // Class accessors are properties of the class prototype
+            // chain (charter step 3); `this` is the prototype ref.
+            if let Some((v, _)) =
+                super::super::class_registry::class_chain_getter_value(class_id, name, || {
+                    class_value
+                })
+            {
+                return v;
+            }
+            return JSValue::undefined();
+        }
+        // Empty-string is a legal static member key (`static get ''()`);
+        // the `!name.is_empty()` guard below skips it, so resolve a
+        // static accessor named "" here (Test262 accessor-name-static
+        // literal-string-empty).
+        if name.is_empty() {
+            if let Some(v) = super::super::class_registry::class_static_accessor_getter_value(
+                class_id,
+                name,
+                class_value,
+            ) {
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+        if !name.is_empty() {
+            if super::super::class_registry::class_is_key_deleted(class_id, name) {
+                return JSValue::undefined();
+            }
+            let result = crate::object::class_value::class_static_get(class_id, name);
+            if let Some(v) = result {
+                return JSValue::from_bits(v.to_bits());
+            }
+            // Static DATA fields are INHERITED by subclasses, exactly like
+            // static methods: `class D {}; D.kind = "x"; class G extends D {}`
+            // makes `G.kind === "x"` (the class-object proto chain
+            // `G.__proto__ === D` carries statics). The own-field read above
+            // only consulted `class_id`; walk the parent class_id chain here
+            // so an inherited static field (or runtime `Parent.x = …`
+            // assignment — both live in CLASS_DYNAMIC_PROPS) resolves. Static
+            // METHODS are handled by `lookup_static_method_in_chain` below;
+            // this covers the data-field case that was returning `undefined`
+            // (Auth.js sets `SignInError.kind = "signIn"` and reads it off a
+            // `CredentialsSignin` subclass to pick the sign-in vs error page).
+            //
+            // #6530: `name` is an OWN property of every constructor — a
+            // subclass never inherits its parent's `.name` (spec:
+            // ClassDefinitionEvaluation installs it per class). Skip the
+            // chain walk so the #2059 own-name synthesis below answers
+            // with THIS class's registered name instead of an ancestor's.
+            if !matches!(name, "name" | "length") {
+                // Walk the class-object proto chain for an inherited static
+                // DATA field. At EACH level the class's pinned
+                // per-evaluation parent OBJECT is consulted BEFORE the
+                // parent's registry props (`CLASS_DYNAMIC_PROPS`).
+                //
+                // #6552: a subclass of a class-EXPRESSION value evaluated
+                // more than once (`function make(a){return class{static
+                // ast=a}}`, then `class Number$ extends make(x) {}` /
+                // `class Widget$ extends make(y) {}`) records THIS
+                // evaluation's parent object as its static prototype
+                // (`class_prototype_object`, #1788), but the parent's
+                // `CLASS_DYNAMIC_PROPS` are keyed by the class-expression
+                // TEMPLATE id — shared, last-wins across every evaluation.
+                // Reading the registry entry for such a parent collapses
+                // sibling subclasses to the LAST `make(...)` (effect Schema:
+                // `Number$.ast`/`Widget$.ast` both read the last parent's
+                // `ast`). The pinned object carries this evaluation's own
+                // edge, so it is authoritative; the registry read remains
+                // the fallback for a plain declaration parent (#6443:
+                // Auth.js `SignInError.kind`), which has no pinned object.
+                let mut child = class_id;
+                let mut depth = 0usize;
+                while depth < 32 {
+                    // The constructor's own `[[Prototype]]`, set by
+                    // `Object.setPrototypeOf(Ctor, obj)`. Checked first:
+                    // it is the nearest static-side link, and unlike
+                    // `class_prototype_object` it is never on an
+                    // instance's chain.
+                    let static_proto = super::super::class_registry::class_static_prototype(child);
+                    if !static_proto.is_null() {
+                        // #10911: this walk re-enters with the PARENT as
+                        // the object. It was written when effect's `ast`
+                        // was a static DATA field (see above), where the
+                        // object doesn't matter; effect now makes `ast` a
+                        // static GETTER, and a getter found this way ran
+                        // with `this` === the parent class. Stash the
+                        // class the read started from so the accessor
+                        // binds it (spec OrdinaryGet threads Receiver) --
+                        // the same device `resolve_proto_chain_field_inner`
+                        // uses for instance getters.
+                        let prev = crate::object::field_get_set::accessor_receiver_override_begin(
+                            class_value,
+                        );
+                        let v = js_object_get_field_by_name(static_proto as *const _, key);
+                        crate::object::field_get_set::accessor_receiver_override_end(prev);
+                        if !v.is_undefined() {
+                            return v;
+                        }
+                    }
+                    let proto = super::super::class_registry::class_prototype_object(child);
+                    if !proto.is_null() {
+                        let prev = crate::object::field_get_set::accessor_receiver_override_begin(
+                            class_value,
+                        );
+                        let v = js_object_get_field_by_name(proto as *const _, key);
+                        crate::object::field_get_set::accessor_receiver_override_end(prev);
+                        // Return a value present on the pinned object even
+                        // when it is `null` — a static explicitly set to
+                        // `null` on THIS evaluation is authoritative and
+                        // must not fall through to the last-wins registry
+                        // entry (a sibling evaluation's value). Only
+                        // `undefined` means "absent here", which continues
+                        // the walk to the parent's registry props / a higher
+                        // ancestor.
+                        if !v.is_undefined() {
+                            return v;
+                        }
+                    }
+                    let p = match get_parent_class_id(child) {
+                        Some(p) if p != 0 && p != child => p,
+                        _ => break,
+                    };
+                    // A key deleted on THIS ancestor is not provided by it,
+                    // but a higher ancestor may still define it — `delete
+                    // Mid.foo` must let `Sub.foo` inherit `Base.foo`, not
+                    // resolve to undefined. Skip the registry read for the
+                    // deleted level and keep walking up.
+                    if !super::super::class_registry::class_is_key_deleted(p, name) {
+                        let inherited = crate::object::class_value::class_static_get(p, name);
+                        if let Some(v) = inherited {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
+                    child = p;
+                    depth += 1;
+                }
+            }
+            if super::super::class_registry::lookup_static_method_in_chain(class_id, name).is_some()
+            {
+                let heap_name = {
+                    let layout = std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                    let ptr = std::alloc::alloc(layout);
+                    std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                    ptr
+                };
+                let result = js_class_method_bind(class_value, heap_name, name_len);
+                return JSValue::from_bits(result.to_bits());
+            }
+            // `class X extends Promise` — a value read of an inherited
+            // builtin static (`X.resolve`, `X.all`, …) resolves to the
+            // reified Promise static (so `X.resolve.bind(X)` works). Only
+            // fires when no user static shadowed it above.
+            if super::super::promise_parent_in_chain(class_id)
+                && super::super::promise_static_function_spec(name).is_some()
+            {
+                let v = super::super::js_promise_static_function_value(name_ptr, name_len);
+                if v.to_bits() != crate::value::TAG_UNDEFINED {
+                    return JSValue::from_bits(v.to_bits());
+                }
+            }
+            if let Some(v) = super::super::class_registry::class_static_accessor_getter_value(
+                class_id,
+                name,
+                class_value,
+            ) {
+                return JSValue::from_bits(v.to_bits());
+            }
+            // #1788: a subclass of a class-expression value
+            // (`class Sub extends make("A") {}`) inherits the parent
+            // class OBJECT's OWN per-evaluation static fields. The
+            // parent object was recorded as `class_id`'s static
+            // prototype at `extends` time; walk that chain (also
+            // covering multi-level `class Leaf extends Mid {}`).
+            // #6530: except `name` — an own property of every
+            // constructor, never inherited; without the guard a
+            // subclass of a per-evaluation class object reported its
+            // BASE's synthesized `.name` (bundled zod:
+            // `z.string().constructor.name` gave "ZodType").
+            if !matches!(name, "name" | "length") {
+                if let Some(v) =
+                    super::super::class_registry::resolve_proto_chain_field(class_id, key)
+                {
+                    if !v.is_undefined() && !v.is_null() {
+                        return v;
+                    }
+                }
+            }
+            // #36 / #321: the subclass extends a FUNCTION value
+            // (`class Svc extends Context.Tag(id)<...>() {}`). Read the
+            // named static off the parent closure — its OWN props
+            // (`Svc.key` → "Svc") plus, via the closure getter, its
+            // static prototype (`Svc._op` → "Tag" on TagProto).
+            // #10210: the edge is keyed by the class that directly
+            // `extends <function>`, which may be an ANCESTOR of this
+            // class (`class Flags extends ConfigTag {}` where
+            // `ConfigTag extends Context.Service()(id)`), so walk the
+            // parent chain like `super()` dispatch does.
+            if let Some(closure_ptr) =
+                super::super::class_registry::parent_closure_in_chain(class_id)
+            {
+                let v = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+                let vb = JSValue::from_bits(v.to_bits());
+                if !vb.is_undefined() && !vb.is_null() {
+                    return vb;
+                }
+            }
+            // #2059: the constructor's built-in `name` own property —
+            // the class name. Checked last so an explicit static
+            // `name` member (method/field, handled above) still wins.
+            // This is what `assert.throws` reads via
+            // `thrown.constructor.name` to label the thrown error.
+            if name == "name"
+                && class_id != 0
+                && !super::super::class_registry::class_is_key_deleted(class_id, name)
+            {
+                if let Some(cname) = super::super::class_registry::class_name_for_id(class_id) {
+                    let s = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
+                    return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                }
+            }
+            if name == "length"
+                && class_id != 0
+                && !is_prototype_ref
+                && !super::super::class_registry::class_is_key_deleted(class_id, name)
+            {
+                if let Some(length) = super::super::class_registry::class_length_for_id(class_id) {
+                    return JSValue::number(length as f64);
+                }
+            }
+            // A class constructor is also a Function object. Reify
+            // inherited Function.prototype methods for value reads
+            // (`const bind = C.bind`) just as the closure path does;
+            // the captured ClassRef is accepted by native method
+            // dispatch and by `js_function_bind`.
+            if !is_prototype_ref {
+                if let Some(method) = super::reified_function_method_name(name) {
+                    let value = crate::closure::reify_function_method_value(class_value, method);
+                    return JSValue::from_bits(value.to_bits());
+                }
+            }
+            // No own static / inherited entry resolved the name. A class
+            // constructor is a function, so a bare read of `.caller` or
+            // `.arguments` hits the poison-pill %ThrowTypeError% accessor
+            // on `Function.prototype` — strict-mode throws (Perry only
+            // compiles strict code). Placed last so any own static field,
+            // accessor, or `defineProperty`-installed data prop of that
+            // name takes precedence. Prototype-refs (`C.prototype`) are
+            // plain objects and are excluded.
+            if !is_prototype_ref && matches!(name, "caller" | "arguments") {
+                crate::fs::validate::throw_type_error_with_code(
+                    "Restricted function property access",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
+            // #11492: a constructor's chain ends at %Function.prototype%,
+            // so a user method or expando installed there
+            // (`Function.prototype.myHelper = fn`) is readable through
+            // `C.myHelper` exactly as through a closure.
+            if !is_prototype_ref {
+                if let Some(v) =
+                    crate::closure::function_prototype_inherited_get(0, name, class_value)
+                {
+                    return JSValue::from_bits(v.to_bits());
+                }
+            }
+        }
+        // The built-in constructor object's `constructor` value is
+        // inherited from Function.prototype. It is therefore only the
+        // fallback after own computed fields, static methods, and
+        // static accessors of the same name have had a chance to win.
+        if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+            let constructor = super::super::js_get_global_this_builtin_value(
+                b"Function".as_ptr(),
+                b"Function".len(),
+            );
+            return JSValue::from_bits(constructor.to_bits());
+        }
+    }
+    return JSValue::undefined();
+}
+
 #[cfg(test)]
 mod primitive_proto_accessor_tests_10648 {
     use super::*;
@@ -186,6 +575,15 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     // computed-access path.
     if key.is_null() {
         return JSValue::undefined();
+    }
+    // A class function object (not the legacy immediate, which keeps its
+    // later arm) is a class constructor: its statics are the class lookup's.
+    // One ShapeId-word pre-filter for every other receiver.
+    {
+        let raw = (obj as u64 & crate::value::POINTER_MASK) as usize;
+        if let Some(class_id) = crate::object::class_value::class_closure_id(raw) {
+            return class_value_get_field(obj, key, obj as u64, class_id);
+        }
     }
     // `process.env` is a live OS-backed exotic object. Direct reads are
     // codegen-specialized, but an alias (`const env = process.env; env.X`)
@@ -1294,399 +1692,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
             crate::object::class_value::legacy_class_ptr_word(bits),
             key.is_null(),
         ) {
-            let class_value = crate::object::class_value::boxed_class_word(bits);
-            let is_prototype_ref = super::super::class_prototype_ref_id(class_value).is_some();
-            unsafe {
-                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let name_len = (*key).byte_len as usize;
-                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-                    .unwrap_or("");
-                // v0.5.752: class_ref.constructor synthesizes back to the
-                // same class ref so drizzle's
-                // `Object.getPrototypeOf(value).constructor === Class` chain
-                // collapses correctly (with v0.5.751's getPrototypeOf
-                // returning the class ref for instance receivers). Refs
-                // #420 / #618 followup.
-                if is_prototype_ref
-                    && name == "constructor"
-                    && class_id != 0
-                    && class_has_own_method(class_id, name)
-                {
-                    let value = class_prototype_method_value_for_name(class_id, name);
-                    return JSValue::from_bits(value.to_bits());
-                }
-                if name == "constructor"
-                    && is_prototype_ref
-                    && class_id != 0
-                    && is_class_id_registered(class_id)
-                {
-                    let value = if is_prototype_ref {
-                        super::super::class_constructor_ref_value(class_id)
-                    } else {
-                        class_value
-                    };
-                    return JSValue::from_bits(value.to_bits());
-                }
-                if name == "prototype"
-                    && class_id != 0
-                    && is_class_id_registered(class_id)
-                    && !is_prototype_ref
-                {
-                    let value = super::super::class_registry::class_decl_prototype_value(class_id);
-                    if value.to_bits() == crate::value::TAG_UNDEFINED {
-                        let value = super::super::class_prototype_ref_value(class_id);
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                    return JSValue::from_bits(value.to_bits());
-                }
-                // A capture-carrying class declaration is materialized as a
-                // heap class object (`ClassExprFresh`).  References that were
-                // lowered before the declaration's runtime binding existed
-                // (the class constructor itself and earlier helper closures)
-                // still carry the template `ClassRef`.  Runtime additions such
-                // as `Object.defineProperty(C, "OPEN", { value: 1 })` live on
-                // the materialized object, so consulting only the template
-                // tables makes `C.OPEN` undefined in those bodies even though
-                // the same expression at the declaration site reads `1`.
-                //
-                // `CLASS_OBJECT_VALUES` is already the runtime identity used
-                // by `instance.constructor`.  Read that same current
-                // evaluation first, preserving its own-property and pinned
-                // static-parent semantics; a miss continues through the
-                // ordinary ClassRef registry path below.
-                if !is_prototype_ref {
-                    if let Some(class_object) =
-                        super::super::class_registry::class_object_value_for_cid(class_id)
-                    {
-                        let class_object = JSValue::from_bits(class_object.to_bits());
-                        if class_object.is_pointer() {
-                            let class_object = class_object.as_pointer::<ObjectHeader>();
-                            if !class_object.is_null() && class_object as usize != obj as usize {
-                                let value = js_object_get_field_by_name(class_object, key);
-                                if !value.is_undefined() {
-                                    return value;
-                                }
-                            }
-                        }
-                    }
-                }
-                // Instance (prototype) methods must only resolve when reading
-                // off the prototype ref (`C.prototype.m`), NOT off the class ref
-                // itself (`C.m`). In JS a class object does not expose its
-                // prototype methods as static members: `class C { m(){} }` has
-                // `C.m === undefined` (the method lives on `C.prototype`). The
-                // earlier unconditional lookup leaked instance methods onto the
-                // class ref, so `C.m` returned a (mis-bound) function. This
-                // broke NestJS interceptor/guard/pipe resolution: its
-                // `getInterceptorInstance` duck-types `!!metatype.intercept` to
-                // decide "is this a class or an already-built instance"; a
-                // truthy `Class.intercept` made it treat the CLASS as the
-                // instance, so `intercept()` ran with a broken receiver and
-                // returned `{}`, which rxjs `innerFrom` then rejected. Real
-                // static methods are resolved below via
-                // `lookup_static_method_in_chain`.
-                if is_prototype_ref && class_id != 0 && class_has_own_method(class_id, name) {
-                    let value = class_prototype_method_value_for_name(class_id, name);
-                    return JSValue::from_bits(value.to_bits());
-                }
-                if is_prototype_ref {
-                    // Class accessors are properties of the class prototype
-                    // chain (charter step 3); `this` is the prototype ref.
-                    if let Some((v, _)) = super::super::class_registry::class_chain_getter_value(
-                        class_id,
-                        name,
-                        || class_value,
-                    ) {
-                        return v;
-                    }
-                    return JSValue::undefined();
-                }
-                // Empty-string is a legal static member key (`static get ''()`);
-                // the `!name.is_empty()` guard below skips it, so resolve a
-                // static accessor named "" here (Test262 accessor-name-static
-                // literal-string-empty).
-                if name.is_empty() {
-                    if let Some(v) =
-                        super::super::class_registry::class_static_accessor_getter_value(
-                            class_id,
-                            name,
-                            class_value,
-                        )
-                    {
-                        return JSValue::from_bits(v.to_bits());
-                    }
-                }
-                if !name.is_empty() {
-                    if super::super::class_registry::class_is_key_deleted(class_id, name) {
-                        return JSValue::undefined();
-                    }
-                    let result = crate::object::class_value::class_static_get(class_id, name);
-                    if let Some(v) = result {
-                        return JSValue::from_bits(v.to_bits());
-                    }
-                    // Static DATA fields are INHERITED by subclasses, exactly like
-                    // static methods: `class D {}; D.kind = "x"; class G extends D {}`
-                    // makes `G.kind === "x"` (the class-object proto chain
-                    // `G.__proto__ === D` carries statics). The own-field read above
-                    // only consulted `class_id`; walk the parent class_id chain here
-                    // so an inherited static field (or runtime `Parent.x = …`
-                    // assignment — both live in CLASS_DYNAMIC_PROPS) resolves. Static
-                    // METHODS are handled by `lookup_static_method_in_chain` below;
-                    // this covers the data-field case that was returning `undefined`
-                    // (Auth.js sets `SignInError.kind = "signIn"` and reads it off a
-                    // `CredentialsSignin` subclass to pick the sign-in vs error page).
-                    //
-                    // #6530: `name` is an OWN property of every constructor — a
-                    // subclass never inherits its parent's `.name` (spec:
-                    // ClassDefinitionEvaluation installs it per class). Skip the
-                    // chain walk so the #2059 own-name synthesis below answers
-                    // with THIS class's registered name instead of an ancestor's.
-                    if !matches!(name, "name" | "length") {
-                        // Walk the class-object proto chain for an inherited static
-                        // DATA field. At EACH level the class's pinned
-                        // per-evaluation parent OBJECT is consulted BEFORE the
-                        // parent's registry props (`CLASS_DYNAMIC_PROPS`).
-                        //
-                        // #6552: a subclass of a class-EXPRESSION value evaluated
-                        // more than once (`function make(a){return class{static
-                        // ast=a}}`, then `class Number$ extends make(x) {}` /
-                        // `class Widget$ extends make(y) {}`) records THIS
-                        // evaluation's parent object as its static prototype
-                        // (`class_prototype_object`, #1788), but the parent's
-                        // `CLASS_DYNAMIC_PROPS` are keyed by the class-expression
-                        // TEMPLATE id — shared, last-wins across every evaluation.
-                        // Reading the registry entry for such a parent collapses
-                        // sibling subclasses to the LAST `make(...)` (effect Schema:
-                        // `Number$.ast`/`Widget$.ast` both read the last parent's
-                        // `ast`). The pinned object carries this evaluation's own
-                        // edge, so it is authoritative; the registry read remains
-                        // the fallback for a plain declaration parent (#6443:
-                        // Auth.js `SignInError.kind`), which has no pinned object.
-                        let mut child = class_id;
-                        let mut depth = 0usize;
-                        while depth < 32 {
-                            // The constructor's own `[[Prototype]]`, set by
-                            // `Object.setPrototypeOf(Ctor, obj)`. Checked first:
-                            // it is the nearest static-side link, and unlike
-                            // `class_prototype_object` it is never on an
-                            // instance's chain.
-                            let static_proto =
-                                super::super::class_registry::class_static_prototype(child);
-                            if !static_proto.is_null() {
-                                // #10911: this walk re-enters with the PARENT as
-                                // the object. It was written when effect's `ast`
-                                // was a static DATA field (see above), where the
-                                // object doesn't matter; effect now makes `ast` a
-                                // static GETTER, and a getter found this way ran
-                                // with `this` === the parent class. Stash the
-                                // class the read started from so the accessor
-                                // binds it (spec OrdinaryGet threads Receiver) --
-                                // the same device `resolve_proto_chain_field_inner`
-                                // uses for instance getters.
-                                let prev =
-                                    crate::object::field_get_set::accessor_receiver_override_begin(
-                                        class_value,
-                                    );
-                                let v = js_object_get_field_by_name(static_proto as *const _, key);
-                                crate::object::field_get_set::accessor_receiver_override_end(prev);
-                                if !v.is_undefined() {
-                                    return v;
-                                }
-                            }
-                            let proto = super::super::class_registry::class_prototype_object(child);
-                            if !proto.is_null() {
-                                let prev =
-                                    crate::object::field_get_set::accessor_receiver_override_begin(
-                                        class_value,
-                                    );
-                                let v = js_object_get_field_by_name(proto as *const _, key);
-                                crate::object::field_get_set::accessor_receiver_override_end(prev);
-                                // Return a value present on the pinned object even
-                                // when it is `null` — a static explicitly set to
-                                // `null` on THIS evaluation is authoritative and
-                                // must not fall through to the last-wins registry
-                                // entry (a sibling evaluation's value). Only
-                                // `undefined` means "absent here", which continues
-                                // the walk to the parent's registry props / a higher
-                                // ancestor.
-                                if !v.is_undefined() {
-                                    return v;
-                                }
-                            }
-                            let p = match get_parent_class_id(child) {
-                                Some(p) if p != 0 && p != child => p,
-                                _ => break,
-                            };
-                            // A key deleted on THIS ancestor is not provided by it,
-                            // but a higher ancestor may still define it — `delete
-                            // Mid.foo` must let `Sub.foo` inherit `Base.foo`, not
-                            // resolve to undefined. Skip the registry read for the
-                            // deleted level and keep walking up.
-                            if !super::super::class_registry::class_is_key_deleted(p, name) {
-                                let inherited =
-                                    crate::object::class_value::class_static_get(p, name);
-                                if let Some(v) = inherited {
-                                    return JSValue::from_bits(v.to_bits());
-                                }
-                            }
-                            child = p;
-                            depth += 1;
-                        }
-                    }
-                    if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
-                        .is_some()
-                    {
-                        let heap_name = {
-                            let layout =
-                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
-                            let ptr = std::alloc::alloc(layout);
-                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
-                            ptr
-                        };
-                        let result = js_class_method_bind(class_value, heap_name, name_len);
-                        return JSValue::from_bits(result.to_bits());
-                    }
-                    // `class X extends Promise` — a value read of an inherited
-                    // builtin static (`X.resolve`, `X.all`, …) resolves to the
-                    // reified Promise static (so `X.resolve.bind(X)` works). Only
-                    // fires when no user static shadowed it above.
-                    if super::super::promise_parent_in_chain(class_id)
-                        && super::super::promise_static_function_spec(name).is_some()
-                    {
-                        let v = super::super::js_promise_static_function_value(name_ptr, name_len);
-                        if v.to_bits() != crate::value::TAG_UNDEFINED {
-                            return JSValue::from_bits(v.to_bits());
-                        }
-                    }
-                    if let Some(v) =
-                        super::super::class_registry::class_static_accessor_getter_value(
-                            class_id,
-                            name,
-                            class_value,
-                        )
-                    {
-                        return JSValue::from_bits(v.to_bits());
-                    }
-                    // #1788: a subclass of a class-expression value
-                    // (`class Sub extends make("A") {}`) inherits the parent
-                    // class OBJECT's OWN per-evaluation static fields. The
-                    // parent object was recorded as `class_id`'s static
-                    // prototype at `extends` time; walk that chain (also
-                    // covering multi-level `class Leaf extends Mid {}`).
-                    // #6530: except `name` — an own property of every
-                    // constructor, never inherited; without the guard a
-                    // subclass of a per-evaluation class object reported its
-                    // BASE's synthesized `.name` (bundled zod:
-                    // `z.string().constructor.name` gave "ZodType").
-                    if !matches!(name, "name" | "length") {
-                        if let Some(v) =
-                            super::super::class_registry::resolve_proto_chain_field(class_id, key)
-                        {
-                            if !v.is_undefined() && !v.is_null() {
-                                return v;
-                            }
-                        }
-                    }
-                    // #36 / #321: the subclass extends a FUNCTION value
-                    // (`class Svc extends Context.Tag(id)<...>() {}`). Read the
-                    // named static off the parent closure — its OWN props
-                    // (`Svc.key` → "Svc") plus, via the closure getter, its
-                    // static prototype (`Svc._op` → "Tag" on TagProto).
-                    // #10210: the edge is keyed by the class that directly
-                    // `extends <function>`, which may be an ANCESTOR of this
-                    // class (`class Flags extends ConfigTag {}` where
-                    // `ConfigTag extends Context.Service()(id)`), so walk the
-                    // parent chain like `super()` dispatch does.
-                    if let Some(closure_ptr) =
-                        super::super::class_registry::parent_closure_in_chain(class_id)
-                    {
-                        let v = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
-                        let vb = JSValue::from_bits(v.to_bits());
-                        if !vb.is_undefined() && !vb.is_null() {
-                            return vb;
-                        }
-                    }
-                    // #2059: the constructor's built-in `name` own property —
-                    // the class name. Checked last so an explicit static
-                    // `name` member (method/field, handled above) still wins.
-                    // This is what `assert.throws` reads via
-                    // `thrown.constructor.name` to label the thrown error.
-                    if name == "name"
-                        && class_id != 0
-                        && !super::super::class_registry::class_is_key_deleted(class_id, name)
-                    {
-                        if let Some(cname) =
-                            super::super::class_registry::class_name_for_id(class_id)
-                        {
-                            let s = crate::string::js_string_from_bytes(
-                                cname.as_ptr(),
-                                cname.len() as u32,
-                            );
-                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
-                        }
-                    }
-                    if name == "length"
-                        && class_id != 0
-                        && !is_prototype_ref
-                        && !super::super::class_registry::class_is_key_deleted(class_id, name)
-                    {
-                        if let Some(length) =
-                            super::super::class_registry::class_length_for_id(class_id)
-                        {
-                            return JSValue::number(length as f64);
-                        }
-                    }
-                    // A class constructor is also a Function object. Reify
-                    // inherited Function.prototype methods for value reads
-                    // (`const bind = C.bind`) just as the closure path does;
-                    // the captured ClassRef is accepted by native method
-                    // dispatch and by `js_function_bind`.
-                    if !is_prototype_ref {
-                        if let Some(method) = super::reified_function_method_name(name) {
-                            let value =
-                                crate::closure::reify_function_method_value(class_value, method);
-                            return JSValue::from_bits(value.to_bits());
-                        }
-                    }
-                    // No own static / inherited entry resolved the name. A class
-                    // constructor is a function, so a bare read of `.caller` or
-                    // `.arguments` hits the poison-pill %ThrowTypeError% accessor
-                    // on `Function.prototype` — strict-mode throws (Perry only
-                    // compiles strict code). Placed last so any own static field,
-                    // accessor, or `defineProperty`-installed data prop of that
-                    // name takes precedence. Prototype-refs (`C.prototype`) are
-                    // plain objects and are excluded.
-                    if !is_prototype_ref && matches!(name, "caller" | "arguments") {
-                        crate::fs::validate::throw_type_error_with_code(
-                            "Restricted function property access",
-                            "ERR_INVALID_ARG_TYPE",
-                        );
-                    }
-                    // #11492: a constructor's chain ends at %Function.prototype%,
-                    // so a user method or expando installed there
-                    // (`Function.prototype.myHelper = fn`) is readable through
-                    // `C.myHelper` exactly as through a closure.
-                    if !is_prototype_ref {
-                        if let Some(v) =
-                            crate::closure::function_prototype_inherited_get(0, name, class_value)
-                        {
-                            return JSValue::from_bits(v.to_bits());
-                        }
-                    }
-                }
-                // The built-in constructor object's `constructor` value is
-                // inherited from Function.prototype. It is therefore only the
-                // fallback after own computed fields, static methods, and
-                // static accessors of the same name have had a chance to win.
-                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-                    let constructor = super::super::js_get_global_this_builtin_value(
-                        b"Function".as_ptr(),
-                        b"Function".len(),
-                    );
-                    return JSValue::from_bits(constructor.to_bits());
-                }
-            }
-            return JSValue::undefined();
+            return class_value_get_field(obj, key, bits, class_id);
         }
     }
     // #1545: Promise `then`/`catch`/`finally` value-reads return a bound

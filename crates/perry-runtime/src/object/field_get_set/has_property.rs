@@ -1394,6 +1394,18 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
     if key.is_null() {
         return None;
     }
+    // A class function object answers from its class lookup (statics, the
+    // parent chain, `name`/`length`/`prototype`, Function.prototype) — not the
+    // plain-function fallbacks, which would walk Function.prototype first.
+    if let Some(class_id) = crate::object::class_value::class_closure_id(obj) {
+        let value = super::get_field_by_name::class_value_get_field(
+            obj as *const crate::object::ObjectHeader,
+            key,
+            obj as u64,
+            class_id,
+        );
+        return Some(f64::from_bits(value.bits()));
+    }
     let name = crate::string::header_str_checked(key)?;
     let val = crate::closure::closure_get_dynamic_prop(obj, name);
     // Function methods were already resolved, including a getter or own
