@@ -68,8 +68,11 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-const FRAME_RELEASED: usize = 1 << 63;
-const FRAME_RELEASE_TAG_SHIFT: u32 = 60;
+// The flag and the 2-bit tag take the record's top three bits on every pointer
+// width (63/60 on LP64, 31/28 on ILP32 — wasm32, arm64_32), leaving the edge
+// count everything below.
+const FRAME_RELEASED: usize = 1 << (usize::BITS - 1);
+const FRAME_RELEASE_TAG_SHIFT: u32 = usize::BITS - 4;
 const FRAME_RELEASE_TAG_MASK: usize = 0b11 << FRAME_RELEASE_TAG_SHIFT;
 const EDGE_COUNT_MASK: usize = (1 << FRAME_RELEASE_TAG_SHIFT) - 1;
 

@@ -938,7 +938,7 @@ pub struct MapHeader {
     /// Extent of the entries array actually written: raw entry indices run
     /// `0..used`. `size` stays the LIVE count, so `used - size` is the number
     /// of tombstoned entries awaiting compaction. Codegen reads it at offset
-    /// 32 (pinned below).
+    /// 32 on LP64 (pinned below).
     pub used: u32,
     /// Bumped by every operation that moves an entry to a LOWER raw index
     /// (`compact_map_entries`) or discards the extent (`clear`). A raw-index
@@ -950,6 +950,7 @@ pub struct MapHeader {
     pub compaction_epoch: u32,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(std::mem::offset_of!(MapHeader, size) == 0);
     assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
@@ -957,6 +958,19 @@ const _: () = {
     assert!(std::mem::offset_of!(MapHeader, used) == 32);
     assert!(std::mem::offset_of!(MapHeader, compaction_epoch) == 36);
     assert!(std::mem::size_of::<MapHeader>() == 40);
+};
+
+// ILP32 (wasm32, arm64_32): the three pointer fields are 4 bytes. Codegen's
+// inline entry read above assumes the LP64 offsets, which is one reason ILP32
+// codegen is refused until #11378 makes it target-derived.
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(std::mem::offset_of!(MapHeader, size) == 0);
+    assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
+    assert!(std::mem::offset_of!(MapHeader, entries) == 8);
+    assert!(std::mem::offset_of!(MapHeader, used) == 20);
+    assert!(std::mem::offset_of!(MapHeader, compaction_epoch) == 24);
+    assert!(std::mem::size_of::<MapHeader>() == 28);
 };
 
 /// The tombstone a deleted entry's KEY slot takes. Never a legal stored key:

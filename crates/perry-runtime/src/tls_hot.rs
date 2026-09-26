@@ -208,9 +208,18 @@ pub(crate) struct HotTls {
 /// Byte offsets generated code hard-codes into its inline hot-cache access
 /// (`perry-codegen/src/expr/hot_tls.rs`, Apple aarch64 only). Pinned here
 /// with `offset_of!` so a field reorder fails to compile instead of silently
-/// reading the wrong cell.
+/// reading the wrong cell. The LP64 values come first: codegen's
+/// `hot_tls_layout_is_what_codegen_assumes` reads the first literal. On ILP32
+/// (arm64_32, wasm32) the preceding pointer fields are 4 bytes; codegen does
+/// not emit the inline path there (ILP32 codegen is refused until #11378).
+#[cfg(target_pointer_width = "64")]
 pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 8;
+#[cfg(target_pointer_width = "64")]
 pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 128;
+#[cfg(target_pointer_width = "32")]
+pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 4;
+#[cfg(target_pointer_width = "32")]
+pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 64;
 const _: () = assert!(std::mem::offset_of!(HotTls, inline_state) == HOT_TLS_INLINE_STATE_OFFSET);
 const _: () = assert!(std::mem::offset_of!(HotTls, implicit_this) == HOT_TLS_IMPLICIT_THIS_OFFSET);
 const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data) == 0);

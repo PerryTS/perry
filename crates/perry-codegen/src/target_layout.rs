@@ -25,6 +25,27 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
         || target_triple.ends_with("gnux32")
 }
 
+/// Why codegen refuses `target_triple`, or `None` when it can emit for it.
+///
+/// `perry-runtime` compiles for ILP32 targets (#11376), but generated code is
+/// not yet ILP32-correct: the inline shadow-stack frame push/slot stores,
+/// `MapHeader::used` and `HotTls` reads bake in LP64 byte offsets, and runtime
+/// pointers cross the ABI as `i64`. Emitting anyway would miscompile silently
+/// (a shadow root written through the wrong word surfaces cycles later as
+/// `TypeError: value is not a function`), so the refusal is loud until #11378
+/// makes those target-derived. The only ILP32 triple the driver produces is
+/// watchOS `arm64_32`, which is opt-in (`PERRY_WATCHOS_ARM64_32`).
+pub fn ilp32_codegen_refusal(target_triple: &str) -> Option<String> {
+    target_is_ilp32(target_triple).then(|| {
+        format!(
+            "target `{target_triple}` has 32-bit pointers, and Perry's LLVM backend \
+             does not emit ILP32-correct code yet (shadow-stack, Map and HotTls \
+             offsets and the runtime pointer ABI are LP64-only); see \
+             https://github.com/PerryTS/perry/issues/11378"
+        )
+    })
+}
+
 /// Exclusive upper bound accepted by the runtime's `is_valid_obj_ptr` for a
 /// candidate GC address. Linux-family AArch64 can use the full low 48-bit VA
 /// range; every other target keeps the canonical low-half 47-bit ceiling.
@@ -273,6 +294,44 @@ mod tests {
         assert_eq!(closure_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
         assert_eq!(closure_header_size_bytes("arm64_32-apple-watchos"), 12);
         assert_eq!(closure_header_size_bytes("wasm32-unknown-unknown"), 12);
+    }
+
+    #[test]
+    fn ilp32_targets_are_refused_and_lp64_targets_are_not() {
+        for triple in [
+            "arm64_32-apple-watchos",
+            "wasm32-wasip2",
+            "i686-unknown-linux-gnu",
+        ] {
+            let refusal = ilp32_codegen_refusal(triple).unwrap_or_else(|| {
+                panic!("{triple}: ILP32 codegen would miscompile, it must be refused")
+            });
+            assert!(
+                refusal.contains(triple) && refusal.contains("11378"),
+                "{refusal}"
+            );
+        }
+        for triple in [
+            "aarch64-apple-watchos",
+            "arm64-apple-watchos26.0",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            assert_eq!(ilp32_codegen_refusal(triple), None, "{triple}");
+        }
+    }
+
+    /// The refusal must be reached by the real entry point, not just exist.
+    #[test]
+    fn compile_module_refuses_an_ilp32_target() {
+        let module = perry_hir::Module::new("ilp32_refusal");
+        let opts = crate::CompileOptions {
+            target: Some("arm64_32-apple-watchos".into()),
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        let err =
+            crate::compile_module(&module, opts).expect_err("an ILP32 target must not be emitted");
+        assert!(err.to_string().contains("11378"), "{err}");
     }
 
     #[test]
