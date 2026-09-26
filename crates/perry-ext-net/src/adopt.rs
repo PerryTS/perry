@@ -56,6 +56,7 @@ pub fn adopt_upgraded_tcp_stream(stream: std::net::TcpStream) -> i64 {
         id,
         SocketState {
             tcp_async_id: 0,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: false,
@@ -144,6 +145,7 @@ pub fn adopt_turnloop_upgrade(id: i64) -> bool {
         id,
         SocketState {
             tcp_async_id: 0,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: false,
