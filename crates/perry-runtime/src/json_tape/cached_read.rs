@@ -144,8 +144,9 @@ pub unsafe extern "C" fn js_lazy_array_index_probe(raw: i64, idx: i64) -> f64 {
     if (*hdr).cached_length != (*cached).length {
         return miss;
     }
-    let elements =
-        (cached as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
+    // Like `lazy_get`, address logical elements after any dense-queue front
+    // offset, rather than the original allocation's first physical slot.
+    let elements = crate::array::array_elements_ptr(cached) as *const u64;
     let bits = *elements.add(i as usize);
     if bits == crate::value::TAG_HOLE {
         return miss;
@@ -259,6 +260,39 @@ mod tests {
             assert_eq!(probe(hdr, 5), MISS, "a stale mirror must decline");
             (*hdr).cached_length = real;
             assert_eq!(probe(hdr, 5), served.bits(), "a fresh mirror serves again");
+        }
+    }
+
+    #[test]
+    fn lazy_index_probe_honors_front_offset_after_shift() {
+        let _guard = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let hdr = fixture(b"[10,20,30,40,50,60]");
+            let arr = force_materialize_lazy(hdr);
+            for shifted in 1..=3 {
+                assert_eq!(crate::array::js_array_shift_f64(arr), (shifted * 10) as f64);
+                assert!(
+                    crate::array::array_front_offset(arr) > 0,
+                    "the fixture must exercise offset-backed storage"
+                );
+                assert_eq!(probe(hdr, 1), MISS, "a stale length mirror must decline");
+                assert_eq!(lazy_get(hdr, 0).as_number(), ((shifted + 1) * 10) as f64);
+                assert_eq!((*hdr).cached_length, (*arr).length);
+
+                // Check index 1 first: the old probe serves the wrong element
+                // there after the first shift, while index 0 merely declines
+                // because its old physical slot contains a hole.
+                for i in (1..(*arr).length).chain(std::iter::once(0)) {
+                    let expected = ((shifted + i + 1) * 10) as f64;
+                    assert_eq!(lazy_get(hdr, i).as_number(), expected);
+                    assert_eq!(
+                        JSValue::from_bits(probe(hdr, i as i64)).as_number(),
+                        expected,
+                        "probe at index {i} after {shifted} shifts"
+                    );
+                }
+                assert_eq!(probe(hdr, (*arr).length as i64), MISS);
+            }
         }
     }
 
