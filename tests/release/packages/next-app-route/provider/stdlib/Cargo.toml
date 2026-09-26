@@ -17,7 +17,6 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "scheduler",
   "ids",
   "html-parser",
-  "bundled-decimal",
   "external-events-construct",
   "external-http-server-pump",
   "external-net-pump",
