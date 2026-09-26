@@ -70,12 +70,6 @@
       "why": "write_tokens(): HashMap<u64 write-token, i64 socket HANDLE>. Each i64 is the same handle-band id ABORTS holds \u2014 the key used to look the socket up in crate::statics::sockets(), never a heap address. Entries are removed on write completion (bun_tcp.rs) and retained-out when a handle closes, so no id outlives its facade."
     },
     {
-      "file": "crates/perry-ext-net/src/lib.rs",
-      "name": "P",
-      "verdict": "not_a_gc_pointer",
-      "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) \u2014 no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
-    },
-    {
       "file": "crates/perry-ext-net/src/server_state.rs",
       "name": "STATE",
       "verdict": "not_a_gc_pointer",
