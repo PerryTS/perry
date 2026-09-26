@@ -58,3 +58,34 @@ const stream = new ReadableStream({
 });
 const streamed = new RequestCtor("https://example.test/stream", { method: "POST", body: stream, duplex: "half" });
 console.log("reflective stream", await streamed.text());
+
+class DerivedRequest extends Request {}
+const derived = new DerivedRequest("https://example.test/derived", {
+  method: "PUT", body: "derived-body", headers: { "x-derived": "yes" },
+});
+const derivedCopy = new Request(derived);
+console.log("subclass", derivedCopy.method, await derivedCopy.text(), derivedCopy.headers.get("x-derived"));
+console.log("subclass transfer", derived.bodyUsed);
+try {
+  new Request(derived);
+  console.log("subclass reused");
+} catch (e) {
+  console.log("subclass used rejected", e instanceof TypeError);
+}
+const textBody = new Request("https://example.test/text", { method: "POST", body: "text" });
+console.log("text content type", textBody.headers.get("content-type"));
+const explicitType = new Request("https://example.test/text", {
+  method: "POST", body: "text", headers: { "content-type": "application/custom" },
+});
+console.log("explicit content type", explicitType.headers.get("content-type"));
+const noBody = new Request("https://example.test/empty");
+console.log("empty content type", noBody.headers.get("content-type"));
+// A Headers handle used as a body used to be dereferenced as a StringHeader.
+// This pins safe construction; coercion of its payload is a separate gap.
+const handleBody = new Request(source(), { body: new Headers() as any });
+console.log("handle body constructed", handleBody.method);
+const overrideStream = new ReadableStream({
+  start(controller) { controller.enqueue(new Uint8Array([67, 68])); controller.close(); },
+});
+const streamCopy = new Request(source(), { body: overrideStream, duplex: "half" });
+console.log("stream override", await streamCopy.text());

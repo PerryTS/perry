@@ -218,11 +218,15 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
     // bytes must be drained, rather than interpreted as a string pointer.
     let body_value = field(b"body");
     let body_ptr = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+        reset_pending_fetch_body_init();
         std::ptr::null()
     } else {
         js_response_body_init_ptr(body_value) as *const StringHeader
     };
-    js_request_new(
+    // Consume conversion metadata before later field getters or a stream
+    // pull can perform another body conversion and replace this thread-local.
+    let content_type = take_pending_fetch_body_content_type();
+    let result = js_request_new(
         url_ptr,
         str_field(b"method"),
         body_ptr,
@@ -237,5 +241,14 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
         keepalive,
         str_field(b"duplex"),
         field(b"signal"),
-    )
+    );
+    if let Some(content_type) = content_type {
+        let mut registry = REQUEST_REGISTRY.lock().unwrap();
+        if let Some(request) = registry.get_mut(&handle_id(result)) {
+            if !request.headers.has("content-type") {
+                request.headers.set("content-type", content_type);
+            }
+        }
+    }
+    result
 }

@@ -52,6 +52,14 @@ fn request_input_inherits_fields_and_applies_init_overrides() {
             "null inherits POST payload\n",
             "reflective POST payload yes\n",
             "reflective stream AB\n",
+            "subclass PUT derived-body yes\n",
+            "subclass transfer true\n",
+            "subclass used rejected true\n",
+            "text content type text/plain;charset=UTF-8\n",
+            "explicit content type application/custom\n",
+            "empty content type null\n",
+            "handle body constructed POST\n",
+            "stream override CD\n",
         )
     );
 }

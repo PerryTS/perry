@@ -12,7 +12,12 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let scope = RuntimeHandleScope::new();
     let input_root = scope.root_nanbox_f64(input);
     let init_root = scope.root_nanbox_f64(init);
-    let source_id = handle_id(input);
+    // Subclasses carry their native Request in a hidden field. Unwrapping
+    // can allocate, so keep the wrapper and init rooted first; then pin the
+    // recovered registry handle for the rest of construction.
+    let native_input = perry_runtime::object::js_fetch_unwrap_handle(input_root.get_nanbox_f64());
+    let _source_pin = lifecycle::pin_handles(&[native_input]);
+    let source_id = handle_id(native_input);
     let source = REQUEST_REGISTRY.lock().unwrap().get(&source_id).cloned();
     let Some(mut request) = source else {
         let url = js_request_input_to_url(input_root.get_nanbox_f64());
@@ -124,12 +129,19 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         } else {
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
             let stream = take_pending_fetch_body_stream_id();
-            // Copy before draining: a stream pull may run allocating JS.
-            let bytes = dispatch::body_bytes_from_header(ptr);
+            let content_type = take_pending_fetch_body_content_type().map(str::to_owned);
+            // Non-body handles (e.g. Headers) are synthetic addresses, not
+            // StringHeaders. Match the URL constructor's guarded fallback.
+            // Copy real bytes before draining: a stream pull may allocate.
+            let bytes = if perry_runtime::value::addr_class::is_handle_band(ptr as usize) {
+                None
+            } else {
+                dispatch::body_bytes_from_header(ptr)
+            };
             request.body = stream
                 .map(crate::streams::drain_readable_into_bytes)
                 .or(bytes);
-            take_pending_fetch_body_content_type().map(str::to_owned)
+            content_type
         };
         if let Some(content_type) = content_type {
             if !request.headers.has("content-type") {

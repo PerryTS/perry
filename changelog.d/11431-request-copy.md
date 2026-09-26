@@ -10,3 +10,10 @@ Add a Node-comparable gap fixture and compiler integration test covering
 plain copies, header-only wrappers, dynamic overrides, binary payloads,
 mutated source headers, body transfer and the reflective constructor. Register
 the new constructor in the GC poll-capable inventory.
+
+Normalize Request subclass handles before copying and transferring their body
+state. Guard non-body handle values before reading converted body pointers,
+and consume body content-type metadata before nested construction or stream
+pulls can replace it. URL-based construction now applies inferred content types
+without overwriting an explicit header. Extend regression coverage for these
+paths and stream-body overrides.
