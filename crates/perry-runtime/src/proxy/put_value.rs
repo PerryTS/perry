@@ -170,12 +170,20 @@ pub extern "C" fn js_put_value_set(
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }
-        // #10498: a key this receiver shape's `[[Set]]` walk has already
-        // resolved to a class vtable setter. See `class_accessor_cache`.
-        if let Some(stored) =
-            unsafe { crate::object::class_accessor_cache::class_setter_hit(obj, key_ptr, value) }
-        {
-            return stored;
+        // Charter step 3: a key this receiver shape inherits as an accessor
+        // runs its setter from the inherited-access table.
+        if crate::value::addr_class::is_above_handle_band(obj as usize) {
+            if let Some(interned) = unsafe {
+                crate::object::chain_store::interned_key_for_store(f64::from_bits(key_bits))
+            } {
+                if unsafe {
+                    crate::object::inherited_read_cache::inherited_write_through(
+                        obj, interned, value,
+                    )
+                } {
+                    return value;
+                }
+            }
         }
     }
 

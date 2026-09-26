@@ -17,7 +17,6 @@ mod census;
 mod census_block_windows;
 mod census_whole_block;
 mod cjs_main_module;
-mod class_accessor_cache_roots;
 mod concat_site;
 mod contract;
 mod copy_slot_decode;

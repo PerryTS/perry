@@ -1110,7 +1110,12 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         return crate::value::js_nanbox_pointer(existing as i64);
     }
 
-    let proto = js_object_alloc(class_id, 0);
+    // Inline room for `constructor` and every declared member, so the
+    // members' slots (an accessor's pair included) are inline: an inherited
+    // read of one is then served by the inherited-read cache (spilled slots
+    // never prime there).
+    let members = class_prototype_member_names(class_id).len() as u32;
+    let proto = js_object_alloc(class_id, members + 1);
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

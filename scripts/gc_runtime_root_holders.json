@@ -372,7 +372,7 @@
         "sources": {
           "crates/perry-runtime/src/gc/census.rs": "25601f25ac70aa998f8cb5c1939d11e7c43a96235d4edf39a78e261b68709471",
           "crates/perry-runtime/src/gc/cycle.rs": "4744196ba5e9c5ac40912154cf5b45b4a618d81ddc776ab1095fbc585f27c878",
-          "crates/perry-runtime/src/gc/mod.rs": "fb7de87bb148643b12ac24c753efff1a7fd0b951ea04cec8f9e68eda72158d9a",
+          "crates/perry-runtime/src/gc/mod.rs": "3a34ff221084f51ae87edc0cac83381029035759f96e7b39574d174c8b5df074",
           "crates/perry-runtime/src/gc/policy.rs": "7e2304ec822d26877df4eaf7aefb55c485c66425b8946b56a9b271a0abcc635b",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
@@ -828,18 +828,6 @@
       "name": "CHAIN_STORE_HITS_THIS_THREAD",
       "verdict": "test_only",
       "why": "#[cfg(test)] Cell<u64> counting the inherited-access chain-verdict hits served on the calling test thread, so a test can assert its own site fired while others run beside it. It stores only a count and is absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_accessor_cache.rs",
-      "name": "SETTER_PROBE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10498 setter probe. `armed` is a (receiver, key) address pair that is only COMPARED against the live pointers `js_object_set_field_by_name`'s vtable-setter arm is about to use, and it lives only across one `target_set` call; it is never dereferenced or handed on. A relocation between arm and match makes the compare fail, which records nothing. `seen` is a `Recording`: a class id, a ShapeId, two counters and the setter's code address. The key the recording is later committed under is re-read from a `RuntimeHandleScope` root after `target_set` returns, and committed into CLASS_ACCESSOR_CACHE, whose keys `scan_class_accessor_cache_roots_mut` marks and rewrites."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_accessor_cache.rs",
-      "name": "STATS",
-      "verdict": "test_only",
-      "why": "#[cfg(test)] (hits, records) counters for the #10498 class-accessor cache tests. Two integers, absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/accessor_attrs.rs",

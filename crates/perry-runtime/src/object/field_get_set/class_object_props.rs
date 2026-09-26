@@ -86,7 +86,10 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     }
 
     let class_id = class.with_mut_ptr::<ObjectHeader, _>(|class| (*class).class_id);
-    let proto = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
+    // Inline room for `constructor` and every declared member (see
+    // `class_decl_prototype_value`).
+    let members = super::super::class_registry::class_prototype_member_names(class_id).len() as u32;
+    let proto = scope.root_raw_mut_ptr(js_object_alloc(class_id, members + 1));
     CLASS_EVALUATION_PROTOTYPES_MATERIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Symbol aliases resolve method values lazily. Their lexical evaluation
