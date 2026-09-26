@@ -1382,27 +1382,14 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     return JSValue::from_bits(value.to_bits());
                 }
                 if is_prototype_ref {
-                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                        if let Some(ref reg) = *registry {
-                            let mut cid = class_id;
-                            let mut depth = 0usize;
-                            while depth < 32 {
-                                if let Some(vtable) = reg.get(&cid) {
-                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
-                                        let f: extern "C" fn(f64) -> f64 =
-                                            std::mem::transmute(getter_ptr);
-                                        return JSValue::from_bits(f(class_value).to_bits());
-                                    }
-                                }
-                                match get_parent_class_id(cid) {
-                                    Some(p) if p != 0 && p != cid => {
-                                        cid = p;
-                                        depth += 1;
-                                    }
-                                    _ => break,
-                                }
-                            }
-                        }
+                    // Class accessors are properties of the class prototype
+                    // chain (charter step 3); `this` is the prototype ref.
+                    if let Some((v, _)) = super::super::class_registry::class_chain_getter_value(
+                        class_id,
+                        name,
+                        || class_value,
+                    ) {
+                        return v;
                     }
                     return JSValue::undefined();
                 }
