@@ -66,9 +66,27 @@ pub(crate) enum ExoticKind {
 /// Classify `addr` as a Date cell, RegExp header, or Error header. Returns
 /// `None` for everything else (including the small-handle band). Every arm is
 /// selected directly by its authoritative `GcHeader` kind.
+///
+/// #11364: the header read alone is not proof that `addr` is a Perry cell.
+/// `try_read_gc_header` checks only the address's magnitude and alignment, so
+/// a native `Box` under `POINTER_TAG` (an `AsyncResource` backing, #10926)
+/// passes it, and its `addr - 8` word is whatever the allocator placed in
+/// front of the `Box`. When that word looked like a `GC_TYPE_MAP` header, the
+/// Box was classified as a Map and `exotic_set_property`'s descriptor probe
+/// read the Map `meta` field at `addr + 0x18` -- past the Box's 24 bytes, the
+/// next allocation's first word, a `4.0` -- and dereferenced it: a 1-in-210
+/// SIGSEGV at `0x4010000000000010`. An exotic verdict therefore also requires
+/// allocator ownership ([`try_read_tracked_gc_header`]), and every consumer
+/// that then reads owner memory on its strength (the descriptor summary via
+/// `cell_meta_slot`, the `OBJ_FLAG_NO_EXTEND` bit, the RegExp `lastIndex`
+/// slot) inherits that proof. Ordinary objects and every other non-exotic
+/// type still answer `None` from the cheap read, so only a receiver that
+/// already claims an exotic type pays for the ownership lookup.
+///
+/// [`try_read_tracked_gc_header`]: crate::value::addr_class::try_read_tracked_gc_header
 pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    match gc.obj_type {
+    let claimed = match gc.obj_type {
         crate::gc::GC_TYPE_DATE_CELL => Some(ExoticKind::Date),
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
@@ -77,7 +95,11 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
         crate::gc::GC_TYPE_REGEXP => Some(ExoticKind::RegExp),
         _ => None,
-    }
+    }?;
+    // The claim came from an unproven read; answer it only for an address the
+    // allocator owns (arena range or exact malloc-registry hit).
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    Some(claimed)
 }
 
 /// Classify a NaN-boxed (or raw-I64) value as an exotic-expando receiver.
@@ -694,5 +716,75 @@ mod tests {
             "the worker overwrote the parent thread's expando value"
         );
         assert!(expando_remove(owner, key));
+    }
+
+    /// #11364: a native `Box` under `POINTER_TAG` whose preceding allocator
+    /// word looks like a `GC_TYPE_MAP` header must not be classified as a Map.
+    /// The crash shape: an `AsyncResource` backing (24 bytes) was taken for a
+    /// Map, and the `[[Set]]` descriptor probe read the Map `meta` field at
+    /// `+0x18` -- the NEXT allocation's `4.0` -- and dereferenced
+    /// `0x4010000000000010`. The fixture reproduces exactly that: a spoofed
+    /// Map header in front of an untracked owner whose `meta` word is `4.0`.
+    /// Without the ownership gate the first assertion fails (and the set path
+    /// below would SIGSEGV); with it the receiver is never exotic.
+    #[test]
+    fn untracked_owner_with_spoofed_map_header_is_not_exotic() {
+        let four = 4.0f64.to_bits();
+        let mut words = Box::new([four; 16]);
+        words[0] = crate::gc::GC_TYPE_MAP as u64 | ((16 * 8) << 32);
+        let owner = &words[1] as *const u64 as usize;
+        let meta_offset = std::mem::offset_of!(crate::map::MapHeader, meta);
+        assert_eq!(
+            words[1 + meta_offset / 8],
+            four,
+            "the spoofed Map's meta word must be the crash's 4.0"
+        );
+        // Precondition: the magnitude-checked reader alone WOULD call this a
+        // Map. Without it the test proves nothing.
+        let hdr = unsafe { crate::value::addr_class::try_read_gc_header(owner) };
+        assert_eq!(
+            hdr.map(|h| h.obj_type),
+            Some(crate::gc::GC_TYPE_MAP),
+            "fixture must look like a Map cell to the magnitude-checked reader"
+        );
+
+        assert!(
+            exotic_expando_kind(owner).is_none(),
+            "an allocator-untracked owner was classified as an exotic cell"
+        );
+        let target = crate::value::js_nanbox_pointer(owner as i64);
+        assert!(exotic_expando_kind_of_value(target).is_none());
+
+        // The crash path itself: with descriptors in use, the `[[Set]]` arm
+        // used to probe the descriptor summary through the spoofed `meta`.
+        super::super::descriptor_state::GLOBAL_DESCRIPTORS_IN_USE
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let name_ptr = crate::string::js_string_from_bytes(b"label".as_ptr(), 5);
+        let key = crate::value::js_nanbox_string(name_ptr as i64);
+        assert!(exotic_put_value_set(target, key, 42.0, target, 1).is_none());
+        assert!(
+            words[1..].iter().all(|w| *w == four),
+            "owner memory was written"
+        );
+        drop(words);
+    }
+
+    /// Positive control for the ownership gate: genuine exotic cells, arena
+    /// (Map/Set/Date/Error) and malloc-tracked (Promise), still classify.
+    #[test]
+    fn genuine_exotic_cells_still_classify() {
+        let map = crate::map::js_map_alloc(4) as usize;
+        let set = crate::set::js_set_alloc(4) as usize;
+        let error = crate::error::js_error_new() as usize;
+        let promise = crate::promise::js_promise_new() as usize;
+        let date = crate::date::js_date_new();
+        assert!(exotic_expando_kind(map) == Some(ExoticKind::Map));
+        assert!(exotic_expando_kind(set) == Some(ExoticKind::Set));
+        assert!(exotic_expando_kind(error) == Some(ExoticKind::Error));
+        assert!(exotic_expando_kind(promise) == Some(ExoticKind::Promise));
+        assert!(matches!(
+            exotic_expando_kind_of_value(date),
+            Some((_, ExoticKind::Date))
+        ));
     }
 }
