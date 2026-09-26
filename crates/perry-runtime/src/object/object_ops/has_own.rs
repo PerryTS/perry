@@ -233,11 +233,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                     {
                         super::super::class_registry::class_name_for_id(class_id).is_some()
                     } else {
-                        let has_public_data = CLASS_DYNAMIC_PROPS.with(|m| {
-                            m.borrow()
-                                .get(&class_id)
-                                .is_some_and(|props| props.contains_key(key))
-                        });
+                        let has_public_data =
+                            crate::object::class_value::class_static_get(class_id, key).is_some();
                         has_public_data
                             || (!key.starts_with('#')
                                 && (super::super::class_registry::lookup_static_method_in_chain(

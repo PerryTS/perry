@@ -1420,11 +1420,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     if super::super::class_registry::class_is_key_deleted(class_id, name) {
                         return JSValue::undefined();
                     }
-                    let result = CLASS_DYNAMIC_PROPS.with(|m| {
-                        m.borrow()
-                            .get(&class_id)
-                            .and_then(|props| props.get(name).copied())
-                    });
+                    let result = crate::object::class_value::class_static_get(class_id, name);
                     if let Some(v) = result {
                         return JSValue::from_bits(v.to_bits());
                     }
@@ -1527,11 +1523,8 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             // resolve to undefined. Skip the registry read for the
                             // deleted level and keep walking up.
                             if !super::super::class_registry::class_is_key_deleted(p, name) {
-                                let inherited = CLASS_DYNAMIC_PROPS.with(|m| {
-                                    m.borrow()
-                                        .get(&p)
-                                        .and_then(|props| props.get(name).copied())
-                                });
+                                let inherited =
+                                    crate::object::class_value::class_static_get(p, name);
                                 if let Some(v) = inherited {
                                     return JSValue::from_bits(v.to_bits());
                                 }

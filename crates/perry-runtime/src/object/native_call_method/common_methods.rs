@@ -116,14 +116,12 @@ pub(super) unsafe fn dispatch_common(
                             {
                                 super::class_registry::class_name_for_id(class_id).is_some()
                             } else {
-                                CLASS_DYNAMIC_PROPS.with(|m| {
-                                    m.borrow()
-                                        .get(&class_id)
-                                        .is_some_and(|props| props.contains_key(key))
-                                }) || super::class_registry::lookup_static_method_in_chain(
-                                    class_id, key,
-                                )
-                                .is_some()
+                                crate::object::class_value::class_static_get(class_id, key)
+                                    .is_some()
+                                    || super::class_registry::lookup_static_method_in_chain(
+                                        class_id, key,
+                                    )
+                                    .is_some()
                             }
                         })
                         .unwrap_or(false);

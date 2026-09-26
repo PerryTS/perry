@@ -1689,8 +1689,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
         let mut cid = class_id;
         let mut depth = 0u32;
         while cid != 0 && depth < 64 {
-            let field_val = CLASS_DYNAMIC_PROPS
-                .with(|m| m.borrow().get(&cid).and_then(|f| f.get(name).copied()));
+            let field_val = crate::object::class_value::class_static_get(cid, name);
             if let Some(v) = field_val {
                 let fv = crate::value::JSValue::from_bits(v.to_bits());
                 if !fv.is_undefined() && !fv.is_null() {

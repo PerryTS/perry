@@ -253,6 +253,69 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
     });
 }
 
+// ---------------------------------------------------------------------------
+// Statics: the class function object's OWN properties.
+// ---------------------------------------------------------------------------
+
+/// A runtime-internal static key (private statics, computed-key records,
+/// class captures): stored in the function object's internal state record,
+/// never as a property.
+#[inline]
+fn is_internal_static_key(name: &str) -> bool {
+    crate::object::is_internal_runtime_key(name)
+}
+
+/// Class `class_id`'s own static data property `name` (a declared static
+/// field or a runtime `C.x = v`): a slot of its function object's own-property
+/// bag.
+pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: `class_value_ptr` returns this agent's live class closure.
+    unsafe {
+        if is_internal_static_key(name) {
+            crate::closure::props::state_internal_get(ptr, name)
+        } else {
+            crate::closure::props::bag_get(ptr, name.as_bytes())
+        }
+    }
+}
+
+/// Define/overwrite class `class_id`'s own static data property `name`.
+pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: as above; the bag writers run under a GcSuppressScope.
+    unsafe {
+        if is_internal_static_key(name) {
+            crate::closure::props::state_internal_set(ptr, name, value);
+        } else {
+            crate::closure::props::bag_set(ptr, name, value);
+        }
+    }
+}
+
+/// Remove class `class_id`'s own static data property `name`; true when it
+/// existed.
+pub(crate) fn class_static_remove(class_id: u32, name: &str) -> bool {
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: as above.
+    unsafe {
+        if is_internal_static_key(name) {
+            crate::closure::props::state_internal_remove(ptr, name)
+        } else {
+            crate::closure::props::bag_remove(ptr, name)
+        }
+    }
+}
+
+/// Class `class_id`'s own static data properties in own-key order (integer
+/// keys ascending, then creation order). Internal keys are not properties and
+/// never appear.
+pub(crate) fn class_static_entries(class_id: u32) -> Vec<(String, f64)> {
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: as above.
+    unsafe { crate::closure::props::bag_snapshot(ptr) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

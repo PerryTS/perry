@@ -24,6 +24,7 @@ use crate::value::JSValue;
 
 const STATE_PROTO: &str = "p";
 const DELETED_PREFIX: &str = "d:";
+const INTERNAL_PREFIX: &str = "i:";
 
 /// The bag of the closure at `ptr` (null when it never had an own property).
 ///
@@ -270,6 +271,48 @@ pub(crate) unsafe fn state_set_prototype(ptr: usize, proto_bits: u64) {
         return;
     };
     object_own_set(state, STATE_PROTO, f64::from_bits(proto_bits));
+}
+
+/// A runtime-internal own slot of the function object — never a JS property
+/// (class private statics, computed-key records, class captures): kept in the
+/// state record under `"i:" + key`, so no reflection or enumeration of the
+/// function can reach it.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn state_internal_get(ptr: usize, key: &str) -> Option<f64> {
+    let state = state_of(ptr);
+    if state.is_null() {
+        return None;
+    }
+    let mut marker = String::with_capacity(INTERNAL_PREFIX.len() + key.len());
+    marker.push_str(INTERNAL_PREFIX);
+    marker.push_str(key);
+    object_own_get(state, marker.as_bytes())
+}
+
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn state_internal_set(ptr: usize, key: &str, value: f64) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let Some(state) = state_ensure(ptr) else {
+        return;
+    };
+    object_own_set(state, &format!("{INTERNAL_PREFIX}{key}"), value);
+}
+
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn state_internal_remove(ptr: usize, key: &str) -> bool {
+    if state_internal_get(ptr, key).is_none() {
+        return false;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let state = state_of(ptr);
+    let marker = format!("{INTERNAL_PREFIX}{key}");
+    let key_hdr = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
+    crate::object::js_object_delete_field(state, key_hdr);
+    true
 }
 
 /// True when the closure carries internal state a base/keyed Function shape

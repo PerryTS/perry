@@ -91,55 +91,20 @@ pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
 /// (`class C { m() {} static m = 1 }` — both land under one class_id) keeps
 /// whatever behaviour it had.
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
-    let nothing_deleted = CLASS_DELETED_KEYS.with(|m| m.borrow().is_empty());
-    if nothing_deleted {
-        let updated = CLASS_DYNAMIC_PROPS.with(|m| {
-            match m
-                .borrow_mut()
-                .get_mut(&class_id)
-                .and_then(|props| props.get_mut(name))
-            {
-                Some(slot) => {
-                    *slot = value;
-                    true
-                }
-                None => false,
-            }
-        });
-        if updated {
-            crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
-            return;
-        }
-    } else {
-        // Un-marking re-exposes a previously `delete`d prototype key to
-        // `class_instance_has_member` / `lookup_prototype_method` — the one
-        // direction a cached "this chain resolves nothing" verdict must not
-        // survive (#10696).
-        CLASS_DELETED_KEYS.with(|m| {
-            if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
-                keys.remove(name);
-            }
-        });
+    // Un-marking re-exposes a previously `delete`d prototype key to
+    // `class_instance_has_member` / `lookup_prototype_method` — the one
+    // direction a cached "this chain resolves nothing" verdict must not
+    // survive (#10696).
+    let was_deleted = CLASS_DELETED_KEYS.with(|m| {
+        m.borrow_mut()
+            .get_mut(&class_id)
+            .is_some_and(|keys| keys.remove(name))
+    });
+    if was_deleted {
         super::class_lookup_surface_gen_bump();
     }
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        let created = m
-            .borrow_mut()
-            .entry(class_id)
-            .or_default()
-            .insert(name.to_string(), value)
-            .is_none();
-        if created {
-            crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
-                order
-                    .borrow_mut()
-                    .entry(class_id)
-                    .or_default()
-                    .push(name.to_string());
-            });
-        }
-    });
-    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    // The class function object's own-property bag (barriered, traced).
+    crate::object::class_value::class_static_set(class_id, name, value);
 }
 
 /// Associate a declared static field's runtime-table entry with the LLVM
@@ -191,11 +156,7 @@ pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value
 /// constructor ref so `verifyProperty(C, "field", …)` sees a real data
 /// descriptor (test262 class/elements static-field-declaration & friends).
 pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<f64> {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .and_then(|props| props.get(name).copied())
-    })
+    crate::object::class_value::class_static_get(class_id, name)
 }
 
 /// Enumerable own string keys of a class constructor: the static fields (and
@@ -216,27 +177,10 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
 }
 
 pub(crate) fn class_own_dynamic_prop_names(class_id: u32) -> Vec<String> {
-    let mut names = crate::object::CLASS_DYNAMIC_PROP_ORDER
-        .with(|order| order.borrow().get(&class_id).cloned().unwrap_or_default());
-    CLASS_DYNAMIC_PROPS.with(|props| {
-        let props = props.borrow();
-        let Some(props) = props.get(&class_id) else {
-            names.clear();
-            return;
-        };
-        names.retain(|name| props.contains_key(name));
-        // Registries populated by older/native paths may predate the order
-        // side table. Keep those visible with a deterministic fallback.
-        let mut missing: Vec<String> = props
-            .keys()
-            .filter(|name| !names.contains(name))
-            .cloned()
-            .collect();
-        missing.sort();
-        names.extend(missing);
-    });
-    names.retain(|key| !crate::object::is_internal_runtime_key(key));
-    names
+    crate::object::class_value::class_static_entries(class_id)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// #7190: record a `defineProperty`-installed static key's attributes. Called
@@ -274,25 +218,11 @@ pub(crate) fn class_static_key_is_non_enumerable(class_id: u32, name: &str) -> b
 /// only — does not read the value, so it never invokes a static getter. Used by
 /// the `in` operator on a class ref (#6149).
 pub(crate) fn class_has_own_dynamic_prop(class_id: u32, name: &str) -> bool {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .map(|props| props.contains_key(name))
-            .unwrap_or(false)
-    })
+    crate::object::class_value::class_static_get(class_id, name).is_some()
 }
 
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        if let Some(props) = m.borrow_mut().get_mut(&class_id) {
-            props.remove(name);
-        }
-    });
-    crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
-        if let Some(names) = order.borrow_mut().get_mut(&class_id) {
-            names.retain(|existing| existing != name);
-        }
-    });
+    crate::object::class_value::class_static_remove(class_id, name);
 }
 
 pub(crate) fn class_prototype_method_value_cache_root_store(

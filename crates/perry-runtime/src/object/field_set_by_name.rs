@@ -452,11 +452,7 @@ pub extern "C" fn js_object_set_field_by_name(
                             .is_some()
                             || super::native_module::class_has_own_method(class_id, &name)
                     } else {
-                        CLASS_DYNAMIC_PROPS.with(|m| {
-                            m.borrow()
-                                .get(&class_id)
-                                .is_some_and(|props| props.contains_key(&name))
-                        })
+                        crate::object::class_value::class_static_get(class_id, &name).is_some()
                     };
                     // `C.prototype[key] = v` where `key` is an instance
                     // accessor invokes the setter with `this = C.prototype`.
