@@ -464,14 +464,18 @@ pub(crate) unsafe fn packed_add_prime(
         return;
     }
     let obj = (bits & POINTER_MASK) as *mut crate::ObjectHeader;
+    // Both halves of the memo are site words: an ORDINARY-band ShapeId only
+    // (`shapes::is_site_matchable_shape_id`), never a dictionary shape's, so
+    // the emitted pre-shape compare can never equal a dictionary receiver's
+    // word and the hit can never stamp a dictionary id.
     if !crate::value::addr_class::is_above_handle_band(obj as usize)
-        || !crate::object::shapes::is_shape_id(pre)
+        || !crate::object::shapes::is_site_matchable_shape_id(pre)
     {
         census(C_FULL_OTHER);
         return;
     }
     let post = crate::object::shapes::object_shape_stamp(obj);
-    if post == pre || !crate::object::shapes::is_shape_id(post) {
+    if post == pre || !crate::object::shapes::is_site_matchable_shape_id(post) {
         census(C_FULL_OTHER);
         return;
     }
