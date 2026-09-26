@@ -502,25 +502,19 @@ fn fast_turn_polls_only_with_outstanding_loop_work() {
     .unwrap();
 }
 
-extern "C" fn native_work_in_flight() -> i32 {
-    1
-}
-
-/// Work that becomes visible to the native in-flight predicate after the park
-/// chose a turnloop wait is honoured before the OS wait (no lost wake).
+/// A notify visible before the OS wait must skip the park (no lost wake).
 #[test]
-fn native_work_visible_before_the_turn_skips_the_wait() {
+fn notify_visible_before_the_turn_skips_the_wait() {
     let _g = serial();
     std::thread::spawn(|| {
         install_unrouted();
-        super::super::NOTIFIED.store(false, Ordering::SeqCst);
-        super::super::js_register_native_inflight(Some(native_work_in_flight));
+        super::super::NOTIFIED.store(true, Ordering::SeqCst);
         let start = Instant::now();
         let park = park_until(start + Duration::from_secs(30));
-        super::super::js_register_native_inflight(None);
+        super::super::NOTIFIED.store(false, Ordering::SeqCst);
         assert_eq!(park, Park::Notified);
         assert!(start.elapsed() < Duration::from_secs(10));
-        assert_eq!(stats().turns, 0, "the wait ran despite pending native work");
+        assert_eq!(stats().turns, 0, "the wait ran despite a pending notify");
     })
     .join()
     .unwrap();
@@ -570,68 +564,6 @@ fn js_wait_for_event_reaches_a_timer_deadline_in_at_most_two_turns() {
     })
     .join()
     .unwrap();
-}
-
-/// The A/B discriminator itself: while tokio owns in-flight native work the
-/// primary agent's park is a TOKIO TICK, not a turnloop turn — and
-/// `PERRY_LOOP_STATS` separates the two. Without that separation a server run,
-/// which keeps a tokio task alive for as long as it serves, would report
-/// turnloop turns it never made.
-#[test]
-fn native_work_in_flight_is_counted_as_a_tokio_tick_not_a_turn() {
-    use super::super::loop_stats;
-    let _g = serial();
-    loop_stats::force_enable_for_test();
-
-    extern "C" fn always_inflight() -> i32 {
-        1
-    }
-    static TICKS: AtomicU64 = AtomicU64::new(0);
-    extern "C" fn counting_tick(_budget_ms: u64) {
-        TICKS.fetch_add(1, Ordering::SeqCst);
-    }
-
-    take_primary_route();
-    super::super::NOTIFIED.store(false, Ordering::SeqCst);
-    super::super::js_register_wait_driver(Some(counting_tick), None, None);
-    super::super::js_register_native_inflight(Some(always_inflight));
-    let before = loop_stats::snapshot();
-    let ticks_before = TICKS.load(Ordering::SeqCst);
-    let turns_before = stats().turns;
-
-    // At most five parks: the idle-reclaim hook may consume one by doing GC
-    // work (it answers `Resume`, and no wait runs at all). Each attempt is a
-    // non-blocking tick, so the loop is bounded and cheap.
-    for _ in 0..5 {
-        super::super::js_wait_for_event();
-        if TICKS.load(Ordering::SeqCst) > ticks_before {
-            break;
-        }
-    }
-
-    let ticks_ran = TICKS.load(Ordering::SeqCst) - ticks_before;
-    let turns_ran = stats().turns - turns_before;
-    let after = loop_stats::snapshot();
-    super::super::js_register_native_inflight(None);
-    super::super::js_register_wait_driver(None, None, None);
-    shutdown_current_thread();
-
-    assert_eq!(
-        ticks_ran, 1,
-        "the registered tick is the subject and it never ran"
-    );
-    assert_eq!(
-        after.tokio_tick.count - before.tokio_tick.count,
-        ticks_ran,
-        "the tick was not counted as a tokio tick"
-    );
-    assert_eq!(
-        after.turnloop.count - before.turnloop.count,
-        0,
-        "a tokio tick was miscounted as a turnloop turn"
-    );
-    assert_eq!(turns_ran, 0, "the loop turned while tokio owned the wait");
-    super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
 
 /// turnloop P3: the armed JS-timer deadline must NOT keep the loop alive.

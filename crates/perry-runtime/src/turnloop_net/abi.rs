@@ -3,7 +3,7 @@
 //! `perry-ext-net` is a `staticlib` whose only Cargo dependency is `perry-ffi`;
 //! it cannot hold a `&mut turnloop::Loop`, so every submission crosses this
 //! boundary as primitives. The shape follows the event pump's existing
-//! registration surface (`js_register_wait_driver`, `js_register_aux_pump`):
+//! registration surface (`js_register_wake_callback`, `js_register_aux_pump`):
 //! `#[no_mangle] extern "C"` functions, function pointers for callbacks, and
 //! no Rust types in a signature.
 //!

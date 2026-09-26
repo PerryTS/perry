@@ -131,88 +131,9 @@ fn invoke_host_wake_callback() {
     }
 }
 
-// ============================================================================
-// Wait-driver (unified single-thread async model).
-//
-// When registered, `js_wait_for_event` drives this instead of parking on the
-// condvar. perry-stdlib installs a driver that runs ONE bounded tick of the
-// (current-thread) tokio runtime — driving the I/O reactor, the timer wheel,
-// and all spawned native tasks (reqwest / net / ws) ON THE MAIN THREAD. A
-// native completion is therefore observed in-thread and queues its result with
-// no cross-thread wake to lose; the loop then drains it in `perry_poll`. This
-// replaces the two-scheduler model (JS loop on the main thread + a multi-thread
-// tokio runtime) whose cross-thread driver-unpark could be lost.
-//
-//   * `sleep(budget_ms)` — block until a native event is ready OR `budget_ms`
-//     elapses, whichever first; drives the runtime meanwhile.
-//   * `wake()` — end the current tick early; fired from `js_notify_main_thread`
-//     by any producer (the in-thread native task, or a blocking-pool thread).
-//
-// Both are installed together; a null `sleep` slot reverts to the condvar park
-// (non-async embedders pay a single atomic load).
-//
-// turnloop P0: these millisecond hooks are no longer the primary agent's park.
-// The primary agent turns its own `turnloop::Loop` on exact `Instant` deadlines
-// (`event_pump/precise_wait.rs`) and drives the registered tick only while the
-// `js_register_native_inflight` predicate reports tokio-owned native work in
-// flight (P0-transitional; P8 deletes it). Worker agents, which have no loop
-// until P3/P4, use the hooks exactly as described above.
-// ============================================================================
-static WAIT_DRIVER_SLEEP: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-static WAIT_DRIVER_WAKE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-/// `fast` — a brief, non-parking-when-idle native drive invoked when JS work is
-/// pending (so we're about to return to run microtasks, NOT park). On the
-/// single-thread runtime model, in-flight native tasks (a fetch's reqwest send,
-/// its h2 connection driver, sibling fetches) run ONLY inside the wait-driver
-/// tick; under constant JS microtask churn the `NOTIFIED` fast-path would
-/// otherwise return every iteration and never call `sleep`, starving those tasks
-/// forever. `fast` gives them a bounded turn each loop iteration and no-ops
-/// cheaply when nothing native is in flight (pure-JS-async is unaffected).
-static WAIT_DRIVER_FAST: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-
-/// Register the wait-driver (see module note above). Passing `sleep = NULL`
-/// clears it. `sleep`/`fast` are invoked on the main thread from
-/// `js_wait_for_event` (never re-entrant); `wake` is invoked from
-/// `js_notify_main_thread` on whatever thread notified, so it must be
-/// thread-safe.
-#[no_mangle]
-pub extern "C" fn js_register_wait_driver(
-    sleep: Option<extern "C" fn(u64)>,
-    fast: Option<extern "C" fn()>,
-    wake: Option<extern "C" fn()>,
-) {
-    // Store wake + fast first so any notifier that observes a fresh sleep slot
-    // also sees usable companions.
-    let wake_ptr = wake.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
-    WAIT_DRIVER_WAKE.store(wake_ptr, Ordering::Release);
-    let fast_ptr = fast.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
-    WAIT_DRIVER_FAST.store(fast_ptr, Ordering::Release);
-    let sleep_ptr = sleep.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
-    WAIT_DRIVER_SLEEP.store(sleep_ptr, Ordering::Release);
-}
-
-/// turnloop P0-transitional: register stdlib's O(1) "tokio owns native work in
-/// flight" predicate (nonzero = in flight). While it reports work, the primary
-/// agent drives the registered millisecond tick instead of a turnloop turn,
-/// because tokio tasks only advance inside that tick. Passing `None` clears it.
-/// A no-op on wasm, which has no agent loop. P8 deletes this hook with
-/// tokio.
-#[no_mangle]
-pub extern "C" fn js_register_native_inflight(f: Option<extern "C" fn() -> i32>) {
-    #[cfg(not(target_arch = "wasm32"))]
-    precise_wait::register_native_inflight(f);
-    #[cfg(target_arch = "wasm32")]
-    let _ = f;
-}
-
-/// turnloop P0-transitional: a producer made tokio-owned native work visible to
-/// the `js_register_native_inflight` predicate (spawned a task, took an
-/// in-flight reference) without `js_notify_main_thread`. If the primary agent is
-/// parked in a turnloop turn it goes back around the loop and selects the tokio
-/// tick, which is the only thing that runs that work; otherwise this is one
-/// atomic load. Needed for spawns from threads other than the primary agent's,
-/// which tokio's own driver unpark cannot deliver to a turnloop wait. A no-op
-/// on wasm. P8 deletes it.
+/// Wake parked agent loops after a native FFI task is submitted. Its completion
+/// is delivered through the normal async queue and `js_notify_main_thread`.
+/// Kept for the live blocking-thread fallback in perry-stdlib's FFI bridge.
 #[no_mangle]
 pub extern "C" fn js_native_work_submitted() {
     // PERRY_LOOP_STATS: this is a wake producer in its own right — it is the
@@ -369,51 +290,6 @@ pub fn shutdown_wait_driver() {
     }
 }
 
-/// Run one bounded tick of the registered wait-driver. Returns `true` if a
-/// driver was installed (and ran), `false` if the caller should fall back to
-/// the condvar park.
-#[inline]
-fn wait_driver_sleep(budget_ms: u64) -> bool {
-    let p = WAIT_DRIVER_SLEEP.load(Ordering::Acquire);
-    if p.is_null() {
-        return false;
-    }
-    // SAFETY: the slot only ever holds an `extern "C" fn(u64)` installed by
-    // `js_register_wait_driver`; re-checked non-null right above.
-    let f: extern "C" fn(u64) = unsafe { std::mem::transmute(p) };
-    let started = loop_stats::begin_wait(loop_stats::WaitKind::TokioTick);
-    f(budget_ms);
-    loop_stats::end_wait(loop_stats::WaitKind::TokioTick, started);
-    true
-}
-
-#[inline]
-fn invoke_wait_driver_wake() {
-    let p = WAIT_DRIVER_WAKE.load(Ordering::Acquire);
-    if p.is_null() {
-        return;
-    }
-    // SAFETY: the slot only ever holds an `extern "C" fn()` installed by
-    // `js_register_wait_driver`; re-checked non-null right above.
-    let f: extern "C" fn() = unsafe { std::mem::transmute(p) };
-    f();
-}
-
-/// Give in-flight native tasks a brief driven turn before returning to run
-/// pending JS work. No-ops cheaply (a single atomic load) when no wait-driver is
-/// registered; the driver itself no-ops when nothing native is in flight.
-#[inline]
-fn invoke_wait_driver_fast() {
-    let p = WAIT_DRIVER_FAST.load(Ordering::Acquire);
-    if p.is_null() {
-        return;
-    }
-    // SAFETY: the slot only ever holds an `extern "C" fn()` installed by
-    // `js_register_wait_driver`; re-checked non-null right above.
-    let f: extern "C" fn() = unsafe { std::mem::transmute(p) };
-    f();
-}
-
 struct Pump {
     /// `true` iff a producer notified since the last consumer reset.
     flag: Mutex<bool>,
@@ -463,7 +339,6 @@ pub static PROFILE_NOTIFY_DRAIN_SUPPRESSED_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_FAST_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_ZERO_COUNT: AtomicI64 = AtomicI64::new(0);
-pub static PROFILE_WAIT_DRIVER_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_WAIT_CONDVAR_COUNT: AtomicI64 = AtomicI64::new(0);
 #[cfg(test)]
 static TEST_FORCE_ZERO_BUDGET: AtomicBool = AtomicBool::new(false);
@@ -590,13 +465,6 @@ pub extern "C" fn js_notify_main_thread() {
     // is a single atomic-load when no host is listening, so callers that
     // never register pay essentially nothing.
     invoke_host_wake_callback();
-    // Unified-loop wake: if a wait-driver is installed, end its current bounded
-    // tick so the main loop drains this notify promptly. Fired before the
-    // WAITER_COUNT fast-path because the wait-driver does NOT register as a cvar
-    // waiter (it parks inside the runtime, not on `PUMP.cvar`). The driver's
-    // wake primitive coalesces (a notify with no tick in progress leaves a
-    // permit consumed on the next tick), so there is no lost wake.
-    invoke_wait_driver_wake();
     // turnloop P0: wake the primary agent's loop if it is inside a turn. One
     // atomic load otherwise; must follow the `NOTIFIED` store above.
     #[cfg(not(target_arch = "wasm32"))]
@@ -798,22 +666,13 @@ pub extern "C" fn js_wait_for_event() {
     // as "progress" for streak-reset purposes.
     // FAST PATH: there is pending JS work — a notify since the last wait, OR
     // queued microtasks. Either way we must run that JS, not park for the budget.
-    // BUT in the single-thread runtime model, in-flight native tasks (a fetch's
-    // reqwest `send`, its h2 connection driver, sibling fetches) run ONLY inside
-    // the wait-driver tick. Constant JS promise churn flips `NOTIFIED` on every
-    // iteration (every `js_promise_resolve`/async-step notifies), so this path is
-    // taken every time and would otherwise STARVE those native tasks forever
-    // (the bundle hang: fetch `send().await` never progressed + sibling fetch
-    // never even started). Give them a brief driven turn here.
-    // `invoke_wait_driver_fast` no-ops cheaply when no driver is registered and
-    // when nothing native is in flight, so pure-JS-async pays only atomic loads.
+    // Drive turnloop briefly so pending JS work cannot starve native I/O.
     // #1114: do NOT reset the spin streak on this path.
     let was_notified = NOTIFIED.swap(false, Ordering::Acquire);
     if was_notified || unsafe { js_microtasks_pending() } > 0 {
         if crate::promise::mt_profile_enabled() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         }
-        invoke_wait_driver_fast();
         #[cfg(not(target_arch = "wasm32"))]
         agent_loop::fast_turn();
         return;
@@ -869,22 +728,7 @@ pub extern "C" fn js_wait_for_event() {
         crate::gc::ParkVerdict::Resume => return,
         crate::gc::ParkVerdict::Park(remaining_ms) => remaining_ms,
     };
-    // Unified single-thread async model: when perry-stdlib has installed a
-    // wait-driver (i.e. async work exists), drive ONE bounded tick of the
-    // current-thread tokio runtime here instead of parking on the condvar. The
-    // tick drives the reactor + timer wheel + native tasks on THIS thread, so a
-    // completion is observed in-thread and queued with no cross-thread wake to
-    // lose; `perry_poll` drains it on the next loop turn. A real tick yielded
-    // the core, so it counts as progress for the #1114 spin throttle.
-    if wait_driver_sleep(budget_ms) {
-        if crate::promise::mt_profile_enabled() {
-            PROFILE_WAIT_DRIVER_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
-        spin_streak_reset();
-        return;
-    }
-    // Fallback (no async runtime registered — non-async programs / embedders):
-    // the original condvar park (#84).
+    // Threads without an agent loop use the original condvar park (#84).
     condvar_park(Duration::from_millis(budget_ms));
 }
 
@@ -922,14 +766,8 @@ fn zero_budget_return() {
         }
     }
     loop_stats::note_zero_budget(throttled);
-    // A due timer pins the budget at 0, but native work (a fetch's reqwest
-    // `send`, sibling fetches, net/ws round-trips) still only advances inside
-    // the wait-driver tick. A hot timer loop would otherwise take this branch
-    // every iteration and starve that work — the same starvation the
-    // notified/microtask path above guards against. Give it the same brief
-    // driven turn. No-op (atomic loads) when no driver is registered or
-    // nothing native is in flight. #1114: this path does NOT reset the streak.
-    invoke_wait_driver_fast();
+    // Even a due-timer loop must drive native I/O. This does not reset the
+    // spin streak: only a real park counts as progress for the throttle.
     #[cfg(not(target_arch = "wasm32"))]
     agent_loop::fast_turn();
 }

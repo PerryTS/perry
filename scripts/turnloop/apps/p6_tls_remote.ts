@@ -6,8 +6,8 @@
 // verified against the webpki roots, a real ALPN negotiation, a real redirect
 // across origins, and a body large enough to span many TLS records.
 //
-// Run with PERRY_LOOP_STATS=1: `tokio_ticks=0` plus a nonzero
-// `p6 http_submitted=`/`connects=` is what says the turnloop path carried it.
+// Run with PERRY_LOOP_STATS=1: nonzero turnloop turns/completions plus
+// `p6 http_submitted=`/`connects=` show that the native path carried the work.
 const targets = [
   'https://example.com/',
   'https://api.github.com/meta',

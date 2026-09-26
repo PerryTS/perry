@@ -21,8 +21,8 @@ interleaved fresh-process rounds:
   * idle-connection capacity (default 10k and 100k keep-alive connections):
     server RSS before/after, bytes per connection, idle CPU, connections
     still open after the hold;
-  * the PERRY_LOOP_STATS wait metrics of every server process (tokio ticks vs
-    turnloop turns, time parked per kind, fast drives, wake-latency histogram,
+  * the PERRY_LOOP_STATS wait metrics of every server process (turnloop turns,
+    condvar parks, time parked per kind, wake-latency histogram,
     zero-budget and spin-throttle hits), plus the arm marker line, which
     must match the arm or the sample is rejected.
 
@@ -1442,11 +1442,9 @@ IDLE_METRICS = [
     ("rss_peak_kb", "RSS peak (KiB)"), ("threads", "threads"),
 ]
 WAIT_METRICS = [
-    ("tokio_ticks", "tokio ticks"), ("tokio_tick_ns", "time in tokio ticks (ns)"),
-    ("tokio_tick_max_ns", "longest tokio tick (ns)"), ("turnloop_waits", "turnloop turns"),
+    ("turnloop_waits", "turnloop turns"),
     ("turnloop_wait_ns", "time in turnloop turns (ns)"), ("turnloop_wait_max_ns", "longest turnloop turn (ns)"),
     ("condvar_waits", "condvar parks"), ("condvar_wait_ns", "time in condvar parks (ns)"),
-    ("fast_drives", "fast drives"), ("fast_drive_ns", "time in fast drives (ns)"),
     ("zero_budget", "zero-budget returns"), ("throttle_sleeps", "spin-throttle sleeps"),
     ("wake_samples", "wake-latency samples"), ("wake_lt50us", "wakes <50µs"),
     ("wake_lt200us", "wakes <200µs"), ("wake_lt1ms", "wakes <1ms"), ("wake_lt5ms", "wakes <5ms"),
@@ -1734,7 +1732,7 @@ def synthetic_report(args, perf_status="synthetic"):
     for rnd in range(1, 4):
         for arm in ARMS:
             base = 1.0 if arm == "turnloop" else 1.1
-            waits = {"arm": ARM_WAITS[arm], "tokio_ticks": 1000 * rnd, "tokio_tick_ns": 5_000_000 * rnd,
+            waits = {"arm": ARM_WAITS[arm],
                      "turnloop_waits": 10 if arm == "turnloop" else 0, "wake_samples": 900, "wake_lt50us": 800,
                      "wake_lt200us": 90, "wake_lt1ms": 10, "wake_lt5ms": 0, "wake_ge5ms": 0}
             requests = int(750000 / base)

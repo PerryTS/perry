@@ -12,7 +12,7 @@
 // What makes this a measurement rather than a smoke test: run it with
 // `PERRY_LOOP_STATS=1` and read the per-agent `[perry-loop] driver=turnloop
 // … agent=N` lines on stderr. A Worker line with `turns>0` and
-// `native_ticks=0` is the evidence that that agent's own loop carried the
+// `completions>0` is the evidence that that agent's own loop carried the
 // work; the process-wide `p6 http_submitted=/declined=` line says the fetch
 // did not fall back. A green run whose Worker printed no `[perry-loop]` line
 // at all proves nothing — the operations would have succeeded on tokio too.

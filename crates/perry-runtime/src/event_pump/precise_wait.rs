@@ -8,41 +8,13 @@
 //! #1114 throttle bounded. Here the deadline stays an `Instant` from the timer
 //! queues to the OS wait: no truncation, no 1 ms floor.
 //!
-//! Wait selection (P0-transitional coexistence, deleted by P8):
-//! - tokio-owned native work in flight (`native_inflight`, an O(1) predicate
-//!   stdlib registers) → drive the legacy registered tick exactly as before
-//!   (its whole-millisecond budget and 1 ms floor included);
-//! - otherwise → one `Loop::turn(Timeout::Until(deadline))`.
+//! Each eligible agent parks in `Loop::turn(Timeout::Until(deadline))`.
 
-use std::sync::atomic::{AtomicPtr, Ordering};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::agent_loop;
-
-/// How long the transitional tokio tick may block while turnloop also has
-/// outstanding work. One millisecond is the legacy loop's own floor, so a
-/// program with both transports live is no coarser than Perry was before P0.
-const MIXED_TRANSPORT_SLICE_MS: u64 = 1;
-
-/// stdlib's O(1) "tokio owns native work in flight" predicate.
-static NATIVE_INFLIGHT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
-
-pub(super) fn register_native_inflight(f: Option<extern "C" fn() -> i32>) {
-    let ptr = f.map(|f| f as *mut ()).unwrap_or(std::ptr::null_mut());
-    NATIVE_INFLIGHT.store(ptr, Ordering::Release);
-}
-
-#[inline]
-pub(super) fn native_inflight() -> bool {
-    let p = NATIVE_INFLIGHT.load(Ordering::Acquire);
-    if p.is_null() {
-        return false;
-    }
-    // SAFETY: the slot only ever holds an `extern "C" fn() -> i32` stored by
-    // `js_register_native_inflight`; re-checked non-null right above.
-    let f: extern "C" fn() -> i32 = unsafe { std::mem::transmute(p) };
-    f() != 0
-}
 
 /// The earliest wake across this agent's timer heap, the stdlib deadline
 /// provider, the agent loop's own deadlines, and the idle cap.
@@ -128,48 +100,6 @@ pub(super) fn park() -> bool {
         if let crate::gc::ParkVerdict::Resume =
             crate::gc::idle_reclaim_park_hook(budget.as_millis() as u64)
         {
-            return true;
-        }
-    }
-    if native_inflight() {
-        // P0-transitional: tokio still owns in-flight native work, and it only
-        // advances inside its own tick. Drive that tick exactly as the legacy
-        // driver did. P8 deletes this branch.
-        //
-        // P1 added a second transport, and with it the case P0 could not have:
-        // tokio-owned work AND turnloop-owned sockets live at once (a
-        // `net.connect` client, which stays on tokio so `upgradeToTLS` keeps
-        // working, talking to a turnloop-backed server in the same process).
-        // The tick blocks inside tokio and nothing there knows about turnloop's
-        // poller, so a full-budget tick would never return to collect a socket
-        // completion — not a delay but a hang, since the completion is what
-        // would have produced the notify that ends the tick.
-        //
-        // While both are live the tick therefore takes a bounded slice and the
-        // loop is turned right after it, so neither transport waits on the
-        // other for more than that slice. It costs a wakeup per slice on a
-        // program that is idle in both, which is the price of running two event
-        // loops at once; P2-P7 remove the second one, and the proper bridge
-        // before then is to register turnloop's `Integration::Fd` /
-        // `Integration::Event` inside the tick so it ends on turnloop readiness
-        // instead of on a timer.
-        let loop_work = agent_loop::has_outstanding_work();
-        let ms = if loop_work {
-            MIXED_TRANSPORT_SLICE_MS
-        } else {
-            deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis() as u64
-        };
-        if super::wait_driver_sleep(ms) {
-            if crate::promise::mt_profile_enabled() {
-                super::PROFILE_WAIT_DRIVER_COUNT.fetch_add(1, Ordering::Relaxed);
-            }
-            agent_loop::note_native_tick();
-            if loop_work {
-                agent_loop::fast_turn();
-            }
-            super::spin_streak_reset();
             return true;
         }
     }
