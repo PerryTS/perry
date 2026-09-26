@@ -173,12 +173,26 @@ pub(crate) extern "C" fn uri_error_constructor_call_thunk(
 /// Whether `value` is the %Function.prototype% intrinsic object. It is the
 /// one ordinary-object-shaped value that is itself a Function: callable
 /// (returns `undefined`), tagged `[object Function]`, but NOT a constructor.
-/// Only consulted on slow paths (failed call dispatch, `Object.prototype.
-/// toString`), so the per-call re-resolution through the global registry is
-/// fine — and safer than caching a raw pointer across GC cycles.
+/// Re-resolved through the global registry on each call rather than cached —
+/// safer than holding a raw pointer across GC cycles.
+///
+/// #10602: this is not only a slow-path probe. `js_new_function_construct`
+/// and `is_constructor_value` ask it on every `new F()`, where the
+/// `globalThis.Function` lookup plus the `prototype` dynamic-prop read cost
+/// ~4k instructions — over 40% of a plain-function construction. The
+/// intrinsic is an ordinary `GC_TYPE_OBJECT` (`populate_builtin_prototype_methods`
+/// fills it through `js_object_set_field_by_name`), so a closure — every
+/// constructor those callers see — or any other GC type is answered from its
+/// header before the lookup runs.
 pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
+        return false;
+    }
+    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    let is_ordinary_object = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    if !is_ordinary_object {
         return false;
     }
     let proto = builtin_prototype_value("Function");
@@ -509,5 +523,36 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    // #10602: the header pre-check is sound only while %Function.prototype%
+    // stays an ordinary object; if it ever became a closure the predicate
+    // would silently answer `false` for it and `new Function.prototype()`
+    // would stop throwing. Pin both halves of that contract.
+    #[test]
+    fn function_prototype_is_an_ordinary_object_and_closures_are_not_it() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proto = scope.root_nanbox_f64(super::builtin_prototype_value("Function"));
+        let header = unsafe {
+            crate::value::addr_class::try_read_gc_header(closure_addr(proto.get_nanbox_f64()))
+        }
+        .expect("Function.prototype must be a heap object");
+        assert_eq!(header.obj_type, crate::gc::GC_TYPE_OBJECT);
+        assert!(super::is_function_prototype_object_value(
+            proto.get_nanbox_f64()
+        ));
+
+        let function_ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+            b"Function".as_ptr(),
+            8,
+        ));
+        assert!(!super::is_function_prototype_object_value(
+            function_ctor.get_nanbox_f64()
+        ));
+        let object_proto = scope.root_nanbox_f64(super::builtin_prototype_value("Object"));
+        assert!(!super::is_function_prototype_object_value(
+            object_proto.get_nanbox_f64()
+        ));
     }
 }
