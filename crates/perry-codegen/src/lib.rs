@@ -80,6 +80,8 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
+#[cfg(feature = "target-wasi")]
+mod wasm32;
 
 pub use codegen::{
     compile_module, context_free_ctor_abi, context_free_ctor_param_count,

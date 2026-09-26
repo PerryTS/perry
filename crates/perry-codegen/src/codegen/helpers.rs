@@ -244,6 +244,23 @@ pub(crate) fn set_native_roots_for_target(triple: &str) {
     NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok));
 }
 
+thread_local! {
+    static ILP32_TARGET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Record, per module, whether this compile targets 32-bit pointers. Only the
+/// wasm32 WASI lowering can get here with `true` (`compile_module` refuses
+/// every other ILP32 triple), so on every other target the inline paths that
+/// consult [`ilp32_target`] emit exactly what they always did.
+pub(crate) fn set_ilp32_for_target(triple: &str) {
+    ILP32_TARGET.with(|c| c.set(crate::target_layout::target_is_ilp32(triple)));
+}
+
+/// See [`set_ilp32_for_target`].
+pub(crate) fn ilp32_target() -> bool {
+    ILP32_TARGET.with(|c| c.get())
+}
+
 /// Whether precise roots should use a native-stack metadata backend rather
 /// than Perry's heap-backed shadow frame.
 pub(crate) fn native_stack_roots_enabled() -> bool {
@@ -1287,6 +1304,9 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         }
         "watchos" => Some("aarch64-apple-watchos".to_string()),
         "watchos-simulator" => Some("arm64-apple-watchos10.0-simulator".to_string()),
+        // Standalone WASI (#11375): only a compiler built with `target-wasi`
+        // knows the name; a default build keeps resolving it to None.
+        "wasi" if cfg!(feature = "target-wasi") => Some("wasm32-unknown-wasip2".to_string()),
         "tvos" => Some("aarch64-apple-tvos".to_string()),
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),

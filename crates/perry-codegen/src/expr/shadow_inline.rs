@@ -115,6 +115,11 @@ fn emit_inline_slot_write(ctx: &mut FnCtx<'_>, slot_idx: u32, what: InlineSlotWr
     if !crate::codegen::helpers::inline_shadow_slot_enabled() {
         return false;
     }
+    // ILP32 (wasm32 WASI): the inline sequence below reads LP64 offsets and
+    // i64 words; take the `js_shadow_slot_*` call arm instead (#11378).
+    if crate::codegen::helpers::ilp32_target() {
+        return false;
+    }
     let Some(state_slot) = ctx.func.shadow_state_slot().map(str::to_owned) else {
         return false;
     };

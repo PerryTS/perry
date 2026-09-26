@@ -131,6 +131,10 @@ fn global_init(mllvm: &[String]) {
         let cfg = InitializationConfig::default();
         Target::initialize_aarch64(&cfg);
         Target::initialize_x86(&cfg);
+        // Standalone WASI (#11375): only with the off-by-default `target-wasi`
+        // feature, so the shipped compiler does not carry the backend.
+        #[cfg(feature = "target-wasi")]
+        Target::initialize_webassembly(&cfg);
         if !mllvm.is_empty() {
             let mut argv: Vec<CString> = vec![CString::new("perry-llvm-inprocess").unwrap()];
             for flag in mllvm {
