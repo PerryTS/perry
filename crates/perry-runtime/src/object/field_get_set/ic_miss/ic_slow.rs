@@ -267,6 +267,63 @@ pub extern "C" fn js_object_get_field_ic_slow(
                         }
                     }
                 }
+                // --- 2b. a MEGAMORPHIC site: the receiver's shape answers ---
+                //
+                // A site whose way state is latched negative will not be primed
+                // again, so the miss handler below would re-derive the receiver
+                // class, probe the inherited-read cache, try to prime and scan
+                // by name — ~700 instructions per read, measured on a 40-shape
+                // `o.kind` site (node: ~51). The receiver's own shape already
+                // knows the answer: an ordinary own data key's inline slot is its
+                // position in the shape's canonical key list. Anything the shape
+                // cannot answer by position (dictionary, generation > 0,
+                // tombstones, spill, inherited, descriptors) falls through
+                // unchanged.
+                // `length` is excluded (UTF-16 length word first, so the byte
+                // compare runs only for 6-unit keys): an Array-subclass receiver serves it
+                // from its elements store, not from a key position.
+                if plain && !key.is_null() && !key_is_length(key) {
+                    let cache = crate::object::pic_slot_peek(cache_slot);
+                    if !cache.is_null()
+                        && (*cache)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] < 0
+                    {
+                        if let Some(rec) =
+                            crate::object::shapes::shape_record_by_id((*obj).parent_class_id)
+                        {
+                            // The site's last primed slot is the guess (the
+                            // compact word's high half; a spill entry's
+                            // flipped id carries no inline slot to guess).
+                            let word = if packed.is_null() {
+                                u64::MAX
+                            } else {
+                                (*packed).load(Ordering::Relaxed)
+                            };
+                            let hint = (word >> 32) as usize;
+                            if let Some(slot) = rec.inline_slot_of_key(key, hint) {
+                                #[cfg(test)]
+                                crate::object::shapes::SHAPE_ANSWERED_READS
+                                    .fetch_add(1, Ordering::Relaxed);
+                                // Keep the answer as the site's next slot GUESS
+                                // (owner-approved form: a guess the receiver's
+                                // shape confirms). Only while the word's low
+                                // half is unmatchable (`PACKED_GET_EMPTY`'s
+                                // 0xFFFF_FFFF): the inline ShapeId compare can
+                                // never equal it, and `packed_get_decode` reads
+                                // it as no entry.
+                                if slot != hint && !packed.is_null() && word as u32 == u32::MAX {
+                                    (*packed).store(
+                                        ((slot as u64) << 32) | u64::from(u32::MAX),
+                                        Ordering::Relaxed,
+                                    );
+                                }
+                                let field = (obj as *const u8)
+                                    .add(std::mem::size_of::<ObjectHeader>() + slot * 8)
+                                    as *const f64;
+                                return *field;
+                            }
+                        }
+                    }
+                }
                 // (There is no third arm. An object-backed Array subclass used
                 // to be served here by a class-wide "named-prefix" token held
                 // in cache word 2 and matched against the receiver's
@@ -285,6 +342,13 @@ pub extern "C" fn js_object_get_field_ic_slow(
     super::ic_miss::get_field_ic_miss_impl(obj, key, cache_slot, packed)
 }
 
+/// `key` spells `length` — six bytes, compared directly (no UTF-8 validation).
+#[inline]
+unsafe fn key_is_length(key: *const crate::StringHeader) -> bool {
+    (*key).byte_len == 6
+        && std::slice::from_raw_parts(crate::string::string_data(key), 6) == b"length"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +363,135 @@ mod tests {
     /// sees it.
     fn handle(obj: *mut ObjectHeader) -> i64 {
         (obj as u64 & 0x0000_FFFF_FFFF_FFFF) as i64
+    }
+
+    /// Build one receiver per distinct shape: every object gets `pos`, `end`,
+    /// `kind` (so `kind` sits at slot 2 in all of them) and then ONE distinct
+    /// extra key, which forks the shape. Returns (receivers, kind key).
+    fn megamorphic_receivers<'s>(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        n: usize,
+    ) -> Vec<crate::gc::RuntimeHandle<'s>> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 8));
+            for (k, v) in [
+                (&b"pos"[..], 1.0),
+                (&b"end"[..], 2.0),
+                (&b"kind"[..], 100.0 + i as f64),
+            ] {
+                let key = scope.root_string_ptr(key_of(k));
+                obj.with_mut_ptr(|o| {
+                    key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, v))
+                });
+            }
+            let extra = format!("x{i}");
+            let key = scope.root_string_ptr(key_of(extra.as_bytes()));
+            obj.with_mut_ptr(|o| {
+                key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, 7.0))
+            });
+            out.push(obj);
+        }
+        out
+    }
+
+    /// S3: once a site has latched megamorphic, a read is answered by the
+    /// RECEIVER'S SHAPE (its key list), for every one of 48 shapes — and the
+    /// answer is the receiver's own value, not the value of whichever shape
+    /// last primed the site.
+    #[test]
+    fn a_latched_megamorphic_site_is_answered_by_the_receivers_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let objs = megamorphic_receivers(&scope, 48);
+        let kind = scope.root_string_ptr(key_of(b"kind"));
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(0);
+        let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
+            o.with_mut_ptr(|p: *mut ObjectHeader| {
+                kind.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+            })
+        };
+        // Drive the site until it latches.
+        for round in 0..4 {
+            for (i, o) in objs.iter().enumerate() {
+                assert_eq!(
+                    read(o, &mut slot),
+                    100.0 + i as f64,
+                    "round {round} receiver {i}"
+                );
+            }
+        }
+        assert!(
+            cache[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] < 0,
+            "48 shapes must latch the site megamorphic: state {}",
+            cache[crate::object::field_get_set::ic_miss::PIC_WAY_STATE]
+        );
+        let before =
+            crate::object::shapes::SHAPE_ANSWERED_READS.load(std::sync::atomic::Ordering::Relaxed);
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(
+                read(o, &mut slot),
+                100.0 + i as f64,
+                "latched read, receiver {i}"
+            );
+        }
+        let answered = crate::object::shapes::SHAPE_ANSWERED_READS
+            .load(std::sync::atomic::Ordering::Relaxed)
+            - before;
+        // The one receiver whose shape the compact word still names is served
+        // by the word itself (inline, in emitted code; step 2 here). Every
+        // other latched read is answered by its receiver's shape.
+        assert!(
+            answered >= 47,
+            "every latched read the word cannot serve must be answered by the shape: {answered}"
+        );
+        // A WRONG slot guess (the compact word's high half) must not change the
+        // answer: the shape confirms or refutes the guess.
+        packed.store(5u64 << 32, std::sync::atomic::Ordering::Relaxed);
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(
+                read(o, &mut slot),
+                100.0 + i as f64,
+                "wrong guess, receiver {i}"
+            );
+        }
+    }
+
+    /// S3 declines what a key POSITION cannot answer: a key the shape does not
+    /// have (inherited/absent) still reaches the full miss handler.
+    #[test]
+    fn a_latched_site_still_answers_an_absent_key_through_the_miss_handler() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let objs = megamorphic_receivers(&scope, 48);
+        let absent = scope.root_string_ptr(key_of(b"notthere"));
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(0);
+        let kind = scope.root_string_ptr(key_of(b"kind"));
+        for _ in 0..4 {
+            for o in &objs {
+                o.with_mut_ptr(|p: *mut ObjectHeader| {
+                    kind.with_const_ptr(|k| {
+                        js_object_get_field_ic_slow(handle(p), k, &mut slot, &packed)
+                    })
+                });
+            }
+        }
+        for o in &objs {
+            let v = o.with_mut_ptr(|p: *mut ObjectHeader| {
+                absent.with_const_ptr(|k| {
+                    js_object_get_field_ic_slow(handle(p), k, &mut slot, &packed)
+                })
+            });
+            assert_eq!(
+                v.to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "an absent key reads undefined"
+            );
+        }
     }
 
     /// A plain own data read that has never primed: the entry must fall all the
