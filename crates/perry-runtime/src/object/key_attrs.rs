@@ -296,6 +296,48 @@ pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
     }
 }
 
+/// Is key position `pos` of `keys` an accessor — does its value slot hold an
+/// accessor PAIR rather than a data value (`accessor_pair.rs`)? Every reader
+/// that walks an object's slots by position must ask before treating a slot
+/// as data. One flag load for a list without attributes.
+///
+/// # Safety
+/// As [`keys_attrs`].
+#[inline]
+pub(crate) unsafe fn key_is_accessor_at(keys: *const ArrayHeader, pos: u32) -> bool {
+    keys_entry(keys, pos) & ENTRY_ACCESSOR != 0
+}
+
+/// `obj`'s slot `idx` as a DATA value for a reader that walks slots by
+/// position without running user code: `undefined` for an accessor key,
+/// whose slot holds its accessor pair (`accessor_pair.rs`) — the value such
+/// a slot always read as before the pair moved into it.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn object_slot_data(
+    obj: *const crate::object::ObjectHeader,
+    idx: u32,
+) -> crate::JSValue {
+    if key_is_accessor_at(crate::object::object_keys(obj).arr(), idx) {
+        return crate::JSValue::undefined();
+    }
+    crate::object::js_object_get_field(obj, idx)
+}
+
+/// [`object_slot_data`] as the raw `f64` word.
+///
+/// # Safety
+/// As [`object_slot_data`].
+#[inline]
+pub(crate) unsafe fn object_slot_data_f64(
+    obj: *const crate::object::ObjectHeader,
+    idx: u32,
+) -> f64 {
+    f64::from_bits(object_slot_data(obj, idx).bits())
+}
+
 /// The summary of the first `count` keys of `keys`: exact for a canonical
 /// list, an over-approximation for an owned list edited in place.
 ///
@@ -651,6 +693,34 @@ pub(crate) unsafe fn object_key_entry_for_string(
         Some(bytes) => object_key_entry_filtered(obj, bytes, false),
         None => ENTRY_ACCESSOR,
     }
+}
+
+/// The names of `obj`'s own accessor keys, sorted (the owner-index contract
+/// of `accessor_descriptor_keys_for_obj`).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn object_accessor_key_names(
+    obj: *const crate::object::ObjectHeader,
+) -> Vec<String> {
+    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+        return Vec::new();
+    }
+    let keys = crate::object::object_keys(obj);
+    let (slots, available) = crate::object::keys_array_dense_slots(keys.arr());
+    let mut out = Vec::new();
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for pos in 0..(keys.count() as usize).min(available) {
+        if keys_entry(keys.arr(), pos as u32) & ENTRY_ACCESSOR == 0 {
+            continue;
+        }
+        let slot = crate::JSValue::from_bits((*slots.add(pos)).to_bits());
+        if let Some(bytes) = crate::string::js_string_key_bytes(slot, &mut sso) {
+            out.push(String::from_utf8_lossy(bytes).into_owned());
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Can a plain data store of `key` be intercepted by `obj` — is the key an

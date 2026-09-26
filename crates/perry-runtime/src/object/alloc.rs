@@ -918,7 +918,11 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     }
 
     let src_ptr = src_raw as *const ObjectHeader;
-    if super::string_wrapper::length(src_raw).is_some() {
+    // An accessor's value is its getter's result, and its slot holds the
+    // accessor pair (`accessor_pair.rs`): such a source copies by [[Get]].
+    if super::string_wrapper::length(src_raw).is_some()
+        || super::key_attrs::object_summary(src_ptr) & super::key_attrs::SUMMARY_ACCESSOR != 0
+    {
         let scope = crate::gc::RuntimeHandleScope::new();
         let src_h = scope.root_nanbox_f64(src_f64);
         let target = js_object_alloc(0, 0);
@@ -1052,7 +1056,13 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         _ => return,
     }
     let src = src_raw as *const ObjectHeader;
-    if super::string_wrapper::length(src_raw).is_some() {
+    // A source with an accessor copies the GETTER's value (CopyDataProperties
+    // is a [[Get]] per key). The raw walk below reads slots, and an accessor
+    // key's slot holds its accessor pair (`accessor_pair.rs`), so such a
+    // source takes the [[Get]]-based copy.
+    if super::string_wrapper::length(src_raw).is_some()
+        || super::key_attrs::object_summary(src) & super::key_attrs::SUMMARY_ACCESSOR != 0
+    {
         js_object_assign_one(crate::value::js_nanbox_pointer(dst as i64), src_f64);
         return;
     }

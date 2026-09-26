@@ -960,10 +960,11 @@ mod view_mode_tests {
         f64::from_bits(JSValue::bool(true).bits())
     }
 
-    /// SABOTAGE-SHAPED: the constant Bloom mask must be the exact bit the
-    /// descriptor writer records. Defining an accessor AFTER the canonical
-    /// site was recorded leaves the old data slot intact; without this bit
-    /// check the fast proof would accept and silently bypass the getter.
+    /// Defining an accessor AFTER the canonical site was recorded must make
+    /// the next call decline. The accessor's pair now occupies the key's slot
+    /// (charter step 3), so the recorded-closure compare sees it; the meta
+    /// Bloom bit is a second witness. Sabotage: storing the pair anywhere but
+    /// the slot fails the premise.
     #[cfg(feature = "regex-engine")]
     #[test]
     fn an_accessor_installed_after_recording_makes_the_next_call_decline() {
@@ -988,10 +989,10 @@ mod view_mode_tests {
             "test".to_string(),
             crate::object::AccessorDescriptor::default(),
         );
-        assert_eq!(
+        assert_ne!(
             crate::object::js_object_get_field(proto, unsafe {
-                // The test deliberately uses the recorded data-slot value as
-                // its witness: installing the accessor must not overwrite it.
+                // The recorded data-slot value is the witness: installing the
+                // accessor puts its pair in the slot.
                 let keys_view = crate::object::object_keys(proto);
                 let keys = keys_view.arr();
                 let count = keys_view.count();
@@ -1007,11 +1008,11 @@ mod view_mode_tests {
             })
             .bits(),
             before.bits(),
-            "premise: the accessor install leaves the canonical data slot intact"
+            "premise: the accessor's pair replaces the canonical closure in the slot"
         );
         assert!(
             is_undefined(js_segments_view_regexp_test(cursor, re_v)),
-            "the accessor Bloom bit must force an immediate decline"
+            "an accessor over `test` must force an immediate decline"
         );
     }
 

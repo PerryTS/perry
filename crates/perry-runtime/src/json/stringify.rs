@@ -1315,8 +1315,11 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // descriptor is installed, which made every later stringify pay a
     // per-key thread-local HashMap probe (`json_key_non_enumerable` +
     // `json_object_getter_value`) on objects that never had a descriptor.
-    let filter_non_enum =
-        crate::object::descriptors_in_use() && crate::object::object_has_descriptors(ptr as usize);
+    let filter_non_enum = crate::object::object_has_descriptors(ptr as usize)
+        && (crate::object::descriptors_in_use()
+            || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+                & crate::object::key_attrs::SUMMARY_KEY_BITS
+                != 0);
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
