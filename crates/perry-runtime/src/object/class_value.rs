@@ -42,9 +42,31 @@ pub(crate) fn class_value_id_bits(bits: u64) -> Option<u32> {
 /// The class id of a class function object at raw address `ptr`, or `None`
 /// for any other word. Ownership is proven (`is_closure_ptr`) before a header
 /// byte is trusted, so arbitrary addresses are fine.
+///
+/// Callers include hot generic paths (bind, method values), so an ordinary
+/// function is rejected before the ownership proof: once the address is a
+/// plausible, aligned heap address whose ShapeId word is in the exotic band
+/// (the same pre-checks `is_closure_ptr` makes before its first load), the
+/// code-pointer word at +8 — inside every exotic cell's header — must be this
+/// module's thunk. Only then is the cell proven.
 #[inline]
 pub fn class_closure_id(ptr: usize) -> Option<u32> {
-    if !crate::closure::is_closure_ptr(ptr) {
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr)
+        || !ptr.is_multiple_of(std::mem::align_of::<ClosureHeader>())
+    {
+        return None;
+    }
+    // SAFETY: a plausible, aligned heap address (the contract of the
+    // `is_closure_ptr` pre-checks this mirrors).
+    let shape =
+        unsafe { *((ptr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32) };
+    if !crate::object::shapes::is_exotic_shape_id(shape) {
+        return None;
+    }
+    // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
+    // at least 16 bytes; +8 is the code pointer of a closure.
+    let code = unsafe { *((ptr as *const u8).add(8) as *const *const u8) };
+    if code != js_class_constructor_called as *const u8 || !crate::closure::is_closure_ptr(ptr) {
         return None;
     }
     // SAFETY: `is_closure_ptr` proved a live, non-forwarded closure cell.
