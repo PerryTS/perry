@@ -1015,7 +1015,9 @@ fn rest_first_arg(rest: f64) -> f64 {
 /// one: returns the `this` value, so a subclass that inherits the accessor
 /// answers itself (ECMA-262 23.1.2.5, 24.1.2.3, 24.2.2.2, 25.1.5.3,
 /// 27.2.4.8, 22.2.5.2, 23.2.2.4).
-extern "C" fn builtin_species_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+pub(crate) extern "C" fn builtin_species_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
     f64::from_bits(IMPLICIT_THIS.with(|c| c.get()))
 }
 

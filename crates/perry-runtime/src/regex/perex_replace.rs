@@ -70,7 +70,6 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     if global {
         dispatch::set_last_index(&receiver, 0.0)?;
     }
-    let mut results = List::new(&scope)?;
     let bound = subject(input)?;
     let reuse = api::Reuse::new(&scope, &receiver, input, &bound, &mut budget);
     if super::perex_replace_direct::admissible(&receiver, &reuse) {
@@ -88,6 +87,8 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
             &memory,
         );
     }
+    // Only the general path collects results; the direct one never did.
+    let mut results = List::new(&scope)?;
     let input_length = length(&input);
     loop {
         let local = RuntimeHandleScope::new();
@@ -205,6 +206,19 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
         .map(|s| js_nanbox_string(s as i64))
 }
 
+/// `Some(global)` when `search` is an untouched RegExp whose `@@replace` is
+/// the builtin, and for replaceAll also its `@@match` (IsRegExp), so every Get
+/// String.prototype.replace/replaceAll makes of it is unobservable. The flag
+/// accessors are part of the proof, so `global` is read from the header.
+fn builtin_replace(all: bool, search: f64) -> Option<bool> {
+    use crate::object::regex_canonical::{method, Method};
+    if !method(search, Method::Replace) || (all && !method(search, Method::Match)) {
+        return None;
+    }
+    let re = crate::value::js_nanbox_get_pointer(search) as *const super::RegExpHeader;
+    Some(unsafe { (*re).global })
+}
+
 pub(crate) fn string(
     all: bool,
     receiver: f64,
@@ -216,6 +230,17 @@ pub(crate) fn string(
         if let Some(result) = super::perex_remove::try_remove(receiver, search, replacement)? {
             return Ok(result);
         }
+    }
+    if let Some(global) = builtin_replace(all, search) {
+        // replaceAll's IsRegExp and flags Gets, and the @@replace Get, would
+        // each reach a builtin without running code. Through the generic
+        // property path they were most of a short `replace` (#10518).
+        if all && !global {
+            return Err(EngineError::Type(
+                "String.prototype.replaceAll requires a global RegExp",
+            ));
+        }
+        return regexp(search, receiver, replacement);
     }
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);

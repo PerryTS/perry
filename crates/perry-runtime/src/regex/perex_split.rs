@@ -102,7 +102,106 @@ fn forward_program<'s>(
     }
     let splitter = scope.root_raw_const_ptr(re);
     let program = super::perex_construct::nonsticky_program(scope, &splitter).ok()?;
-    BoundProgram::new(program, budget).ok()
+    api::bind_program(program, budget).ok()
+}
+
+/// Split's forward search over `bound`, from the start (#10165). The caller
+/// has established that nothing can observe the skipped sticky attempts.
+#[allow(clippy::too_many_arguments)]
+fn forward_split(
+    scope: &RuntimeHandleScope,
+    input: &RuntimeHandle<'_>,
+    bound: &BoundSubject<HeapSubject<'_>>,
+    forward: &BoundProgram<GcProgram<'_>>,
+    lim: usize,
+    unicode: bool,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+) -> Result<f64, EngineError> {
+    let mut output = List::new(scope)?;
+    let mut units = Units::new(bound)?;
+    let mut copies = SpanCopies::new(bound)?;
+    let size = length(input);
+    let (mut p, mut q) = (0, 0);
+    #[cfg(test)]
+    FORWARD_SPLITS.with(|n| n.set(n.get() + 1));
+    let charged = |budget: &Budget| {
+        #[cfg(test)]
+        LAST_FORWARD_WORK.with(|w| w.set(api::WORK - budget.remaining()));
+        let _ = budget;
+    };
+    // Each search starts where the previous one stood, so on non-ASCII
+    // storage it does not seek from an end of the subject (#10164).
+    let mut near: Option<Position> = None;
+    while q < size {
+        let local = RuntimeHandleScope::new();
+        let (found, position) = host::find_near(
+            forward,
+            bound,
+            q,
+            near,
+            CaptureMode::All,
+            budget,
+            memory,
+            api::QUANTUM,
+            &mut host::poll,
+        )?;
+        near = Some(position);
+        let Some(found) = found else {
+            break;
+        };
+        let start = found.full.start();
+        // The sticky loop never tries the end of the input.
+        if start >= size {
+            break;
+        }
+        let end = found.full.end().min(size);
+        if end == p {
+            // Only an empty match at `p` itself: step past it, as the
+            // sticky loop does.
+            q = advance(&mut units, start, size, unicode, budget)?;
+            host::poll()?;
+            continue;
+        }
+        push_span(&mut output, &mut copies, p, start, budget)?;
+        if output.len() == lim {
+            charged(budget);
+            return Ok(output.value());
+        }
+        p = end;
+        let count = found.captures.as_ref().map_or(0, |captures| captures.len());
+        if count > 1 {
+            let (array, _) = api::caught(|| {
+                super::perex_results::materialize(
+                    input,
+                    bound,
+                    forward,
+                    &found,
+                    // Captures lie within this match, just behind the search's end.
+                    Some(position),
+                    false,
+                    budget,
+                    &mut host::poll,
+                )
+            })??;
+            let array = local.root_raw_mut_ptr(array);
+            for capture in 1..count {
+                let value = array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+                    crate::array::js_array_get_f64(array, capture as u32)
+                });
+                output.push(value, budget)?;
+                if output.len() == lim {
+                    charged(budget);
+                    return Ok(output.value());
+                }
+            }
+        }
+        q = p;
+        host::poll()?;
+    }
+    push_span(&mut output, &mut copies, p, size, budget)?;
+    charged(budget);
+    Ok(output.value())
 }
 
 fn push_span(
@@ -116,6 +215,69 @@ fn push_span(
     output.push(js_nanbox_string(result as i64), budget)
 }
 
+/// Split by an untouched RegExp without its protocol Gets (#10518).
+///
+/// When `regex_canonical::split` holds, SpeciesConstructor reaches the
+/// intrinsic `RegExp` through builtin data and a builtin `@@species` accessor,
+/// `Get(rx, "flags")` reaches the builtin getter over builtin flag accessors,
+/// and constructing the splitter from them runs no code either. The splitter
+/// is then a fresh object nothing can see, so the forward search applies, and
+/// its program is the receiver's own source and flags without `y`. Through the
+/// generic property path those Gets were ~60% of a short split.
+///
+/// `None` defers to the general algorithm, which reaches the same result: an
+/// empty subject, or a `limit` whose ToUint32 could run code after the
+/// skipped steps and so invalidate the proof they rest on.
+fn canonical_split(
+    scope: &RuntimeHandleScope,
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    limit_value: &RuntimeHandle<'_>,
+) -> Result<Option<f64>, EngineError> {
+    if !limit_is_plain(limit_value)
+        || !crate::object::regex_canonical::split(receiver.get_nanbox_f64())
+    {
+        return Ok(None);
+    }
+    let lim = limit(limit_value)?;
+    if lim == 0 {
+        return Ok(Some(List::new(scope)?.value()));
+    }
+    if length(input) == 0 {
+        return Ok(None);
+    }
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    let re = scope.root_raw_mut_ptr(
+        crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut super::RegExpHeader,
+    );
+    let (unicode, sticky) =
+        re.with_const_ptr::<super::RegExpHeader, _>(|re| unsafe { ((*re).unicode, (*re).sticky) });
+    // Without `y` the splitter's program is the receiver's own, which binds in
+    // constant work once validated (#10166); with it, compile one without.
+    let forward = if sticky {
+        super::perex_construct::nonsticky_program(scope, &re)
+            .and_then(|program| api::bind_program(program, &mut budget))
+    } else {
+        api::program(scope, &re, &mut budget, &memory, &mut host::poll)
+    };
+    let Ok(forward) = forward else {
+        return Ok(None);
+    };
+    let bound = subject(*input)?;
+    forward_split(
+        scope,
+        input,
+        &bound,
+        &forward,
+        lim,
+        unicode,
+        &mut budget,
+        &memory,
+    )
+    .map(Some)
+}
+
 pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f64, EngineError> {
     dispatch::require_object(receiver)?;
     let scope = RuntimeHandleScope::new();
@@ -123,6 +285,9 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     let argument = scope.root_nanbox_f64(argument);
     let limit_value = scope.root_nanbox_f64(limit_value);
     let input = text(&scope, &argument)?;
+    if let Some(result) = canonical_split(&scope, &receiver, &input, &limit_value)? {
+        return Ok(result);
+    }
     let constructor = super::match_all::species(&receiver)?.map(|v| scope.root_nanbox_f64(v));
     let flags = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
     let flags = text(&scope, &flags)?;
@@ -187,90 +352,21 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     }
     let bound = subject(input)?;
     let reuse = api::Reuse::new(&scope, &splitter, input, &bound, &mut budget);
+    if let Some(forward) = forward_program(&scope, constructor.as_ref(), &splitter, &mut budget) {
+        return forward_split(
+            &scope,
+            &input,
+            &bound,
+            &forward,
+            lim,
+            unicode,
+            &mut budget,
+            &memory,
+        );
+    }
     let mut units = Units::new(&bound)?;
     let mut copies = SpanCopies::new(&bound)?;
     let (mut p, mut q) = (0, 0);
-    if let Some(forward) = forward_program(&scope, constructor.as_ref(), &splitter, &mut budget) {
-        #[cfg(test)]
-        FORWARD_SPLITS.with(|n| n.set(n.get() + 1));
-        let charged = |budget: &Budget| {
-            #[cfg(test)]
-            LAST_FORWARD_WORK.with(|w| w.set(api::WORK - budget.remaining()));
-            let _ = budget;
-        };
-        // Each search starts where the previous one stood, so on non-ASCII
-        // storage it does not seek from an end of the subject (#10164).
-        let mut near: Option<Position> = None;
-        while q < size {
-            let local = RuntimeHandleScope::new();
-            let (found, position) = host::find_near(
-                &forward,
-                &bound,
-                q,
-                near,
-                CaptureMode::All,
-                &mut budget,
-                &memory,
-                api::QUANTUM,
-                &mut host::poll,
-            )?;
-            near = Some(position);
-            let Some(found) = found else {
-                break;
-            };
-            let start = found.full.start();
-            // The sticky loop never tries the end of the input.
-            if start >= size {
-                break;
-            }
-            let end = found.full.end().min(size);
-            if end == p {
-                // Only an empty match at `p` itself: step past it, as the
-                // sticky loop does.
-                q = advance(&mut units, start, size, unicode, &mut budget)?;
-                host::poll()?;
-                continue;
-            }
-            push_span(&mut output, &mut copies, p, start, &mut budget)?;
-            if output.len() == lim {
-                charged(&budget);
-                return Ok(output.value());
-            }
-            p = end;
-            let count = found.captures.as_ref().map_or(0, |captures| captures.len());
-            if count > 1 {
-                let (array, _) = api::caught(|| {
-                    super::perex_results::materialize(
-                        &input,
-                        &bound,
-                        &forward,
-                        &found,
-                        // Captures lie within this match, just behind the search's end.
-                        Some(position),
-                        false,
-                        &mut budget,
-                        &mut host::poll,
-                    )
-                })??;
-                let array = local.root_raw_mut_ptr(array);
-                for capture in 1..count {
-                    let value = array.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
-                        crate::array::js_array_get_f64(array, capture as u32)
-                    });
-                    output.push(value, &mut budget)?;
-                    if output.len() == lim {
-                        charged(&budget);
-                        return Ok(output.value());
-                    }
-                }
-            }
-            q = p;
-            host::poll()?;
-        }
-        push_span(&mut output, &mut copies, p, size, &mut budget)?;
-        charged(&budget);
-        return Ok(output.value());
-    }
     while q < size {
         let local = RuntimeHandleScope::new();
         dispatch::set_last_index(&splitter, q as f64)?;
@@ -370,6 +466,15 @@ pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<
     let limit_value = scope.root_nanbox_f64(limit_value);
     let mut budget = Budget::new(api::WORK);
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    if crate::object::regex_canonical::split(separator.get_nanbox_f64()) {
+        // `Get(separator, @@split)` would reach the builtin without running
+        // code (#10518). Call what it would have returned.
+        return regexp(
+            separator.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            limit_value.get_nanbox_f64(),
+        );
+    }
     if crate::proxy::reflect_value_is_object(separator.get_nanbox_f64()) {
         let method = scope.root_nanbox_f64(dispatch::get_symbol(&separator, "split")?);
         if !matches!(method.get_nanbox_f64().to_bits(), TAG_NULL | TAG_UNDEFINED) {

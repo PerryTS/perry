@@ -28,6 +28,22 @@ impl Operation {
 
 pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     dispatch::require_object(receiver)?;
+    // The eight Gets below would each reach a builtin flag getter over this
+    // RegExp's header, which `perex_construct` publishes together with the
+    // canonical flags text in spec order (`dgimsuvy`, the order below). So the
+    // answer is that text. Each Get went through `js_reflect_get` in a trap
+    // frame: ~70k instructions for a two-flag RegExp (#10518).
+    let re = crate::value::js_nanbox_get_pointer(receiver) as *const super::RegExpHeader;
+    if super::is_valid_regex_ptr(re)
+        && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(receiver)
+    {
+        let text = unsafe { (*re).flags_ptr } as *mut StringHeader;
+        if !text.is_null() {
+            // Shared with the header: keep a later append from reusing it.
+            crate::string::js_string_addref(text);
+            return Ok(text);
+        }
+    }
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let mut output = [0u8; 8];
@@ -286,6 +302,17 @@ pub(crate) fn string(
         return Err(EngineError::Type(
             "String method called on null or undefined",
         ));
+    }
+    if matches!(operation, Operation::Match)
+        && crate::object::regex_canonical::method(
+            pattern,
+            crate::object::regex_canonical::Method::Match,
+        )
+    {
+        // `Get(pattern, @@match)` would reach the builtin without running
+        // code; through the generic property path it was ~8% of a short
+        // `match` (#10518). Call what it would have returned.
+        return regexp(operation, pattern, receiver);
     }
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
