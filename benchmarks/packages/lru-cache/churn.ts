@@ -5,6 +5,9 @@ import { iters, header, lcg } from "../_lib/bench.ts";
 
 const it = iters(500000, 10000);
 header("lru-cache/churn", "lru-cache", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 const cache = new LRUCache<string, number>({ max: 1000 });
 const keys: string[] = [];
 for (let k = 0; k < 5000; k++) keys.push("key:" + k);
@@ -15,7 +18,7 @@ function op(i: number): void {
   const v = cache.get(k);
   if (v === undefined) { misses++; cache.set(k, i); } else { hits++; sum = (sum + v) % 1000000007; }
 }
-for (let i = 0; i < it.warm; i++) op(i);
+for (let i = 0; i < WARM; i++) op(i);
 hits = 0; misses = 0; sum = 0;
-for (let i = 0; i < it.n; i++) op(i);
+for (let i = 0; i < N; i++) op(i);
 console.log("hits " + hits + " misses " + misses + " sum " + sum + " size " + cache.size);

@@ -6,6 +6,9 @@ import { iters, header } from "../_lib/bench.ts";
 
 const it = iters(20000, 1000);
 header("rate-limiter-flexible/consume", "rate-limiter-flexible", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   const run = async (n: number): Promise<string> => {
@@ -22,7 +25,7 @@ async function main(): Promise<void> {
     }
     return "ok " + ok + " rejected " + rejected + " remaining " + remaining;
   };
-  await run(it.warm);
-  console.log(await run(it.n));
+  await run(WARM);
+  console.log(await run(N));
 }
 main().catch((e) => { console.log("ERROR " + (e && e.message)); process.exitCode = 1; });

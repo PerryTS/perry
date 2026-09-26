@@ -5,6 +5,9 @@ import { iters, header, fnv, hex, FNV_SEED } from "../_lib/bench.ts";
 
 const it = iters(5000, 200);
 header("cron/next_dates", "cron", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 const exprs = ["*/5 * * * *", "0 9 * * 1-5", "30 2 1,15 * *", "0 0 29 2 *", "15 */3 * * 0,6", "0 */10 8-18 * * *"];
 const start0 = Date.UTC(2024, 2, 15, 10, 20, 30);
 
@@ -14,7 +17,7 @@ function op(i: number, h: number): number {
   return fnv(h, next.toISO() ?? "null");
 }
 let h = FNV_SEED;
-for (let i = 0; i < it.warm; i++) h = op(i, h);
+for (let i = 0; i < WARM; i++) h = op(i, h);
 h = FNV_SEED;
-for (let i = 0; i < it.n; i++) h = op(i, h);
+for (let i = 0; i < N; i++) h = op(i, h);
 console.log("checksum " + hex(h));

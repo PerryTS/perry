@@ -5,6 +5,9 @@ import { port, HOST } from "../_lib/env.ts";
 
 const it = iters(2000, 200);
 header("redis/set_get", "redis", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   const c = createClient({ socket: { host: HOST, port: port("PKG_BENCH_REDIS_PORT") } });
@@ -18,9 +21,9 @@ async function main(): Promise<void> {
     return fnv(h, v + ":" + (n > 0));
   };
   let h = FNV_SEED;
-  for (let i = 0; i < it.warm; i++) h = await once(i, h);
+  for (let i = 0; i < WARM; i++) h = await once(i, h);
   h = FNV_SEED;
-  for (let i = 0; i < it.n; i++) h = await once(i, h);
+  for (let i = 0; i < N; i++) h = await once(i, h);
   const total = await c.get("pkgbench:nr:ctr");
   await c.quit();
   console.log("checksum " + hex(h) + " ctr " + total);

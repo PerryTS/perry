@@ -5,6 +5,9 @@ import { iters, header } from "../_lib/bench.ts";
 
 const it = iters(2000, 100);
 header("exponential-backoff/retry", "exponential-backoff", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   let attempts = 0, retries = 0, total = 0;
@@ -18,9 +21,9 @@ async function main(): Promise<void> {
          retry: () => { retries++; return true; } });
     total += r;
   };
-  for (let i = 0; i < it.warm; i++) await once(i);
+  for (let i = 0; i < WARM; i++) await once(i);
   attempts = 0; retries = 0; total = 0;
-  for (let i = 0; i < it.n; i++) await once(i);
+  for (let i = 0; i < N; i++) await once(i);
   console.log("attempts " + attempts + " retries " + retries + " total " + total);
 }
 main().catch((e) => { console.log("ERROR " + (e && e.message)); process.exitCode = 1; });

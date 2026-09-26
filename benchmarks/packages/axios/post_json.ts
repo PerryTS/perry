@@ -6,6 +6,9 @@ import { port, HOST } from "../_lib/env.ts";
 
 const it = iters(2000, 200);
 header("axios/post_json", "axios", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -15,9 +18,9 @@ async function main(): Promise<void> {
     return fnv(h, r.status + ":" + r.data.id + ":" + r.data.items.join(",") + ":" + r.data.label);
   };
   let h = FNV_SEED;
-  for (let i = 0; i < it.warm; i++) h = await once(i, h);
+  for (let i = 0; i < WARM; i++) h = await once(i, h);
   h = FNV_SEED;
-  for (let i = 0; i < it.n; i++) h = await once(i, h);
+  for (let i = 0; i < N; i++) h = await once(i, h);
   agent.destroy();
   console.log("checksum " + hex(h));
 }

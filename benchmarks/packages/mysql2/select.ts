@@ -5,6 +5,9 @@ import { port, HOST } from "../_lib/env.ts";
 
 const it = iters(2000, 200);
 header("mysql2/select", "mysql2", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   const c = await mysql.createConnection({ host: HOST, port: port("PKG_BENCH_MYSQL_PORT"), user: "bench", password: "bench", database: "bench" });
@@ -14,9 +17,9 @@ async function main(): Promise<void> {
     return fnv(h, row.n + ":" + row.s + ":" + row.b);
   };
   let h = FNV_SEED;
-  for (let i = 0; i < it.warm; i++) h = await once(i, h);
+  for (let i = 0; i < WARM; i++) h = await once(i, h);
   h = FNV_SEED;
-  for (let i = 0; i < it.n; i++) h = await once(i, h);
+  for (let i = 0; i < N; i++) h = await once(i, h);
   await c.end();
   console.log("checksum " + hex(h));
 }

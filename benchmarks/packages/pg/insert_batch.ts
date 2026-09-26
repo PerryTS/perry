@@ -6,6 +6,9 @@ import { port, HOST } from "../_lib/env.ts";
 
 const it = iters(2000, 200);
 header("pg/insert_batch", "pg", it);
+// Loop bounds as locals: re-reading `it.n` per iteration would add harness
+// cost to the measurement (Perry: a by-name property read, ~1k instructions).
+const N = it.n, WARM = it.warm;
 
 async function main(): Promise<void> {
   const c = new pg.Client({ host: HOST, port: port("PKG_BENCH_PG_PORT"), user: "bench", database: "bench" });
@@ -24,9 +27,9 @@ async function main(): Promise<void> {
     return h;
   };
   let h = FNV_SEED;
-  for (let i = 0; i < it.warm; i++) h = await once(i, h);
+  for (let i = 0; i < WARM; i++) h = await once(i, h);
   h = FNV_SEED;
-  for (let i = 0; i < it.n; i++) h = await once(i, h);
+  for (let i = 0; i < N; i++) h = await once(i, h);
   await c.query("DROP TABLE pkgbench_pg_items");
   await c.end();
   console.log("checksum " + hex(h));
