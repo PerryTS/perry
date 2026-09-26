@@ -3782,10 +3782,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // behavior). `emit_ir_only` wants the whole-module text, so it takes the
     // single-text path; the split path avoids materializing the full ~1GB IR
     // string at all (which would defeat the memory win).
-    // wasm32 WASI (#11378) takes the single-text path: its runtime-ABI pass
-    // rewrites the whole module text before object emission.
+    // wasm32 WASI (#11378) splits like every other target, but only on the
+    // textual path: its runtime-ABI pass rewrites IR text, which the native
+    // unit constructors never render. The pass is line-local and its adapters
+    // are unit-internal, so each unit is adapted on its own.
     let wasm32 = crate::target_layout::wasm32_lowering(&triple);
-    let n_units = if opts.emit_ir_only || wasm32 {
+    let n_units = if opts.emit_ir_only {
         1
     } else {
         decide_codegen_units(
@@ -3795,9 +3797,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     };
     if n_units > 1 {
         progress.phase(2, &format!("partitioning into {n_units} codegen units"));
-        if let Some(result) =
+        let native = if wasm32 {
+            None
+        } else {
             try_native_units(&mut llmod, n_units, opts.target.as_deref(), &module_prefix)
-        {
+        };
+        if let Some(result) = native {
             // `result` already contains the final object/archive here. The
             // generated `LlModule` can own millions of small allocations in a
             // minified bundle, and Rust must destroy that graph before this
@@ -3811,6 +3816,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         loop {
             let units = llmod.render_codegen_units(n_units);
+            #[cfg(feature = "target-wasi")]
+            let units: Vec<String> = if wasm32 {
+                units
+                    .into_iter()
+                    .map(|unit| crate::wasm32::adapt_runtime_abi(&unit))
+                    .collect()
+            } else {
+                units
+            };
             log::debug!(
                 "perry-codegen: split '{}' into {} codegen units",
                 hir.name,

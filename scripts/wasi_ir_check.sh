@@ -11,8 +11,9 @@
 # `PERRY_SAVE_LL` captures before that. A program that produces no IR fails.
 #
 # Liveness: every saved module must carry the wasm32 triple (a host compile
-# would pass the ABI check vacuously against nothing) and the ABI check must
-# have verified a non-zero number of runtime calls.
+# would pass the ABI check vacuously against nothing), a forced two-unit
+# compile must produce per-unit IR, and the ABI check must have verified a
+# non-zero number of runtime calls.
 
 set -euo pipefail
 
@@ -62,8 +63,34 @@ for name in "${SAMPLES[@]}"; do
   done
 done
 
-report="$(python3 "$ROOT/scripts/runtime_abi_check.py" --ir "$OUT"/*/*.ll)"
+# The codegen-unit split path adapts each unit on its own. Force it on one
+# sample (small modules never split by themselves) and require per-unit IR,
+# so the ABI check below also covers split output.
+split="$OUT/split_${SAMPLES[0]}"
+mkdir -p "$split"
+( cd "$split" && PERRY_CODEGEN_UNITS=2 PERRY_SAVE_LL="$split" PERRY_NO_AUTO_OPTIMIZE=1 PERRY_NO_CACHE=1 \
+    timeout 300 "$PERRY" compile "$ROOT/test-files/${SAMPLES[0]}.ts" -o "$split/out" --target wasi \
+    >"$split/log.txt" 2>&1 ) || true
+if ! compgen -G "$split/*.unit1.ll" >/dev/null; then
+  echo "::error::PERRY_CODEGEN_UNITS=2 produced no per-unit IR; the split path did not run" >&2
+  tail -20 "$split/log.txt" >&2
+  exit 1
+fi
+for ll in "$split"/*.ll; do
+  if ! grep -q '^target triple = "wasm32-' "$ll"; then
+    echo "::error::$ll is not wasm32 IR" >&2
+    exit 1
+  fi
+  n=$((n + 1))
+done
+
+# A mismatch exits 1: capture it so the report still prints, then fail.
+status=0
+report="$(python3 "$ROOT/scripts/runtime_abi_check.py" --ir "$OUT"/*/*.ll)" || status=$?
 echo "$report"
+if ((status != 0)); then
+  exit "$status"
+fi
 calls="$(sed -n 's/.*modules, \([0-9]*\) runtime calls checked.*/\1/p' <<<"$report" | head -1)"
 if [[ -z "$calls" || "$calls" -eq 0 ]]; then
   echo "::error::the ABI check verified no runtime calls; nothing was checked" >&2
