@@ -1329,6 +1329,23 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// absent) has no code path that can produce it, because the only writer of the
 /// entry is also the only writer of the bit, under one lock.
 pub(crate) const GC_RESIDUAL_PROTO_OWNER: u16 = 0x40;
+/// #10593: the same bit, read on a `GC_TYPE_ARRAY` as "THIS array's
+/// `[[Prototype]]` was retargeted". Arrays are never meta-capable, so every
+/// `Object.setPrototypeOf(arr, p)` records into the residual registry and sets
+/// the bit; it rides growth and every GC relocation for the reasons given
+/// above, and it is set-only, so a later reset to `Array.prototype` leaves the
+/// array (conservatively) on the slow path.
+///
+/// This is what the inline element guards consult per receiver instead of the
+/// process-wide `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED` byte, which used to
+/// be flipped by the first retargeted array and then stood the index fast path
+/// — and with it the cheap element-store barrier — down for EVERY array in the
+/// program (a 33x whole-program cliff from one line of setup). The byte now
+/// only carries the genuinely global facts: an index on `Array.prototype` or
+/// `Object.prototype`, a retargeted `Array.prototype`, or a retargeted lazy
+/// JSON array (whose materialized storage is a separate allocation that does
+/// not carry this bit).
+pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = GC_RESIDUAL_PROTO_OWNER;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
@@ -1385,7 +1402,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// |---|---|---|---|
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
-/// | 6 | `OBJ_FLAG_NULL_PROTO` | | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
+/// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
 /// | 7 | `OBJ_FLAG_PACKED_NUMERIC_PROOF` | `GC_ARRAY_RAW_F64_LAYOUT` | |
 /// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |

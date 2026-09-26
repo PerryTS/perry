@@ -60,7 +60,7 @@ fn elements_backed_loop_guard(
     out: *mut u64,
 ) -> Option<(i32, *const u8)> {
     if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-        || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        || super::super::array_index_fast_path_invalid_for(elements_header._reserved)
         || require_numeric >= 2
     {
         return None;
@@ -166,7 +166,7 @@ fn packed_arraylike_loop_guard(
 
     if header.obj_type == crate::gc::GC_TYPE_ARRAY {
         if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-            || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+            || super::super::array_index_fast_path_invalid_for(header._reserved)
         {
             return None;
         }
@@ -453,7 +453,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     if kind == 1 {
         if header.obj_type != crate::gc::GC_TYPE_ARRAY
             || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-            || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+            || super::super::array_index_fast_path_invalid_for(header._reserved)
         {
             return 0;
         }
@@ -540,7 +540,7 @@ fn revalidate_admitted_elements_live(
         return 0;
     };
     if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-        || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        || super::super::array_index_fast_path_invalid_for(elements_header._reserved)
     {
         return 0;
     }

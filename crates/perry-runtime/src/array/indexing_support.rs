@@ -118,6 +118,22 @@ pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
 }
 
+/// Must an index fast path decline for the `GC_TYPE_ARRAY` whose header
+/// `_reserved` word is `reserved`, because an inherited indexed property could
+/// intercept the access?
+///
+/// #10593: the process-wide byte covers the default chain (`Array.prototype` /
+/// `Object.prototype` indices, a retargeted `Array.prototype`); a retargeted
+/// ordinary array is answered by its OWN `GC_ARRAY_CUSTOM_PROTO` bit, so one
+/// `Object.setPrototypeOf(arr, p)` no longer moves every other array's element
+/// stores off the fast path and onto the full write barrier. The generated
+/// guards test the same two conditions inline.
+#[inline]
+pub(crate) fn array_index_fast_path_invalid_for(reserved: u16) -> bool {
+    reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+        || PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+}
+
 /// Test-only companion to
 /// `prototype_chain::test_swap_array_static_proto_recorded`: swap the summary
 /// byte generated code reads, returning the previous value. Only for a test

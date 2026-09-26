@@ -32,6 +32,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
+pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;

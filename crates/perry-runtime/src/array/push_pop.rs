@@ -1,7 +1,6 @@
 //! push / pop / shift / unshift / set_length / delete + grow primitive.
 use super::*;
 use std::ptr;
-use std::sync::atomic::Ordering;
 
 /// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
 /// with `Throw = true` internally (ECMA-262 §23.1.3.*), so a non-writable
@@ -808,7 +807,7 @@ fn direct_plain_push_receiver(arr: *mut ArrayHeader) -> Option<*mut ArrayHeader>
             header.obj_type == crate::gc::GC_TYPE_ARRAY
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
-                && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+                && !super::array_index_fast_path_invalid_for(header._reserved)
         })
         .and_then(|_| unsafe {
             let length = (*arr).length;
@@ -1194,7 +1193,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         if header.obj_type == crate::gc::GC_TYPE_ARRAY
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && header._reserved & guarded_flags == 0
-            && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+            && !super::array_index_fast_path_invalid_for(header._reserved)
         {
             unsafe {
                 let length = (*arr).length;

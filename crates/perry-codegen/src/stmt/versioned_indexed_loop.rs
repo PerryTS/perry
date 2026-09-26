@@ -319,10 +319,10 @@ fn emit_array_admission(
     let reserved = ctx.block().trunc(I64, &reserved_shifted, I16);
     let descriptors = ctx.block().and(I16, &reserved, "1024");
     let no_descriptors = ctx.block().icmp_eq(I16, &descriptors, "0");
-    let prototype_invalidated = ctx
-        .block()
-        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let prototype_ok = ctx.block().icmp_eq(I8, &prototype_invalidated, "0");
+    // #10593: the process-wide byte AND this array's own custom-proto bit.
+    // The per-iteration guard re-tests the byte and compares the whole header
+    // fingerprint, which includes that bit, so a mid-loop retarget exits.
+    let prototype_ok = crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &reserved);
     let length = ctx.block().trunc(I128, &array_header, I32);
     let capacity_shifted = ctx.block().lshr(I128, &array_header, "32");
     let capacity = ctx.block().trunc(I128, &capacity_shifted, I32);

@@ -477,10 +477,8 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 None
             }
         });
-    let obj_ptr = obj_ptr as usize;
-    let proto_bits = prototype_handle.get_heap_word_u64();
-    if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
-        && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+    let mut obj_ptr = obj_ptr as usize;
+    if obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
         && crate::value::addr_class::is_above_handle_band(obj_ptr)
         && crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
     {
@@ -489,11 +487,34 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if obj_type == crate::gc::GC_TYPE_ARRAY {
+            // #10593: a retargeted ordinary array is a PER-ARRAY fact. The
+            // registry insert below sets `GC_ARRAY_CUSTOM_PROTO` on this
+            // array's own header, and every inline element guard tests that
+            // bit next to the global byte, so only THIS array leaves the fast
+            // path. The runtime latch stays: it only gates the slow paths'
+            // per-array side-table probe.
+            ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
+            // `Array.prototype` itself heads every default chain, so a new
+            // `[[Prototype]]` there IS global. Resolving its address can
+            // bootstrap `globalThis` (allocation), so do it with the owner
+            // rooted and reload the owner afterwards.
+            let (array_prototype, owner) =
+                owner_handle.across_mut::<u8, _>(crate::array::array_prototype_addr);
+            obj_ptr = owner as usize;
+            if array_prototype != 0 && array_prototype == obj_ptr {
+                crate::array::invalidate_array_index_fast_path();
+            }
+        } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            // A lazy JSON array's materialized storage is a SEPARATE
+            // `GC_TYPE_ARRAY` allocation that does not carry the owner's bit,
+            // so keep the conservative process-wide invalidation here.
             ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
             crate::array::invalidate_array_index_fast_path();
         }
     }
+    let obj_ptr = obj_ptr;
+    let proto_bits = prototype_handle.get_heap_word_u64();
     // A per-instance prototype override invalidates class-keyed interception
     // verdicts (the overridden chain can differ from the class chain), and the
     // object itself must never satisfy a class-keyed plan again.

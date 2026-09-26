@@ -99,8 +99,9 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let reserved = blk.load(I16, &reserved_ptr);
         let blocking = blk.and(I16, &reserved, POP_BLOCKING_FLAGS_I16);
         let plain = blk.icmp_eq(I16, &blocking, "0");
-        let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-        let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
+        // #10593: the process-wide byte AND this array's own custom-proto bit.
+        let prototype_clean =
+            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
         let mut ok = blk.and(I1, &not_fwd, &plain);
         ok = blk.and(I1, &ok, &prototype_clean);
         let array_ok = blk.and(I1, &ok, &is_array);
@@ -383,6 +384,16 @@ mod tests {
         assert!(
             hdr.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED"),
             "{what}: the header gate must test the prototype-pollution latch:\n{hdr}"
+        );
+        let custom_proto_mask = format!(
+            ", {}",
+            crate::expr::array_proto_guard::GC_ARRAY_CUSTOM_PROTO_I16
+        );
+        assert!(
+            hdr.lines()
+                .any(|line| line.contains("and i16") && line.trim_end().ends_with(&custom_proto_mask)),
+            "{what}: the header gate must test the receiver's own custom-prototype \
+             bit, not only the process-wide latch (#10593):\n{hdr}"
         );
         let read = super::super::class_field_barrier_tests::block_body(ir, "apop.read.")
             .expect("read block");

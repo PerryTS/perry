@@ -210,10 +210,8 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
     let array_descriptor_bits = ctx.block().and(I16, &array_reserved, "1024");
     let array_no_descriptors = ctx.block().icmp_eq(I16, &array_descriptor_bits, "0");
-    let array_invalidated = ctx
-        .block()
-        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let array_default_prototypes = ctx.block().icmp_eq(I8, &array_invalidated, "0");
+    // #10593: the process-wide byte AND this array's own custom-proto bit.
+    let array_default_prototypes = crate::expr::array_proto_guard::emit_array_default_prototype_chain(ctx.block(), &array_reserved);
     let array_ptr = ctx.block().inttoptr(I64, &object_raw);
     let array_length = ctx.block().load(I32, &array_ptr);
     let array_capacity_addr = ctx.block().add(I64, &object_raw, "4");

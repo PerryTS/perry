@@ -1302,12 +1302,11 @@ fn plain_array_index_guard_impl(
         // A polluted `Array.prototype[i]` (or custom array prototype) makes
         // holes read through the chain — the raw slot load would return
         // undefined instead (test262 concat/S15.4.4.4_A3_T2,
-        // copyWithin/coerced-values-start-change-*). Rare global flags;
-        // two relaxed atomic loads.
-        if crate::array::array_prototype_has_index_flag()
-            || crate::array::object_prototype_has_index_flag()
-            || crate::object::prototype_chain::array_static_proto_recorded()
-        {
+        // copyWithin/coerced-values-start-change-*). #10593: THIS array's own
+        // custom-prototype bit plus the rare process-wide byte; retargeting
+        // some other array no longer stands every array's guard down.
+        // One relaxed load beside the header word already in hand.
+        if crate::array::array_index_fast_path_invalid_for((*header)._reserved) {
             return false;
         }
         let arr = raw_addr as *const ArrayHeader;

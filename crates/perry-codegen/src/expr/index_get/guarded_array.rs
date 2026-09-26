@@ -347,8 +347,8 @@ pub(super) fn lower_guarded_array_index_get(
             let descriptor_bits = blk.and(I16, &reserved, "1024");
             let no_descriptors = blk.icmp_eq(I16, &descriptor_bits, "0");
 
-            let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-            let default_prototype_chain = blk.icmp_eq(I8, &invalidated, "0");
+            // #10593: the process-wide byte AND this array's own custom-proto bit.
+            let default_prototype_chain = crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
 
             let arr_ptr = blk.inttoptr(I64, &live_handle);
             let length = blk.load(I32, &arr_ptr);

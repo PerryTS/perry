@@ -1306,13 +1306,12 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         blk.icmp_eq(I16, &integrity_bits, "0")
                     };
                     // A sticky runtime byte records indexed properties on
-                    // Array/Object.prototype (and custom Array prototypes).
+                    // Array/Object.prototype, and the array's own
+                    // `GC_ARRAY_CUSTOM_PROTO` bit a custom prototype (#10593).
                     // Such a property can intercept push with an inherited
-                    // setter, so the raw append is valid only while the default
-                    // prototype chain remains pristine.
-                    let invalidated =
-                        blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-                    let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
+                    // setter, so the raw append is valid only while the
+                    // receiver's prototype chain remains pristine.
+                    let prototype_clean = crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &obj_flags);
                     let clean = blk.and(I1, &clean, &prototype_clean);
                     let length = blk.safe_load_i32_from_ptr(&payload);
                     let cap_addr = blk.add(I64, &payload, "4");

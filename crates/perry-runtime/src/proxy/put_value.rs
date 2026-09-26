@@ -1425,9 +1425,7 @@ fn object_array_numeric_write_slots(
     if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
         || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || array_gc._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-        || crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
-            .load(std::sync::atomic::Ordering::Relaxed)
-            != 0
+        || crate::array::array_index_fast_path_invalid_for(array_gc._reserved)
     {
         trace_object_array_numeric_write_rejection(
             "array kind, forwarding, descriptor, or index-fast-path state",

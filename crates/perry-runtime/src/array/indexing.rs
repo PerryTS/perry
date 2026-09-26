@@ -1093,7 +1093,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     // the old slot while all three prototype conditions remain clear.
     let may_have_holes = flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0
         || flags & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0;
-    if PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+    if array_index_fast_path_invalid_for(flags)
         && may_have_holes
         && ptr::read(slot) == crate::value::TAG_HOLE
     {
@@ -1354,7 +1354,7 @@ pub(crate) fn try_strict_dense_index_set(
                 && header._reserved
                     & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
                     == 0
-                && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+                && !super::array_index_fast_path_invalid_for(header._reserved)
             {
                 unsafe {
                     let length = (*arr).length;
@@ -1397,7 +1397,7 @@ pub(crate) fn try_strict_dense_index_set(
     if flags & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS) != 0 {
         return None;
     }
-    if super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0 {
+    if super::array_index_fast_path_invalid_for(flags) {
         return None;
     }
     unsafe {
