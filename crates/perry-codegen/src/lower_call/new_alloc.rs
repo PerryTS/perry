@@ -545,7 +545,12 @@ fn emit_instance_alloc_inner(
             field_count,
         ) && image_size_agrees)
             || wide_birth_image;
-        if !descriptor_facts_exact || (!force_inline_new && !new_site_is_in_loop(ctx)) {
+        // ILP32 (wasm32 WASI, #11378): the inline bump below reads
+        // `InlineArenaState` at LP64 offsets; take the outlined call.
+        if !descriptor_facts_exact
+            || (!force_inline_new && !new_site_is_in_loop(ctx))
+            || crate::codegen::helpers::ilp32_target()
+        {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
             } else {

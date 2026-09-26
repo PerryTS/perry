@@ -1,8 +1,13 @@
 name: WASI Check
 
-# Keeps `perry-runtime` building for the standalone WASI target
-# (wasm32-wasip2). Tracking issue #11375; this gate is phase 2a (#11377).
-# The check itself is `scripts/wasi_check.sh` — run it locally the same way.
+# The standalone WASI target (wasm32-wasip2), tracking issue #11375:
+#   wasi-check     `perry-runtime` builds for WASI (phase 2a, #11377;
+#                  `scripts/wasi_check.sh`) and the runtime ABI checks.
+#   wasi-codegen   a compiler built with `--features target-wasi` compiles
+#                  sample programs for WASI and every runtime call in the IR
+#                  matches the runtime's signature (#11378;
+#                  `scripts/wasi_ir_check.sh`).
+# Both scripts run locally the same way.
 #
 # Checked against CLAUDE.md's "four ways a gate can be unable to fail":
 #
@@ -28,10 +33,21 @@ on:
     paths:
       - "crates/perry-runtime/**"
       - "crates/perry-dispatch/**"
+      # The ABI table is built from the runtime, stdlib and ext crates, and
+      # the codegen job builds the perry driver and compiles gap programs.
+      - "crates/perry-stdlib/**"
+      - "crates/perry-ext-*/**"
+      - "crates/perry/**"
+      - "crates/perry-codegen/Cargo.toml"
+      - "test-files/test_gap_*.ts"
+      - ".github/actions/setup-llvm22/**"
+      - "Cargo.toml"
+      - ".cargo/**"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "scripts/wasi_check.sh"
       - "scripts/runtime_abi_check.py"
+      - "scripts/wasi_ir_check.sh"
       - "crates/perry-codegen/src/**"
       - ".github/workflows/wasi-check.yml"
   # Main-line arm: one daily sweep, not one run per merge — see
@@ -78,3 +94,34 @@ jobs:
         run: python3 scripts/runtime_abi_check.py --self-test
       - name: Runtime ABI check (report)
         run: python3 scripts/runtime_abi_check.py
+      # The wasm32 lowering adapts calls to the runtime's real signatures as
+      # recorded in this table; a stale table would adapt to the wrong ones.
+      - name: wasm32 runtime ABI table is current
+        run: python3 scripts/runtime_abi_check.py --check-wasm-abi
+
+  # The wasm32 codegen lowering (#11378), in a compiler built with the
+  # off-by-default `target-wasi` feature: sample programs compile for WASI and
+  # every runtime call in the emitted IR matches the runtime's real signature.
+  wasi-codegen:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-wasi-codegen"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build perry with the WASI target
+        run: cargo build --locked --profile perry-dev -p perry --features target-wasi
+
+      - name: wasm32 IR matches the runtime ABI
+        run: ./scripts/wasi_ir_check.sh target/perry-dev/perry

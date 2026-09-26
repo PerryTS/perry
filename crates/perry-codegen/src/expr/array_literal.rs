@@ -165,7 +165,9 @@ pub(crate) fn emit_array_from_lowered_values(
     // Inline bump-allocator path for small literals. Size threshold matches
     // `MAX_SCALAR_ARRAY_LEN` in collectors.rs so every candidate the escape
     // pass rejects can still benefit from the inline alloc.
-    if n <= INLINE_ARRAY_MAX_ELEMENTS {
+    // ILP32 (wasm32 WASI, #11378): the inline bump reads `InlineArenaState`
+    // at LP64 offsets; take the runtime call below instead.
+    if n <= INLINE_ARRAY_MAX_ELEMENTS && !crate::codegen::helpers::ilp32_target() {
         // Layout constants — must match `ArrayHeader` in array.rs and
         // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
         // byte offsets; the runtime declarations are authoritative.

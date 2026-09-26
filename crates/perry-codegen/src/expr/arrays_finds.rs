@@ -139,6 +139,14 @@ fn lower_map_entry_at_inline(
         let is_pointer = blk.icmp_eq(I64, &top16, POINTER_TAG_TOP16_I64);
         let above_band = blk.icmp_ugt(I64, &m_handle, HANDLE_BAND_TOP);
         let plausible = blk.and(I1, &is_pointer, &above_band);
+        // ILP32 (wasm32 WASI): the header reads below use LP64 offsets
+        // (`MAP_HEADER_USED_OFFSET`, an i64 `entries`); every read takes the
+        // runtime helper instead, and LLVM drops the dead fast path (#11378).
+        let plausible = if crate::codegen::helpers::ilp32_target() {
+            "false".to_string()
+        } else {
+            plausible
+        };
         blk.cond_br(&plausible, &head_label, &slow_label);
         (m_handle, i_i32)
     };
