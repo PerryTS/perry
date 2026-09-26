@@ -333,10 +333,7 @@ fn unsupported_targets_keep_the_default_convention() {
     // walk does. (arm64_32 is refused by `compile_module` before this gate
     // until #11378 — `target_layout::ilp32_codegen_refusal` — so it cannot be
     // compiled here; put it back in this list when that refusal is lifted.)
-    for triple in [
-        "aarch64-pc-windows-msvc",
-        "aarch64-w64-mingw32",
-    ] {
+    for triple in ["aarch64-pc-windows-msvc", "aarch64-w64-mingw32"] {
         let ir = compile_ir_for(&recursive_module(), Some(triple));
         assert!(
             ir.contains("$spec_i32(i32"),
