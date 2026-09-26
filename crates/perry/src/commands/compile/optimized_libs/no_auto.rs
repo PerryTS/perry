@@ -45,8 +45,12 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     let iteration_set = well_known_iteration_set(ctx);
     // PERRY_DISABLE_WELL_KNOWN=1 keeps only the wrappers that have no
     // perry-stdlib copy to revert to (`net`, `ws`).
-    let mut well_known_libs =
-        resolve_prebuilt_ext_libs(&retain_routed(iteration_set.clone()), target, format, verbose);
+    let mut well_known_libs = resolve_prebuilt_ext_libs(
+        &retain_routed(iteration_set.clone()),
+        target,
+        format,
+        verbose,
+    );
     // #10458: native addons need every runtime-bearing archive rebuilt
     // together with the host feature.
     if !ctx.native_addons.is_empty() {

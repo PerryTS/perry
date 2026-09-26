@@ -932,10 +932,14 @@ fn tls_import_routes_net_wrapper() {
 #[test]
 fn disabled_flip_still_routes_sole_provider_wrappers() {
     let _guard = env_lock();
-    let saved: Vec<_> = ["PERRY_LIB_DIR", "PERRY_RUNTIME_DIR", "PERRY_DISABLE_WELL_KNOWN"]
-        .iter()
-        .map(|k| (*k, std::env::var(k).ok()))
-        .collect();
+    let saved: Vec<_> = [
+        "PERRY_LIB_DIR",
+        "PERRY_RUNTIME_DIR",
+        "PERRY_DISABLE_WELL_KNOWN",
+    ]
+    .iter()
+    .map(|k| (*k, std::env::var(k).ok()))
+    .collect();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut archives = Vec::new();
@@ -965,8 +969,16 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
         set_env_var(key, value.as_deref());
     }
 
-    assert!(libs.well_known_libs.contains(&archives[0]), "net: {libs:?}", libs = libs.well_known_libs);
-    assert!(libs.well_known_libs.contains(&archives[1]), "ws: {libs:?}", libs = libs.well_known_libs);
+    assert!(
+        libs.well_known_libs.contains(&archives[0]),
+        "net: {libs:?}",
+        libs = libs.well_known_libs
+    );
+    assert!(
+        libs.well_known_libs.contains(&archives[1]),
+        "ws: {libs:?}",
+        libs = libs.well_known_libs
+    );
     assert!(
         !libs.well_known_libs.contains(&archives[2]),
         "events has a perry-stdlib copy and must revert under the disabled flip"

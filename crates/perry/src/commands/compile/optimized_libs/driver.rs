@@ -254,8 +254,8 @@ pub(crate) fn build_optimized_libs(
                 // exists on disk first (so we can actually build it).
                 let crate_dir = workspace_root.join("crates").join(&binding.krate);
                 if !crate_dir.is_dir() {
-                    // turnloop P8 group H removed the bundled db copies, so
-                    // the fall-back below has nothing to fall back to.
+                    // tokio lane L4 deleted perry-stdlib's bundled `net` / `ws`,
+                    // so for those the fall-back below has nothing to fall back to.
                     if wrapper_is_sole_provider(module_normalized) {
                         eprintln!(
                             "error: `import '{}'` requires the external {} wrapper, but its \
