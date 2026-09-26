@@ -1,0 +1,1 @@
+**test(ext-nodemailer): the crate's unit tests link again.** `#[cfg(test)]` link-only shims stand in for the perry-stdlib `js_perry_smtp_*` seam and the `perry_ffi_promise_*` bridge. `cargo test -p perry-ext-nodemailer --lib` had failed to link since #10354, which reddened every full-scope cargo-test run.
