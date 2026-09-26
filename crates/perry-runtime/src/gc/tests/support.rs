@@ -126,7 +126,14 @@ pub(super) unsafe fn alloc_old_test_set(
         .expect("valid set elements layout");
     let elements = std::alloc::alloc_zeroed(layout) as *mut u64;
     assert!(!elements.is_null());
-    (*set).size = 0;
+    // #11362: the arena does not zero recycled holes; leaving `meta` (a
+    // traced edge) or `used` (the scanned extent) as residue is the same bug
+    // as the Map fixture's `store`. Zero the whole payload first.
+    std::ptr::write_bytes(
+        set as *mut u8,
+        0,
+        std::mem::size_of::<crate::set::SetHeader>(),
+    );
     (*set).capacity = capacity;
     (*set).elements = elements as *mut f64;
     (set, elements, layout)
@@ -976,4 +983,62 @@ pub(super) fn old_test_header_and_size(user: usize) -> (*mut GcHeader, usize) {
     let header = unsafe { header_from_user_ptr(user as *const u8) as *mut GcHeader };
     let total = unsafe { (*header).size as usize };
     (header, total)
+}
+
+/// Allocate an OLD-generation `MapHeader` for a remembered-set fixture, with a
+/// plain zeroed malloc block as its entries buffer (the test owns it; pair
+/// with [`retire_old_test_map`]).
+///
+/// #11362: `arena_alloc_gc_old` reuses swept same-size holes and bump space
+/// WITHOUT zeroing, so every header word the fixture does not write carries
+/// whatever the previous occupant left there. The old per-file copies of this
+/// fixture wrote only `size`/`used`/`capacity`/`entries`, leaving the owned
+/// `store` box and the traced `meta` edge as residue from an earlier test. The
+/// thread-exit arena drop (`walk_block_maps` → `drop_map_store_at_thread_exit`)
+/// then `Box::from_raw`'d that residue — `0x7878…`, an earlier test's `"xxx…"`
+/// string bytes — and SIGSEGV'd the whole suite after the test had passed.
+pub(super) unsafe fn alloc_old_test_map(
+    capacity: u32,
+) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
+    let map = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::map::MapHeader>(),
+        8,
+        GC_TYPE_MAP,
+    ) as *mut crate::map::MapHeader;
+    let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
+        .expect("valid map entries layout");
+    let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
+    assert!(!entries.is_null());
+    init_test_map_header(map, entries, capacity);
+    (map, entries, layout)
+}
+
+/// Initialise EVERY word of a fixture `MapHeader`, as `js_map_alloc` does —
+/// never only the fields the test happens to read (#11362). Zeroing the whole
+/// payload first is what makes `store` and `meta` null regardless of what the
+/// recycled arena bytes held.
+pub(super) unsafe fn init_test_map_header(
+    map: *mut crate::map::MapHeader,
+    entries: *mut u64,
+    capacity: u32,
+) {
+    std::ptr::write_bytes(
+        map as *mut u8,
+        0,
+        std::mem::size_of::<crate::map::MapHeader>(),
+    );
+    (*map).capacity = capacity;
+    (*map).entries = entries as *mut f64;
+}
+
+pub(super) unsafe fn retire_old_test_map(
+    map: *mut crate::map::MapHeader,
+    entries: *mut u64,
+    layout: std::alloc::Layout,
+) {
+    (*map).size = 0;
+    (*map).used = 0;
+    (*map).capacity = 0;
+    (*map).entries = std::ptr::null_mut();
+    std::alloc::dealloc(entries as *mut u8, layout);
 }

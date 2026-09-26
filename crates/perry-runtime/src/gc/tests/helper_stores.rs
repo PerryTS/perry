@@ -15,37 +15,6 @@ use std::fmt::Write as _;
 const OLD_BORN_FIELDS: u32 =
     (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES / 8) as u32 + 64;
 
-unsafe fn alloc_old_test_map(
-    capacity: u32,
-) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
-    let map = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<crate::map::MapHeader>(),
-        8,
-        GC_TYPE_MAP,
-    ) as *mut crate::map::MapHeader;
-    let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
-        .expect("valid map entries layout");
-    let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
-    assert!(!entries.is_null());
-    (*map).size = 0;
-    (*map).used = 0;
-    (*map).capacity = capacity;
-    (*map).entries = entries as *mut f64;
-    (map, entries, layout)
-}
-
-unsafe fn retire_old_test_map(
-    map: *mut crate::map::MapHeader,
-    entries: *mut u64,
-    layout: std::alloc::Layout,
-) {
-    (*map).size = 0;
-    (*map).used = 0;
-    (*map).capacity = 0;
-    (*map).entries = std::ptr::null_mut();
-    std::alloc::dealloc(entries as *mut u8, layout);
-}
-
 fn assert_verified_copied_minor(trace: &GcCycleTrace) {
     assert_copied_minor_trace(trace, true, CopiedMinorFallbackReason::None, false);
     assert!(

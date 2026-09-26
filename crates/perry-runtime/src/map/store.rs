@@ -227,6 +227,14 @@ pub(crate) fn test_map_side_allocation(addr: usize) -> Option<(usize, usize)> {
     }
 }
 
+/// The raw owned-store word of a Map header, read without trusting it. A
+/// fixture that builds a `MapHeader` by hand must leave this null, or the
+/// thread-exit arena drop frees whatever it holds (#11362).
+#[cfg(test)]
+pub(crate) unsafe fn test_map_store_word(map: *const MapHeader) -> usize {
+    (*map).store as usize
+}
+
 /// TLS destructors cannot access GC accounting TLS, which may already be gone.
 pub(crate) unsafe fn drop_map_store_at_thread_exit(map: *mut MapHeader) {
     let store = std::mem::replace(&mut (*map).store, ptr::null_mut());

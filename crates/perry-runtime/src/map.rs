@@ -319,7 +319,9 @@ pub(crate) use store::{
     release_current_thread_map_side_allocations,
 };
 #[cfg(test)]
-pub(crate) use store::{test_from_space_map_finalizations, test_map_side_allocation};
+pub(crate) use store::{
+    test_from_space_map_finalizations, test_map_side_allocation, test_map_store_word,
+};
 
 #[cfg(test)]
 thread_local! {

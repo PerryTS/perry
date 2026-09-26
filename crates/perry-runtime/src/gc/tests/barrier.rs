@@ -2,37 +2,6 @@ use super::super::barrier::RememberedSetClearState;
 use super::super::*;
 use super::support::*;
 
-unsafe fn alloc_old_test_map(
-    capacity: u32,
-) -> (*mut crate::map::MapHeader, *mut u64, std::alloc::Layout) {
-    let map = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<crate::map::MapHeader>(),
-        8,
-        GC_TYPE_MAP,
-    ) as *mut crate::map::MapHeader;
-    let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
-        .expect("valid map entries layout");
-    let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
-    assert!(!entries.is_null());
-    (*map).size = 0;
-    (*map).used = 0;
-    (*map).capacity = capacity;
-    (*map).entries = entries as *mut f64;
-    (map, entries, layout)
-}
-
-unsafe fn retire_old_test_map(
-    map: *mut crate::map::MapHeader,
-    entries: *mut u64,
-    layout: std::alloc::Layout,
-) {
-    (*map).size = 0;
-    (*map).used = 0;
-    (*map).capacity = 0;
-    (*map).entries = std::ptr::null_mut();
-    std::alloc::dealloc(entries as *mut u8, layout);
-}
-
 unsafe fn field_index_not_on_last_page(fields: *mut u64, field_count: u32) -> usize {
     assert!(field_count > 1);
     let last_page =
@@ -924,6 +893,59 @@ fn test_dirty_page_scan_dedupes_object_spanning_dirty_pages() {
     }
     clear_marks();
     remembered_set_clear();
+}
+
+/// #11362: the hand-built fixture Map must not inherit recycled arena bytes.
+/// `arena_alloc_gc_old` does not zero, so poison the payload the way a
+/// previous occupant would (the suite's crash carried `0x7878…`) and require
+/// the fixture initialiser to leave the owned `store` box and the traced
+/// `meta` edge null. A non-null `store` is freed by the thread-exit arena
+/// drop, which is how the entry-scan test SIGSEGV'd after it had passed.
+#[test]
+fn old_test_map_fixture_initialises_every_header_word_over_recycled_bytes() {
+    let _guard = GcTestIsolationGuard::new();
+    let map = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::map::MapHeader>(),
+        8,
+        GC_TYPE_MAP,
+    ) as *mut crate::map::MapHeader;
+    let layout = std::alloc::Layout::from_size_align(16 * 4, 8).unwrap();
+    let entries = unsafe { std::alloc::alloc_zeroed(layout) } as *mut u64;
+    assert!(!entries.is_null());
+    let (store, meta, size, used, epoch) = unsafe {
+        std::ptr::write_bytes(
+            map as *mut u8,
+            0x78,
+            std::mem::size_of::<crate::map::MapHeader>(),
+        );
+        init_test_map_header(map, entries, 4);
+        let observed = (
+            crate::map::test_map_store_word(map),
+            (*map).meta as usize,
+            (*map).size,
+            (*map).used,
+            (*map).compaction_epoch,
+        );
+        // Scrub BEFORE asserting: a failing arm must fail as a test, not as a
+        // thread-exit SIGSEGV that takes the whole suite down with it.
+        std::ptr::write_bytes(
+            map as *mut u8,
+            0,
+            std::mem::size_of::<crate::map::MapHeader>(),
+        );
+        retire_old_test_map(map, entries, layout);
+        observed
+    };
+    assert_eq!(
+        store, 0,
+        "fixture left recycled bytes in MapHeader.store; the thread-exit \
+         arena drop would Box::from_raw them"
+    );
+    assert_eq!(
+        meta, 0,
+        "fixture left recycled bytes in the traced meta edge"
+    );
+    assert_eq!((size, used, epoch), (0, 0, 0));
 }
 
 #[test]
