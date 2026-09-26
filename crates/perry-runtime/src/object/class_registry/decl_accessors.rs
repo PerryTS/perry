@@ -92,7 +92,6 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
 /// prototype (materialized on demand) and its ancestors, stopping at the first
 /// own property named `name` — an accessor answers, a data property shadows
 /// (`None`). This is the one lookup the class-accessor readers use (S3).
-#[allow(dead_code)] // S3's readers switch to it.
 pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, Accessor)> {
     use crate::object::key_attrs as ka;
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -125,4 +124,38 @@ pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, 
         cur.set_nanbox_f64(next);
     }
     None
+}
+
+/// `[[Get]]` of `name` on an instance of `class_id` when the class chain
+/// declares an accessor for it: `None` when no accessor answers (the caller
+/// keeps resolving), otherwise the getter's result — `undefined` for a
+/// setter-only accessor. `this_of` supplies the receiver and is called only
+/// when an accessor answers (it may consume the inherited-read receiver
+/// override). A compiled class getter is called directly; a getter installed
+/// by `defineProperty` runs as a closure.
+///
+/// # Safety
+/// `this_of` returns a live receiver.
+pub(crate) unsafe fn class_chain_getter_value(
+    class_id: u32,
+    name: &str,
+    this_of: impl FnOnce() -> f64,
+) -> Option<(crate::JSValue, usize)> {
+    // The per-class declarations say whether ANY class on the chain has an
+    // accessor named `name`; most reads stop here without materializing.
+    if !super::parent_static::class_chain_has_instance_accessor(class_id, name) {
+        return None;
+    }
+    let (_holder, acc) = class_proto_accessor(class_id, name)?;
+    if acc.raw_get != 0 {
+        let this = this_of();
+        let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
+        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        return Some((crate::JSValue::from_bits(f(this).to_bits()), acc.raw_get));
+    }
+    if acc.get != 0 {
+        let this = this_of();
+        return Some((crate::object::invoke_accessor_getter(acc.get, this), 0));
+    }
+    Some((crate::JSValue::undefined(), 0))
 }

@@ -137,3 +137,31 @@ class Computed {
 out("8.names", [Object.getOwnPropertyNames(Computed.prototype), summary(Computed.prototype, dyn)]);
 out("8.static", [summary(Computed, "s"), (Computed as any).s]);
 out("8.read", (new Computed() as any)[dyn]);
+
+// --- 9. reads resolve the property on the prototype, not a side record
+class Live {
+  _v = 5;
+  get v() {
+    return this._v;
+  }
+  set only(x: number) {
+    this._v = x;
+  }
+}
+{
+  const a: any = new Live();
+  out("9.read", [a.v, a.only]);
+  Object.defineProperty(Live.prototype, "v", {
+    get() {
+      return "replaced:" + this._v;
+    },
+    configurable: true,
+  });
+  out("9.replaced", a.v);
+  delete (Live.prototype as any).v;
+  out("9.deleted", [a.v, "v" in a]);
+  class Sub extends Live {}
+  const s: any = new Sub();
+  s.only = 9;
+  out("9.sub", [s._v, s.only]);
+}

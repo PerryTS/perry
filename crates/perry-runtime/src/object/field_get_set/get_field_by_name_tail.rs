@@ -1286,33 +1286,19 @@ pub(crate) fn get_field_by_name_object_tail(
                     {
                         return JSValue::from_bits(v.to_bits());
                     }
-                    // Native class vtable accessors and methods are exposed
-                    // from the class, not from own fields, so keyless
-                    // receivers need the same fallback as shaped receivers.
-                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                        if let Some(ref reg) = *registry {
-                            let mut cid = class_id;
-                            let mut depth = 0usize;
-                            while depth < 32 {
-                                if let Some(vtable) = reg.get(&cid) {
-                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
-                                        // #10498: see `class_accessor_cache`.
-                                        super::super::class_accessor_cache::note_class_getter(
-                                            obj, key, getter_ptr,
-                                        );
-                                        let v = call_class_getter(getter_ptr, obj);
-                                        return JSValue::from_bits(v.to_bits());
-                                    }
-                                }
-                                match get_parent_class_id(cid) {
-                                    Some(p) if p != 0 && p != cid => {
-                                        cid = p;
-                                        depth += 1;
-                                    }
-                                    _ => break,
-                                }
-                            }
+                    // Class accessors are properties of the class prototype
+                    // (charter step 3), so keyless receivers need the same
+                    // fallback as shaped receivers.
+                    if let Some((v, raw)) = super::super::class_registry::class_chain_getter_value(
+                        class_id,
+                        name,
+                        || super::accessors::class_getter_this(obj),
+                    ) {
+                        if raw != 0 {
+                            // #10498: see `class_accessor_cache`.
+                            super::super::class_accessor_cache::note_class_getter(obj, key, raw);
                         }
+                        return v;
                     }
                     if lookup_class_method_in_chain(class_id, name).is_some() {
                         let heap_name = {
@@ -1665,38 +1651,19 @@ pub(crate) fn get_field_by_name_object_tail(
         // method dispatch.
         let class_id = (*obj).class_id;
         if class_id != 0 {
-            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                if let Some(ref reg) = *registry {
-                    // Walk the class -> parent chain so a getter declared
-                    // on a base class is also found when the receiver is
-                    // a subclass instance. `get_parent_class_id` reads
-                    // CLASS_REGISTRY (populated by `js_register_class_parent`).
-                    let mut cid = class_id;
-                    let mut depth = 0usize;
-                    while depth < 32 {
-                        if let Some(vtable) = reg.get(&cid) {
-                            if let Ok(name) = std::str::from_utf8(key_bytes) {
-                                if let Some(&getter_ptr) = vtable.getters.get(name) {
-                                    // Getters take `this` as f64 (NaN-boxed
-                                    // POINTER_TAG), matching the codegen
-                                    // calling convention for class methods.
-                                    // #10498: see `class_accessor_cache`.
-                                    super::super::class_accessor_cache::note_class_getter(
-                                        obj, key, getter_ptr,
-                                    );
-                                    let v = call_class_getter(getter_ptr, obj);
-                                    return JSValue::from_bits(v.to_bits());
-                                }
-                            }
-                        }
-                        match get_parent_class_id(cid) {
-                            Some(p) if p != 0 && p != cid => {
-                                cid = p;
-                                depth += 1;
-                            }
-                            _ => break,
-                        }
+            // Class accessors (a base class's included) are accessor
+            // properties of the class prototype chain (charter step 3).
+            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                if let Some((v, raw)) =
+                    super::super::class_registry::class_chain_getter_value(class_id, name, || {
+                        super::accessors::class_getter_this(obj)
+                    })
+                {
+                    if raw != 0 {
+                        // #10498: see `class_accessor_cache`.
+                        super::super::class_accessor_cache::note_class_getter(obj, key, raw);
                     }
+                    return v;
                 }
             }
 
