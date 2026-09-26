@@ -433,6 +433,64 @@ pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usiz
     }
 }
 
+/// Thread-heap teardown (#11319): drop every entry of the PROCESS-GLOBAL
+/// closure side tables whose owner lies in one of `ranges` — the blocks an
+/// exiting thread's arena is about to free.
+///
+/// The tables outlive the thread that inserted an entry, but the young log
+/// that names the entry is thread-local and dies with it, and the owner's
+/// memory goes back to the allocator. [`prune_dead_closure_side_table_owners`]
+/// cannot reach these entries (a foreign address does not attribute), so
+/// without this they leak for the life of the process — and once another
+/// thread's arena reuses the address range, a stale entry reads as THAT
+/// thread's young owner: its minor's rule-2 re-derivation finds a relevant
+/// key its log never noted (the young_log.rs rule-1 abort), and a new closure
+/// allocated at the recycled address inherits the dead one's props.
+///
+/// Only the mutexed process-global tables are touched: this runs from a TLS
+/// destructor, where the thread-local tables (young log, box captures) may
+/// already be gone, and they die with the thread anyway.
+pub(crate) fn release_closure_side_table_owners_in_ranges(ranges: &[(usize, usize)]) {
+    if ranges.is_empty() {
+        return;
+    }
+    // Arena blocks never overlap, so a start-sorted list answers membership
+    // with one binary search per owner.
+    let mut ranges = ranges.to_vec();
+    ranges.sort_unstable_by_key(|&(start, _)| start);
+    let in_ranges = |owner: usize| {
+        let after = ranges.partition_point(|&(start, _)| start <= owner);
+        after > 0 && owner < ranges[after - 1].1
+    };
+    if let Ok(mut props) = get_closure_props().lock() {
+        props.retain(|owner, _| !in_ranges(*owner));
+    }
+    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+        prototypes.retain(|owner, _| !in_ranges(*owner));
+    }
+    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
+        deleted.retain(|owner, _| !in_ranges(*owner));
+    }
+    #[cfg(feature = "wasm-host")]
+    let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
+        let mut removed = Vec::new();
+        externals.retain(|owner, handle| {
+            let keep = !in_ranges(*owner);
+            if !keep {
+                removed.push(*handle);
+            }
+            keep
+        });
+        removed
+    } else {
+        Vec::new()
+    };
+    #[cfg(feature = "wasm-host")]
+    for external in removed {
+        drop_wasm_funcref_external(external);
+    }
+}
+
 /// [`prune_dead_closure_side_table_owners`] for a MINOR: only a young owner
 /// can be dead, and a young owner is always in the young log (it was noted
 /// at insert and is re-logged by every minor-scoped walk while it stays

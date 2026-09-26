@@ -33,7 +33,11 @@ pub mod perry_ffi_async;
 // Core modules - always available
 pub mod async_local_storage;
 pub mod common;
+// Runtime behaviour only observable with perry-runtime compiled as a normal
+// dependency (its own unit tests build it with `cfg(test)` side tables).
 pub mod domain;
+#[cfg(test)]
+mod runtime_thread_exit_tests;
 // dotenv is feature-gated as of v0.5.533 so the well-known bindings
 // table (#466 Phase 4) can route `import 'dotenv'` to perry-ext-dotenv
 // without duplicate _js_dotenv_* symbols at link time. Default-on
