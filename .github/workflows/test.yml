@@ -191,6 +191,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test
 
+      - name: Cargo test scope regression tests
+        run: python3 -m unittest discover -s tests -p 'test_ci_test_scope.py' -v
+
       - name: Docs catalog toolchain tests
         run: python3 docs/scripts/test_i18n_toolchain.py
 
