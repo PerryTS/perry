@@ -88,6 +88,12 @@ fn converting_bodies(target: Option<&str>, body: Vec<Stmt>) -> Vec<String> {
     bodies
 }
 
+/// The diamond tests pin a target without FEAT_JSCVT. `None` would mean the
+/// HOST, and on an Apple-silicon host that is a JSCVT CPU, where the whole
+/// conversion is one `fjcvtzs` and there is no diamond to find (see
+/// `jscvt_targets_keep_the_single_instruction_conversion`).
+const DIAMOND_TARGET: &str = "x86_64-unknown-linux-gnu";
+
 fn returning(expr: Expr) -> Vec<Stmt> {
     vec![Stmt::Return(Some(expr))]
 }
@@ -177,7 +183,7 @@ fn assert_guarded_diamond(what: &str, ir: &str) {
 #[test]
 fn bitwise_or_zero_of_a_double_takes_the_guarded_fast_path() {
     let body = returning(bin(BinaryOp::BitOr, Expr::LocalGet(A), Expr::Integer(0)));
-    for ir in converting_bodies(None, body) {
+    for ir in converting_bodies(Some(DIAMOND_TARGET), body) {
         assert_guarded_diamond("a | 0", &ir);
     }
 }
@@ -192,7 +198,7 @@ fn every_toint32_operator_shares_the_diamond() {
         BinaryOp::UShr,
     ] {
         let body = returning(bin(op, Expr::LocalGet(A), Expr::Integer(3)));
-        for ir in converting_bodies(None, body) {
+        for ir in converting_bodies(Some(DIAMOND_TARGET), body) {
             assert_guarded_diamond(&format!("a {op:?} 3"), &ir);
         }
     }
@@ -200,7 +206,7 @@ fn every_toint32_operator_shares_the_diamond() {
         op: UnaryOp::BitNot,
         operand: Box::new(Expr::LocalGet(A)),
     });
-    for ir in converting_bodies(None, body) {
+    for ir in converting_bodies(Some(DIAMOND_TARGET), body) {
         assert_guarded_diamond("~a", &ir);
     }
 }
@@ -244,7 +250,7 @@ fn a_toint32_result_enters_an_i32_slot_without_a_second_conversion() {
         )),
         Stmt::Return(Some(Expr::LocalGet(H))),
     ];
-    for ir in converting_bodies(None, body) {
+    for ir in converting_bodies(Some(DIAMOND_TARGET), body) {
         assert!(
             ir.contains("alloca i32"),
             "h is a canonical i32 local:\n{ir}"
