@@ -9,6 +9,7 @@ mod alloc;
 mod box_captures;
 mod dispatch;
 mod dynamic_props;
+pub(crate) mod props;
 mod registry;
 pub(crate) mod shape;
 mod unbox;
@@ -95,7 +96,6 @@ pub(crate) use dynamic_props::{
     closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
     function_prototype_inherited_get, prune_dead_closure_side_table_owners,
     prune_dead_closure_side_table_owners_young, release_closure_side_table_owners_in_ranges,
-    visit_closure_dynamic_prop_value_slots_mut, visit_closure_static_prototype_slot_mut,
 };
 pub use dynamic_props::{
     closure_delete_own_dynamic_prop, closure_dynamic_props_snapshot, closure_get_dynamic_prop,

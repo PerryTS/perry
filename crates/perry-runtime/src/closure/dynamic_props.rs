@@ -1,99 +1,21 @@
-//! Dynamic per-closure property side-table, `this`-rebind/unbind helpers,
-//! and the closure-magic-tag pointer predicate.
+//! A function object's own properties, `this`-rebind/unbind helpers, and the
+//! closure kind predicate.
+//!
+//! Own properties live IN the function object (D1, the every-receiver-shape
+//! lane): `ClosureHeader::props` points at a runtime-internal null-prototype
+//! `ObjectHeader` (the "bag", `closure::props`) whose keys and slots are the
+//! function's own string-keyed data properties, in ordinary creation order.
+//! The bag is a traced child edge of the closure, so it moves and dies with
+//! it; the three address-keyed side tables it replaces (own values, deleted
+//! synthesized keys, recorded [[Prototype]]) and their young log, re-key hook,
+//! dead-owner prune and root scanner are gone. What remains keyed by address
+//! is the wasm-host funcref table below.
 
 use super::*;
+#[cfg(feature = "wasm-host")]
 use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
-use std::collections::{HashMap, HashSet};
+#[cfg(feature = "wasm-host")]
 use std::sync::{Mutex, OnceLock};
-
-/// Per-function dynamic properties with ordinary property-creation order.
-///
-/// Reads stay O(1) through the hash map, while `order` records the string-key
-/// insertion order required by `OrdinaryOwnPropertyKeys`. Updating an existing
-/// property leaves its position unchanged; deleting it removes the position so
-/// a later re-add appends it at the end.
-#[derive(Default)]
-struct ClosureProps {
-    values: HashMap<String, f64>,
-    order: Vec<String>,
-}
-
-impl ClosureProps {
-    fn contains_key(&self, key: &str) -> bool {
-        self.values.contains_key(key)
-    }
-
-    fn get(&self, key: &str) -> Option<&f64> {
-        self.values.get(key)
-    }
-
-    fn insert(&mut self, key: String, value: f64) {
-        if !self.values.contains_key(&key) {
-            self.order.push(key.clone());
-        }
-        self.values.insert(key, value);
-    }
-
-    fn remove(&mut self, key: &str) -> Option<f64> {
-        let value = self.values.remove(key)?;
-        self.order.retain(|existing| existing != key);
-        Some(value)
-    }
-
-    fn merge_older(&mut self, mut older: ClosureProps) {
-        let newer = std::mem::take(self);
-        for key in newer.order {
-            if older.values.contains_key(&key) {
-                continue;
-            }
-            if let Some(value) = newer.values.get(&key).copied() {
-                older.insert(key, value);
-            }
-        }
-        *self = older;
-    }
-
-    fn snapshot(&self) -> Vec<(String, f64)> {
-        let mut indexed = Vec::new();
-        let mut strings = Vec::new();
-        for key in &self.order {
-            let Some(value) = self.values.get(key).copied() else {
-                continue;
-            };
-            if let Some(index) = crate::object::canonical_array_index(key) {
-                indexed.push((index, key.clone(), value));
-            } else {
-                strings.push((key.clone(), value));
-            }
-        }
-        crate::cold_sort::sort_by_key(&mut indexed, |(index, _, _)| *index);
-        indexed
-            .into_iter()
-            .map(|(_, key, value)| (key, value))
-            .chain(strings)
-            .collect()
-    }
-}
-
-per_test_global! {
-    /// OUTER key is a closure heap address, probed on every dynamic property
-    /// get/set/delete on a function object, so it takes `PtrHasher` for the
-    /// same reason as the other pointer-keyed registries (#8125): a raw
-    /// address is already well distributed and no external input reaches it.
-    ///
-    /// `ClosureProps::values` deliberately keeps std's SipHash. Its keys are JS
-    /// property names, and unlike the descriptor side tables' program-identifier
-    /// keys these can be computed at runtime from program input
-    /// (`fn[userSuppliedName] = 1`), which is exactly the adversarial case
-    /// `RandomState` exists to defend. It is also not the half the profile
-    /// implicates -- `hash_one::<&usize>` is the outer probe.
-    static CLOSURE_PROPS: OnceLock<Mutex<PtrHashMap<usize, ClosureProps>>> =
-        OnceLock::new();
-}
-
-fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, ClosureProps>> {
-    crate::once_init::get_or_init(&CLOSURE_PROPS, || Mutex::new(new_ptr_hash_map()))
-}
 
 #[cfg(feature = "wasm-host")]
 per_test_global! {
@@ -119,7 +41,6 @@ pub(crate) fn register_wasm_funcref_external(owner: usize, handle: usize) {
         drop_wasm_funcref_external(handle);
         return;
     }
-    note_young_closure_owner(owner, 0);
     let replaced = match get_wasm_funcref_externals().lock() {
         Ok(mut externals) => externals.insert(owner, handle),
         Err(_) => Some(handle),
@@ -129,110 +50,24 @@ pub(crate) fn register_wasm_funcref_external(owner: usize, handle: usize) {
     }
 }
 
-crate::perry_thread_local! {
-    /// #9754: this thread's young-entry log for the closure side tables —
-    /// the owners whose entry may hold a pointer a minor can act on, as key
-    /// or as value. Thread-local although the tables are process-global: an
-    /// entry's addresses belong to the inserting thread's heap, and only that
-    /// thread's minors can move or free them. See `gc/young_log.rs`.
-    static CLOSURE_YOUNG_OWNERS: std::cell::RefCell<crate::gc::young_log::YoungLog<usize>> =
-        const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
-    #[cfg(test)]
-    static TEST_SUPPRESS_CLOSURE_YOUNG_NOTE: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-const CLOSURE_YOUNG_LOG_NAME: &str = "closure.dynamic_props";
-
-/// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE the entry is published
-/// when the owner or the value being stored can matter to a minor.
-#[inline]
-fn note_young_closure_owner(owner: usize, value_bits: u64) {
-    if crate::gc::young_log::addr_is_minor_collectible(owner)
-        || crate::gc::young_log::bits_are_minor_relevant(value_bits)
-    {
-        #[cfg(test)]
-        if TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(std::cell::Cell::get) {
-            return;
-        }
-        CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().note(owner));
-    }
-}
-
-#[cfg(test)]
-mod young_log_sabotage_tests {
-    use super::*;
-
-    #[test]
-    fn closure_log_rederivation_rejects_a_suppressed_setter() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        test_clear_closure_side_tables();
-        let owner = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
-        TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(true));
-        closure_set_dynamic_prop(owner, "sabotage", 7.0);
-        TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(false));
-        let missed = std::panic::catch_unwind(debug_assert_closure_young_log_complete);
-        test_clear_closure_side_tables();
-        assert!(
-            missed.is_err(),
-            "sabotage: suppressing closure_set_dynamic_prop's note must trip completeness"
-        );
-    }
-}
-
-/// A re-keyed entry keeps whatever values it had, so the new owner is logged
-/// unconditionally; the next minor-scoped walk drops it if nothing in it is
-/// relevant any more.
-#[inline]
-fn note_young_closure_owner_rekeyed(new_owner: usize) {
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().note(new_owner));
-}
-
-per_test_global! {
-    /// #3655: keys deleted off a closure via `delete fn.name` etc.
-    ///
-    /// Functions carry built-in own data properties (`name`, `length`, and —
-    /// for constructors — `prototype`) that aren't stored in `CLOSURE_PROPS`:
-    /// they're synthesized from the arity/name registries on read. Those
-    /// properties are spec'd `configurable: true`, so `delete fn.name` must make
-    /// them disappear from every subsequent `hasOwnProperty` / `getOwnProperty*`
-    /// / value read. We can't remove a synthesized slot, so we record the
-    /// deletion here and have every property-protocol site consult it. test262's
-    /// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
-    /// when checking `configurable`.
-    ///
-    /// Outer key is a closure address (`PtrHasher`); the inner `HashSet<String>`
-    /// keeps SipHash for the same reason as `CLOSURE_PROPS`' inner map.
-    static CLOSURE_DELETED_KEYS: OnceLock<Mutex<PtrHashMap<usize, HashSet<String>>>> =
-        OnceLock::new();
-}
-
-fn get_closure_deleted_keys() -> &'static Mutex<PtrHashMap<usize, HashSet<String>>> {
-    crate::once_init::get_or_init(&CLOSURE_DELETED_KEYS, || Mutex::new(new_ptr_hash_map()))
-}
-
-/// Record that `key` was `delete`d off the closure at `ptr`.
+/// Record that `key` was `delete`d off the closure at `ptr` — the #3655
+/// marker for a SYNTHESIZED own property (`name`, `length`, `prototype`, a
+/// builtin static) that has no stored value to drop. Kept in the bag's
+/// internal state record (`closure::props`).
 pub fn closure_mark_key_deleted(ptr: usize, key: &str) {
-    if ptr == 0 {
+    if ptr == 0 || !is_closure_ptr(ptr) {
         return;
     }
-    note_young_closure_owner(ptr, 0);
-    if let Ok(mut map) = get_closure_deleted_keys().lock() {
-        map.entry(ptr).or_default().insert(key.to_string());
-    }
+    unsafe { super::props::state_mark_deleted(ptr, key) };
     super::shape::note_function_own_state_changed(ptr);
 }
 
 /// True if `key` was previously `delete`d off the closure at `ptr`.
 pub fn closure_is_key_deleted(ptr: usize, key: &str) -> bool {
-    if ptr == 0 {
+    if ptr == 0 || !is_closure_ptr(ptr) {
         return false;
     }
-    get_closure_deleted_keys()
-        .lock()
-        .ok()
-        .map(|map| map.get(&ptr).map(|s| s.contains(key)).unwrap_or(false))
-        .unwrap_or(false)
+    unsafe { super::props::state_is_deleted(ptr, key) }
 }
 
 /// True if `prop` is an OWN dynamic property of the closure at `ptr` (does NOT
@@ -240,125 +75,37 @@ pub fn closure_is_key_deleted(ptr: usize, key: &str) -> bool {
 /// by `hasOwnProperty`/`getOwnPropertyNames` to report own user props and the
 /// constructor `prototype` slot without inheriting from a set prototype.
 pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
-    get_closure_props()
-        .lock()
-        .ok()
-        .map(|m| m.get(&ptr).map(|p| p.contains_key(prop)).unwrap_or(false))
-        .unwrap_or(false)
-}
-
-per_test_global! {
-    /// #36 / #321: `Object.setPrototypeOf(closure, protoObj)` side-table.
-    ///
-    /// Maps a closure pointer to the NaN-box bits of the object that was set as
-    /// its static prototype. effect's `Context.Tag(id)` returns a plain function
-    /// `TagClass` whose `_op: "Tag"`, `[TagTypeId]`, and `[EffectTypeId]` live on
-    /// `TagProto` (a regular object), wired by `Object.setPrototypeOf(TagClass,
-    /// TagProto)`. Perry bakes class IDs at allocation time so it can't mutate a
-    /// real prototype chain, but recording the (closure → proto) link here lets
-    /// string- and symbol-keyed property reads on the closure walk to the proto's
-    /// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
-    static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<PtrHashMap<usize, u64>>> = OnceLock::new();
-}
-
-fn get_closure_prototypes() -> &'static Mutex<PtrHashMap<usize, u64>> {
-    crate::once_init::get_or_init(
-        &CLOSURE_STATIC_PROTOTYPES,
-        || Mutex::new(new_ptr_hash_map()),
-    )
+    closure_get_own_dynamic_prop(ptr, prop).is_some()
 }
 
 /// Record `Object.setPrototypeOf(closure_ptr, proto)`. `proto_bits` is the
 /// NaN-box bits of the prototype object (POINTER-tagged). Idempotent overwrite.
+///
+/// #36 / #321: effect's `Context.Tag(id)` wires `Object.setPrototypeOf(TagClass,
+/// TagProto)`; recording the link lets string- and symbol-keyed reads on the
+/// closure walk to the proto's own properties. The link lives in the bag's
+/// internal state record, a traced edge of the closure.
 pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
-    if closure_ptr == 0 {
+    if closure_ptr == 0 || !is_closure_ptr(closure_ptr) {
         return;
     }
-    let mut slot_addr = 0usize;
-    note_young_closure_owner(closure_ptr, proto_bits);
-    if let Ok(mut map) = get_closure_prototypes().lock() {
-        let slot = map.entry(closure_ptr).or_insert(0);
-        *slot = proto_bits;
-        slot_addr = slot as *mut u64 as usize;
-    }
-    if slot_addr != 0 {
-        crate::gc::runtime_write_barrier_external_slot(closure_ptr, slot_addr, proto_bits);
-    }
+    unsafe { super::props::state_set_prototype(closure_ptr, proto_bits) };
     super::shape::note_function_own_state_changed(closure_ptr);
 }
 
 /// Look up the static prototype object bits recorded for a closure, if any.
 pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
-    get_closure_prototypes()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(&closure_ptr).copied())
-}
-
-fn barrier_closure_dynamic_props(owner: usize, props: &mut ClosureProps) {
-    for value in props.values.values_mut() {
-        crate::gc::runtime_write_barrier_external_slot(
-            owner,
-            value as *mut f64 as usize,
-            value.to_bits(),
-        );
-    }
-}
-
-fn merge_closure_prop_map(
-    props: &mut PtrHashMap<usize, ClosureProps>,
-    owner: usize,
-    owner_props: ClosureProps,
-) {
-    match props.entry(owner) {
-        std::collections::hash_map::Entry::Occupied(mut entry) => {
-            entry.get_mut().merge_older(owner_props);
-        }
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(owner_props);
-        }
-    }
-}
-
-fn forwarded_heap_owner(owner: usize) -> Option<usize> {
-    if owner == 0 {
+    if closure_ptr == 0 || !is_closure_ptr(closure_ptr) {
         return None;
     }
-    if matches!(
-        crate::arena::classify_heap_generation(owner),
-        crate::arena::HeapGeneration::Unknown
-    ) {
-        return None;
-    }
-    unsafe {
-        let header = crate::value::addr_class::try_read_gc_header(owner)?;
-        if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
-            return None;
-        }
-        Some(crate::gc::forwarding_address(header as *const _) as usize)
-    }
+    unsafe { super::props::state_prototype(closure_ptr) }
 }
 
-/// Dead-payload sweep arm (2026-07-09 GC audit wave 2): remove every side
-/// table entry owned by the DEAD closure at `ptr`, exactly like
-/// `object::clear_overflow_for_ptr` does for object overflow fields. Called
-/// from `gc_type_clear_dead_payload_side_tables` when the sweep reclaims a
-/// `GC_TYPE_CLOSURE` header — previously an explicit no-op, so one entry per
-/// closure INSTANCE that ever got `fn.prop = …` / `setPrototypeOf(fn, …)`
-/// (memoization wrappers, effect `Context.Tag`) leaked forever and a new
-/// closure at the recycled address inherited the dead one's props.
+/// Dead-payload sweep arm: release the wasm-host funcref handle owned by the
+/// DEAD closure at `ptr`. Own properties need nothing — they die with it.
 pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
     if ptr == 0 {
         return;
-    }
-    if let Ok(mut props) = get_closure_props().lock() {
-        props.remove(&ptr);
-    }
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        prototypes.remove(&ptr);
-    }
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        deleted.remove(&ptr);
     }
     #[cfg(feature = "wasm-host")]
     let external = get_wasm_funcref_externals()
@@ -371,55 +118,25 @@ pub(crate) fn clear_closure_side_tables_for_dead_ptr(ptr: usize) {
     }
 }
 
-/// Cheap sweep gate: true when any closure side table has
-/// entries, so the per-dead-object `clear_dead_payload` dispatch can be
-/// skipped entirely on the (overwhelmingly common) runs that never attach
-/// props to closures. Mirrors `object::overflow_fields_is_empty`.
+/// Cheap sweep gate: true when any closure-keyed side table has entries.
 pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
-    let dynamic = get_closure_props().lock().is_ok_and(|m| !m.is_empty())
-        || get_closure_prototypes().lock().is_ok_and(|m| !m.is_empty())
-        || get_closure_deleted_keys()
-            .lock()
-            .is_ok_and(|m| !m.is_empty());
     #[cfg(feature = "wasm-host")]
-    return dynamic
-        || get_wasm_funcref_externals()
-            .lock()
-            .is_ok_and(|m| !m.is_empty());
+    return get_wasm_funcref_externals()
+        .lock()
+        .is_ok_and(|m| !m.is_empty());
     #[cfg(not(feature = "wasm-host"))]
-    dynamic
+    false
 }
 
-/// Death pruning for tenured/uncollected-by-sweep closures (2026-07-09 GC
-/// audit wave 2): the sweep's dead-payload arm above only fires for headers
-/// the ordinary sweep reclaims; closures dying in the ACTIVE nursery block,
-/// in bulk block resets, or in copied-minor from-space never reach it. This
-/// registry-style pass walks the tables with one of the GC's deadness
-/// predicates (`gc::dead_owner`, narrowed to `GC_TYPE_CLOSURE`). The tables
-/// are process-global: foreign threads' closure addresses don't attribute
-/// and are skipped (documented residual).
+/// Death pruning for closure-keyed tables (box-capture owners and the
+/// wasm-host funcref table), with one of the GC's deadness predicates.
 pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
     super::prune_dead_closure_box_capture_owners(is_dead_closure);
-    let mut verdicts: HashMap<usize, bool> = HashMap::new();
-    let mut is_dead = |owner: usize| -> bool {
-        *verdicts
-            .entry(owner)
-            .or_insert_with(|| is_dead_closure(owner))
-    };
-    if let Ok(mut props) = get_closure_props().lock() {
-        props.retain(|owner, _| !is_dead(*owner));
-    }
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        prototypes.retain(|owner, _| !is_dead(*owner));
-    }
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        deleted.retain(|owner, _| !is_dead(*owner));
-    }
     #[cfg(feature = "wasm-host")]
     let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
         let mut removed = Vec::new();
         externals.retain(|owner, handle| {
-            let keep = !is_dead(*owner);
+            let keep = !is_dead_closure(*owner);
             if !keep {
                 removed.push(*handle);
             }
@@ -436,100 +153,66 @@ pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usiz
 }
 
 /// Thread-heap teardown (#11319): drop every entry of the PROCESS-GLOBAL
-/// closure side tables whose owner lies in one of `ranges` — the blocks an
-/// exiting thread's arena is about to free.
+/// closure side table (the wasm-host funcref table) whose owner lies in one
+/// of `ranges` — the blocks an exiting thread's arena is about to free.
 ///
-/// The tables outlive the thread that inserted an entry, but the young log
-/// that names the entry is thread-local and dies with it, and the owner's
+/// The table outlives the thread that inserted an entry, and the owner's
 /// memory goes back to the allocator. [`prune_dead_closure_side_table_owners`]
 /// cannot reach these entries (a foreign address does not attribute), so
-/// without this they leak for the life of the process — and once another
-/// thread's arena reuses the address range, a stale entry reads as THAT
-/// thread's young owner: its minor's rule-2 re-derivation finds a relevant
-/// key its log never noted (the young_log.rs rule-1 abort), and a new closure
-/// allocated at the recycled address inherits the dead one's props.
+/// without this they leak for the life of the process, and once another
+/// thread's arena reuses the address range a stale entry would name a new
+/// closure allocated there. A function's own properties are not here: they
+/// live in the function object (`closure/props.rs`) and die with it.
 ///
-/// Only the mutexed process-global tables are touched: this runs from a TLS
-/// destructor, where the thread-local tables (young log, box captures) may
-/// already be gone, and they die with the thread anyway.
+/// Only the mutexed process-global table is touched: this runs from a TLS
+/// destructor, where the thread-local tables (box captures) may already be
+/// gone, and they die with the thread anyway.
 pub(crate) fn release_closure_side_table_owners_in_ranges(ranges: &[(usize, usize)]) {
-    if ranges.is_empty() {
-        return;
-    }
-    // Arena blocks never overlap, so a start-sorted list answers membership
-    // with one binary search per owner.
-    let mut ranges = ranges.to_vec();
-    ranges.sort_unstable_by_key(|&(start, _)| start);
-    let in_ranges = |owner: usize| {
-        let after = ranges.partition_point(|&(start, _)| start <= owner);
-        after > 0 && owner < ranges[after - 1].1
-    };
-    if let Ok(mut props) = get_closure_props().lock() {
-        props.retain(|owner, _| !in_ranges(*owner));
-    }
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        prototypes.retain(|owner, _| !in_ranges(*owner));
-    }
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        deleted.retain(|owner, _| !in_ranges(*owner));
-    }
+    #[cfg(not(feature = "wasm-host"))]
+    let _ = ranges;
     #[cfg(feature = "wasm-host")]
-    let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
-        let mut removed = Vec::new();
-        externals.retain(|owner, handle| {
-            let keep = !in_ranges(*owner);
-            if !keep {
-                removed.push(*handle);
-            }
-            keep
-        });
-        removed
-    } else {
-        Vec::new()
-    };
-    #[cfg(feature = "wasm-host")]
-    for external in removed {
-        drop_wasm_funcref_external(external);
-    }
-}
-
-/// [`prune_dead_closure_side_table_owners`] for a MINOR: only a young owner
-/// can be dead, and a young owner is always in the young log (it was noted
-/// at insert and is re-logged by every minor-scoped walk while it stays
-/// young), so the log is the complete candidate set (#9754).
-pub(crate) fn prune_dead_closure_side_table_owners_young(is_dead_closure: &dyn Fn(usize) -> bool) {
-    super::prune_dead_closure_box_capture_owners(is_dead_closure);
-    let candidates = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
-    let mut kept = Vec::with_capacity(candidates.len());
-    for owner in candidates {
-        if is_dead_closure(owner) {
-            clear_closure_side_tables_for_dead_ptr(owner);
+    {
+        if ranges.is_empty() {
+            return;
+        }
+        // Arena blocks never overlap, so a start-sorted list answers
+        // membership with one binary search per owner.
+        let mut ranges = ranges.to_vec();
+        ranges.sort_unstable_by_key(|&(start, _)| start);
+        let in_ranges = |owner: usize| {
+            let after = ranges.partition_point(|&(start, _)| start <= owner);
+            after > 0 && owner < ranges[after - 1].1
+        };
+        let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
+            let mut removed = Vec::new();
+            externals.retain(|owner, handle| {
+                let keep = !in_ranges(*owner);
+                if !keep {
+                    removed.push(*handle);
+                }
+                keep
+            });
+            removed
         } else {
-            kept.push(owner);
+            Vec::new()
+        };
+        for external in removed {
+            drop_wasm_funcref_external(external);
         }
     }
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
 }
 
+/// [`prune_dead_closure_side_table_owners`] for a MINOR. The wasm-host table
+/// is tiny and only exists with that feature, so a minor walks it whole.
+pub(crate) fn prune_dead_closure_side_table_owners_young(is_dead_closure: &dyn Fn(usize) -> bool) {
+    prune_dead_closure_side_table_owners(is_dead_closure);
+}
+
+/// Owner-move hook (`GcMoveHookKind::ClosureDynamicProps`): re-key the
+/// wasm-host funcref table. Own properties move with the closure.
 pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
-    }
-    note_young_closure_owner_rekeyed(new_owner);
-    if let Ok(mut props) = get_closure_props().lock() {
-        if let Some(old_props) = props.remove(&old_owner) {
-            merge_closure_prop_map(&mut props, new_owner, old_props);
-        }
-    }
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        if let Some(proto_bits) = prototypes.remove(&old_owner) {
-            prototypes.insert(new_owner, proto_bits);
-        }
-    }
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        if let Some(keys) = deleted.remove(&old_owner) {
-            deleted.entry(new_owner).or_default().extend(keys);
-        }
     }
     #[cfg(feature = "wasm-host")]
     let replaced = get_wasm_funcref_externals()
@@ -545,330 +228,24 @@ pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usi
     }
 }
 
-pub(crate) fn visit_closure_dynamic_prop_values_mut(owner: usize, mut visit: impl FnMut(&mut f64)) {
-    if owner == 0 {
-        return;
-    }
-    let Some(mut owner_props) = get_closure_props()
-        .lock()
-        .ok()
-        .and_then(|mut props| props.remove(&owner))
-    else {
-        return;
-    };
-
-    for value in owner_props.values.values_mut() {
-        visit(value);
-    }
-
-    // `visit` may rewrite an old value to a nursery/survivor address. This
-    // path temporarily removes the entry, so the ordinary setter's pre-publish
-    // young-log note does not cover the rewritten value. Re-arm the log before
-    // putting the entry back; otherwise the next minor-scoped root walk skips
-    // the new pointer (#11117).
-    let relevant_value_bits = owner_props
-        .values
-        .values()
-        .map(|value| value.to_bits())
-        .find(|bits| crate::gc::young_log::bits_are_minor_relevant(*bits))
-        .unwrap_or(0);
-    note_young_closure_owner(owner, relevant_value_bits);
-    if let Ok(mut props) = get_closure_props().lock() {
-        merge_closure_prop_map(&mut props, owner, owner_props);
-    }
-}
-
-pub(crate) fn visit_closure_dynamic_prop_value_slots_mut(
-    owner: usize,
-    mut visit: impl FnMut(*mut u64),
-) {
-    visit_closure_dynamic_prop_values_mut(owner, |value| {
-        visit(value as *mut f64 as *mut u64);
-    });
-}
-
-pub(crate) fn visit_closure_static_prototype_slot_mut(
-    owner: usize,
-    mut visit: impl FnMut(*mut u64),
-) {
-    if owner == 0 {
-        return;
-    }
-    // Take the entry OUT and run the visit with the lock RELEASED: a
-    // copying-minor rewrite visitor can move the prototype closure, and
-    // move fixup re-enters `closure_dynamic_props_owner_moved`, which
-    // takes this same lock — visiting under it self-deadlocks the
-    // collector (the geisterhand+reviver GC test wedged CI's cargo-test
-    // at the 3h job timeout). Same remove → visit → merge-back pattern
-    // as `visit_closure_dynamic_prop_values_mut` above and the roots
-    // scanner below.
-    let Some(mut proto_bits) = get_closure_prototypes()
-        .lock()
-        .ok()
-        .and_then(|mut prototypes| prototypes.remove(&owner))
-    else {
-        return;
-    };
-    visit(&mut proto_bits as *mut u64);
-    // The visit can forward the owner itself (self-referential
-    // prototype); re-key like the roots scanner does.
-    let new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
-    note_young_closure_owner(new_owner, proto_bits);
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        prototypes.insert(new_owner, proto_bits);
-    }
-}
-
-fn closure_side_table_owners() -> Vec<usize> {
-    let mut owners: Vec<usize> = Vec::new();
-    if let Ok(props) = get_closure_props().lock() {
-        owners.extend(props.keys().copied());
-    }
-    if let Ok(prototypes) = get_closure_prototypes().lock() {
-        owners.extend(prototypes.keys().copied());
-    }
-    if let Ok(deleted) = get_closure_deleted_keys().lock() {
-        owners.extend(deleted.keys().copied());
-    }
-    #[cfg(feature = "wasm-host")]
-    if let Ok(externals) = get_wasm_funcref_externals().lock() {
-        owners.extend(externals.keys().copied());
-    }
-    owners.sort_unstable();
-    owners.dedup();
-    owners
-}
-
-/// Mutable GC scanner for closure dynamic-property side-table metadata.
-///
-/// The side table is keyed by closure address. The key itself is metadata
-/// (visited only so a moved closure has its entry re-keyed; the metadata
-/// visitor is a no-op in mark phases), but the **values** are real JS
-/// references that must be marked alive in every phase, just like the
-/// parallel `scan_overflow_fields_roots_mut` (`object/mod.rs`) does for
-/// object overflow fields. #1802: pre-fix this scanner early-returned
-/// unless `is_metadata_rewrite_phase()`, so during `Mark` /
-/// `CopyingMark` the values were never traced, and a closure prop whose
-/// transitive contents were reachable only via the side table (e.g.
-/// ajv's `validate.errors = [{ msg }]`) had its element objects freed
-/// behind the still-live array.
-///
-/// #9754: a minor-scoped pass (`visitor.young_scope()`) visits only the
-/// owners in `CLOSURE_YOUNG_OWNERS`; a full pass walks every owner and
-/// rebuilds the log. Both go through [`scan_closure_owner`], so the per-entry
-/// work is identical and only the candidate set differs.
+/// Mutable GC scanner for the wasm-host funcref table: its keys are
+/// metadata (re-keyed when a closure moves, never a root).
 pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if visitor.young_scope() {
-        scan_closure_side_tables_young(visitor);
-        return;
-    }
-    let owners = closure_side_table_owners();
-    let table_len = owners.len() as u64;
-    // A full walk is authoritative: rebuild the log from what it finds.
-    // Notes made by owner-move hooks while the walk runs land in the emptied
-    // log and are kept — they name entries this walk already visited under
-    // their old key, so the duplicate is harmless.
-    let _ = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
-    let mut kept = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_spare());
-    for owner in owners {
-        let (new_owner, relevant) = scan_closure_owner(visitor, owner);
-        if relevant {
-            kept.push(new_owner);
-        }
-    }
-    let kept_len = kept.len() as u64;
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
-    crate::gc::young_log::note_walk(
-        CLOSURE_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: false,
-            logged: table_len,
-            visited: table_len,
-            kept: kept_len,
-            table_len,
-        },
-    );
-}
-
-/// The minor-scoped walk: only logged owners. Rounds repeat while visits
-/// trigger owner-move hooks that log new keys (`note_young_closure_owner_rekeyed`),
-/// which is also what closes the pre-#9754 gap where an entry re-keyed
-/// mid-walk was skipped by the mark pass and only rewritten later.
-fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    // Count the same distinct owners as the full walk, not map memberships.
-    // Enumerating them is diagnostic work: ordinary minor collections must
-    // retain the young log's ability to skip the full owner population.
-    let table_len = (cfg!(test) || crate::gc::gc_diag_enabled())
-        .then(|| closure_side_table_owners().len() as u64);
-    #[cfg(any(debug_assertions, test))]
-    debug_assert_closure_young_log_complete();
-    let mut logged = 0u64;
-    let mut visited = 0u64;
-    let mut kept = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_spare());
-    loop {
-        let batch = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
-        if batch.is_empty() {
-            break;
-        }
-        logged += batch.len() as u64;
-        for owner in batch {
-            visited += 1;
-            let (new_owner, relevant) = scan_closure_owner(visitor, owner);
-            if relevant {
-                kept.push(new_owner);
-            }
-        }
-    }
-    let kept_len = kept.len() as u64;
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
-    if let Some(table_len) = table_len {
-        crate::gc::young_log::note_walk(
-            CLOSURE_YOUNG_LOG_NAME,
-            crate::gc::young_log::YoungLogWalk {
-                partial: true,
-                logged,
-                visited,
-                kept: kept_len,
-                table_len,
-            },
-        );
-    }
-}
-
-/// Rule 2 of `gc/young_log.rs`: re-derive the relevant owners from the three
-/// tables and require the log to name each one.
-#[cfg(any(debug_assertions, test))]
-fn debug_assert_closure_young_log_complete() {
-    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
-    let mut relevant = Vec::new();
-    if let Ok(props) = get_closure_props().lock() {
-        for (&owner, entry) in props.iter() {
-            if addr_is_minor_collectible(owner)
-                || entry
-                    .values
-                    .values()
-                    .any(|value| bits_are_minor_relevant(value.to_bits()))
-            {
-                relevant.push(owner);
-            }
-        }
-    }
-    if let Ok(prototypes) = get_closure_prototypes().lock() {
-        for (&owner, &proto_bits) in prototypes.iter() {
-            if addr_is_minor_collectible(owner) || bits_are_minor_relevant(proto_bits) {
-                relevant.push(owner);
-            }
-        }
-    }
-    if let Ok(deleted) = get_closure_deleted_keys().lock() {
-        for &owner in deleted.keys() {
-            if addr_is_minor_collectible(owner) {
-                relevant.push(owner);
-            }
-        }
-    }
     #[cfg(feature = "wasm-host")]
-    if let Ok(externals) = get_wasm_funcref_externals().lock() {
-        for &owner in externals.keys() {
-            if addr_is_minor_collectible(owner) {
-                relevant.push(owner);
-            }
-        }
-    }
-    CLOSURE_YOUNG_OWNERS.with(|log| {
-        log.borrow()
-            .debug_assert_logged(CLOSURE_YOUNG_LOG_NAME, &relevant)
-    });
-}
-
-/// Visit one owner's entries in all three tables — the per-entry body both
-/// walks share. Returns the owner's post-visit key and whether the entry can
-/// still matter to a minor (its key or any value is not old).
-fn scan_closure_owner(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    owner: usize,
-) -> (usize, bool) {
-    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
-    let mut relevant = false;
-    let mut current_owner = owner;
-
-    if let Some(mut closure_props) = get_closure_props()
-        .lock()
-        .ok()
-        .and_then(|mut props| props.remove(&owner))
     {
-        // Metadata key rewrite. Only fires in rewrite-phase modes; mark phases
-        // return `false` here without recording the key as a root (so the
-        // side-table entry doesn't itself keep the closure alive).
-        let mut new_owner = owner;
-        visitor.visit_metadata_usize_slot(&mut new_owner);
-        // #1802: trace every stored value in every phase. In `Mark` /
-        // `CopyingMark` this keeps `fn.errors = [...]` and its transitive
-        // contents reachable; in rewrite phases it updates slot bits when a
-        // value was forwarded.
-        for value in closure_props.values.values_mut() {
-            visitor.visit_nanbox_f64_slot(value);
-            relevant |= bits_are_minor_relevant(value.to_bits());
-        }
-        if new_owner == owner {
-            new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
-        }
-        current_owner = new_owner;
-        if let Ok(mut props) = get_closure_props().lock() {
-            merge_closure_prop_map(&mut props, new_owner, closure_props);
-        }
-    }
-
-    if let Some(mut proto_bits) = get_closure_prototypes()
-        .lock()
-        .ok()
-        .and_then(|mut prototypes| prototypes.remove(&owner))
-    {
-        let mut new_owner = owner;
-        visitor.visit_metadata_usize_slot(&mut new_owner);
-        visitor.visit_nanbox_u64_slot(&mut proto_bits);
-        relevant |= bits_are_minor_relevant(proto_bits);
-        if new_owner == owner {
-            new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
-        }
-        current_owner = new_owner;
-        if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-            prototypes.insert(new_owner, proto_bits);
-        }
-    }
-
-    // #3655: re-key the deleted-keys side table when a closure moves. The
-    // entries are pure metadata (string keys, no JS references), so the
-    // metadata-key visitor only records a re-key; nothing to trace.
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        if deleted.contains_key(&owner) {
+        let owners: Vec<usize> = get_wasm_funcref_externals()
+            .lock()
+            .map(|m| m.keys().copied().collect())
+            .unwrap_or_default();
+        for owner in owners {
             let mut new_owner = owner;
             if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
-                if let Some(keys) = deleted.remove(&owner) {
-                    deleted.entry(new_owner).or_default().extend(keys);
-                }
-                current_owner = new_owner;
+                closure_dynamic_props_owner_moved(owner, new_owner);
             }
         }
     }
-
-    #[cfg(feature = "wasm-host")]
-    if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
-        if externals.contains_key(&owner) {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
-                if let Some(handle) = externals.remove(&owner) {
-                    if let Some(replaced) = externals.insert(new_owner, handle) {
-                        drop_wasm_funcref_external(replaced);
-                    }
-                }
-                current_owner = new_owner;
-            }
-        }
-    }
-
-    relevant |= addr_is_minor_collectible(current_owner);
-    (current_owner, relevant)
+    #[cfg(not(feature = "wasm-host"))]
+    let _ = visitor;
 }
 
 /// Is `ptr` a live function object (`GC_TYPE_CLOSURE` cell)? Safe for an
@@ -990,12 +367,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         return result;
     }
 
-    if let Ok(props) = get_closure_props().lock() {
-        if let Some(closure_props) = props.get(&ptr) {
-            if let Some(&val) = closure_props.get(prop) {
-                return val;
-            }
-        }
+    if let Some(val) = closure_get_own_dynamic_prop(ptr, prop) {
+        return val;
     }
     // #11175: resolve these inherited values from the actual prototype,
     // including explicit null/custom chains. Do this before the legacy walk
@@ -1075,10 +448,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return result;
             }
-            if let Ok(props) = get_closure_props().lock() {
-                if let Some(p) = props.get(&proto_ptr).and_then(|m| m.get(prop)) {
-                    return *p;
-                }
+            if let Some(p) = closure_get_own_dynamic_prop(proto_ptr, prop) {
+                return p;
             }
             cur = proto_ptr;
             depth += 1;
@@ -1267,61 +638,43 @@ pub(crate) fn closure_set_via_function_prototype_descriptor(
     false
 }
 
-/// Set a dynamic property on a closure.
+/// Set a dynamic property on a closure (an own data property in its bag).
+/// A non-closure `ptr` is ignored.
 pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
-    if !super::shape::is_intrinsic_function_key(prop) {
-        super::shape::note_function_own_state_changed(ptr);
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return;
     }
-    note_young_closure_owner(ptr, value.to_bits());
-    if let Ok(mut props) = get_closure_props().lock() {
-        let closure_props = props.entry(ptr).or_default();
-        closure_props.insert(prop.to_string(), value);
-        barrier_closure_dynamic_props(ptr, closure_props);
-    }
+    unsafe { super::props::bag_set(ptr, prop, value) };
     // #3655: re-defining a previously deleted slot makes it present again.
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        if let Some(keys) = deleted.get_mut(&ptr) {
-            keys.remove(prop);
-        }
-    }
+    unsafe { super::props::state_clear_deleted(ptr, prop) };
+    super::shape::refresh_closure_shape(ptr);
 }
 
 /// Read an OWN dynamic property without any prototype/builtin fallback.
 /// Used by `bind` to honor an `Object.defineProperty(fn, "length", …)`
 /// override before falling back to the registered declared length.
 pub fn closure_get_own_dynamic_prop(ptr: usize, prop: &str) -> Option<f64> {
-    if let Ok(props) = get_closure_props().lock() {
-        return props.get(&ptr).and_then(|m| m.get(prop).copied());
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return None;
     }
-    None
+    unsafe { super::props::bag_get(ptr, prop.as_bytes()) }
 }
 
 /// #3655: remove an OWN user dynamic property from a closure (used by
 /// `delete fn.userProp`). Returns true if a property was actually removed.
 /// Built-in synthesized slots (`name`/`length`/`prototype`) are handled by
-/// `closure_mark_key_deleted` instead, since they have no map entry to drop.
+/// `closure_mark_key_deleted` instead, since they have no stored value.
 pub fn closure_delete_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
-    super::shape::note_function_own_state_changed(ptr);
-    if let Ok(mut props) = get_closure_props().lock() {
-        if let Some(closure_props) = props.get_mut(&ptr) {
-            return closure_props.remove(prop).is_some();
-        }
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return false;
     }
-    false
+    let removed = unsafe { super::props::bag_remove(ptr, prop) };
+    super::shape::refresh_closure_shape(ptr);
+    removed
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_closure_side_tables() {
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().clear());
-    if let Ok(mut props) = get_closure_props().lock() {
-        props.clear();
-    }
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        prototypes.clear();
-    }
-    if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        deleted.clear();
-    }
     #[cfg(feature = "wasm-host")]
     let externals = get_wasm_funcref_externals()
         .lock()
@@ -1344,45 +697,10 @@ pub(crate) fn test_clear_closure_side_tables() {
 /// by `format_jsvalue` to emit `[Function: f] { ownProp: value }`. See #1203
 /// and #9148.
 pub fn closure_dynamic_props_snapshot(ptr: usize) -> Vec<(String, f64)> {
-    if let Ok(props) = get_closure_props().lock() {
-        if let Some(map) = props.get(&ptr) {
-            return map.snapshot();
-        }
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return Vec::new();
     }
-    Vec::new()
-}
-
-#[cfg(test)]
-mod tests_9148 {
-    use super::ClosureProps;
-
-    fn names(props: &ClosureProps) -> Vec<String> {
-        props.snapshot().into_iter().map(|(name, _)| name).collect()
-    }
-
-    #[test]
-    fn closure_props_snapshot_uses_ecma_own_key_order() {
-        let mut props = ClosureProps::default();
-        props.insert("tag".to_string(), 1.0);
-        props.insert("other".to_string(), 2.0);
-        props.insert("10".to_string(), 10.0);
-        props.insert("2".to_string(), 2.0);
-
-        assert_eq!(names(&props), ["2", "10", "tag", "other"]);
-    }
-
-    #[test]
-    fn update_keeps_position_and_delete_readd_moves_to_tail() {
-        let mut props = ClosureProps::default();
-        props.insert("tag".to_string(), 1.0);
-        props.insert("other".to_string(), 2.0);
-        props.insert("tag".to_string(), 3.0);
-        assert_eq!(names(&props), ["tag", "other"]);
-
-        assert_eq!(props.remove("tag"), Some(3.0));
-        props.insert("tag".to_string(), 4.0);
-        assert_eq!(names(&props), ["other", "tag"]);
-    }
+    unsafe { super::props::bag_snapshot(ptr) }
 }
 
 /// Unbind `this` from a detached method closure.
@@ -1465,106 +783,6 @@ mod tests_1802 {
         SIDE_TABLE_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// #1802: the side-table values must be visited in mark phases, not
-    /// only during the metadata-rewrite tail. Pre-fix
-    /// `scan_closure_dynamic_props_roots_mut` early-returned unless
-    /// `is_metadata_rewrite_phase()`, so the `for_copy` adapter (which
-    /// wraps a non-rewrite callback) saw nothing — proving the values
-    /// were never traced in `Mark` / `CopyingMark`. With the early-return
-    /// removed, the adapter sees every stored value's bits.
-    #[test]
-    fn dyn_prop_values_are_visited_in_mark_phase() {
-        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
-        // (`test_clear_closure_side_tables`) clears it from parallel test
-        // threads, wiping this test's parked entry mid-assertion. Serialize
-        // against those guards, THEN against this module's own tests.
-        let _global = crate::gc::global_side_table_test_lock();
-        let _guard = side_table_test_lock();
-        // A unique synthetic closure address (just an integer key — the
-        // scanner doesn't deref it during value visitation; the
-        // metadata-key visitor is a no-op for non-heap addresses).
-        let owner: usize = 0xC10C_AB1E_0000_1802;
-        let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCC;
-        closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
-
-        // Copy-mode visitor calls our closure for every nanbox-bits
-        // slot the scanner visits. Pre-fix this produced an empty
-        // `seen` vec because the scanner early-returned.
-        let mut seen: Vec<u64> = Vec::new();
-        {
-            let mut mark = |v: f64| seen.push(v.to_bits());
-            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
-            scan_closure_dynamic_props_roots_mut(&mut visitor);
-        }
-
-        assert!(
-            seen.contains(&value_bits),
-            "expected stored prop value bits {:x} in seen={:x?} — \
-             scanner did not trace the value during the mark phase",
-            value_bits,
-            seen,
-        );
-
-        // Cleanup so other tests don't see the synthetic entry.
-        if let Ok(mut props) = get_closure_props().lock() {
-            props.remove(&owner);
-        }
-    }
-
-    #[test]
-    fn dyn_prop_scanner_visits_values_without_holding_props_lock() {
-        // CLOSURE_PROPS is PROCESS-global; the gc test guards' state reset
-        // (`test_clear_closure_side_tables`) clears it from parallel test
-        // threads, wiping this test's parked entry mid-assertion. Serialize
-        // against those guards, THEN against this module's own tests.
-        let _global = crate::gc::global_side_table_test_lock();
-        let _guard = side_table_test_lock();
-        let owner: usize = 0xC10C_AB1E_0000_1803;
-        let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
-        closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
-
-        let mut saw_value = false;
-        let mut lock_was_free = false;
-        {
-            let mut mark = |v: f64| {
-                if v.to_bits() == value_bits {
-                    saw_value = true;
-                    // The regression under test is the SCANNER holding
-                    // CLOSURE_PROPS across visitor callbacks — a same-thread
-                    // hold, so `try_lock` can never succeed no matter how
-                    // long we wait. A one-shot `try_lock` also fails on
-                    // transient contention from an unrelated parallel test
-                    // thread's brief map access (#6965) — retry with a yield
-                    // so a foreign holder gets to release. `Poisoned` counts
-                    // as free: poison means a panicking holder already
-                    // RELEASED the mutex.
-                    lock_was_free = (0..4096).any(|_| match get_closure_props().try_lock() {
-                        Ok(_) | Err(std::sync::TryLockError::Poisoned(_)) => true,
-                        Err(std::sync::TryLockError::WouldBlock) => {
-                            std::thread::yield_now();
-                            false
-                        }
-                    });
-                }
-            };
-            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
-            scan_closure_dynamic_props_roots_mut(&mut visitor);
-        }
-
-        assert!(
-            saw_value,
-            "scanner did not visit the stored closure prop value"
-        );
-        assert!(
-            lock_was_free,
-            "scanner must not hold CLOSURE_PROPS while visitor callbacks can move closures"
-        );
-
-        if let Ok(mut props) = get_closure_props().lock() {
-            props.remove(&owner);
-        }
     }
 
     #[test]
@@ -1731,23 +949,18 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
     }
 }
 
-/// `PERRY_GC_CENSUS`: closure dynamic-property side tables.
+/// `PERRY_GC_CENSUS`: closure-keyed side tables (own properties are object
+/// storage now and are counted with the heap).
 pub(super) fn dynamic_props_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::{map_bytes, set_bytes};
+    #[allow(unused_mut)]
     let mut rows = Vec::new();
-    if let Ok(m) = get_closure_props().lock() {
-        let inner: usize = m
-            .values()
-            .map(|p| map_bytes(&p.values) + p.values.keys().map(|k| k.capacity()).sum::<usize>())
-            .sum();
-        rows.push(("closure.dynamic_props", m.len(), map_bytes(&m) + inner));
-    }
-    if let Ok(m) = get_closure_deleted_keys().lock() {
-        let inner: usize = m.values().map(set_bytes).sum();
-        rows.push(("closure.deleted_keys", m.len(), map_bytes(&m) + inner));
-    }
-    if let Ok(m) = get_closure_prototypes().lock() {
-        rows.push(("closure.static_prototypes", m.len(), map_bytes(&m)));
+    #[cfg(feature = "wasm-host")]
+    if let Ok(m) = get_wasm_funcref_externals().lock() {
+        rows.push((
+            "closure.wasm_funcref_externals",
+            m.len(),
+            crate::gc::census::map_bytes(&m),
+        ));
     }
     rows
 }

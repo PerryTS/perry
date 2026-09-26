@@ -32,10 +32,10 @@
       "why": "#8191: registered prune retains on !is_dead_owner over the wrapper ObjectHeader address (builtins/formatting/boxed_primitives.rs)."
     },
     {
-      "site": "crates/perry-runtime/src/closure/dynamic_props.rs::scan_closure_owner",
-      "table": "CLOSURE_PROPS / CLOSURE_STATIC_PROTOTYPES / CLOSURE_DELETED_KEYS",
+      "site": "crates/perry-runtime/src/closure/dynamic_props.rs::scan_closure_dynamic_props_roots_mut",
+      "table": "WASM_FUNCREF_EXTERNALS",
       "death": "dead_owner:prune_dead_closure_side_table_owners",
-      "why": "All three tables are retained on the GC_TYPE_CLOSURE-narrowed predicate in one prune (closure/dynamic_props.rs:206-214). #9754: the per-owner body shared by the full walk and the young-log walk."
+      "why": "The wasm-host funcref table (the only closure-address-keyed table left: function own properties, deleted markers and recorded prototypes live in the closure's traced own-property bag). Retained on the GC_TYPE_CLOSURE-narrowed predicate in prune_dead_closure_side_table_owners."
     },
     {
       "site": "crates/perry-runtime/src/fs/mod.rs::scan_filehandle_object_fd_metadata_roots_mut",

@@ -669,6 +669,18 @@ pub(crate) unsafe fn layout_init_unknown_fresh(user_ptr: *mut u8) {
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
 }
 
+/// A header-level child edge was just installed on `user_ptr` (a closure's
+/// own-property bag): a `GC_LAYOUT_POINTER_FREE` payload state must not let
+/// any walk treat the cell as edge-free. Other states already visit it.
+pub(crate) unsafe fn layout_note_closure_edge_installed(user_ptr: *mut u8) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
+        layout_mark_unknown(user_ptr);
+    }
+}
+
 pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -1893,7 +1905,12 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             let Some(range) = crate::closure::gc_capture_slot_range(closure) else {
                 return HeapChildSlotIterator::empty();
             };
+            // D1: the function's own-property bag is a raw-pointer child
+            // edge (0 = none), like an `ObjectHeader`'s `meta`: marking keeps
+            // it alive and evacuation rewrites it.
+            let props = &mut (*closure).props as *mut _ as *mut u64;
             HeapChildSlotIterator::new(header, None, range)
+                .with_meta_slot((*props != 0).then_some(props))
         }
         GcLayoutSlotKind::None => HeapChildSlotIterator::empty(),
     }

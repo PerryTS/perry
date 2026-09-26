@@ -1,12 +1,13 @@
 //! Method calls on a function object, answered from its SHAPE.
 //!
-//! A closure on its base Function shape (`closure::shape`) has exactly the
-//! intrinsic own keys (`name`, `length`, `prototype`) and inherits from the
-//! prototype its shape names. So for any other key the answer is the
-//! prototype's own slot, and the call is decided by that slot's VALUE:
+//! A closure on a described Function shape (`closure::shape`: base or keyed,
+//! not FunctionDictionary) has exactly the own keys its shape lists and
+//! inherits from the prototype its shape names. So for a key the list lacks
+//! the answer is the prototype's own slot, and the call is decided by that
+//! slot's VALUE:
 //!
-//! 1. one compare: the receiver's +4 word is this agent's base Function
-//!    ShapeId (ownership then proven by the tracked GC header);
+//! 1. the receiver's +4 word is a Function ShapeId naming Function.prototype
+//!    whose key list lacks the key (ownership proven by the tracked header);
 //! 2. one lookup: the key's data slot on `Function.prototype`;
 //! 3. identity by value: the slot still holds the intrinsic `bind` / `call` /
 //!    `apply` closure (its code pointer) — then run exactly what the by-name
@@ -49,17 +50,13 @@ pub(crate) unsafe fn try_function_shape_method_call(
     if !crate::object::shapes::is_exotic_shape_id(word) {
         return None;
     }
-    if word
-        != crate::closure::shape::function_base_shape(
-            crate::closure::shape::FunctionProtoKind::Function,
-        )
-    {
-        return None;
-    }
     if !crate::closure::is_closure_ptr(addr) {
         return None;
     }
-    if crate::closure::shape::is_intrinsic_function_key_bytes(name) {
+    // A DESCRIBED Function shape (base or keyed) whose prototype is
+    // Function.prototype, and whose own key list does not hold `name` —
+    // then the receiver has no own `name` and inherits it from the prototype.
+    if !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name) {
         return None;
     }
     // (2) The prototype the shape names, and its own data slot for the key.

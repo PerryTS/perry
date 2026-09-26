@@ -295,13 +295,8 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             visit_gc_layout_slot_descriptors(header, &mut visit);
         }
         GcRewriteDescriptorKind::Closure => {
+            // Captures and the own-property bag edge (`ClosureCaptures`).
             visit_gc_layout_slot_descriptors(header, &mut visit);
-            crate::closure::visit_closure_dynamic_prop_value_slots_mut(user_ptr as usize, |slot| {
-                visit(fixed_slot(slot));
-            });
-            crate::closure::visit_closure_static_prototype_slot_mut(user_ptr as usize, |slot| {
-                visit(fixed_slot(slot));
-            });
         }
         GcRewriteDescriptorKind::Promise => {
             let promise = user_ptr as *mut crate::promise::Promise;

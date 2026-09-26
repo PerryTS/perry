@@ -216,7 +216,6 @@ handle-floor | crates/perry-stdlib/src/webcrypto/supports.rs | 1
 handle-floor | crates/perry-stdlib/src/webcrypto/util.rs | 5
 handle-floor | crates/perry-stdlib/src/zlib.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/buffer/access.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/closure/dynamic_props.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/collection_iter.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/error.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/intl.rs | 1

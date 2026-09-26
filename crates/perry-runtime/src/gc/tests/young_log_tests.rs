@@ -64,9 +64,13 @@ fn walk_opt(table: &'static str) -> Option<young_log::YoungLogWalk> {
 }
 
 // ---------------------------------------------------------------- closures
+//
+// Function own properties live in the function's bag (`closure::props`), a
+// traced child edge: they follow their owner through a copying minor with no
+// young log. These keep the semantic halves of the old table proofs.
 
 #[test]
-fn young_closure_prop_value_is_moved_through_the_log() {
+fn young_closure_prop_value_moves_with_its_owner() {
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
@@ -97,23 +101,10 @@ fn young_closure_prop_value_is_moved_through_the_log() {
         crate::closure::closure_get_own_dynamic_prop(owner, "memo").is_none(),
         "the stale owner key must be gone"
     );
-    let row = walk("closure.dynamic_props");
-    assert!(
-        row.partial,
-        "a copying minor must take the young-scoped walk"
-    );
-    assert!(
-        row.visited >= 1,
-        "the logged owner must have been visited: {row:?}"
-    );
-    assert!(
-        row.kept >= 1,
-        "a survivor still young must stay logged: {row:?}"
-    );
 }
 
 #[test]
-fn young_value_under_an_old_closure_owner_is_logged_by_the_value() {
+fn young_value_under_an_old_closure_owner_survives_a_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
@@ -135,71 +126,10 @@ fn young_value_under_an_old_closure_owner_is_logged_by_the_value() {
         & POINTER_MASK) as usize;
     assert_ne!(proto_after, proto);
     assert!(crate::arena::pointer_in_nursery(proto_after));
-    assert!(walk("closure.dynamic_props").partial);
 }
 
 #[test]
-fn layout_slot_rewrite_rearms_old_closure_for_a_young_value() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-
-    let owner = old_closure();
-    crate::closure::closure_set_dynamic_prop(owner, "memo", 42.0);
-    let value = young_leaf();
-    crate::closure::visit_closure_dynamic_prop_value_slots_mut(owner, |slot| unsafe {
-        *slot = string_bits(value);
-    });
-
-    let _ = gc_collect_minor();
-
-    let bits = crate::closure::closure_get_own_dynamic_prop(owner, "memo")
-        .expect("old owner keeps its rewritten entry")
-        .to_bits();
-    let value_after = (bits & POINTER_MASK) as usize;
-    assert_ne!(
-        value_after, value,
-        "the rewritten young value must be evacuated through the re-armed log"
-    );
-    assert!(crate::arena::pointer_in_nursery(value_after));
-    let row = walk("closure.dynamic_props");
-    assert!(row.partial);
-    assert!(
-        row.visited >= 1,
-        "the re-armed owner must be visited: {row:?}"
-    );
-}
-
-#[test]
-fn layout_slot_rewrite_rearms_old_closure_for_a_young_prototype() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-
-    let owner = old_closure();
-    crate::closure::closure_set_static_prototype(owner, crate::value::TAG_NULL);
-    let prototype = young_leaf();
-    crate::closure::visit_closure_static_prototype_slot_mut(owner, |slot| unsafe {
-        *slot = string_bits(prototype);
-    });
-
-    let _ = gc_collect_minor();
-
-    let bits = crate::closure::closure_static_prototype(owner).expect("prototype kept");
-    let prototype_after = (bits & POINTER_MASK) as usize;
-    assert_ne!(
-        prototype_after, prototype,
-        "the rewritten young prototype must be evacuated through the re-armed log"
-    );
-    assert!(crate::arena::pointer_in_nursery(prototype_after));
-    let row = walk("closure.dynamic_props");
-    assert!(row.partial);
-    assert!(
-        row.visited >= 1,
-        "the re-armed owner must be visited: {row:?}"
-    );
-}
-
-#[test]
-fn old_closure_entries_are_skipped_by_a_minor() {
+fn old_closure_entries_survive_a_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
 
@@ -214,13 +144,6 @@ fn old_closure_entries_are_skipped_by_a_minor() {
         Some(42.0)
     );
     assert!(crate::closure::closure_is_key_deleted(owner, "name"));
-    let row = walk("closure.dynamic_props");
-    assert!(row.partial);
-    assert!(row.table_len >= 1, "{row:?}");
-    assert_eq!(
-        row.visited, 0,
-        "an old owner with no heap values must not be visited by a minor: {row:?}"
-    );
 }
 
 #[test]

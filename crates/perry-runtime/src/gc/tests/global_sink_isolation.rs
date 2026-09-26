@@ -97,40 +97,6 @@ fn the_probe_catches_a_bare_process_global_sink() {
 // Converted tables. One test per `test_clear_*` helper the guards call.
 // ---------------------------------------------------------------------------
 
-/// `closure::test_clear_closure_side_tables` — `CLOSURE_PROPS`,
-/// `CLOSURE_STATIC_PROTOTYPES`, `CLOSURE_DELETED_KEYS`.
-///
-/// This is the #7671 shape exactly: a value written through the closure
-/// dynamic-property table and read back came out `TAG_UNDEFINED` because a GC
-/// guard on another libtest thread had emptied the table in between.
-#[test]
-fn closure_side_tables_survive_a_guard_clear_on_another_thread() {
-    // A synthetic, per-test key: the tables are keyed by heap address but the
-    // accessors treat the key as an opaque integer for store/load.
-    let owner = 0x_C105_0000_7672_usize;
-    let survived = survives_a_foreign_clear(
-        "closure dynamic props",
-        || {
-            crate::closure::closure_set_dynamic_prop(owner, "probe7672", 42.5);
-            crate::closure::closure_set_static_prototype(owner, 0x7FFD_0000_0000_7672);
-            crate::closure::closure_mark_key_deleted(owner, "goneKey");
-        },
-        move || {
-            crate::closure::closure_get_own_dynamic_prop(owner, "probe7672") == Some(42.5)
-                && crate::closure::closure_has_own_dynamic_prop(owner, "probe7672")
-                && crate::closure::closure_static_prototype(owner) == Some(0x7FFD_0000_0000_7672)
-                && crate::closure::closure_is_key_deleted(owner, "goneKey")
-        },
-        foreign_guard_clear,
-    );
-    assert!(
-        survived,
-        "a closure dynamic property written on this thread was destroyed by the GC \
-         test guards' state reset running on another thread (#7672 / #7671). The \
-         table's `per_test_global!` declaration is what prevents this."
-    );
-}
-
 /// `symbol::test_clear_symbol_side_table_roots` — `SYMBOL_PROPERTIES`,
 /// `SYMBOL_PROPERTY_ATTRS`, `CLASS_STATIC_SYMBOLS`, `SYMBOL_ACCESSOR_PROPERTIES`
 /// and the `SYMBOL_POINTERS` rebuild.

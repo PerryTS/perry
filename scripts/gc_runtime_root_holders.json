@@ -275,12 +275,6 @@
       "why": "Cache miss counter (telemetry). Holds no address."
     },
     {
-      "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-      "name": "TEST_SUPPRESS_CLOSURE_YOUNG_NOTE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9976: a `Cell<bool>` test seam that suppresses the closure young-log note so a test can exercise the full-walk fallback. A FLAG; there is no slot for the collector."
-    },
-    {
       "file": "crates/perry-runtime/src/closure/registry.rs",
       "name": "BODY_RECORD_LOOKUPS",
       "verdict": "test_only",

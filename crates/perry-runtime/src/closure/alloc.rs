@@ -367,10 +367,9 @@ pub struct ClosureHeader {
     pub shape_id: u32,
     /// Function pointer (the actual compiled function).
     pub func_ptr: *const u8,
-    /// Reserved for the function object's shaped own-property record (D1).
-    /// ALWAYS NULL in this stage and not yet enumerated by the collector:
-    /// the stage that first writes it must make it a traced, rewritten
-    /// raw-pointer child edge (and barrier the store) in the same change.
+    /// The function object's own-property bag (`closure::props`, D1): null
+    /// until the first own property, then a traced, rewritten raw-pointer
+    /// child edge (`gc::layout`'s `ClosureCaptures` arm).
     pub props: *mut crate::object::ObjectHeader,
 }
 
