@@ -2949,7 +2949,16 @@ pub(crate) fn invalidate_method_change(class_id: u32) {
 const REPRESENTATION_INVALIDATION_SCAN_BUDGET: u64 = 50_000_000;
 
 pub(crate) fn invalidate_representation_change(obj_addr: usize) {
-    if obj_addr == 0 {
+    invalidate_representation_change_when(obj_addr, typed_feedback_enabled());
+}
+
+fn invalidate_representation_change_when(obj_addr: usize, feedback_on: bool) {
+    // Both counters this bumps are read only by the typed-feedback trace, and
+    // every site this could credit is recorded only while feedback is on. Off
+    // (every production run), taking the registry lock to learn that cost a
+    // key-add on a typed-layout receiver ~250 instructions: the lock, the
+    // GC-root lock depth, and the deferred-collection flush on its release.
+    if obj_addr == 0 || !feedback_on {
         return;
     }
     let mut reg = registry();
