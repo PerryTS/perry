@@ -95,26 +95,58 @@ pub struct PackedSetSite {
     /// A `*mut AddWays` (0 = none): the memos of further pre-shapes, served
     /// by [`packed_add_try`]. A base-class constructor's key-add sees one
     /// pre-shape per subclass (the prototype is part of the shape), so such
-    /// a site is polymorphic by construction. Emitted code never reads it.
+    /// a site is polymorphic by construction. The emitted hit compares the
+    /// ways at the pre-shape's home ([`add_way_home`]) and the one after it,
+    /// after the primary words.
     pub add_ways: AtomicU64,
 }
 
-/// One further memo, in the primary words' format.
+/// One further memo, in the primary words' format (`add_shapes`,
+/// `add_guard` are a way too: the emitted hit reads either through one
+/// pointer).
 #[repr(C)]
 pub struct AddWay {
     shapes: AtomicU64,
     guard: AtomicU64,
 }
 
-/// Further memos per site. Filled in order, never evicted (so a site with
-/// more stable pre-shapes than ways settles instead of cycling); a site that
-/// overflows them re-primes its primary words. 48, not 8: Zod 3's `ZodType`
+/// Further memos per site, never evicted (so a site with more stable
+/// pre-shapes than ways settles instead of cycling); a site that overflows
+/// them re-primes its primary words. A memo is placed at its pre-shape's HOME
+/// way ([`add_way_home`]) when that way is free, and otherwise at the next
+/// free way from it; the emitted hit compares the home and the way after it
+/// ([`ADD_WAY_PROBES`]), the runtime every way, and a memo the runtime serves
+/// from further away is moved into one of the two ([`promote_way`]). Placement by pre-shape rather
+/// than by arrival matters: on
+/// tsc the hot memo of a polymorphic site is typically NOT among its first
+/// (8 sites whose hits all land on their 3rd way, 10 on their 15th, behind
+/// transient first-instance shapes), so no fixed prefix of an in-order list
+/// is where the hits are.
+///
+/// 64 (a power of two for the home hash), not 8: Zod 3's `ZodType`
 /// constructor adds its keys to one pre-shape per subclass (36 of them), and
 /// with 8 ways 15,069 of its 78,250 executed key-adds per 200 parses re-ran
-/// the full `[[Set]]` and re-primed. A linear scan of 48 words is a small
-/// fraction of that walk, and only a polymorphic site allocates them.
-pub const ADD_WAYS: usize = 48;
+/// the full `[[Set]]` and re-primed. Only a polymorphic site allocates them.
+pub const ADD_WAYS: usize = 1 << ADD_WAYS_LOG2;
+/// `log2(ADD_WAYS)`: the home is the top bits of a 32-bit product.
+pub const ADD_WAYS_LOG2: u32 = 6;
+/// The multiplier of [`add_way_home`] (2^32 / golden ratio): consecutive
+/// ShapeIds, which subclass shapes minted in sequence are, land far apart.
+pub const ADD_WAY_HASH: u32 = 0x9E37_79B1;
+/// Ways the emitted hit compares from the home on (the home, then the next
+/// mod [`ADD_WAYS`]): a memo whose home an earlier memo holds lands on the
+/// next free way, which is most often the very next.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const ADD_WAY_PROBES: usize = 2;
 type AddWays = [AddWay; ADD_WAYS];
+
+/// The way the emitted hit compares for a receiver of ShapeId `pre`:
+/// the top [`ADD_WAYS_LOG2`] bits of `pre * ADD_WAY_HASH` (mod 2^32).
+/// **perry-codegen computes the same (`emit_static_store_ic`).**
+#[inline]
+pub fn add_way_home(pre: u32) -> usize {
+    (pre.wrapping_mul(ADD_WAY_HASH) >> (32 - ADD_WAYS_LOG2)) as usize
+}
 
 impl PackedSetSite {
     pub const fn empty() -> Self {
@@ -134,6 +166,11 @@ pub const ADD_SHAPES_WORD: usize = 1;
 pub const ADD_GUARD_WORD: usize = 2;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const PACKED_SET_SITE_WORDS: usize = 4;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const ADD_WAYS_WORD: usize = 3;
+/// Words of one [`AddWay`].
+#[cfg_attr(not(test), allow(dead_code))]
+pub const ADD_WAY_WORDS: usize = 2;
 /// Low bits of the guard word that hold the slot.
 pub const ADD_SLOT_BITS: u32 = 16;
 const ADD_SLOT_MASK: u64 = (1 << ADD_SLOT_BITS) - 1;
@@ -263,7 +300,7 @@ const CENSUS_NAMES: [&str; 32] = [
     "emit.by_name.runtime",
     "emit.by_name.put_value",
     "emit.add.layout_forget",
-    "emit.14",
+    "emit.add.way_hit",
     "emit.15",
     "rt.add.memo_inline",
     "rt.add.memo_spill",
@@ -364,13 +401,21 @@ pub(crate) unsafe fn packed_add_try(
     let (shapes, guard) = if matches(primary) {
         (primary, (*site).add_guard.load(Ordering::Relaxed))
     } else {
-        let way = site_ways(site)?
-            .iter()
-            .find(|way| matches(way.shapes.load(Ordering::Relaxed)))?;
-        (
+        let ways = site_ways(site)?;
+        // A memo sits at its home way unless that was taken when it was
+        // placed; the emitted hit has already compared the home.
+        let home = add_way_home(sid);
+        let distance = (0..ADD_WAYS)
+            .find(|&i| matches(ways[(home + i) % ADD_WAYS].shapes.load(Ordering::Relaxed)))?;
+        let way = &ways[(home + distance) % ADD_WAYS];
+        let found = (
             way.shapes.load(Ordering::Relaxed),
             way.guard.load(Ordering::Relaxed),
-        )
+        );
+        if distance >= ADD_WAY_PROBES {
+            promote_way(ways, home, distance);
+        }
+        found
     };
     let spill = shapes as u32 != sid;
     if guard >> ADD_SLOT_BITS != add_generation() {
@@ -419,6 +464,51 @@ pub(crate) unsafe fn packed_add_try(
     census(C_ADD_RT_INLINE);
     crate::object::store_object_field_slot(obj, slot, vbits);
     Some(value)
+}
+
+/// A memo the runtime just served lies beyond the ways the emitted hit
+/// compares (its home and the next were taken when it was placed, typically
+/// by a polymorphic site's transient first-instance shapes). Move it into
+/// one of those two ways, so its next receiver is served inline, and move
+/// that way's memo to where it was. A way whose memo sits at its OWN home is
+/// kept (its receivers are served inline already); with both kept nothing
+/// moves. Every memo stays in the block, so the runtime still serves each.
+///
+/// Only the primary agent publishes a site's memos (see `# Agents`), and only
+/// it ever matches them, so the moves are ordered with its own reads. Each
+/// way is retired (`shapes` EMPTY) before its guard changes and republished
+/// last, as [`packed_add_prime`] does.
+fn promote_way(ways: &AddWays, home: usize, distance: usize) {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
+        return;
+    }
+    let from = (home + distance) % ADD_WAYS;
+    let shapes = ways[from].shapes.load(Ordering::Relaxed);
+    if shapes as u32 != unflip(shapes as u32) {
+        // A spill memo: the emitted hit never takes it, wherever it sits.
+        return;
+    }
+    let at_own_home = |idx: usize| {
+        let word = ways[idx].shapes.load(Ordering::Relaxed);
+        word != PACKED_SET_EMPTY && add_way_home(unflip(word as u32)) == idx
+    };
+    let second = (home + 1) % ADD_WAYS;
+    let Some(to) = [second, home].into_iter().find(|&idx| !at_own_home(idx)) else {
+        return;
+    };
+    let (to_shapes, to_guard) = (
+        ways[to].shapes.load(Ordering::Relaxed),
+        ways[to].guard.load(Ordering::Relaxed),
+    );
+    let guard = ways[from].guard.load(Ordering::Relaxed);
+    ways[from].shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+    ways[to].shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+    ways[to].guard.store(guard, Ordering::Relaxed);
+    ways[to].shapes.store(shapes, Ordering::Relaxed);
+    if to_shapes != PACKED_SET_EMPTY {
+        ways[from].guard.store(to_guard, Ordering::Relaxed);
+        ways[from].shapes.store(to_shapes, Ordering::Relaxed);
+    }
 }
 
 /// The key-add hit's layout retirement: a receiver whose layout record
@@ -629,10 +719,14 @@ pub(crate) unsafe fn packed_add_prime(
         }
         let displaced_pre = unflip(primary as u32);
         if let Some(way) = site_ways(site_ptr).and_then(|ways| {
-            ways.iter().find(|way| {
-                let word = way.shapes.load(Ordering::Relaxed);
-                word == PACKED_SET_EMPTY || unflip(word as u32) == displaced_pre
-            })
+            // The home way first, then the rest in order from it.
+            let home = add_way_home(displaced_pre);
+            (0..ADD_WAYS)
+                .map(|i| &ways[(home + i) % ADD_WAYS])
+                .find(|way| {
+                    let word = way.shapes.load(Ordering::Relaxed);
+                    word == PACKED_SET_EMPTY || unflip(word as u32) == displaced_pre
+                })
         }) {
             way.shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
             way.guard.store(displaced_guard, Ordering::Relaxed);

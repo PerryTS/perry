@@ -19,6 +19,21 @@ fn perry_bin() -> PathBuf {
 /// Compile `source` with the store census, run it, and return (stdout, the
 /// inline add hits, the runtime memo serves).
 fn run(source: &str) -> (String, u64, u64) {
+    let (stdout, stderr) = run_census(source);
+    let memo = census(&stderr, "rt.add.memo_inline") + census(&stderr, "rt.add.memo_spill");
+    (stdout, census(&stderr, "emit.add.inline_hit"), memo)
+}
+
+/// One counter of the census line the binary printed to stderr.
+fn census(stderr: &str, name: &str) -> u64 {
+    stderr
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Compile `source` with the store census, run it, and return (stdout, stderr).
+fn run_census(source: &str) -> (String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
@@ -50,17 +65,9 @@ fn run(source: &str) -> (String, u64, u64) {
         "binary failed ({:?})\nstderr:\n{stderr}",
         run.status
     );
-    let count = |name: &str| -> u64 {
-        stderr
-            .split_whitespace()
-            .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-            .unwrap_or(0)
-    };
-    let memo = count("rt.add.memo_inline") + count("rt.add.memo_spill");
     (
         String::from_utf8_lossy(&run.stdout).trim().to_owned(),
-        count("emit.add.inline_hit"),
-        memo,
+        stderr,
     )
 }
 
@@ -312,5 +319,59 @@ console.log(s, before, after, Object.keys(P).join(","), Q.k, Object.keys(Q).leng
     assert_eq!(
         hits, 2999,
         "the prototype must miss the inline add (first receiver primes)"
+    );
+}
+
+/// One site fed receivers of four key lists holds four memos: the primary
+/// and three ways of the runtime's block, each at its pre-shape's home way
+/// unless an earlier memo took it, then at the next free way (the emitted
+/// hit compares the home and the next). Each
+/// has its own successor shape and slot (`{}` adds at slot 0, the others at
+/// slot 1), and an inherited setter appearing later must stop every one of
+/// them. Sabotage: a way hit reads the PRIMARY pair's guard -> `z` of a
+/// one-key receiver lands in slot 0 over its first key.
+#[test]
+fn a_polymorphic_site_serves_its_first_ways_inline() {
+    let (stdout, stderr) = run_census(
+        r#"// One key-add site fed receivers of four key lists, so it holds four memos:
+// the primary and three ways, with different successor shapes and slots.
+function addZ(o: any, v: number) { o.z = v; }
+function mk(i: number): any {
+  const o: any = {};
+  const k = i % 4;
+  if (k === 1) o.a = i;
+  if (k === 2) o.b = i;
+  if (k === 3) o.c = i;
+  return o;
+}
+const objs: any[] = [];
+for (let i = 0; i < 4000; i++) { const o = mk(i); addZ(o, i * 2); objs.push(o); }
+let s = 0;
+for (let i = 0; i < 4000; i++) s += objs[i].z * (i % 4 + 1);
+const shapes = [objs[3996], objs[3997], objs[3998], objs[3999]].map((o) => Object.keys(o).join("") + "=" + Object.values(o).join(",")).join(" ");
+// An inherited setter for the key appears: every memo, way or primary, must refuse.
+const log: number[] = [];
+Object.defineProperty(Object.prototype, "z", { set(v: number) { log.push(v); }, configurable: true });
+for (let i = 0; i < 4; i++) addZ(mk(i), 100 + i);
+delete (Object.prototype as any).z;
+console.log(s, shapes, log.join(","));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        r#"40000000 z=7992 az=3997,7994 bz=3998,7996 cz=3999,7998 100,101,102,103"#
+    );
+    // Each shape's first receiver primes: 999 more of each hit a memo, the
+    // three displaced ones inline at their home way or the next.
+    let way_hits = census(&stderr, "emit.add.way_hit");
+    let memo = census(&stderr, "rt.add.memo_inline");
+    assert_eq!(
+        way_hits + memo,
+        2997,
+        "the three displaced memos serve 999 adds each (census: {stderr})"
+    );
+    assert!(
+        way_hits >= 1998,
+        "at most one memo can sit beyond its home's next way (census: {stderr})"
     );
 }

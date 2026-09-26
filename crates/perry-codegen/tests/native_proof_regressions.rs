@@ -15433,6 +15433,38 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         ir.contains("put.add.check") && ir.contains("put.add.hit.store"),
         "a word and way miss must compare the key-add memo before the call:\n{ir}"
     );
+    // The add memo's primary pre-shape is compared right after the word, and
+    // only its miss reaches the existing-key ways.
+    let check_block: Vec<&str> = ir
+        .lines()
+        .skip_while(|l| !(l.starts_with("put.add.check") && l.trim_end().ends_with(':')))
+        .skip(1)
+        .take_while(|l| !l.trim_end().ends_with(':'))
+        .collect();
+    let check_br = check_block
+        .iter()
+        .find(|l| l.contains(" br "))
+        .copied()
+        .unwrap_or("");
+    assert!(
+        check_br.contains("%put.add.chain") && check_br.contains("%put.pic.ways"),
+        "the key-add primary compare must branch to the add hit or the existing-key ways:\n{ir}"
+    );
+    // After the primary memo, TWO key-add ways: the receiver ShapeId's home,
+    // `(sid * 0x9E3779B1) >> 26` (packed_add::add_way_home), and the next.
+    let way_blocks: Vec<&str> = ir
+        .lines()
+        .filter(|l| l.starts_with("put.add.way.") && l.trim_end().ends_with(':'))
+        .collect();
+    assert_eq!(
+        way_blocks.len(),
+        2,
+        "after the primary memo the home way and the next are compared inline:\n{ir}"
+    );
+    assert!(
+        ir.contains("mul i32") && ir.contains("-1640531535") && ir.contains("lshr i32"),
+        "the inline way is the ShapeId's home, sid * ADD_WAY_HASH >> 26:\n{ir}"
+    );
     assert_eq!(
         ir.lines()
             .filter(|l| l.starts_with("put.pic.way.") && l.trim_end().ends_with(':'))

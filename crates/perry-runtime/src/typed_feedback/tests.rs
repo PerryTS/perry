@@ -3183,3 +3183,23 @@ fn class_field_get_ic_throws_a_type_error_on_a_nullish_receiver() {
         );
     }
 }
+
+/// A key-add on a typed-layout receiver retires its layout record through
+/// `invalidate_representation_change`. With feedback off (every production
+/// run) nothing can read what it counts, so it must return before the
+/// registry lock; the control arm proves the counter this test reads moves.
+#[test]
+fn representation_change_takes_no_registry_lock_with_feedback_off() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    let addr = 0x7000_0000usize;
+    invalidate_representation_change_when(addr, false);
+    assert_eq!(
+        typed_feedback_snapshot().representation_invalidations,
+        0,
+        "feedback off: the registry must not be touched"
+    );
+    invalidate_representation_change_when(addr, true);
+    assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
+    reset_typed_feedback_for_tests();
+}
