@@ -1235,25 +1235,29 @@ pub(crate) fn get_field_by_name_object_tail(
 
         if keys.is_null() {
             // #9131; see `prototype_override::inherited_field_if_overridden`.
-            // A miss returns None so the synthesized arms below stay reachable
-            // (#9244).
-            if let Some(v) = super::prototype_override::inherited_field_if_overridden(obj, key) {
-                return v;
-            }
+            // A miss is not a `Hit` so the synthesized arms below stay
+            // reachable (#9244).
+            let chain_walked =
+                match super::prototype_override::inherited_field_if_overridden(obj, key) {
+                    super::prototype_override::InheritedRead::Hit(v) => return v,
+                    read => read.walked(),
+                };
             // #809: an object with no own keys (e.g. an `Object.create(proto)`
             // result, or a `Function.prototype = obj` instance) still has to
             // resolve inherited props/methods. Pre-fix this returned undefined
             // here — BEFORE the `class_id` prototype-walk below — so
             // `Object.create(P).m()` threw `TypeError: m is not a function`.
             let class_id = (*obj).class_id;
+            let mut proto_read_miss = 0u64;
             if class_id != 0 {
                 let receiver =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                if let Some(v) =
-                    super::super::class_registry::resolve_proto_chain_field_with_receiver(
-                        class_id, key, receiver,
-                    )
-                {
+                if let Some(v) = super::super::class_registry::resolve_proto_chain_field_noting_miss(
+                    class_id,
+                    key,
+                    receiver,
+                    &mut proto_read_miss,
+                ) {
                     return v;
                 }
                 let key_bytes = std::slice::from_raw_parts(
@@ -1342,12 +1346,19 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             // #2820: a keyless object (`{}`, `Object.create(...)`) may still
             // carry an explicit `Object.setPrototypeOf` prototype — walk it so
-            // inherited reads resolve.
+            // inherited reads resolve. Not a second time (#10877).
             if !key.is_null() {
-                if let Some(v) =
-                    super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                if !chain_walked
+                    && !super::prototype_override::static_prototype_already_read(
+                        obj,
+                        proto_read_miss,
+                    )
                 {
-                    return v;
+                    if let Some(v) =
+                        super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                    {
+                        return v;
+                    }
                 }
                 if let Some(v) = super::accessors::array_subclass_prototype_field(obj, key) {
                     return v;
@@ -1626,9 +1637,13 @@ pub(crate) fn get_field_by_name_object_tail(
         }
 
         // Shaped-receiver own-key miss; same rule as the keyless arm above.
-        if let Some(v) = super::prototype_override::inherited_field_if_overridden(obj, key) {
-            return v;
-        }
+        let chain_walked = match super::prototype_override::inherited_field_if_overridden(obj, key)
+        {
+            super::prototype_override::InheritedRead::Hit(v) => return v,
+            read => read.walked(),
+        };
+        // Set by the class-chain walk below; see `static_prototype_already_read`.
+        let mut proto_read_miss = 0u64;
 
         // Key not found in the keys_array — fall back to the class
         // vtable's getter map. Refs #486 (hono): cross-module class
@@ -1685,7 +1700,12 @@ pub(crate) fn get_field_by_name_object_tail(
             {
                 let receiver =
                     f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                if let Some(v) = resolve_proto_chain_field_with_receiver(class_id, key, receiver) {
+                if let Some(v) = super::super::class_registry::resolve_proto_chain_field_noting_miss(
+                    class_id,
+                    key,
+                    receiver,
+                    &mut proto_read_miss,
+                ) {
                     return v;
                 }
             }
@@ -1769,11 +1789,16 @@ pub(crate) fn get_field_by_name_object_tail(
         // #2820: before giving up, walk an explicit `Object.setPrototypeOf`
         // prototype chain recorded for this object so inherited property reads
         // (`obj.x` where `x` is an own property of the set prototype) resolve.
+        // Not a second time (#10877).
         if !key.is_null() {
-            if let Some(v) =
-                super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+            if !chain_walked
+                && !super::prototype_override::static_prototype_already_read(obj, proto_read_miss)
             {
-                return v;
+                if let Some(v) =
+                    super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                {
+                    return v;
+                }
             }
             if let Some(v) = super::accessors::array_subclass_prototype_field(obj, key) {
                 return v;

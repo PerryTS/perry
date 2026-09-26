@@ -515,7 +515,7 @@ pub(crate) unsafe fn resolve_proto_chain_field(
     class_id: u32,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    resolve_proto_chain_field_inner(class_id, key, None, true)
+    resolve_proto_chain_field_inner(class_id, key, None, true, None)
 }
 
 pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
@@ -523,7 +523,31 @@ pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> Option<JSValue> {
-    resolve_proto_chain_field_inner(class_id, key, Some(receiver), false)
+    resolve_proto_chain_field_inner(class_id, key, Some(receiver), false, None)
+}
+
+/// [`resolve_proto_chain_field_with_receiver`] that also reports, through
+/// `read_miss`, a prototype object this walk read IN FULL — the generic getter,
+/// which walks that object's own chain — and which answered exactly
+/// `undefined`. Its bits are left as they were when nothing qualified.
+///
+/// #10877: a `new F()` instance reaches `F.prototype` twice, through its
+/// synthetic class id (this walk) and through its recorded per-object
+/// prototype link (`resolve_inherited_field`), and the object-getter tail asks
+/// both. Each is a full read of the same object, which re-enters the tail one
+/// level up, so an absent read cost `2^depth` getter entries on a
+/// constructor-function chain. The tail compares this to the receiver's
+/// recorded prototype (`prototype_override::static_prototype_already_read`)
+/// and skips the second read when they are the same object. Only an exact
+/// `undefined` qualifies: this walk skips a `null` value, which the per-object
+/// read must still return.
+pub(crate) unsafe fn resolve_proto_chain_field_noting_miss(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: f64,
+    read_miss: &mut u64,
+) -> Option<JSValue> {
+    resolve_proto_chain_field_inner(class_id, key, Some(receiver), false, Some(read_miss))
 }
 
 unsafe fn inherited_proto_accessor_value(
@@ -659,6 +683,7 @@ unsafe fn resolve_proto_chain_field_inner(
     key: *const crate::StringHeader,
     receiver: Option<f64>,
     constructor_side: bool,
+    mut read_miss: Option<&mut u64>,
 ) -> Option<JSValue> {
     if let Some(receiver) = receiver {
         let receiver_value = JSValue::from_bits(receiver.to_bits());
@@ -843,6 +868,15 @@ unsafe fn resolve_proto_chain_field_inner(
             };
             if !field_val.is_undefined() && !field_val.is_null() {
                 return Some(field_val);
+            }
+            if field_val.is_undefined() {
+                if let Some(read_miss) = read_miss.as_deref_mut() {
+                    // The read can collect; re-read the address it now names.
+                    let proto_now = class_prototype_object(cid);
+                    if proto_now == proto_obj {
+                        *read_miss = JSValue::pointer(proto_now as *const u8).bits();
+                    }
+                }
             }
         }
         match get_parent_class_id(cid) {
