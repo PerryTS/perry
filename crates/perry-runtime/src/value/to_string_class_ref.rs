@@ -31,6 +31,18 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return CustomToPrimitiveOutcome::TypeError;
     }
+    // #10510: `Date.prototype[Symbol.toPrimitive]` is `OrdinaryToPrimitive`
+    // with the hint-selected order; run it without materializing the hint
+    // string or entering the native call path.
+    if crate::object::date_proto_thunks::is_builtin_date_to_primitive_call(
+        method,
+        value_handle.get_nanbox_f64(),
+    ) {
+        return CustomToPrimitiveOutcome::Primitive(ordinary_to_primitive_for_toprimitive(
+            value_handle.get_nanbox_f64(),
+            hint != b"number",
+        ));
+    }
     let method_handle = scope.root_nanbox_f64(method);
     let hint_ptr = crate::string::js_string_from_bytes(hint.as_ptr(), hint.len() as u32);
     let hint_handle = scope.root_string_ptr(hint_ptr);

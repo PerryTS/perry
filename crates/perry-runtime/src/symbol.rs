@@ -318,6 +318,44 @@ static WELL_KNOWN_SYMBOLS: Mutex<Option<HashMap<String, usize>>> = Mutex::new(No
 /// Returns the pointer to the cached `SymbolHeader`. Registered in
 /// `SYMBOL_POINTERS` so `js_is_symbol` / `is_registered_symbol` recognize it.
 pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
+    // #10510: lock-free hit for the names the runtime itself resolves on hot
+    // paths — every implicit `ToPrimitive` and every symbol-keyed read that
+    // misses reaches several of these, and the slow path below takes a mutex
+    // and hashes a `String` key each time. Published only after the slow path
+    // has fully initialized the symbol, and never cleared (the symbols are
+    // Box-leaked and `WELL_KNOWN_SYMBOLS` is never reset).
+    let fast = well_known_fast_slot(short_name);
+    if let Some(slot) = fast {
+        let ptr = slot.load(std::sync::atomic::Ordering::Acquire);
+        if ptr != 0 {
+            return ptr as *mut SymbolHeader;
+        }
+    }
+    let sym_ptr = well_known_symbol_slow(short_name);
+    if let Some(slot) = fast {
+        slot.store(sym_ptr as usize, std::sync::atomic::Ordering::Release);
+    }
+    sym_ptr
+}
+
+fn well_known_fast_slot(short_name: &str) -> Option<&'static std::sync::atomic::AtomicUsize> {
+    static SLOTS: [std::sync::atomic::AtomicUsize; 8] =
+        [const { std::sync::atomic::AtomicUsize::new(0) }; 8];
+    let index = match short_name {
+        "iterator" => 0,
+        "asyncIterator" => 1,
+        "toPrimitive" => 2,
+        "toStringTag" => 3,
+        "hasInstance" => 4,
+        "dispose" => 5,
+        "asyncDispose" => 6,
+        "species" => 7,
+        _ => return None,
+    };
+    Some(&SLOTS[index])
+}
+
+fn well_known_symbol_slow(short_name: &str) -> *mut SymbolHeader {
     let mut guard = WELL_KNOWN_SYMBOLS.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -1023,6 +1061,34 @@ pub(crate) fn note_symbol_key_installed(sym_key: usize) {
     }
 }
 
+/// #10510: has a symbol-keyed property (data or accessor) EVER been stored
+/// against a small-native-handle owner key? The #5437 `_req` fallback in
+/// `js_object_get_symbol_property` can only return a value the handle holds
+/// in these side tables, so while this is `false` it is a guaranteed miss —
+/// and it is not free: it interns a `"_req"` key and runs a by-name `[[Get]]`
+/// over the receiver's whole prototype chain on EVERY symbol read that misses
+/// the receiver's own table (every implicit `ToPrimitive`'s
+/// `Symbol.toPrimitive` probe, every `[Symbol.iterator]` behind a spread).
+/// Monotonic, like [`CONCAT_SPREADABLE_EVER`]. GC owner rekeys need no note:
+/// they only move heap-object owners, which the fallback rejects.
+static SMALL_HANDLE_SYMBOL_OWNER_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn small_handle_symbol_owner_ever() -> bool {
+    SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Note a symbol-keyed install on `obj_key`. Must be called BEFORE the table
+/// insert in every install funnel (same ordering argument as
+/// [`note_symbol_key_installed`]).
+pub(crate) fn note_symbol_owner_installed(obj_key: usize) {
+    if crate::value::addr_class::is_small_handle(obj_key)
+        && !SMALL_HANDLE_SYMBOL_OWNER_EVER.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        SMALL_HANDLE_SYMBOL_OWNER_EVER.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// The cached well-known symbol pointer if `short_name` was ever
 /// materialized, else null. Unlike [`well_known_symbol`], never allocates.
 pub(crate) fn well_known_symbol_if_cached(short_name: &str) -> *mut SymbolHeader {
@@ -1044,6 +1110,7 @@ pub(crate) fn store_object_symbol_property_root(
     value_bits: u64,
 ) -> bool {
     note_symbol_key_installed(sym_key);
+    note_symbol_owner_installed(obj_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if guard.is_none() {

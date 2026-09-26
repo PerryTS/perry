@@ -179,7 +179,9 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
     let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for name in order {
         let recv = value_handle.get_nanbox_f64();
-        let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        // #10510: a runtime-spelled literal — reuse the interned key instead
+        // of allocating a fresh string on every conversion.
+        let key_ptr = crate::string::canonical_key(name);
         let key = f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
         // `Get(O, name)` — fires accessor getters and walks the prototype chain,
         // exactly like the spec's abstract `Get` (so `{ get valueOf() {…} }` is
@@ -188,6 +190,13 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
         if !crate::collection_iter::is_callable(method) {
             // Non-callable (or absent) — skip to the next name.
             continue;
+        }
+        // #10510: the builtin Date `valueOf` on a Date is its time value.
+        if let Some(time) = crate::object::date_proto_thunks::builtin_date_value_of_result(
+            method,
+            value_handle.get_nanbox_f64(),
+        ) {
+            return time;
         }
         let method_handle = scope.root_nanbox_f64(method);
         let recv = value_handle.get_nanbox_f64();

@@ -275,6 +275,46 @@ extern "C" fn date_to_primitive(_closure: *const crate::closure::ClosureHeader, 
     unsafe { crate::value::ordinary_to_primitive_for_toprimitive(this, try_string_first) }
 }
 
+/// #10510: the code address of the closure `method` holds, if it is a valid
+/// closure. Compared by function pointer (like
+/// `is_array_prototype_method_value`): every reification of a builtin shares
+/// one code address, and a `.bind`/wrapper gets a different one.
+fn closure_func_ptr(method: f64) -> *const u8 {
+    let jsv = crate::value::JSValue::from_bits(method.to_bits());
+    if !jsv.is_pointer() {
+        return std::ptr::null();
+    }
+    let ptr = jsv.as_pointer::<crate::closure::ClosureHeader>();
+    if ptr.is_null() {
+        return std::ptr::null();
+    }
+    crate::closure::get_valid_func_ptr(ptr)
+}
+
+/// #10510: can `ToPrimitive(receiver, hint)` skip calling `method` and run
+/// `OrdinaryToPrimitive` directly? True iff `method` IS the builtin
+/// `Date.prototype[Symbol.toPrimitive]` (whatever object it was found on) and
+/// the call would pass its step-1 `Type(O) is Object` check — then its body is
+/// exactly `OrdinaryToPrimitive(O, tryFirst)` for the three hints the runtime
+/// itself passes. Skips a hint-string allocation and a native closure call on
+/// every `+date` / `date - other` / `date < other`.
+pub(crate) fn is_builtin_date_to_primitive_call(method: f64, receiver: f64) -> bool {
+    closure_func_ptr(method) == date_to_primitive as *const u8 && value_is_object(receiver)
+}
+
+/// #10510: is `method` the builtin `Date.prototype.valueOf` (equivalently
+/// `getTime`) and `receiver` a Date? Then `Call(method, receiver)` is exactly
+/// the receiver's time value — no brand-check throw is possible.
+pub(crate) fn builtin_date_value_of_result(method: f64, receiver: f64) -> Option<f64> {
+    if closure_func_ptr(method) == date_get_time as *const u8
+        && crate::date::is_date_value(receiver)
+    {
+        Some(crate::date::date_cell_timestamp(receiver))
+    } else {
+        None
+    }
+}
+
 /// Install `Date.prototype[Symbol.toPrimitive]` — a non-enumerable own method
 /// keyed by the real well-known `Symbol.toPrimitive` (not an `@@`-string own
 /// property, which would leak into `getOwnPropertyNames`). Its property
@@ -664,4 +704,46 @@ pub(crate) fn install_date_proto_to_locale_string(proto_obj: *mut ObjectHeader) 
         0,
         0,
     );
+}
+
+#[cfg(test)]
+mod to_primitive_fast_path_tests {
+    /// #10510: the direct-dispatch shortcuts must recognize the INSTALLED
+    /// builtins — they compare code addresses, so a builtin reinstalled
+    /// through a wrapper would silently fall back to the slow path.
+    #[test]
+    fn installed_date_builtins_take_the_direct_paths() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let date = crate::date::alloc_date_cell(1234.0);
+            let sym = crate::symbol::well_known_symbol("toPrimitive");
+            let sym_value = f64::from_bits(
+                crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK),
+            );
+            let method = crate::symbol::js_object_get_symbol_property(date, sym_value);
+            assert_eq!(
+                super::closure_func_ptr(method) as usize,
+                super::date_to_primitive as *const () as usize,
+                "Date.prototype[Symbol.toPrimitive] must be the builtin thunk"
+            );
+            assert!(super::is_builtin_date_to_primitive_call(method, date));
+
+            let key = crate::string::js_string_from_bytes(b"valueOf".as_ptr(), 7);
+            let key = crate::value::js_nanbox_string(key as i64);
+            let value_of = crate::proxy::js_reflect_get(date, key, date);
+            assert_eq!(
+                super::closure_func_ptr(value_of) as usize,
+                super::date_get_time as *const () as usize,
+                "Date.prototype.valueOf must be the builtin thunk"
+            );
+            assert_eq!(
+                super::builtin_date_value_of_result(value_of, date),
+                Some(1234.0)
+            );
+            // A non-Date receiver never takes the valueOf shortcut.
+            let plain =
+                crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            assert_eq!(super::builtin_date_value_of_result(value_of, plain), None);
+        }
+    }
 }

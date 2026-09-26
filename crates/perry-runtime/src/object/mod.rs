@@ -97,7 +97,7 @@ mod bound_method_receiver_tests;
 mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
-mod date_proto_thunks;
+pub(crate) mod date_proto_thunks;
 mod delete_rest;
 pub(crate) mod descriptors;
 pub(crate) mod dictionary;

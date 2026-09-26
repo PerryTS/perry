@@ -150,6 +150,7 @@ pub(crate) unsafe fn set_symbol_accessor_property(
         return;
     }
     crate::symbol::note_symbol_key_installed(sym_key);
+    crate::symbol::note_symbol_owner_installed(obj_key);
     note_symbol_accessor_key(sym_key);
     {
         // `SYMBOL_PROPERTIES` is the only insertion-ordered record of symbol
