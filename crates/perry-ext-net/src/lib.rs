@@ -253,6 +253,10 @@ pub(crate) mod statics {
 /// pass instead of needing a second per-server scanner.
 pub(crate) struct ServerState {
     pub async_id: u64,
+    /// The agent that created this server (`perry_ffi::agent_post::current_agent`).
+    /// Only that agent's pump delivers its events, so only that agent's
+    /// keepalive may count it (#11340).
+    pub owner_agent: u64,
     /// Set by `.listen()`. Keeps `has_active_handles` answering yes from the
     /// `listen()` call until the server's registry entry is removed by its
     /// `'close'`, including the window before the bind has been published.
@@ -274,6 +278,10 @@ pub(crate) struct ServerState {
 
 pub(crate) struct SocketState {
     pub(crate) tcp_async_id: u64,
+    /// The agent the socket belongs to — the one whose thread created it
+    /// (`perry_ffi::agent_post::current_agent`). Its events go to that agent's
+    /// queue, so only that agent's keepalive may count it (#11340).
+    pub(crate) owner_agent: u64,
     pub(crate) connect_async_id: u64,
     pub(crate) shutdown_async_id: u64,
     /// True only between `js_net_socket_alloc` and the first
@@ -427,6 +435,7 @@ pub(crate) fn register_turnloop_socket(
         socket_id,
         SocketState {
             tcp_async_id: 0,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: false,
@@ -469,6 +478,7 @@ impl SocketState {
     pub(crate) fn for_test(awaiting_connect: bool) -> Self {
         SocketState {
             tcp_async_id: 0,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect,
@@ -721,6 +731,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
         id,
         SocketState {
             tcp_async_id,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: true,
@@ -778,6 +789,7 @@ pub unsafe extern "C" fn js_net_create_server(
         id,
         ServerState {
             async_id: 0,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             listen_armed: false,
             bound_port: 0,
             bound_host: String::new(),
@@ -1260,6 +1272,7 @@ where
         id,
         SocketState {
             tcp_async_id,
+            owner_agent: perry_ffi::agent_post::current_agent(),
             connect_async_id,
             shutdown_async_id: 0,
             awaiting_connect: false,

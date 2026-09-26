@@ -395,8 +395,15 @@ pub(crate) fn has_active_handles() -> bool {
     if crate::turnloop_io::close_in_flight() {
         return true;
     }
+    // #11340: only this agent's sockets and servers. A worker's socket is
+    // served by the worker's pump; counting it here kept the primary alive
+    // forever once the worker had exited with that socket's events undrained.
+    let agent = perry_ffi::agent_post::current_agent();
     if statics::sockets().lock().unwrap().values().any(|socket| {
-        socket.refed && !socket.destroyed && (socket.is_open || !socket.awaiting_connect)
+        socket.owner_agent == agent
+            && socket.refed
+            && !socket.destroyed
+            && (socket.is_open || !socket.awaiting_connect)
     }) {
         return true;
     }
@@ -405,7 +412,9 @@ pub(crate) fn has_active_handles() -> bool {
         .unwrap()
         .iter()
         .any(|(id, server)| {
-            (server.listening || server.listen_armed) && crate::bun_tcp::server_keeps_alive(*id)
+            server.owner_agent == agent
+                && (server.listening || server.listen_armed)
+                && crate::bun_tcp::server_keeps_alive(*id)
         })
 }
 

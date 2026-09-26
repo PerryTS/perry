@@ -141,25 +141,29 @@ struct Aux {
 /// so a program with nothing else pending exited in between and the
 /// `'close'` never fired. undici's `Client.close()` awaits exactly that
 /// event, so it never settled.
-fn closing() -> &'static Mutex<std::collections::HashSet<i64>> {
-    static CLOSING: OnceLock<Mutex<std::collections::HashSet<i64>>> = OnceLock::new();
-    CLOSING.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+/// Sockets whose close was submitted and whose `'close'` is still owed, each
+/// with the agent that submitted it (#11340: only that agent waits for it).
+fn closing() -> &'static Mutex<std::collections::HashMap<i64, u64>> {
+    static CLOSING: OnceLock<Mutex<std::collections::HashMap<i64, u64>>> = OnceLock::new();
+    CLOSING.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Whether a submitted socket close still owes its `'close'` event; the
 /// keepalive gate (`server_state::has_active_handles`) waits for it.
 pub(crate) fn close_in_flight() -> bool {
-    !closing()
+    let agent = perry_ffi::agent_post::current_agent();
+    closing()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .is_empty()
+        .values()
+        .any(|owner| *owner == agent)
 }
 
 fn note_close_submitted(id: i64) {
     closing()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(id);
+        .insert(id, perry_ffi::agent_post::current_agent());
 }
 
 fn submit_socket_close(id: i64) -> bool {
