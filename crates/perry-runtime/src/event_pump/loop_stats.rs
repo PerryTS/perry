@@ -1,16 +1,14 @@
 //! `PERRY_LOOP_STATS=1` wait metrics: where the primary agent's event loop
 //! spends its waits.
 //!
-//! Instruction counts and RSS can stay flat while the waits between Perry and
-//! tokio decide a server's latency and CPU. This module makes them directly
+//! Instruction counts and RSS can stay flat while OS waits decide a server's
+//! latency and CPU. This module makes them directly
 //! observable:
 //!
-//! * per wait kind (a turnloop turn, a tokio tick, a condvar park): count,
+//! * per wait kind (a turnloop turn or a condvar park): count,
 //!   total and maximum time parked, from the monotonic clock around the wait;
-//! * fast drives (the stdlib's brief tokio drive on the notified path, reported
-//!   only when it actually drove): count, total and maximum time;
 //! * wake latency: time from a producer's notify (a cross-thread producer, or a
-//!   native completion queued inside a tokio tick) to the parked wait
+//!   native completion) to the parked wait
 //!   returning, as a five-bucket histogram plus the maximum;
 //! * zero-budget returns and #1114 spin-throttle sleeps.
 //!
@@ -88,8 +86,6 @@ pub(crate) fn test_adopt_wake(key: usize) {
 pub enum WaitKind {
     /// One `turnloop::Loop::turn` on an `Instant` deadline.
     Turnloop = 1,
-    /// One registered tokio tick (`stdlib_wait_driver` → `run_one_tick`).
-    TokioTick = 2,
     /// One condvar park (runtime-only binaries in the legacy arm, declined
     /// threads, turn-failure fallback).
     Condvar = 3,
@@ -124,9 +120,7 @@ impl Kind {
 }
 
 static TURNLOOP: Kind = Kind::new();
-static TOKIO_TICK: Kind = Kind::new();
 static CONDVAR: Kind = Kind::new();
-static FAST_DRIVE: Kind = Kind::new();
 static ZERO_BUDGET: AtomicU64 = AtomicU64::new(0);
 static THROTTLE_SLEEPS: AtomicU64 = AtomicU64::new(0);
 
@@ -153,9 +147,7 @@ pub struct KindStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LoopWaitStats {
     pub turnloop: KindStats,
-    pub tokio_tick: KindStats,
     pub condvar: KindStats,
-    pub fast_drive: KindStats,
     pub zero_budget: u64,
     pub throttle_sleeps: u64,
     /// Wake-latency histogram: `<50µs, <200µs, <1ms, <5ms, ≥5ms`.
@@ -188,9 +180,8 @@ fn resolve() -> bool {
 
 /// Test hook: turn recording on regardless of the environment.
 ///
-/// Public because perry-stdlib's tests drive the real tokio tick through this
-/// module, and a test cannot rely on `PERRY_LOOP_STATS` having been in the
-/// environment before the first [`enabled`] call resolved [`STATE`]. It turns a
+/// A test cannot rely on `PERRY_LOOP_STATS` having been in the environment
+/// before the first [`enabled`] call resolved [`STATE`]. This turns a
 /// diagnostic on and nothing else; no production caller exists.
 #[doc(hidden)]
 pub fn enable_for_tests() {
@@ -246,7 +237,6 @@ fn end_wait_recorded(kind: WaitKind, started: u64) {
     let notified_at = NOTIFY_AT_NS.swap(0, Ordering::SeqCst);
     let slot = match kind {
         WaitKind::Turnloop => &TURNLOOP,
-        WaitKind::TokioTick => &TOKIO_TICK,
         WaitKind::Condvar => &CONDVAR,
     };
     slot.add(now.saturating_sub(started));
@@ -290,28 +280,6 @@ pub fn note_zero_budget(throttled: bool) {
     }
 }
 
-/// perry-stdlib: a fast drive is about to run tokio. Returns 0 when not
-/// recording; pass the result to [`end_fast_drive`].
-///
-/// A plain Rust call (perry-stdlib links perry-runtime as an rlib): the stats
-/// hooks add no `extern "C"` symbol and no FFI contract to maintain.
-#[inline]
-pub fn begin_fast_drive() -> u64 {
-    if enabled() && recording_thread() {
-        now_ns()
-    } else {
-        0
-    }
-}
-
-/// perry-stdlib: the fast drive started by [`begin_fast_drive`] ended.
-#[inline]
-pub fn end_fast_drive(started: u64) {
-    if started != 0 {
-        FAST_DRIVE.add(now_ns().saturating_sub(started));
-    }
-}
-
 pub fn snapshot() -> LoopWaitStats {
     let mut wake_buckets = [0; 5];
     for (out, bucket) in wake_buckets.iter_mut().zip(WAKE_BUCKETS.iter()) {
@@ -319,9 +287,7 @@ pub fn snapshot() -> LoopWaitStats {
     }
     LoopWaitStats {
         turnloop: TURNLOOP.snapshot(),
-        tokio_tick: TOKIO_TICK.snapshot(),
         condvar: CONDVAR.snapshot(),
-        fast_drive: FAST_DRIVE.snapshot(),
         zero_budget: ZERO_BUDGET.load(Ordering::Relaxed),
         throttle_sleeps: THROTTLE_SLEEPS.load(Ordering::Relaxed),
         wake_buckets,
@@ -335,24 +301,16 @@ pub fn format_line(arm: &str, s: &LoopWaitStats) -> String {
     format!(
         "[perry-loop-waits] arm={arm} \
          turnloop_waits={} turnloop_wait_ns={} turnloop_wait_max_ns={} \
-         tokio_ticks={} tokio_tick_ns={} tokio_tick_max_ns={} \
          condvar_waits={} condvar_wait_ns={} condvar_wait_max_ns={} \
-         fast_drives={} fast_drive_ns={} fast_drive_max_ns={} \
          zero_budget={} throttle_sleeps={} \
          wake_samples={} wake_lt50us={} wake_lt200us={} wake_lt1ms={} wake_lt5ms={} wake_ge5ms={} \
          wake_max_ns={}",
         s.turnloop.count,
         s.turnloop.total_ns,
         s.turnloop.max_ns,
-        s.tokio_tick.count,
-        s.tokio_tick.total_ns,
-        s.tokio_tick.max_ns,
         s.condvar.count,
         s.condvar.total_ns,
         s.condvar.max_ns,
-        s.fast_drive.count,
-        s.fast_drive.total_ns,
-        s.fast_drive.max_ns,
         s.zero_budget,
         s.throttle_sleeps,
         s.wake_samples(),

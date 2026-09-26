@@ -95,69 +95,14 @@ fn a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample() {
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
 }
 
-static FAKE_WOKEN: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
-static FAKE_CVAR: std::sync::Condvar = std::sync::Condvar::new();
-
-extern "C" fn fake_tick(budget_ms: u64) {
-    let guard = FAKE_WOKEN.lock().unwrap();
-    let (mut woken, _) = FAKE_CVAR
-        .wait_timeout_while(guard, Duration::from_millis(budget_ms), |w| !*w)
-        .unwrap();
-    *woken = false;
-}
-
-extern "C" fn fake_wake() {
-    *FAKE_WOKEN.lock().unwrap() = true;
-    FAKE_CVAR.notify_all();
-}
-
-/// The tokio-tick kind: a notify while the registered tick is parked is one
-/// wake sample and one tick (a stand-in tick with the same wake contract).
 #[test]
-fn one_notify_into_a_registered_tick_is_one_wake_sample() {
-    let _g = serial();
-    force_enable_for_test();
-    *FAKE_WOKEN.lock().unwrap() = false;
-    super::super::js_register_wait_driver(Some(fake_tick), None, Some(fake_wake));
-    let before = snapshot();
-    // The park and the notify are on different threads; share this thread's
-    // wake-latency instance so the sample is observable here (see
-    // `PerThread::adopt` -- must precede the spawned thread's first park).
-    let wake_key = super::test_shared_wake_key();
-    let waiter = std::thread::spawn(move || {
-        super::test_adopt_wake(wake_key);
-        super::super::wait_driver_sleep(30_000)
-    });
-    let limit = std::time::Instant::now() + Duration::from_secs(10);
-    while PARKED.load(Ordering::SeqCst) != WaitKind::TokioTick as u8 {
-        assert!(std::time::Instant::now() < limit, "tick never parked");
-        std::thread::yield_now();
-    }
-    super::super::js_notify_main_thread();
-    let ran = waiter.join().unwrap();
-    super::super::js_register_wait_driver(None, None, None);
-    assert!(ran, "the registered tick did not run");
-    let after = snapshot();
-    assert_eq!(after.tokio_tick.count - before.tokio_tick.count, 1);
-    assert_eq!(after.wake_samples() - before.wake_samples(), 1);
-    super::super::NOTIFIED.store(false, Ordering::SeqCst);
-}
-
-#[test]
-fn fast_drives_and_zero_budget_returns_are_counted() {
+fn zero_budget_returns_are_counted() {
     let _g = serial();
     force_enable_for_test();
     let before = snapshot();
-    let started = begin_fast_drive();
-    assert_ne!(started, 0);
-    std::thread::sleep(Duration::from_millis(1));
-    end_fast_drive(started);
-    end_fast_drive(0);
     note_zero_budget(false);
     note_zero_budget(true);
     let after = snapshot();
-    assert_eq!(after.fast_drive.count - before.fast_drive.count, 1);
-    assert!(after.fast_drive.total_ns - before.fast_drive.total_ns >= 900_000);
     assert_eq!(after.zero_budget - before.zero_budget, 2);
     assert_eq!(after.throttle_sleeps - before.throttle_sleeps, 1);
 }
@@ -191,23 +136,22 @@ fn workers_are_not_recorded_and_the_line_names_every_metric() {
     std::thread::spawn(|| {
         let agent = crate::agent::enter_worker_agent();
         assert_eq!(begin_wait(WaitKind::Condvar), None);
-        assert_eq!(begin_fast_drive(), 0);
         crate::agent::retire_agent(agent);
     })
     .join()
     .unwrap();
     let line = format_line("turnloop", &snapshot());
+    assert!(!line.contains("tokio"), "obsolete tick counters: {line}");
+    assert!(
+        !line.contains("fast_drive"),
+        "obsolete drive counters: {line}"
+    );
     for key in [
         "arm=turnloop",
         "turnloop_waits=",
         "turnloop_wait_ns=",
         "turnloop_wait_max_ns=",
-        "tokio_ticks=",
-        "tokio_tick_ns=",
-        "tokio_tick_max_ns=",
         "condvar_waits=",
-        "fast_drives=",
-        "fast_drive_ns=",
         "zero_budget=",
         "throttle_sleeps=",
         "wake_samples=",

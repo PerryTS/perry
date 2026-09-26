@@ -244,14 +244,13 @@ extern "C" fn mt_profile_atexit() {
         crate::timer::PROFILE_INTERVAL_TIMERS_FIRED.load(Ordering::Relaxed),
     );
     eprintln!(
-        "[mt-profile] event_notify={{sent:{},during_drain:{},drain_suppressed:{}}} event_wait={{total:{},fast:{},zero:{},driver:{},condvar:{}}}",
+        "[mt-profile] event_notify={{sent:{},during_drain:{},drain_suppressed:{}}} event_wait={{total:{},fast:{},zero:{},condvar:{}}}",
         crate::event_pump::PROFILE_NOTIFY_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_NOTIFY_DURING_DRAIN_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_NOTIFY_DRAIN_SUPPRESSED_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_FAST_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_ZERO_COUNT.load(Ordering::Relaxed),
-        crate::event_pump::PROFILE_WAIT_DRIVER_COUNT.load(Ordering::Relaxed),
         crate::event_pump::PROFILE_WAIT_CONDVAR_COUNT.load(Ordering::Relaxed),
     );
     let q = MT_TIME_NS_QUEUE.load(Ordering::Relaxed);

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""turnloop P0 transitional-bridge probe: tokio-owned native work still runs.
+"""Native loopback probe: fetch and WebSocket run on turnloop.
 
-While tokio owns in-flight native work the primary agent must drive the legacy
-tokio tick instead of a turnloop turn (P0 coexistence rule). This compiles two
-loopback programs — `fetch` against a local HTTP server and a global
-`WebSocket` against a local server — checks their stdout against the pinned
-Node oracle, proves on the SERVER side that both native subjects really made
-their requests, and requires `native_ticks > 0` in the `PERRY_LOOP_STATS=1`
-line, i.e. the bridge branch actually ran.
+Compile two loopback programs, compare their output against the pinned Node
+oracle, and verify on the server side that both subjects made their requests.
+Require nonzero turnloop turns and completions so a successful run also proves
+that the native event loop actually ran.
 
 Usage: scripts/turnloop_p0_native_probe.py [--perry target/perry-dev/perry] [--runtime-dir DIR]
 """
@@ -28,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STATS = re.compile(
     r"\[perry-loop\] driver=turnloop turns=(\d+) os_waits=(\d+) "
-    r"zero_event_waits=(\d+) native_ticks=(\d+) turn_errors=(\d+)"
+    r"zero_event_waits=(\d+) turn_errors=(\d+) completions=(\d+)"
 )
 
 
@@ -112,11 +109,11 @@ def run_probe(perry, env, folder, name, source, expected):
         problems.append(f"no turnloop stats line: {run.stderr!r}")
         line = "no stats"
     else:
-        turns, os_waits, zero, native, errors = map(int, found[0])
+        turns, os_waits, zero, errors, completions = map(int, found[0])
         line = (f"turns={turns} os_waits={os_waits} zero_event_waits={zero} "
-                f"native_ticks={native} turn_errors={errors}")
-        if native == 0:
-            problems.append("the tokio bridge never ran (native_ticks=0)")
+                f"turn_errors={errors} completions={completions}")
+        if turns == 0 or completions == 0:
+            problems.append("the native loop never completed work")
         if errors:
             problems.append("turn errors")
     print(("PASS " if not problems else "FAIL ") + f"{name}: {line}", flush=True)

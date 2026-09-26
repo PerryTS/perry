@@ -10,8 +10,7 @@ reached its deadlines by waiting, not spinning:
     (DESIGN §10 rule 4a);
   * at least one turn and one OS wait where a real wait is due (the subject
     ran — a green run with zero turns would prove nothing);
-  * no transitional tokio ticks (these probes own no native work) and no turn
-    errors.
+  * no turn errors.
 
 Usage:
   scripts/turnloop_p0_loop_stats.py [--perry target/perry-dev/perry]
@@ -48,7 +47,7 @@ PROBES = {
 UNPARKED = "[perry-loop] driver=turnloop parked=0"
 STATS = re.compile(
     r"\[perry-loop\] driver=turnloop turns=(\d+) os_waits=(\d+) "
-    r"zero_event_waits=(\d+) native_ticks=(\d+) turn_errors=(\d+)"
+    r"zero_event_waits=(\d+) turn_errors=(\d+)"
 )
 
 
@@ -101,22 +100,22 @@ def main() -> int:
                 problems.append(f"stdout {run.stdout!r} != node {oracle!r}")
             found = STATS.findall(run.stderr)
             if not found and run.stderr.count(UNPARKED) == 1:
-                found = [("0", "0", "0", "0", "0")]
+                found = [("0", "0", "0", "0")]
             if len(found) != 1:
                 problems.append(f"expected one turnloop stats line, stderr={run.stderr!r}")
                 line = f"{probe}: no stats"
             else:
-                turns, os_waits, zero, native, errors = map(int, found[0])
+                turns, os_waits, zero, errors = map(int, found[0])
                 line = (f"{probe}: turns={turns} os_waits={os_waits} zero_event_waits={zero} "
-                        f"native_ticks={native} turn_errors={errors} wall_ms={wall_ms:.1f}")
+                        f"turn_errors={errors} wall_ms={wall_ms:.1f}")
                 if turns > 2 * expiries:
                     problems.append(f"{turns} turns for {expiries} expiries (spin)")
                 if zero > expiries:
                     problems.append(f"{zero} zero-event waits for {expiries} expiries")
                 if turns < min_turns or os_waits < min_turns:
                     problems.append("the precise park never waited (subject did not run)")
-                if native or errors:
-                    problems.append("unexpected tokio ticks or turn errors")
+                if errors:
+                    problems.append("unexpected turn errors")
             print(("PASS " if not problems else "FAIL ") + line, flush=True)
             if problems:
                 failures.append(f"{probe}: " + "; ".join(problems))

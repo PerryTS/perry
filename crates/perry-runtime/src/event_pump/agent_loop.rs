@@ -213,9 +213,6 @@ pub struct LoopStats {
     /// OS waits that returned with no I/O or notifier event (a timed-out
     /// deadline wait is one of these).
     pub zero_event_waits: u64,
-    /// P0-transitional parks that drove the legacy tokio tick instead of a
-    /// turn, because tokio-owned native work was in flight.
-    pub native_ticks: u64,
     /// Turns that returned an error; the park fell back to the condvar.
     pub turn_errors: u64,
     /// Every completion the driver returned, summed across ALL classes before
@@ -767,8 +764,7 @@ pub(super) fn reset_for_test() {
 }
 
 /// Whether the loop has referenced handles, operations or queued results —
-/// `Loop::alive()`, O(1). Used to decide whether a park must service turnloop
-/// as well as the transitional tokio tick.
+/// `Loop::alive()`, O(1). Used by the host-driven bounded-turn entry point.
 pub(super) fn has_outstanding_work() -> bool {
     if STATE.with(Cell::get) != LoopState::Owner {
         return false;
@@ -833,11 +829,9 @@ fn park_turn(deadline: Instant) -> Park {
         // or this thread's load below sees the producer's store. No lost wake.
         agent.in_turn.store(true, Ordering::SeqCst);
         PARKED_LOOPS.fetch_add(1, Ordering::SeqCst);
-        if super::NOTIFIED.load(Ordering::SeqCst) || super::precise_wait::native_inflight() {
+        if super::NOTIFIED.load(Ordering::SeqCst) {
             // A notify landed after the fast path (leave the flag for the next
-            // `js_wait_for_event` fast path to consume), or tokio-owned native
-            // work appeared after the caller chose this wait
-            // (`js_native_work_submitted`). Either way, go back around the loop.
+            // `js_wait_for_event` fast path to consume). Go back around the loop.
             agent.in_turn.store(false, Ordering::SeqCst);
             PARKED_LOOPS.fetch_sub(1, Ordering::SeqCst);
             return Park::Notified;
@@ -1009,18 +1003,9 @@ pub(super) fn settle_turn() {
     }
 }
 
-/// Count a transitional tokio tick taken instead of a turn.
-pub(super) fn note_native_tick() {
-    AGENT_LOOP.with(|slot| {
-        if let Some(agent) = slot.borrow_mut().as_mut() {
-            agent.stats.native_ticks += 1;
-        }
-    });
-}
-
 /// Wake every agent loop currently inside a turn. `js_notify_main_thread`
 /// calls this after storing `NOTIFIED`; `js_native_work_submitted` after new
-/// tokio-owned work became visible to the in-flight predicate.
+/// native FFI work was submitted.
 ///
 /// A broadcast, deliberately. The two things it mirrors are both broadcasts:
 /// `NOTIFIED` is one process-global flag every JS thread consumes, and the
@@ -1246,11 +1231,10 @@ fn print_stats(id: AgentId, stats: LoopStats) {
     // would make the A/B harness reject every sample as "wrong arm", which is
     // exactly the check that stops it comparing a tree against itself.
     eprintln!(
-        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} native_ticks={} turn_errors={} completions={} timer_arms={} timer_expiries={} agent={id}",
+        "[perry-loop] driver=turnloop turns={} os_waits={} zero_event_waits={} turn_errors={} completions={} timer_arms={} timer_expiries={} agent={id}",
         stats.turns,
         stats.os_waits,
         stats.zero_event_waits,
-        stats.native_ticks,
         stats.turn_errors,
         stats.completions,
         stats.timer_arms,
