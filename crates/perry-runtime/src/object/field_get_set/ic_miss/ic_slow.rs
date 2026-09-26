@@ -238,6 +238,68 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
+    // --- 0. a MEGAMORPHIC site's slot guess, confirmed by the receiver ------
+    //
+    // A site whose way state is latched negative sees more shapes than any
+    // per-site entry can name, and every read that misses its compact word
+    // lands here. The site may still hold one thing: a slot GUESS (the compact
+    // word's high half — the slot the receiver's shape answered last, step 2b),
+    // which the RECEIVER'S own shape confirms or refutes
+    // (`shapes::confirm_slot_guess`: the position bound says key position
+    // `guess` is inline slot `guess`, and the key there IS this key, one
+    // pointer compare). Everything the guess cannot answer continues in
+    // `ic_slow_body` unchanged. Asked first, and only at a latched site, so a
+    // site that can still be primed is primed exactly as before. `length` is
+    // excluded as in step 2b: an Array-subclass receiver serves it from its
+    // elements store. Kept in this frameless entry, with the body out of line,
+    // so the confirmed read pays no prologue for the arms below.
+    if let Some(value) = unsafe { megamorphic_slot_guess(obj_handle, key, cache_slot, packed) } {
+        return value;
+    }
+    ic_slow_body(obj_handle, key, cache_slot, packed)
+}
+
+/// Step 0 of [`js_object_get_field_ic_slow`]: the latched site's slot guess.
+///
+/// # Safety
+/// The entry's contract: a POINTER receiver handle, this site's cache slot
+/// and packed word.
+#[inline(always)]
+unsafe fn megamorphic_slot_guess(
+    obj_handle: i64,
+    key: *const crate::StringHeader,
+    cache_slot: *mut PicCacheSlot,
+    packed: *const AtomicU64,
+) -> Option<f64> {
+    let obj = obj_handle as usize as *const ObjectHeader;
+    if packed.is_null()
+        || key.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        return None;
+    }
+    let cache = crate::object::pic_slot_peek(cache_slot);
+    if cache.is_null()
+        || (*cache)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] >= 0
+        || key_is_length(key)
+    {
+        return None;
+    }
+    let guess = ((*packed).load(Ordering::Relaxed) >> 32) as usize;
+    let value = crate::object::shapes::confirm_slot_guess(obj, key, guess)?;
+    #[cfg(test)]
+    crate::object::shapes::SHAPE_ANSWERED_READS.fetch_add(1, Ordering::Relaxed);
+    Some(value)
+}
+
+/// Everything after step 0 of [`js_object_get_field_ic_slow`].
+#[inline(never)]
+fn ic_slow_body(
+    obj_handle: i64,
+    key: *const crate::StringHeader,
+    cache_slot: *mut PicCacheSlot,
+    packed: *const AtomicU64,
+) -> f64 {
     let obj = obj_handle as usize as *const ObjectHeader;
     let addr = obj as usize;
     // Below the handle band the emitted code never dereferenced, and neither
@@ -689,6 +751,427 @@ mod tests {
         assert_ne!(stored, atom_bits, "premise: the list predates the atom");
         let n = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
         assert!(n >= 47, "the shape answers by bytes: {n}");
+    }
+
+    /// Dictionary receivers keep their ShapeId across layout changes, so the
+    /// shape can never answer for one by position: a latched site reading
+    /// half-dictionary receivers answers every read correctly, and not one
+    /// dictionary read is counted as shape-answered.
+    #[test]
+    fn a_dictionary_receiver_is_never_answered_by_position() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3b_dict_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let objs = megamorphic_receivers_keyed(&scope, 48, text, "s3b_dict_x");
+        let ordinary = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        assert!(
+            ordinary >= 47,
+            "premise: ordinary receivers are shape-answered ({ordinary})"
+        );
+        let mut dict = 0;
+        for o in objs.iter().step_by(2) {
+            if o.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
+                crate::object::dictionary::latch_object_to_dictionary(p)
+            }) {
+                dict += 1;
+                let bound = o.with_const_ptr(|p: *const ObjectHeader| {
+                    crate::object::shapes::test_position_bound_of(p)
+                });
+                assert_eq!(bound, Some(0), "a dictionary shape has no position bound");
+            }
+        }
+        assert_eq!(
+            dict, 24,
+            "premise: every other receiver latched to dictionary"
+        );
+        let n = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        assert!(
+            n <= 24,
+            "INVARIANT: at most the 24 ordinary receivers are shape-answered, got {n}"
+        );
+    }
+
+    /// Tombstones: a receiver whose list carries a HOLE (a tombstone delete)
+    /// cannot be answered by position — its shape reports no position bound —
+    /// and every read still returns the receiver's own value; the deleted key
+    /// reads undefined.
+    #[test]
+    fn a_receiver_with_a_tombstoned_key_is_never_answered_by_position() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::object::delete_rest::test_set_tombstone_deletes(None);
+            }
+        }
+        crate::object::delete_rest::test_set_tombstone_deletes(Some(true));
+        let _restore = Restore;
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3b_tomb_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let objs = megamorphic_receivers_keyed(&scope, 48, text, "s3b_tomb_x");
+        let _ = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        let end = scope.root_string_ptr(key_of(b"end"));
+        let mut tombstoned = 0;
+        for (i, o) in objs.iter().enumerate().step_by(3) {
+            // The first delete of a shared list compacts (it takes ownership);
+            // the second tombstones in place (`tombstone_tests.rs`).
+            let extra = format!("s3b_tomb_x{i}");
+            let extra = scope.root_string_ptr(key_of(extra.as_bytes()));
+            for k in [&extra, &end] {
+                o.with_mut_ptr(|p: *mut ObjectHeader| {
+                    k.with_const_ptr(|kp| crate::object::js_object_delete_field(p, kp))
+                });
+            }
+            let (holes, bound) = o.with_const_ptr(|p: *const ObjectHeader| unsafe {
+                (
+                    crate::object::shapes::object_shape_hole_count(p),
+                    crate::object::shapes::test_position_bound_of(p),
+                )
+            });
+            if holes > 0 {
+                tombstoned += 1;
+                assert_eq!(
+                    bound,
+                    Some(0),
+                    "INVARIANT: a tombstoned shape has no position bound"
+                );
+            }
+        }
+        assert_eq!(
+            tombstoned, 16,
+            "premise: every third receiver carries a tombstone"
+        );
+        let _ = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        let _ = latched_pass(&objs, &end, |i| {
+            if i % 3 == 0 {
+                crate::value::TAG_UNDEFINED
+            } else {
+                2.0f64.to_bits()
+            }
+        });
+    }
+
+    /// The slot-guess confirm for shape `shape_id`, as the megamorphic entry
+    /// asks it (`shapes::slot_guess_confirmed`): `Some(guess)` when the shape
+    /// says key position `guess` is inline slot `guess` and holds exactly the
+    /// key `site_key_bits` names, `None` for a decline.
+    unsafe fn guess_walk(shape_id: u32, guess: u64, site_key_bits: u64) -> Option<usize> {
+        let key = (site_key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        crate::object::shapes::slot_guess_confirmed(shape_id, key, guess as usize)
+            .then_some(guess as usize)
+    }
+
+    fn stamp_of(o: &crate::gc::RuntimeHandle<'_>) -> u32 {
+        o.with_const_ptr(|p: *const ObjectHeader| unsafe {
+            crate::object::shapes::object_shape_stamp(p)
+        })
+    }
+
+    /// For every ordinary receiver the slot-guess confirm reaches the
+    /// receiver's own record, confirms the site's guess against the
+    /// receiver's own key, and names the slot holding the receiver's own
+    /// value. A guess whose position holds a DIFFERENT key, a guess past the
+    /// shape's bound, an id outside the ShapeId range and an id whose page
+    /// was never allocated all decline.
+    #[test]
+    fn the_slot_guess_is_confirmed_only_against_the_receivers_own_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3c_walk_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let site = atom.with_const_ptr(|p: *const crate::StringHeader| {
+            crate::value::js_nanbox_string(p as i64).to_bits()
+        });
+        let objs = megamorphic_receivers_keyed(&scope, 48, text, "s3c_walk_x");
+        for (i, o) in objs.iter().enumerate() {
+            let id = stamp_of(o);
+            let slot = unsafe { guess_walk(id, 2, site) };
+            assert_eq!(slot, Some(2), "receiver {i}: the right guess is confirmed");
+            let value = o.with_const_ptr(|p: *const ObjectHeader| unsafe {
+                *((p as *const u8).add(std::mem::size_of::<ObjectHeader>() + 2 * 8) as *const f64)
+            });
+            assert_eq!(
+                value,
+                100.0 + i as f64,
+                "receiver {i}: the confirmed slot is its own"
+            );
+            for wrong in [0u64, 1, 3] {
+                assert_eq!(
+                    unsafe { guess_walk(id, wrong, site) },
+                    None,
+                    "receiver {i}: guess {wrong} holds another key and must decline"
+                );
+            }
+            assert_eq!(unsafe { guess_walk(id, 4, site) }, None, "past the bound");
+            assert_eq!(unsafe { guess_walk(id, u64::from(u32::MAX), site) }, None);
+        }
+        assert_eq!(
+            unsafe { guess_walk(5, 2, site) },
+            None,
+            "a class id is no ShapeId"
+        );
+        assert_eq!(
+            unsafe { guess_walk(0xBFFF_FFFF, 2, site) },
+            None,
+            "a page never minted"
+        );
+    }
+
+    /// The slot-guess confirm on dictionary and tombstoned receivers: declines,
+    /// whatever the guess.
+    #[test]
+    fn the_slot_guess_never_matches_a_dictionary_or_tombstoned_receiver() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::object::delete_rest::test_set_tombstone_deletes(None);
+            }
+        }
+        crate::object::delete_rest::test_set_tombstone_deletes(Some(true));
+        let _restore = Restore;
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3c_walk2_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let site = atom.with_const_ptr(|p: *const crate::StringHeader| {
+            crate::value::js_nanbox_string(p as i64).to_bits()
+        });
+        let objs = megamorphic_receivers_keyed(&scope, 8, text, "s3c_walk2_x");
+        let dict = &objs[0];
+        assert!(
+            dict.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
+                crate::object::dictionary::latch_object_to_dictionary(p)
+            }),
+            "premise: the receiver latched to dictionary"
+        );
+        for guess in 0..4 {
+            assert_eq!(
+                unsafe { guess_walk(stamp_of(dict), guess, site) },
+                None,
+                "dictionary"
+            );
+        }
+        let tomb = &objs[1];
+        let end = scope.root_string_ptr(key_of(b"end"));
+        let extra = scope.root_string_ptr(key_of(b"s3c_walk2_x1"));
+        for k in [&extra, &end] {
+            tomb.with_mut_ptr(|p: *mut ObjectHeader| {
+                k.with_const_ptr(|kp| crate::object::js_object_delete_field(p, kp))
+            });
+        }
+        let holes = tomb.with_const_ptr(|p: *const ObjectHeader| unsafe {
+            crate::object::shapes::object_shape_hole_count(p)
+        });
+        assert!(holes > 0, "premise: the receiver carries a tombstone");
+        for guess in 0..4 {
+            assert_eq!(
+                unsafe { guess_walk(stamp_of(tomb), guess, site) },
+                None,
+                "tombstoned"
+            );
+        }
+    }
+
+    fn boxed(p: *mut ObjectHeader) -> f64 {
+        f64::from_bits(0x7FFD_0000_0000_0000 | (p as u64 & 0x0000_FFFF_FFFF_FFFF))
+    }
+
+    /// A [[Prototype]] change is a shape transition (the prototype is part of
+    /// shape identity) that moves no own key and no own slot: receivers built
+    /// by `new F()` / `setPrototypeOf` before their fields are assigned — every
+    /// tsc AST node — get a NEW shape with the SAME own-key layout as a
+    /// prototype-less twin, and the megamorphic read answers them from that
+    /// shape, by the key-list scan and by the slot-guess confirm.
+    #[test]
+    fn a_prototype_change_is_a_new_shape_with_the_same_layout_and_is_answered() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3_proto_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let site = atom.with_const_ptr(|p: *const crate::StringHeader| {
+            crate::value::js_nanbox_string(p as i64).to_bits()
+        });
+        let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+        let build = |with_proto: bool, i: usize| {
+            let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 8));
+            if with_proto {
+                let (o, p) = (
+                    obj.with_mut_ptr(|o: *mut ObjectHeader| o),
+                    proto.with_mut_ptr(|p: *mut ObjectHeader| p),
+                );
+                crate::object::object_ops::js_object_set_prototype_of(boxed(o), boxed(p));
+            }
+            let extra = format!("s3_proto_x{i}");
+            for (k, v) in [
+                (&b"pos"[..], 1.0),
+                (&b"end"[..], 2.0),
+                (&text[..], 100.0 + i as f64),
+                (extra.as_bytes(), 7.0),
+            ] {
+                let key = scope.root_string_ptr(key_of(k));
+                obj.with_mut_ptr(|o| {
+                    key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, v))
+                });
+            }
+            obj
+        };
+        let objs: Vec<_> = (0..48).map(|i| build(true, i)).collect();
+        let twin = build(false, 0);
+        let (shape, twin_shape) = (stamp_of(&objs[0]), stamp_of(&twin));
+        assert_ne!(
+            shape, twin_shape,
+            "premise: the prototype is part of shape identity"
+        );
+        let d = |id| crate::object::shapes::shape_descriptor_by_id(id).expect("live shape");
+        let (d, t) = (d(shape), d(twin_shape));
+        assert_eq!(
+            (
+                d.keys,
+                d.logical_key_count,
+                d.live_inline_slot_count,
+                d.semantic_generation
+            ),
+            (
+                t.keys,
+                t.logical_key_count,
+                t.live_inline_slot_count,
+                t.semantic_generation
+            ),
+            "the prototype change moved no own key and bumped no generation"
+        );
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(
+                unsafe { guess_walk(stamp_of(o), 2, site) },
+                Some(2),
+                "INVARIANT: the guess confirm answers prototype-linked receiver {i}"
+            );
+        }
+        let n = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        assert!(
+            n >= 47,
+            "INVARIANT: prototype-linked receivers are shape-answered: {n}"
+        );
+    }
+
+    /// A shape over a SHIFTED keys array (a front offset): the slot-guess
+    /// confirm reads LOGICAL key position `i`, past the front offset, so the
+    /// guess for the key now at logical 0 is confirmed at 0, and the physical
+    /// position it used to occupy (1) is not.
+    #[test]
+    fn a_shape_over_a_shifted_keys_array_is_answered_by_logical_position() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(4));
+        let mut keys = Vec::new();
+        for name in [&b"sh_a"[..], b"sh_b", b"sh_c"] {
+            let k = scope.root_string_ptr(key_of(name));
+            let bits = k.with_const_ptr(|p: *const crate::StringHeader| {
+                crate::value::js_nanbox_string(p as i64).to_bits()
+            });
+            arr.with_mut_ptr(|a| crate::array::js_array_push(a, crate::JSValue::from_bits(bits)));
+            keys.push(k);
+        }
+        let a = arr.with_mut_ptr(|a: *mut crate::array::ArrayHeader| a);
+        let bound =
+            |id: u32| crate::object::shapes::test_position_bound_of_id(id).expect("a live shape");
+        let flat = crate::object::shapes::shape_descriptor_ensure(a, 3, 3).expect("mints");
+        assert_eq!(bound(flat), 3, "premise: an unshifted keys array");
+        crate::array::js_array_shift_f64(a);
+        assert_ne!(
+            unsafe { crate::array::array_front_offset(a) },
+            0,
+            "premise: shift left a front offset"
+        );
+        let shifted = crate::object::shapes::shape_descriptor_ensure(a, 2, 2).expect("mints");
+        assert_eq!(bound(shifted), 2, "premise: the shifted shape has two keys");
+        let sh_b = keys[1].with_const_ptr(|p: *const crate::StringHeader| {
+            crate::value::js_nanbox_string(p as i64).to_bits()
+        });
+        assert_eq!(
+            unsafe { guess_walk(shifted, 0, sh_b) },
+            Some(0),
+            "INVARIANT: the confirm reads the logical position"
+        );
+        assert_eq!(
+            unsafe { guess_walk(shifted, 1, sh_b) },
+            None,
+            "INVARIANT: the physical position is not a key position"
+        );
+    }
+
+    /// The positional bit is a stored FACT of the shape record, read on every
+    /// latched miss; it must equal its definition for every record the agent
+    /// has minted. Mints ordinary, dictionary, tombstoned, accessor and
+    /// class-keyed shapes, then walks the whole slab.
+    #[test]
+    fn every_minted_records_positional_bit_matches_its_facts() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::object::delete_rest::test_set_tombstone_deletes(None);
+            }
+        }
+        crate::object::delete_rest::test_set_tombstone_deletes(Some(true));
+        let _restore = Restore;
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let objs = megamorphic_receivers_keyed(&scope, 24, b"pos_fact_kind", "pos_fact_x");
+        // Tombstones: the in-place stable-tombstone update rewrites the hole
+        // count (two deletes: the first compacts, the second tombstones).
+        let end = scope.root_string_ptr(key_of(b"end"));
+        for (i, o) in objs.iter().enumerate().step_by(3) {
+            let extra = format!("pos_fact_x{i}");
+            let extra = scope.root_string_ptr(key_of(extra.as_bytes()));
+            for k in [&extra, &end] {
+                o.with_mut_ptr(|p: *mut ObjectHeader| {
+                    k.with_const_ptr(|kp| crate::object::js_object_delete_field(p, kp))
+                });
+            }
+        }
+        // Dictionaries.
+        for o in objs.iter().skip(1).step_by(3) {
+            o.with_mut_ptr(|p: *mut ObjectHeader| unsafe {
+                crate::object::dictionary::latch_object_to_dictionary(p)
+            });
+        }
+        // Keep the tombstoned receivers growing: re-adds take the cached
+        // stable-tombstone update.
+        let again = scope.root_string_ptr(key_of(b"pos_fact_again"));
+        for o in objs.iter().step_by(3) {
+            o.with_mut_ptr(|p| {
+                again.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(p, kp, 3.0))
+            });
+        }
+        // Accessor keys: the summary is an input of the bit.
+        let acc = scope.root_string_ptr(key_of(b"pos_fact_acc"));
+        for o in objs.iter().skip(2).step_by(3) {
+            let (ov, kv) = (
+                o.with_const_ptr(|p: *const ObjectHeader| {
+                    crate::value::js_nanbox_pointer(p as i64)
+                }),
+                acc.with_const_ptr(|p: *const crate::StringHeader| {
+                    crate::value::js_nanbox_string(p as i64)
+                }),
+            );
+            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+            crate::object::js_object_define_accessor(ov, kv, undef, undef);
+        }
+        let (n, positional, accessor, bad) = crate::object::shapes::test_positional_census();
+        assert!(
+            positional > 0 && positional < n,
+            "premise: the slab holds both answerable and unanswerable shapes ({positional} of {n})"
+        );
+        assert!(
+            accessor > 0,
+            "premise: an ordinary shape with an accessor key was minted"
+        );
+        assert!(
+            bad.is_empty(),
+            "INVARIANT: the stored positional bit equals its definition; {} of {n} records disagree: {bad:x?}",
+            bad.len()
+        );
     }
 
     /// A plain own data read that has never primed: the entry must fall all the

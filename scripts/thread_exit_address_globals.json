@@ -4086,6 +4086,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds (Handle, Parked) rows: a Handle is a native-registry id in [1, 0x40000) minted by the process-global shared pool (perry_ffi::shared_handle_id_pool), never an arena address, and Parked is {kind, NativeRegistrationIdentity{domain, serial, numeric_id}, epoch}. Payloads live in the process-global common HANDLES map, not in any thread's arena. A row cannot name a different object after reuse: release() retires only via begin_retirement_of(identity), which rejects any registration whose serial differs, and ids are reissued only after a full trace proves them unreferenced (#11453)."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes_store.rs",
+   "names": [
+    "ORDINARY_DIR"
+   ],
+   "verdict": "per_thread",
+   "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
   }
  ]
 }

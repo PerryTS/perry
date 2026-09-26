@@ -72,7 +72,9 @@ pub(crate) struct ShapeRecord {
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
     /// discriminant. Bits 11-14: the births a keyless birth shape served while
-    /// tracking its width (#10905). Bit 15: reserved. Bits 16-23: the
+    /// tracking its width (#10905). Bit 15: ANSWERABLE BY POSITION (see
+    /// [`ShapeRecord::position_bound`]), derived from the record's own facts.
+    /// Bits 16-23: the
     /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
     /// Bits 24-31: the inline width a keyless birth shape's descendants grow
     /// to (#10905). The two #10905 fields are learned facts of the record,
@@ -107,6 +109,10 @@ const RECORD_BIRTHS_MASK: u32 = 0xF << RECORD_BIRTHS_SHIFT;
 /// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-31.
 const RECORD_WIDTH_SHIFT: u32 = 24;
 const RECORD_WIDTH_MASK: u32 = 0xFF << RECORD_WIDTH_SHIFT;
+/// Bit 15: the shape answers by position ([`ShapeRecord::position_bound`]).
+/// A function of the record's facts, rewritten by
+/// [`ShapeRecord::refresh_positional`] wherever an input changes.
+const RECORD_POSITIONAL: u32 = 1 << 15;
 // The fields of `flags_and_kind` are pairwise disjoint.
 const _: () = {
     let fields = [
@@ -115,6 +121,7 @@ const _: () = {
         RECORD_BIRTHS_MASK,
         RECORD_SUMMARY_MASK,
         RECORD_WIDTH_MASK,
+        RECORD_POSITIONAL,
     ];
     let mut i = 0;
     while i < fields.len() {
@@ -187,6 +194,8 @@ impl ShapeRecord {
     pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
             | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
+        // The summary is an input of the positional bit (an accessor key).
+        self.refresh_positional();
         self
     }
 
@@ -247,7 +256,7 @@ impl ShapeRecord {
         // because `facts_match` compares the full enum.
         let kind_bits = (object_kind.code() as u32) << RECORD_KIND_SHIFT;
         debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
-        ShapeRecord {
+        let mut record = ShapeRecord {
             keys,
             semantic_generation,
             proto_id: 0,
@@ -255,7 +264,74 @@ impl ShapeRecord {
             live_inline_slot_count,
             hole_count,
             flags_and_kind: u32::from(flags) | kind_bits,
+        };
+        record.refresh_positional();
+        record
+    }
+
+    /// How many leading keys of this shape's list sit AT their own inline
+    /// slot: logical key position `i < bound` IS inline slot `i` of every
+    /// receiver carrying the shape. 0 when the shape cannot answer by position
+    /// at all.
+    ///
+    /// Whether it can is a FACT OF THE RECORD, stored in bit 15
+    /// (`RECORD_POSITIONAL`) and read here with one load: the megamorphic
+    /// read asks it on every latched miss. [`Self::positional_by_facts`] is
+    /// its definition; every write of one of its inputs is followed by
+    /// [`Self::refresh_positional`] (construction, `with_summary`, slab
+    /// insert, the in-place stable-tombstone update), and debug builds assert
+    /// the stored bit against the definition on every read.
+    ///
+    /// The bound is `min(logical_key_count, live_inline_slot_count)`: a key
+    /// past the key count is another list's (canonical backings are shared by
+    /// a growth chain), and one past the live inline count is spilled.
+    #[inline]
+    pub(crate) fn position_bound(&self) -> u32 {
+        debug_assert_eq!(
+            self.flags_and_kind & RECORD_POSITIONAL != 0,
+            self.positional_by_facts(),
+            "the positional bit disagrees with the record's facts: {self:?}"
+        );
+        if self.flags_and_kind & RECORD_POSITIONAL == 0 {
+            return 0;
         }
+        self.logical_key_count.min(self.live_inline_slot_count)
+    }
+
+    /// The definition of the positional bit. The conjuncts are
+    /// `js_shape_ordinary_inline_slot_for_key`'s:
+    ///
+    /// * `Ordinary` — a class shape's slots are its class layout, and a
+    ///   DICTIONARY shape keeps its id across layout changes, so a dictionary
+    ///   receiver must never be matched by position;
+    /// * generation 0 — a descriptor/prototype mutation minted this layout;
+    /// * no tombstones — the answer is only claimed for hole-free lists;
+    /// * no ACCESSOR key in the attribute summary — an accessor key's slot
+    ///   holds its accessor pair, not a value;
+    /// * a keys array at all.
+    #[inline]
+    pub(super) fn positional_by_facts(&self) -> bool {
+        self.object_kind() == ShapeObjectKind::Ordinary
+            && self.semantic_generation == 0
+            && self.hole_count == 0
+            && self.keys != 0
+            && self.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0
+    }
+
+    /// Rewrite the positional bit from the record's facts.
+    #[inline]
+    pub(super) fn refresh_positional(&mut self) {
+        if self.positional_by_facts() {
+            self.flags_and_kind |= RECORD_POSITIONAL;
+        } else {
+            self.flags_and_kind &= !RECORD_POSITIONAL;
+        }
+    }
+
+    /// The stored positional bit, for the agreement test.
+    #[cfg(test)]
+    pub(super) fn positional_bit(&self) -> bool {
+        self.flags_and_kind & RECORD_POSITIONAL != 0
     }
 
     /// The same record for a receiver whose [[Prototype]] identity is
@@ -465,6 +541,19 @@ fn new_page() -> Page {
         .unwrap_or_else(|_| unreachable!("page vector has PAGE_LEN slots"))
 }
 
+/// This thread's ordinary page directory as `(page pointers, page count)`:
+/// `ShapeSlab::pages`' element pointer and length, republished after every
+/// change to `pages` (`ShapeSlab::publish_dir`) and cleared before the slab
+/// is dropped. The megamorphic read's slot-guess confirm
+/// ([`ShapeSlab::ordinary_record`]) reads it with one thread-local load
+/// instead of resolving the runtime state and walking `record_ptr`.
+/// `#[thread_local]` (const, no destructor) rather than `thread_local!`: a
+/// late read during thread teardown sees the cleared pair, and the access
+/// compiles to one thread-pointer-relative load.
+#[thread_local]
+static ORDINARY_DIR: std::cell::Cell<(*const Option<Page>, usize)> =
+    std::cell::Cell::new((std::ptr::null(), 0));
+
 /// The by-id descriptor store. See the module docs.
 /// Two page directories: ordinary ShapeIds index from `SHAPE_ID_BASE`, and the
 /// dictionary band (`shapes::DICTIONARY_SHAPE_ID_BASE`) from its own base. One
@@ -473,6 +562,14 @@ fn new_page() -> Page {
 /// that one ~196 KB allocation moved the GC arena's pages relative to the
 /// page-class table window and cost +2.3% instructions (1.65 M vs 0.20 M
 /// registered-page misses in `classify_heap_generation`).
+impl Drop for ShapeSlab {
+    fn drop(&mut self) {
+        if ORDINARY_DIR.get().0 == self.pages.as_ptr() {
+            ORDINARY_DIR.set((std::ptr::null(), 0));
+        }
+    }
+}
+
 pub(crate) struct ShapeSlab {
     pages: Vec<Option<Page>>,
     dict_pages: Vec<Option<Page>>,
@@ -587,18 +684,26 @@ impl ShapeSlab {
     /// Install `record` under `id`, allocating the page and chunk on first
     /// touch. Returns the record it replaced, if the id was already present.
     pub(super) fn insert(&mut self, id: u32, mut record: ShapeRecord) -> Option<ShapeRecord> {
-        let (dict, index) =
+        let (band, index) =
             Self::index_of(id).expect("ShapeSlab::insert: id outside the ShapeId range");
         record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
-        let dir = self.dir_mut(dict);
+        let dir = self.dir_mut(band);
         if page >= dir.len() {
             dir.resize_with(page + 1, || None);
+            // Only the ordinary band is mirrored (`ORDINARY_DIR`).
+            if band == 0 {
+                self.publish_dir();
+            }
         }
+        let dir = self.dir_mut(band);
         let page = dir[page].get_or_insert_with(new_page);
         let chunk = page[chunk].get_or_insert_with(new_chunk);
         let cell = chunk[slot].get_mut();
         let previous = cell.present().then_some(*cell);
+        // A retire-and-reinsert edits facts on a removed copy: the positional
+        // bit follows them.
+        record.refresh_positional();
         *cell = record;
         if previous.is_none() {
             self.len += 1;
@@ -686,6 +791,39 @@ impl ShapeSlab {
             }
             dir.shrink_to_fit();
         }
+        self.publish_dir();
+    }
+
+    /// Publish `pages` for [`Self::ordinary_record`] (see [`ORDINARY_DIR`]).
+    fn publish_dir(&self) {
+        ORDINARY_DIR.set((self.pages.as_ptr(), self.pages.len()));
+    }
+
+    /// The record of ordinary ShapeId `id` in THIS thread's slab, or null —
+    /// the fast twin of [`Self::record_ptr`] for the megamorphic read: one
+    /// thread-local load, two dependent directory loads, no `state()`. A
+    /// dictionary- or exotic-band id indexes past the ordinary directory's
+    /// length. The
+    /// record may be absent (`EMPTY`): its position bound is 0.
+    #[inline(always)]
+    pub(super) fn ordinary_record(id: u32) -> *const ShapeRecord {
+        let (pages, len) = ORDINARY_DIR.get();
+        let index = id.wrapping_sub(SHAPE_ID_BASE) as usize;
+        let (page, chunk, slot) = Self::split(index);
+        if page >= len {
+            return std::ptr::null();
+        }
+        // SAFETY: `pages` holds `len` entries of this thread's slab, current
+        // as of the last change to it; nothing here can change it.
+        unsafe {
+            let Some(page) = (*pages.add(page)).as_ref() else {
+                return std::ptr::null();
+            };
+            match page[chunk].as_ref() {
+                Some(chunk) => chunk[slot].get(),
+                None => std::ptr::null(),
+            }
+        }
     }
 
     #[cfg(test)]
@@ -693,6 +831,7 @@ impl ShapeSlab {
         self.pages.clear();
         self.dict_pages.clear();
         self.exotic_pages.clear();
+        self.publish_dir();
         self.len = 0;
     }
 
