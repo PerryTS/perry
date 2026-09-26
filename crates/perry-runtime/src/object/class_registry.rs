@@ -50,6 +50,8 @@ mod construct;
 #[cfg(feature = "regex-engine")]
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
+mod decl_accessors;
+pub(crate) use decl_accessors::{class_proto_accessor, install_decl_prototype_accessor};
 pub mod decl_prototype_table;
 mod dispatch;
 pub(crate) mod evaluation_heritage;
@@ -86,13 +88,14 @@ pub(crate) use state::{
     class_is_key_deleted, class_mark_key_deleted, class_object_value_for_cid,
     class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
     class_own_static_field_value, class_own_string_member_names, class_parent_closure,
-    class_parent_closure_root_store, class_prototype_method_is_enumerable,
-    class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_addr_index_contains, class_prototype_object_addr_index_rekey,
-    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
-    class_register_declared_static_global_slot, class_static_defined_attrs, class_static_prototype,
-    class_static_prototype_is_nulled, class_static_prototype_root_clear,
-    class_static_prototype_root_store, class_static_set_defined_attrs, class_unmark_key_deleted,
+    class_parent_closure_root_store, class_prototype_member_names,
+    class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
+    class_prototype_method_value_cache_root_store, class_prototype_object_addr_index_contains,
+    class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
+    class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
+    class_static_defined_attrs, class_static_prototype, class_static_prototype_is_nulled,
+    class_static_prototype_root_clear, class_static_prototype_root_store,
+    class_static_set_defined_attrs, class_unmark_key_deleted, decl_prototype_identity_id,
     global_object_prototype_bits, is_bound_native_constructor_closure_value,
     is_non_constructable_builtin_function_value, parent_closure_in_chain,
     throw_non_constructable_builtin_function,

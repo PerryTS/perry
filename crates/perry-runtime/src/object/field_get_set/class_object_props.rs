@@ -113,7 +113,17 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         );
     });
 
-    for name in super::super::class_registry::class_decl_prototype_method_names(class_id) {
+    for (name, is_accessor) in super::super::class_registry::class_prototype_member_names(class_id)
+    {
+        if is_accessor {
+            // S2: an accessor is a real accessor property of this prototype.
+            proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                super::super::class_registry::install_decl_prototype_accessor(
+                    proto, class_id, &name,
+                )
+            });
+            continue;
+        }
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let key = scope.root_string_ptr(key);
         let class_value = class

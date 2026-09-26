@@ -30,6 +30,23 @@ pub(super) unsafe fn define_declared_class_accessor(
     else {
         return false;
     };
+    if !is_static {
+        // S2: an instance accessor is a real accessor property of the declared
+        // prototype object, so the ordinary define applies to that object —
+        // attributes, replacement and conversion alike.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let desc = scope.root_nanbox_f64(descriptor_value);
+        let proto = scope.root_nanbox_f64(
+            super::super::class_registry::class_decl_prototype_value(class_id),
+        );
+        if !crate::value::JSValue::from_bits(proto.get_nanbox_f64().to_bits()).is_pointer() {
+            return false;
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+        super::js_object_define_property(proto.get_nanbox_f64(), key, desc.get_nanbox_f64());
+        return true;
+    }
     let (enumerable, configurable) =
         super::super::class_registry::class_accessor_attrs(class_id, is_static, name);
     // The per-field reads below allocate a field-name string (and may run a

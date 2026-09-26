@@ -851,7 +851,7 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
 /// (#7632), applied to the third and last identity surface. METHOD DISPATCH is
 /// unaffected: it runs off the per-class-id vtable, not this object, so each
 /// specialization keeps its own monomorphized bodies.
-fn decl_prototype_identity_id(class_id: u32) -> u32 {
+pub(crate) fn decl_prototype_identity_id(class_id: u32) -> u32 {
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
@@ -986,9 +986,43 @@ pub(super) fn install_class_decl_prototype_method_field(
     });
 }
 
+/// The class's own string-keyed prototype members in ClassBody order, each
+/// with whether it is an accessor (else a method).
+pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
+    let mut names = Vec::new();
+    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+        if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
+            names.extend(vtable.methods.keys().cloned());
+            names.extend(vtable.getters.keys().cloned());
+            names.extend(vtable.setters.keys().cloned());
+        }
+    }
+    order_class_string_member_names(class_id, false, &mut names);
+    names
+        .into_iter()
+        .map(|name| {
+            let is_accessor =
+                super::registration::class_own_accessor_ptrs(class_id, &name).is_some();
+            (name, is_accessor)
+        })
+        .collect()
+}
+
+/// Install the class's own members on its decl prototype in ClassBody order:
+/// methods as data properties, accessors as accessor properties (S2,
+/// `decl_accessors.rs`).
 fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id: u32) {
-    for name in class_decl_prototype_method_names(class_id) {
-        install_class_decl_prototype_method_field(proto, class_id, &name);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_raw_mut_ptr(proto);
+    for (name, is_accessor) in class_prototype_member_names(class_id) {
+        // Both installers root the prototype across their own allocations.
+        proto_h.with_mut_ptr(|proto: *mut ObjectHeader| {
+            if is_accessor {
+                super::decl_accessors::install_decl_prototype_accessor(proto, class_id, &name);
+            } else {
+                install_class_decl_prototype_method_field(proto, class_id, &name);
+            }
+        });
     }
 }
 

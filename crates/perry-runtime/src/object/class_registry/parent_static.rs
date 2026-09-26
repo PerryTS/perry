@@ -874,8 +874,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 vtable.getters.insert(name.clone(), getter_ptr as usize);
             }
             if setter_ptr != 0 {
-                vtable.setters.insert(name, setter_ptr as usize);
+                vtable.setters.insert(name.clone(), setter_ptr as usize);
             }
+            drop(registry);
+            super::decl_accessors::note_instance_accessor_registered(class_id, &name);
         } else {
             let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
             if guard.is_none() {
