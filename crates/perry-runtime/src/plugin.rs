@@ -147,6 +147,29 @@ fn last_load_error(path: &str) -> String {
     format!("LoadLibraryW failed for {}: Win32 error {}", path, err)
 }
 
+// WASI (#11377) has no dynamic loading: every load fails through the ordinary
+// "load failed" path, so the other helpers are never reached with a handle.
+#[cfg(target_os = "wasi")]
+type RawLibHandle = *mut libc::c_void;
+
+#[cfg(target_os = "wasi")]
+unsafe fn open_library(_path: &str) -> Option<RawLibHandle> {
+    None
+}
+
+#[cfg(target_os = "wasi")]
+unsafe fn lookup_symbol(_handle: RawLibHandle, _name: &str) -> Option<*mut libc::c_void> {
+    None
+}
+
+#[cfg(target_os = "wasi")]
+unsafe fn close_library(_handle: RawLibHandle) {}
+
+#[cfg(target_os = "wasi")]
+fn last_load_error(path: &str) -> String {
+    format!("cannot load native plugin {path}: WASI has no dynamic libraries")
+}
+
 struct PluginMetadata {
     name: String,
     version: String,

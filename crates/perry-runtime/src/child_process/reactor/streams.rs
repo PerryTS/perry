@@ -21,6 +21,10 @@ pub(super) enum CpPipe {
     Fd(std::os::fd::OwnedFd),
     #[cfg(windows)]
     Handle(std::os::windows::io::OwnedHandle),
+    /// WASI (#11377) cannot spawn a child, so no pipe ever reaches the loop;
+    /// the variant only keeps the reader plumbing well-typed.
+    #[cfg(target_os = "wasi")]
+    Reader(CpReader),
 }
 
 impl CpPipe {
@@ -31,9 +35,12 @@ impl CpPipe {
             CpPipe::Fd(fd) => Box::new(std::fs::File::from(fd)) as CpReader,
             #[cfg(windows)]
             CpPipe::Handle(h) => Box::new(std::fs::File::from(h)) as CpReader,
+            #[cfg(target_os = "wasi")]
+            CpPipe::Reader(r) => r,
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn into_transport(self) -> crate::turnloop_proc::adopt::Transport {
         match self {
             #[cfg(unix)]
@@ -56,6 +63,10 @@ pub(super) fn cp_pipe_from_child_stdout(pipe: std::process::ChildStdout) -> CpPi
     {
         CpPipe::Handle(std::os::windows::io::OwnedHandle::from(pipe))
     }
+    #[cfg(target_os = "wasi")]
+    {
+        CpPipe::Reader(Box::new(pipe))
+    }
 }
 
 pub(super) fn cp_pipe_from_child_stderr(pipe: std::process::ChildStderr) -> CpPipe {
@@ -67,6 +78,10 @@ pub(super) fn cp_pipe_from_child_stderr(pipe: std::process::ChildStderr) -> CpPi
     {
         CpPipe::Handle(std::os::windows::io::OwnedHandle::from(pipe))
     }
+    #[cfg(target_os = "wasi")]
+    {
+        CpPipe::Reader(Box::new(pipe))
+    }
 }
 
 pub(super) fn cp_pipe_from_file(file: std::fs::File) -> CpPipe {
@@ -77,6 +92,10 @@ pub(super) fn cp_pipe_from_file(file: std::fs::File) -> CpPipe {
     #[cfg(windows)]
     {
         CpPipe::Handle(std::os::windows::io::OwnedHandle::from(file))
+    }
+    #[cfg(target_os = "wasi")]
+    {
+        CpPipe::Reader(Box::new(file))
     }
 }
 
@@ -95,6 +114,8 @@ pub(super) fn cp_pipe_from_file(file: std::fs::File) -> CpPipe {
 /// fallback reconstructs the reader from it rather than from a copy: there
 /// is exactly one owner at every instant.
 pub(super) fn cp_spawn_reader(handle: u64, pipe: CpPipe, fd: usize) {
+    // wasm32 has no turnloop (same gate as `crate::turnloop_proc`).
+    #[cfg(not(target_arch = "wasm32"))]
     if crate::turnloop_proc::available() {
         let transport = pipe.into_transport();
         match crate::turnloop_proc::adopt_stream(
@@ -149,6 +170,7 @@ fn cp_spawn_reader_thread<R: Read + Send + 'static>(handle: u64, mut pipe: R, fd
 
 /// Remember which loop entry carries a child's stream, so it can be closed at
 /// EOF and at teardown.
+#[cfg(not(target_arch = "wasm32"))]
 fn cp_record_loop_stream(handle: u64, fd: usize, id: u64) {
     if let Some(lc) = cp_live_lock().as_mut().and_then(|map| map.get_mut(&handle)) {
         lc.loop_streams.push((fd, id));
@@ -159,6 +181,7 @@ fn cp_record_loop_stream(handle: u64, fd: usize, id: u64) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn cp_take_loop_stream(handle: u64, fd: usize) -> Option<u64> {
     let mut guard = cp_live_lock();
     let lc = guard.as_mut()?.get_mut(&handle)?;
@@ -172,6 +195,7 @@ fn cp_take_loop_stream(handle: u64, fd: usize) -> Option<u64> {
 /// become [`CpEvent::Data`], and EOF *or any read failure* becomes
 /// [`CpEvent::Eof`] — the thread's `Ok(0) | Err(_)` arm made no distinction
 /// either, and Node does not surface a read error on a child's stdout.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn on_stream_completion(
     handle: u64,
     fd: usize,
@@ -213,7 +237,11 @@ pub(crate) fn cp_release_loop_streams(handle: u64) {
             None => Vec::new(),
         }
     };
+    // wasm32 never adopts a stream (no turnloop), so `ids` is always empty.
+    #[cfg(not(target_arch = "wasm32"))]
     for id in ids {
         crate::turnloop_proc::close(id);
     }
+    #[cfg(target_arch = "wasm32")]
+    debug_assert!(ids.is_empty());
 }

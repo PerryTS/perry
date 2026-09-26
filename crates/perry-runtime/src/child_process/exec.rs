@@ -60,6 +60,14 @@ pub extern "C" fn js_child_process_exec_sync(
         c.arg("/C").arg(&cmd_str);
         c
     };
+    // WASI has no process spawning (#11377): std's `spawn` returns
+    // `Unsupported`, which surfaces through the ordinary spawn-error path.
+    #[cfg(target_os = "wasi")]
+    let mut command = {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c").arg(&cmd_str);
+        c
+    };
     cp_apply_options(&mut command, opts_val);
 
     let run_options = cp_read_sync_stdio_run_options(opts_val);
@@ -296,6 +304,14 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         c.arg("/C").arg(&cmd_str);
         c
     };
+    // WASI has no process spawning (#11377): std's `spawn` returns
+    // `Unsupported`, which surfaces through the ordinary spawn-error path.
+    #[cfg(target_os = "wasi")]
+    let mut command = {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c").arg(&cmd_str);
+        c
+    };
     cp_apply_options(&mut command, arg1);
     let run_options = cp_read_async_run_options(arg1);
 
@@ -517,6 +533,14 @@ extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, 
     let mut command = {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(&cmd);
+        c
+    };
+    // WASI has no process spawning (#11377): std's `spawn` returns
+    // `Unsupported`, which surfaces through the ordinary spawn-error path.
+    #[cfg(target_os = "wasi")]
+    let mut command = {
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c").arg(&cmd);
         c
     };
     cp_apply_options(&mut command, opts);

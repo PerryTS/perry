@@ -140,7 +140,7 @@ pub extern "C" fn js_os_machine() -> *mut StringHeader {
 /// Get the hostname of the operating system
 #[no_mangle]
 pub extern "C" fn js_os_hostname() -> *mut StringHeader {
-    #[cfg(feature = "full")]
+    #[cfg(all(feature = "full", not(target_os = "wasi")))]
     {
         match hostname::get() {
             Ok(hostname) => {
@@ -154,7 +154,8 @@ pub extern "C" fn js_os_hostname() -> *mut StringHeader {
             }
         }
     }
-    #[cfg(not(feature = "full"))]
+    // WASI has no hostname (#11377).
+    #[cfg(not(all(feature = "full", not(target_os = "wasi"))))]
     {
         let default = "localhost";
         js_string_from_bytes(default.as_ptr(), default.len() as u32)

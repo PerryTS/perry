@@ -568,13 +568,19 @@ fn main() {
     // miscompiled under LLVM's one-return assumption (stack-slot
     // coloring across the call). See the header comment in the C file.
     println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
-    cc::Build::new()
-        .file("src/ffi/perry_sjlj.c")
-        // The trampoline is never unwound through (a raise targeting a
-        // generated frame is always innermost-above it), but keep CFI so
-        // debuggers and the unwind-table self-check can walk past it.
-        .flag_if_supported("-fasynchronous-unwind-tables")
-        .compile("perry_sjlj");
+    // WASI (#11377): setjmp/longjmp on wasm needs the exception-handling
+    // proposal and wasi-libc's `libsetjmp`, which the `--target wasi` link
+    // wires up (#11378/#11379). Until then the trampoline is not built there,
+    // so a WASI link fails loudly on `perry_sjlj_try` rather than silently.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("wasi") {
+        cc::Build::new()
+            .file("src/ffi/perry_sjlj.c")
+            // The trampoline is never unwound through (a raise targeting a
+            // generated frame is always innermost-above it), but keep CFI so
+            // debuggers and the unwind-table self-check can walk past it.
+            .flag_if_supported("-fasynchronous-unwind-tables")
+            .compile("perry_sjlj");
+    }
     println!(
         "cargo:rustc-env=PERRY_RUNTIME_TARGET={}",
         std::env::var("TARGET").expect("TARGET not set by Cargo")

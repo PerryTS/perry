@@ -1809,6 +1809,8 @@ pub(crate) unsafe fn js_fs_symlink_result(target_value: f64, path_value: f64) ->
     let res = std::os::unix::fs::symlink(&target, &path);
     #[cfg(windows)]
     let res = std::os::windows::fs::symlink_file(&target, &path);
+    #[cfg(target_os = "wasi")]
+    let res = std::os::wasi::fs::symlink_path(&target, &path);
     match res {
         Ok(()) => Ok(()),
         Err(err) => Err(build_fs_error_value_with_dest(
