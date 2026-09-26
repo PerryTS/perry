@@ -490,6 +490,20 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         }
         break;
     }
+    // #3655 + spec: a DELETED own `name`/`length` is not an own property any
+    // more, so the read continues on the prototype — `Function.prototype`
+    // itself has own `name` ("") and `length` (0).
+    if matches!(prop, "name" | "length") && !on_base && closure_is_key_deleted(ptr, prop) {
+        let proto = super::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+        if proto != 0 && proto as usize != ptr {
+            let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+            let v = crate::object::js_object_get_field_by_name(
+                proto as *const crate::object::ObjectHeader,
+                key_hdr as *const crate::StringHeader,
+            );
+            return f64::from_bits(v.bits());
+        }
+    }
     // Every function's [[Prototype]] is %Function.prototype% — an expando
     // installed there (`Function.prototype.property = 12`), or a property
     // installed via `Object.defineProperty(Function.prototype, k, {...})`,

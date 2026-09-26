@@ -705,7 +705,33 @@ pub unsafe extern "C" fn js_function_bind(
     let target_closure = target_is_closure.then(|| {
         JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>()
     });
-    let target_len_f = if let Some(target_closure) = target_closure {
+    // Spec step 5: `HasOwnProperty(Target, "length")` then `Get(Target,
+    // "length")` — a GETTER installed by `Object.defineProperty(fn, "length",
+    // {get})` runs. Only a FunctionDictionary target can carry one (every
+    // accessor install leaves the described shapes), so the common case stays
+    // the own-data / registered-length read below. The getter may allocate:
+    // everything live is rooted above, and the target is re-read after.
+    let accessor_len = target_closure.and_then(|t| unsafe {
+        if crate::closure::shape::closure_on_base_shape(t) {
+            return None;
+        }
+        crate::object::get_accessor_descriptor(t as usize, "length")?;
+        let v = crate::closure::closure_get_dynamic_prop(t as usize, "length");
+        let jv = JSValue::from_bits(v.to_bits());
+        Some(if jv.is_int32() {
+            jv.as_int32() as f64
+        } else if jv.is_number() {
+            jv.as_number()
+        } else {
+            0.0
+        })
+    });
+    let target_closure = target_is_closure.then(|| {
+        JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>()
+    });
+    let target_len_f = if let Some(len) = accessor_len {
+        len
+    } else if let Some(target_closure) = target_closure {
         match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
             Some(v) => {
                 let jv = JSValue::from_bits(v.to_bits());
