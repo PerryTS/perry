@@ -240,3 +240,58 @@ fn a_displaced_memo_sits_at_its_home_way() {
         assert_eq!(served, Some(2.0), "memo {i} must be served");
     }
 }
+
+fn fresh_ways() -> Box<AddWays> {
+    Box::new(std::array::from_fn(|_| AddWay {
+        shapes: AtomicU64::new(PACKED_SET_EMPTY),
+        guard: AtomicU64::new(0),
+    }))
+}
+
+/// The first ShapeId at or after `from` whose home is `home`.
+fn sid_with_home(home: usize, from: u32) -> u32 {
+    (from..).find(|&sid| add_way_home(sid) == home).unwrap()
+}
+
+/// A memo the runtime serves from beyond the two ways the emitted hit
+/// compares moves into the second of them, trading places with a memo that
+/// was not at its own home; a way whose memo IS at its own home is kept.
+/// Sabotage: `promote_way` moves nothing -> the hot memo stays out of reach
+/// of the emitted hit (tsc: 8 sites, every hit 2-3 ways from home).
+#[test]
+fn a_far_memo_moves_into_the_inline_ways() {
+    let base = crate::object::shapes::SHAPE_ID_BASE;
+    let h = 10usize;
+    let hot = sid_with_home(h, base);
+    let at_home = sid_with_home(h, hot + 1);
+    let stray = sid_with_home(40, base);
+    let ways = fresh_ways();
+    let word = |sid: u32| u64::from(sid) | (u64::from(sid + 1) << 32);
+    ways[h].shapes.store(word(at_home), Ordering::Relaxed);
+    ways[h].guard.store(1, Ordering::Relaxed);
+    ways[h + 1].shapes.store(word(stray), Ordering::Relaxed);
+    ways[h + 1].guard.store(2, Ordering::Relaxed);
+    ways[h + 3].shapes.store(word(hot), Ordering::Relaxed);
+    ways[h + 3].guard.store(3, Ordering::Relaxed);
+    promote_way(&ways, h, 3);
+    let at = |i: usize| {
+        (
+            ways[i].shapes.load(Ordering::Relaxed) as u32,
+            ways[i].guard.load(Ordering::Relaxed),
+        )
+    };
+    assert_eq!(at(h), (at_home, 1), "a memo at its own home is kept");
+    assert_eq!(
+        at(h + 1),
+        (hot, 3),
+        "the served memo moves in with its guard"
+    );
+    assert_eq!(at(h + 3), (stray, 2), "the displaced memo takes its place");
+    // Both inline ways hold memos at their own homes: nothing moves.
+    let next_home = sid_with_home(h + 1, base);
+    ways[h + 1].shapes.store(word(next_home), Ordering::Relaxed);
+    ways[h + 3].shapes.store(word(hot), Ordering::Relaxed);
+    promote_way(&ways, h, 3);
+    assert_eq!(at(h + 1).0, next_home);
+    assert_eq!(at(h + 3).0, hot);
+}

@@ -115,7 +115,8 @@ pub struct AddWay {
 /// them re-primes its primary words. A memo is placed at its pre-shape's HOME
 /// way ([`add_way_home`]) when that way is free, and otherwise at the next
 /// free way from it; the emitted hit compares the home and the way after it
-/// ([`ADD_WAY_PROBES`]), the runtime every way. Placement by pre-shape rather
+/// ([`ADD_WAY_PROBES`]), the runtime every way, and a memo the runtime serves
+/// from further away is moved into one of the two ([`promote_way`]). Placement by pre-shape rather
 /// than by arrival matters: on
 /// tsc the hot memo of a polymorphic site is typically NOT among its first
 /// (8 sites whose hits all land on their 3rd way, 10 on their 15th, behind
@@ -404,13 +405,17 @@ pub(crate) unsafe fn packed_add_try(
         // A memo sits at its home way unless that was taken when it was
         // placed; the emitted hit has already compared the home.
         let home = add_way_home(sid);
-        let way = (0..ADD_WAYS)
-            .map(|i| &ways[(home + i) % ADD_WAYS])
-            .find(|way| matches(way.shapes.load(Ordering::Relaxed)))?;
-        (
+        let distance = (0..ADD_WAYS)
+            .find(|&i| matches(ways[(home + i) % ADD_WAYS].shapes.load(Ordering::Relaxed)))?;
+        let way = &ways[(home + distance) % ADD_WAYS];
+        let found = (
             way.shapes.load(Ordering::Relaxed),
             way.guard.load(Ordering::Relaxed),
-        )
+        );
+        if distance >= ADD_WAY_PROBES {
+            promote_way(ways, home, distance);
+        }
+        found
     };
     let spill = shapes as u32 != sid;
     if guard >> ADD_SLOT_BITS != add_generation() {
@@ -459,6 +464,51 @@ pub(crate) unsafe fn packed_add_try(
     census(C_ADD_RT_INLINE);
     crate::object::store_object_field_slot(obj, slot, vbits);
     Some(value)
+}
+
+/// A memo the runtime just served lies beyond the ways the emitted hit
+/// compares (its home and the next were taken when it was placed, typically
+/// by a polymorphic site's transient first-instance shapes). Move it into
+/// one of those two ways, so its next receiver is served inline, and move
+/// that way's memo to where it was. A way whose memo sits at its OWN home is
+/// kept (its receivers are served inline already); with both kept nothing
+/// moves. Every memo stays in the block, so the runtime still serves each.
+///
+/// Only the primary agent publishes a site's memos (see `# Agents`), and only
+/// it ever matches them, so the moves are ordered with its own reads. Each
+/// way is retired (`shapes` EMPTY) before its guard changes and republished
+/// last, as [`packed_add_prime`] does.
+fn promote_way(ways: &AddWays, home: usize, distance: usize) {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
+        return;
+    }
+    let from = (home + distance) % ADD_WAYS;
+    let shapes = ways[from].shapes.load(Ordering::Relaxed);
+    if shapes as u32 != unflip(shapes as u32) {
+        // A spill memo: the emitted hit never takes it, wherever it sits.
+        return;
+    }
+    let at_own_home = |idx: usize| {
+        let word = ways[idx].shapes.load(Ordering::Relaxed);
+        word != PACKED_SET_EMPTY && add_way_home(unflip(word as u32)) == idx
+    };
+    let second = (home + 1) % ADD_WAYS;
+    let Some(to) = [second, home].into_iter().find(|&idx| !at_own_home(idx)) else {
+        return;
+    };
+    let (to_shapes, to_guard) = (
+        ways[to].shapes.load(Ordering::Relaxed),
+        ways[to].guard.load(Ordering::Relaxed),
+    );
+    let guard = ways[from].guard.load(Ordering::Relaxed);
+    ways[from].shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+    ways[to].shapes.store(PACKED_SET_EMPTY, Ordering::Relaxed);
+    ways[to].guard.store(guard, Ordering::Relaxed);
+    ways[to].shapes.store(shapes, Ordering::Relaxed);
+    if to_shapes != PACKED_SET_EMPTY {
+        ways[from].guard.store(to_guard, Ordering::Relaxed);
+        ways[from].shapes.store(to_shapes, Ordering::Relaxed);
+    }
 }
 
 /// The key-add hit's layout retirement: a receiver whose layout record
