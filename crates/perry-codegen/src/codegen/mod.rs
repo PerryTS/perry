@@ -211,6 +211,8 @@ mod guarded_undefined_method_tests;
 #[cfg(test)]
 mod hoisted_callback_method_tests;
 #[cfg(test)]
+mod imported_global_order_tests;
+#[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
 #[cfg(test)]
@@ -2430,6 +2432,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .values()
             .map(|object| (object.source_prefix.clone(), object.source_global_id))
             .collect();
+    // #11409: collect before emitting. Candidate maps have randomized order;
+    // declarations must be stable for byte-identical IR and object-cache keys.
+    for candidate in opts.object_literal_method_candidates.values().flatten() {
+        if candidate.source_prefix != module_prefix {
+            imported_object_producers
+                .insert((candidate.source_prefix.clone(), candidate.source_global_id));
+        }
+    }
     for (source_prefix, source_global_id) in &imported_object_producers {
         llmod.add_external_module_state_global(
             &format!("perry_global_{source_prefix}__{source_global_id}"),
@@ -2437,38 +2447,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         );
     }
 
-    for candidate in opts.object_literal_method_candidates.values().flatten() {
-        if candidate.source_prefix != module_prefix
-            && imported_object_producers
-                .insert((candidate.source_prefix.clone(), candidate.source_global_id))
-        {
-            llmod.add_external_module_state_global(
-                &format!(
-                    "perry_global_{}__{}",
-                    candidate.source_prefix, candidate.source_global_id
-                ),
-                DOUBLE,
-            );
-        }
-    }
-
     // #8772: declare the opaque ShapeId slots published by concrete classes
     // in other modules. Local candidates already have a defining global in
-    // this module and must not be redeclared as external.
-    let mut declared_short_spread_shapes = std::collections::HashSet::new();
+    // this module and must not be redeclared as external. Both capability
+    // families share the sorted set so aliases remain deduplicated.
+    let mut imported_shapes = std::collections::BTreeSet::new();
     for candidate in opts.short_spread_method_candidates.values().flatten() {
-        if candidate.source_prefix != module_prefix
-            && declared_short_spread_shapes.insert(candidate.shape_id_global.clone())
-        {
-            llmod.add_external_module_state_global(&candidate.shape_id_global, I32);
+        if candidate.source_prefix != module_prefix {
+            imported_shapes.insert(&candidate.shape_id_global);
         }
     }
     for candidate in opts.object_literal_method_candidates.values().flatten() {
-        if candidate.source_prefix != module_prefix
-            && declared_short_spread_shapes.insert(candidate.shape_id_global.clone())
-        {
-            llmod.add_external_module_state_global(&candidate.shape_id_global, I32);
+        if candidate.source_prefix != module_prefix {
+            imported_shapes.insert(&candidate.shape_id_global);
         }
+    }
+    for shape in imported_shapes {
+        llmod.add_external_module_state_global(shape, I32);
     }
 
     let mut cross_module = CrossModuleCtx {
