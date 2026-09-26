@@ -1204,6 +1204,11 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // #11360: a `=1` build emits a census counter bump per store route.
+    h.field(
+        "env_store_census",
+        env_var("PERRY_STORE_CENSUS").as_deref().unwrap_or(""),
+    );
     h.field(
         "env_inline_new",
         env_var("PERRY_INLINE_NEW").as_deref().unwrap_or(""),
