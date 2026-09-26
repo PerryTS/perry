@@ -5,9 +5,9 @@
 //! guard, a fast arm with the bare conversion, and the tower confined to the
 //! cold exact arm (so NaN, ±Infinity and `|v| >= 2^63` stay spec-exact).
 //!
-//! A `number` parameter makes `f` specialize, so its body lives in `$spec_*`
-//! and `$generic` clones behind a dispatcher. Every clone that converts is
-//! checked — a clone that kept the bare tower is the regression.
+//! A `number` parameter makes `f` specialize, so its body lives in
+//! specialized and generic clones behind a dispatcher. Every clone that
+//! converts is checked — a clone that kept the bare tower is the regression.
 
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
