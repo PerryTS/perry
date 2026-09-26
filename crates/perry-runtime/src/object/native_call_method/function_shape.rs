@@ -56,7 +56,7 @@ pub(crate) unsafe fn try_function_shape_method_call(
     }
     // (2) The prototype the shape names, and its own data slot for the key.
     let proto =
-        crate::object::FUNCTION_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
     if proto == 0 {
         return None;
     }
@@ -104,7 +104,7 @@ mod tests {
             key("bind"),
             crate::value::js_nanbox_pointer(method as i64),
         );
-        crate::object::FUNCTION_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.store(proto as i64, Ordering::Release);
         proto
     }
 
@@ -117,7 +117,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
         unsafe {
-            let saved = crate::object::FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+            let saved = crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire);
             install_proto(crate::object::global_this::function_prototype_bind_thunk_for_test());
             let target = crate::closure::js_closure_alloc(target_body as *const u8, 0);
             let target_v = crate::value::js_nanbox_pointer(target as i64);
@@ -132,7 +132,7 @@ mod tests {
                 crate::closure::BOUND_FUNCTION_FUNC_PTR
             );
             assert_eq!(crate::closure::js_closure_call0(bound_ptr), 42.0);
-            crate::object::FUNCTION_INTRINSIC_PROTO_PTR.store(saved, Ordering::Release);
+            crate::closure::shape::FUNCTION_PROTOTYPE_PTR.store(saved, Ordering::Release);
         }
     }
 
@@ -141,7 +141,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
         unsafe {
-            let saved = crate::object::FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+            let saved = crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire);
             // The slot holds something else: identity by VALUE says no.
             install_proto(target_body as *const u8);
             let target = crate::closure::js_closure_alloc(target_body as *const u8, 0);
@@ -159,7 +159,7 @@ mod tests {
                 try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none()
             );
             assert_eq!(hits(), before);
-            crate::object::FUNCTION_INTRINSIC_PROTO_PTR.store(saved, Ordering::Release);
+            crate::closure::shape::FUNCTION_PROTOTYPE_PTR.store(saved, Ordering::Release);
         }
     }
 

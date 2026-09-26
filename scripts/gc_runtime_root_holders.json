@@ -34,6 +34,25 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/closure/shape.rs",
+      "name": "BASE_SHAPES",
+      "verdict": "not_a_gc_pointer",
+      "why": "This agent's base Function ShapeIds ([u32; 5]): shape-table ids, not addresses. The records they name are pinned by RECORD_FLAG_EXTERNAL_CARRIER at mint."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/shape.rs",
+      "name": "LAST_BODY",
+      "verdict": "not_a_gc_pointer",
+      "why": "One-entry closure-birth cache: (func_ptr code address, ShapeId). A code address and an id; nothing for the collector."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/shape.rs",
+      "name": "FUNCTION_PROTOTYPE_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> closure::shape::scan_function_prototype_roots_mut",
+      "why": "The per-agent Function.prototype OBJECT (the prototype the base Function ShapeId names), read by the shape-proven fn.bind/call/apply path. Visited by `closure::shape::scan_function_prototype_roots_mut` from the registered `object::scan_object_cache_roots_mut`, which keeps it alive and rewrites the slot when it moves. Uncovered here only because that registered scanner is in another file (same pattern as NULL_STUB_SLOT)."
+    },
+    {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
       "name": "CONSOLE_CHANNEL_IDS",
       "verdict": "not_a_gc_pointer",

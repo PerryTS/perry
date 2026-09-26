@@ -69,6 +69,30 @@ impl FunctionProtoKind {
 }
 
 crate::perry_thread_local! {
+    static FUNCTION_PROTOTYPE_SLOT: std::sync::atomic::AtomicI64 =
+        const { std::sync::atomic::AtomicI64::new(0) };
+}
+
+/// This agent's `Function.prototype` — the object the base Function
+/// ShapeId's `proto_id` names — published when the global table populates it.
+/// A GC pointer in a static: scanned (kept alive AND rewritten on a move) by
+/// [`scan_function_prototype_roots_mut`], registered from
+/// `object::scan_object_cache_roots_mut`.
+pub(crate) static FUNCTION_PROTOTYPE_PTR: crate::object::RealmAtomicI64 =
+    crate::object::RealmAtomicI64::new(&FUNCTION_PROTOTYPE_SLOT);
+
+/// GC root for [`FUNCTION_PROTOTYPE_PTR`].
+pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    FUNCTION_PROTOTYPE_PTR.with_slot(|slot| {
+        visitor.visit_atomic_i64_slot(
+            slot,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+    });
+}
+
+crate::perry_thread_local! {
     /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
     /// then the FunctionDictionary id (0 = not minted yet).
     static BASE_SHAPES: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };

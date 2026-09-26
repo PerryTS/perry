@@ -1604,6 +1604,7 @@ mod tests_1802 {
             ));
 
             assert!(!is_closure_ptr(error as usize));
+            // GC_STORE_AUDIT(POINTER_FREE): restores the scalar error_kind word.
             word.write(saved);
             assert_eq!((*error).message, message);
 

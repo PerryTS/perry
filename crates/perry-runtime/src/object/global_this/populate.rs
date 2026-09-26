@@ -414,7 +414,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
                         crate::closure::shape::INTRINSIC_SERIAL_FUNCTION,
                     );
                 }
-                crate::object::FUNCTION_INTRINSIC_PROTO_PTR
+                crate::closure::shape::FUNCTION_PROTOTYPE_PTR
                     .store(proto_obj as i64, std::sync::atomic::Ordering::Release);
             }
             install_error_prototype_data_properties(name, proto_obj);
