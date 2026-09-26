@@ -669,41 +669,23 @@ pub(crate) fn lower_class_from_ast(
         }
     }
 
-    // Issue #10499: infer own fields from the constructor's top-level
-    // `this.<name> = …` assignments exactly as `lower_class_decl` does, so a
-    // plain-JS class EXPRESSION (`var NodeObject = class {…}`) gets the same
-    // slot layout as the identical declaration instead of zero fields (every
-    // constructor store a property ADD through full `[[Set]]`). Also
-    // registers the class's field / accessor / method name sets. The
-    // accessor set matters beyond subclass lowering: the assignment
-    // recogniser in `expr_assign.rs` uses it to treat `C.prototype.<accessor>
-    // = v` as a setter INVOCATION instead of a prototype-method monkey-patch
-    // (test262 accessor-name-inst setters, `var C = class { set ''(p){…} }`).
-    //
-    // Unlike a declaration, only infer when the parent's field layout is
-    // statically known: no heritage at all, or a statically resolved parent
-    // (`extends_name` with no dynamic `extends_expr`) whose complete field
-    // set is registered. A class expression is far more often built over a
-    // RUNTIME parent — a mixin's `class extends Base` parameter, a
-    // lexically-local binding (see the #5437 comment above), `extends
-    // pick()` — and there an own slot inferred for a name the parent's
-    // constructor also writes (`this.side = …` in both) would shadow the
-    // parent's value: the subclass reads its own still-undefined slot.
-    // Such a class also does not publish a field set, so a subclass lowered
-    // later sees its parent layout as unknown too.
-    let static_parent_fields_known = match (&class.super_class, &extends_name, &extends_expr) {
-        (None, _, _) => true,
-        (Some(_), Some(parent), None) => ctx.lookup_class_field_names(parent).is_some(),
-        _ => false,
-    };
-    infer_ctor_this_fields(
-        ctx,
-        class,
-        name,
-        extends_name.as_deref(),
-        static_parent_fields_known,
-        &mut fields,
-    );
+    // Mirror `lower_class_decl`: register the union of this class's accessor
+    // names (own get/set, including private and the parent chain) so the
+    // assignment recogniser in `expr_assign.rs` treats `C.prototype.<accessor>
+    // = v` as a setter INVOCATION instead of a prototype-method monkey-patch.
+    // `lower_class_decl` registers these for class declarations; without the
+    // parallel call here, a class EXPRESSION's instance setters (e.g.
+    // `var C = class { set ''(p){…} }; C.prototype[''] = v`) were silently
+    // dropped to `RegisterPrototypeMethod`. Test262 accessor-name-inst setters.
+    {
+        let mut accessor_names = runtime_instance_accessor_names(&class.body);
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_accessors) = ctx.lookup_class_accessor_names(parent_name) {
+                accessor_names.extend_from(parent_accessors);
+            }
+        }
+        ctx.register_class_accessor_names(name.to_string(), accessor_names);
+    }
 
     // Issue #740: synthesize __perry_cap_* capture machinery for class
     // expressions that reference enclosing-fn locals (e.g. `const Inner =
