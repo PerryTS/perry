@@ -1582,73 +1582,20 @@ pub extern "C" fn js_path_win32_parse(
     use crate::value::JSValue;
 
     let path_str = unsafe { string_from_header(path_ptr) }.unwrap_or_default();
-    let split = split_win32(&path_str);
-    let prefix = split.prefix;
-    let is_absolute = split.is_absolute;
-    let rest = split.rest;
-    let prefix_is_unc = prefix.starts_with('\\') || prefix.starts_with('/');
-
-    // root: prefix + trailing separator (when absolute), or just prefix
-    // (drive-relative "C:foo" yields root "C:").
-    let root = {
-        let mut r = String::new();
-        if prefix_is_unc {
-            for c in prefix.chars() {
-                r.push(if c == '/' { '\\' } else { c });
-            }
-            r.push('\\');
-        } else if !prefix.is_empty() {
-            r.push_str(prefix);
-            if is_absolute {
-                r.push('\\');
-            }
-        } else if is_absolute {
-            r.push('\\');
-        }
-        r
-    };
-
-    // Split rest into segments; base = last, dir = root + joined remaining.
-    let segments: Vec<&str> = rest.split(is_win32_sep).filter(|s| !s.is_empty()).collect();
-    let (base, dir) = if segments.is_empty() {
-        // Path is the bare root.
-        (String::new(), root.clone())
-    } else {
-        let base = segments.last().unwrap().to_string();
-        let head_segments = &segments[..segments.len() - 1];
-        let mut d = String::new();
-        if prefix_is_unc {
-            for c in prefix.chars() {
-                d.push(if c == '/' { '\\' } else { c });
-            }
-        } else {
-            d.push_str(prefix);
-        }
-        if is_absolute && !d.ends_with('\\') {
-            d.push('\\');
-        }
-        d.push_str(&head_segments.join("\\"));
-        // Pop trailing separator from dir unless dir IS the root.
-        if d.ends_with('\\') && d != root {
-            d.pop();
-        }
-        (base, d)
-    };
-
-    let (ext, name) = split_extension(&base);
-
+    let fields = win32_parse::parse_components(&path_str);
     let packed = b"root\0dir\0base\0ext\0name\0";
-    let obj = js_object_alloc_with_shape(0x7FFF_FF21, 5, packed.as_ptr(), packed.len() as u32);
-    let nb = |s: &str| -> f64 {
-        let ptr = string_to_js(s);
-        crate::value::js_nanbox_string(ptr as i64)
-    };
-    js_object_set_field(obj, 0, JSValue::from_bits(nb(&root).to_bits()));
-    js_object_set_field(obj, 1, JSValue::from_bits(nb(&dir).to_bits()));
-    js_object_set_field(obj, 2, JSValue::from_bits(nb(&base).to_bits()));
-    js_object_set_field(obj, 3, JSValue::from_bits(nb(&ext).to_bits()));
-    js_object_set_field(obj, 4, JSValue::from_bits(nb(&name).to_bits()));
-    obj
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        0x7FFF_FF21,
+        5,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ));
+    for (index, field) in fields.iter().enumerate() {
+        let value = JSValue::string_ptr(string_to_js(field));
+        js_object_set_field(obj.get_raw_mut_ptr(), index as u32, value);
+    }
+    obj.get_raw_mut_ptr()
 }
 
 /// `path.win32.format({ dir, root, base, name, ext })` — like the POSIX
@@ -1880,3 +1827,5 @@ pub mod value_args;
 
 #[cfg(test)]
 mod tests;
+
+mod win32_parse;
