@@ -92,6 +92,7 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
 /// prototype (materialized on demand) and its ancestors, stopping at the first
 /// own property named `name` — an accessor answers, a data property shadows
 /// (`None`). This is the one lookup the class-accessor readers use (S3).
+#[allow(dead_code)] // S3's readers switch to it.
 pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, Accessor)> {
     use crate::object::key_attrs as ka;
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -106,10 +107,14 @@ pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, 
         if !unsafe { ka::attrs_live_in_keys(obj as usize) } {
             return None;
         }
-        let keys = crate::object::object_keys(obj);
-        if crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
-            .is_some()
-        {
+        // SAFETY: `obj` is a live ordinary object (checked above); nothing
+        // between here and the slot read allocates.
+        let own = unsafe {
+            let keys = crate::object::object_keys(obj);
+            crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
+                .is_some()
+        };
+        if own {
             if unsafe { ka::object_key_entry(obj, name.as_bytes()) } & ka::ENTRY_ACCESSOR == 0 {
                 return None;
             }

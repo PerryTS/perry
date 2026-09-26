@@ -51,6 +51,7 @@ mod construct;
 pub(crate) use construct::construct_two_rooted;
 pub(crate) use construct::{construct_rooted_arguments, scan_current_new_target_root_mut};
 mod decl_accessors;
+#[allow(unused_imports)] // S3's readers switch to `class_proto_accessor`.
 pub(crate) use decl_accessors::{class_proto_accessor, install_decl_prototype_accessor};
 pub mod decl_prototype_table;
 mod dispatch;

@@ -75,12 +75,18 @@ fn evaluated_class_accessors_are_present_on_the_actual_prototype_chain() {
         );
         assert!(has(proto.get_nanbox_f64(), &get));
         assert_eq!(CALLS.get(), 0, "presence must not invoke accessors");
-        class_registry::class_mark_key_deleted(EVALUATION_ACCESSOR_TEST_CLASS_ID, "getOnly");
+        // The accessor is a real property of the evaluated prototype (charter
+        // step 3, S2): `delete proto.getOnly` removes it.
+        assert!(has(instance_value(), &set));
+        let proto_obj = crate::JSValue::from_bits(proto.get_nanbox_f64().to_bits())
+            .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        get.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::js_object_delete_field(proto_obj, key)
+        });
         assert!(
             !has(instance_value(), &get),
             "deleted accessor must stay absent"
         );
-        class_registry::class_unmark_key_deleted(EVALUATION_ACCESSOR_TEST_CLASS_ID, "getOnly");
         crate::object::js_object_set_prototype_of(
             instance_value(),
             f64::from_bits(0x7FFC_0000_0000_0002),
