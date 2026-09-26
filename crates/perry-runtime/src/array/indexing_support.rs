@@ -106,12 +106,19 @@ pub(super) static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 /// and the hole/OOB read fallbacks.
 pub(super) static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
-/// Sticky summary of the process-wide conditions that invalidate codegen's
-/// inline plain-array index guard. The generated guard loads this byte
-/// directly; keeping the three rare prototype conditions behind one exported
-/// byte avoids an out-of-line runtime call on every array read.
-#[no_mangle]
-pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0);
+per_test_global! {
+    /// Sticky summary of the process-wide conditions that invalidate codegen's
+    /// inline plain-array index guard. The generated guard loads this byte
+    /// directly; keeping the three rare prototype conditions behind one exported
+    /// byte avoids an out-of-line runtime call on every array read.
+    ///
+    /// Outside a test build this is the plain exported `AtomicU8` generated
+    /// code links against by name. In a test build it is per-thread, so a test
+    /// asserting that one retarget did (or did not) flip it cannot be broken
+    /// by a sibling test retargeting an array on another libtest thread (#7672).
+    #[no_mangle]
+    pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0)
+}
 
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
