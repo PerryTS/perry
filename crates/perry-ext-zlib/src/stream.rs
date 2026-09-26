@@ -27,6 +27,9 @@ use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::sync::Mutex;
 
+mod one_shot_callback;
+pub(crate) use one_shot_callback::queue_one_shot_callback;
+
 use flate2::read::{
     DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
 };
@@ -200,26 +203,42 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut 
     }
 }
 
-/// `zlib.brotliCompress(data, callback)` -> undefined.
+/// `zlib.brotliCompress(data, options?, callback)` -> undefined.
 ///
 /// # Safety
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value: f64) {
-    queue_one_shot_callback(data_value, callback_value, "BrotliCompress", |b| {
-        Ok(brotli_compress_bytes(b))
-    });
+pub unsafe extern "C" fn js_zlib_brotli_compress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_one_shot_callback(
+        data_value,
+        options,
+        callback_value,
+        "BrotliCompress",
+        |b, _level| Ok(brotli_compress_bytes(b)),
+    );
 }
 
-/// `zlib.brotliDecompress(data, callback)` -> undefined.
+/// `zlib.brotliDecompress(data, options?, callback)` -> undefined.
 ///
 /// # Safety
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
-    queue_one_shot_callback(data_value, callback_value, "BrotliDecompress", |b| {
-        brotli_decompress_bytes(b)
-    });
+pub unsafe extern "C" fn js_zlib_brotli_decompress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_one_shot_callback(
+        data_value,
+        options,
+        callback_value,
+        "BrotliDecompress",
+        |b, _level| brotli_decompress_bytes(b),
+    );
 }
 
 fn throw_zstd_error(err: &std::io::Error) -> ! {
@@ -266,26 +285,38 @@ pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(
     }
 }
 
-/// `zlib.zstdCompress(data, callback)` -> undefined.
+/// `zlib.zstdCompress(data, options?, callback)` -> undefined.
 ///
 /// # Safety
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, callback_value: f64) {
-    queue_one_shot_callback(data_value, callback_value, "ZstdCompress", |b| {
-        zstd::stream::encode_all(b, ZSTD_DEFAULT_LEVEL)
-    });
+pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, options: f64, callback_value: f64) {
+    queue_one_shot_callback(
+        data_value,
+        options,
+        callback_value,
+        "ZstdCompress",
+        |b, _level| zstd::stream::encode_all(b, ZSTD_DEFAULT_LEVEL),
+    );
 }
 
-/// `zlib.zstdDecompress(data, callback)` -> undefined.
+/// `zlib.zstdDecompress(data, options?, callback)` -> undefined.
 ///
 /// # Safety
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value: f64) {
-    queue_one_shot_callback(data_value, callback_value, "ZstdDecompress", |b| {
-        zstd::stream::decode_all(b)
-    });
+pub unsafe extern "C" fn js_zlib_zstd_decompress(
+    data_value: f64,
+    options: f64,
+    callback_value: f64,
+) {
+    queue_one_shot_callback(
+        data_value,
+        options,
+        callback_value,
+        "ZstdDecompress",
+        |b, _level| zstd::stream::decode_all(b),
+    );
 }
 
 // ── stream codec ─────────────────────────────────────────────────────────────
@@ -711,38 +742,6 @@ unsafe fn call_one_shot_callback(callback: i64, result: Result<Vec<u8>, String>)
                 .call2(err.get(), f64::from_bits(JsValue::UNDEFINED.bits()));
         }
     }
-}
-
-pub(crate) unsafe fn queue_one_shot_callback<F>(
-    data_value: f64,
-    callback_value: f64,
-    label: &'static str,
-    op: F,
-) where
-    F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>>,
-{
-    let scope = TransientRootScope::enter();
-    let callback_value = scope.root_nanbox(callback_value);
-    let _ = js_zlib_validate_callback(callback_value.get());
-    let data_bits = data_value.to_bits() as i64;
-    js_zlib_validate_buffer_arg(data_bits);
-    let result = match read_input_from_bits(data_bits) {
-        Some(data) => op(&data).map_err(|e| format!("{} error: {}", label, e)),
-        None => Err("Invalid input data".to_string()),
-    };
-    ensure_aux_pump_registered();
-    ensure_gc_scanner_registered();
-    let async_id = js_async_hooks_provider_init(b"ZLIB".as_ptr(), b"ZLIB".len());
-    // Provider init delivers user hooks and may move the callback. Re-read the
-    // rooted value only after it returns, immediately before publishing it in
-    // the scanned pending queue.
-    let callback = js_zlib_validate_callback(callback_value.get());
-    statics()
-        .lock()
-        .unwrap()
-        .pending
-        .push_back(ZlibEvent::OneShotCallback(callback, result, async_id));
-    notify_main_thread();
 }
 
 unsafe fn event_name(value: f64) -> Option<String> {
