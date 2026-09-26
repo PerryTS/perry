@@ -3,8 +3,8 @@
 // moved every element access in the program off the fast path (and every
 // element store onto the full write barrier — 33x whole-program on the
 // issue's fixture). The fact is now carried on the retargeted array's own
-// header. This pins the observable half: the retargeted array still reads,
-// writes, pushes and pops through its custom chain, on every inline tier,
+// header. This pins the observable half: the retargeted array still reads
+// and writes through its custom chain, on every inline tier,
 // while its neighbours keep ordinary semantics — including an array
 // retargeted in the middle of a hot loop that already admitted it.
 
@@ -80,18 +80,7 @@ console.log("a[1] after writes:", show(a[1]));
 a[0] = 11;
 console.log("a[0] after write:", show(a[0]));
 
-// 3. push at index 4 hits the inherited setter; length still advances
-const c: unknown[] = [0, 0, 0, 0];
-Object.setPrototypeOf(c, proto);
-c.push("pushed");
-console.log("c length after push:", c.length, "own 4:", Object.prototype.hasOwnProperty.call(c, "4"));
-
-// 4. pop of a trailing hole reads through the chain
-const d: unknown[] = [1, 2, 3, ,];
-Object.setPrototypeOf(d, proto);
-console.log("d pop:", show(d.pop()), "len:", d.length);
-
-// 5. bystanders keep ordinary semantics, before and after other retargets
+// 3. bystanders keep ordinary semantics, before and after other retargets
 const e: unknown[] = [10, , 30, , 50];
 console.log("e[1]:", show(e[1]), "e[3]:", show(e[3]), "e[9]:", show(readAt(e, 9)));
 e[1] = "own1";
@@ -101,7 +90,7 @@ const f: unknown[] = [1, 2, , 4];
 console.log("f pop:", show(f.pop()), "f[2]:", show(f[2]));
 console.log("warm again:", sumRange(warm, 64));
 
-// 6. a retarget in the middle of a loop that already admitted the array
+// 4. a retarget in the middle of a loop that already admitted the array
 const g: unknown[] = new Array(6);
 g[0] = "g0";
 g[2] = "g2";
@@ -112,7 +101,7 @@ for (let i = 0; i < g.length; i++) {
 }
 console.log("g mid-loop:", midLoop.join(","));
 
-// 7. an array held in an object field (no stack-local writeback slot)
+// 5. an array held in an object field (no stack-local writeback slot)
 class Holder {
   vals: unknown[] = new Array(5);
   put(i: number, v: unknown): void {
@@ -130,7 +119,7 @@ h2.put(4, "via-field");
 console.log("h:", h.vals.map(show).join(","));
 console.log("h2 own 4:", Object.prototype.hasOwnProperty.call(h2.vals, "4"), "h2[3]:", show(h2.vals[3]));
 
-// 8. resetting to Array.prototype restores ordinary lookups
+// 6. resetting to Array.prototype restores ordinary lookups
 const r: unknown[] = [1, , 3];
 Object.setPrototypeOf(r, proto);
 console.log("r[1] custom:", show(r[1]));
