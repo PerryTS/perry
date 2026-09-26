@@ -14,10 +14,13 @@
 //! * Drop the `BitAnd` / `Shr`-`UShr` tightening and the `*_stays_exact_*`
 //!   tests go red — masked and shifted hash mixing would leave the fast path
 //!   for no correctness reason.
+//! * Drop the `Unary { BitNot }` arm and `bitnot_admits_what_xor_minus_one_admits`
+//!   goes red — one `~` would push its whole chain back onto the f64 path
+//!   (#10512).
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use super::{i32_chain_magnitude_bits, FlatConstInfo, I32ChainEnv};
 
@@ -291,4 +294,66 @@ fn const_bits_never_widen_past_the_leaf_default() {
     assert_eq!(super::const_number_magnitude_bits(f64::NAN), None);
     assert_eq!(super::const_number_magnitude_bits(f64::INFINITY), None);
     assert_eq!(super::const_number_magnitude_bits(1e18), Some(32));
+}
+
+// ---------------------------------------------------------------------------
+// #10512: `~x` is `x ^ -1`.
+// ---------------------------------------------------------------------------
+
+fn bitnot(operand: Expr) -> Expr {
+    Expr::Unary {
+        op: UnaryOp::BitNot,
+        operand: Box::new(operand),
+    }
+}
+
+/// Over a Number, `~x` and `x ^ -1` are the same operation, so the chain must
+/// treat them identically — admitted exactly when the other is, with the same
+/// 32-bit result bound.
+#[test]
+fn bitnot_admits_what_xor_minus_one_admits() {
+    for operand in [
+        x(),
+        byte(),
+        k(),
+        and(x(), Expr::Integer(0xff)),
+        mul(x(), Expr::Integer(31)),
+        mul(x(), Expr::Integer(1103515245)),
+        Expr::LocalGet(99),
+        Expr::Integer(3000000000),
+    ] {
+        let xor = bin(BinaryOp::BitXor, operand.clone(), Expr::Integer(-1));
+        assert_eq!(bits(&bitnot(operand.clone())), bits(&xor), "{operand:?}");
+    }
+    assert_eq!(bits(&bitnot(x())), Some(32));
+    assert_eq!(bits(&bitnot(bitnot(x()))), Some(32));
+}
+
+/// The issue's shape, noble's sha256 `Chi`: `(B & C) ^ (~B & D)`, then
+/// `+ i | 0`. Every node stays on the native path.
+#[test]
+fn sha256_chi_stays_native() {
+    // B = x, C = y, D = local 3 (another integer-valued local).
+    let chi = bin(
+        BinaryOp::BitXor,
+        and(x(), y()),
+        and(bitnot(x()), Expr::LocalGet(3)),
+    );
+    assert_eq!(bits(&chi), Some(32));
+    let t = bin(BinaryOp::BitOr, add(chi, y()), Expr::Integer(0));
+    assert_eq!(bits(&t), Some(32));
+}
+
+/// `~` does not launder an inexact operand: JS rounds `x * 1103515245` before
+/// ToInt32 sees it, so the product still has to leave the exact chain.
+#[test]
+fn bitnot_does_not_launder_an_inexact_operand() {
+    assert_eq!(bits(&bitnot(mul(x(), Expr::Integer(1103515245)))), None);
+    assert_eq!(
+        bits(&and(
+            bitnot(mul(x(), Expr::Integer(1103515245))),
+            Expr::Integer(0xff)
+        )),
+        None
+    );
 }

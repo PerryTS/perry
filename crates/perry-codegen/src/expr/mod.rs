@@ -4441,6 +4441,10 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             );
             Ok(Some(lowered))
         }
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => unary::lower_bitnot_value(ctx, operand),
         Expr::BooleanCoerce(operand) if matches!(operand.as_ref(), Expr::IterResultGetValue) => {
             let value_i32 = ctx.block().call(I32, "js_iter_result_get_value_i1", &[]);
             let value = ctx.block().icmp_ne(I32, &value_i32, "0");

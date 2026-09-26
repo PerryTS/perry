@@ -8,12 +8,53 @@ use anyhow::Result;
 use perry_hir::{Expr, UnaryOp};
 
 use crate::lower_conditional::lower_expr_with_truthy;
+use crate::native_value::LoweredValue;
 use crate::type_analysis::{
-    expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr, is_provably_not_bigint,
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_numeric_expr,
+    is_provably_not_bigint,
 };
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{is_known_i32_range, lower_expr, FnCtx};
+
+/// `~operand` as a native int32 value, or `None` when the operand has no
+/// native int32 form (#10512).
+///
+/// Over a Number, `~x` IS `x ^ -1` (Number::bitwiseNOT is ToInt32 with every
+/// bit flipped), so the operand takes exactly the path a binary bitwise
+/// operand takes and the result stays an `i32` for whatever consumes it. The
+/// ordinary lowering in [`lower`] instead left through `sitofp`, and every
+/// enclosing `&`/`^`/`| 0` paid the ToInt32 tower again on the way back in:
+/// a sha256 `Chi` round ran 10x slower than the same loop spelled `B ^ -1`.
+///
+/// `lower_bitwise_operand_i32` only produces a value for an operand it can
+/// prove is a Number, and a BigInt-typed operand declines up front, so a
+/// BigInt `~x` (a BigInt result) still reaches the dynamic helper in [`lower`].
+pub(crate) fn lower_bitnot_value(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+) -> Result<Option<LoweredValue>> {
+    if is_bigint_expr(ctx, operand) {
+        return Ok(None);
+    }
+    let Some(value) = super::lower_bitwise_operand_i32(ctx, operand)? else {
+        return Ok(None);
+    };
+    let lowered = LoweredValue::i32(ctx.block().xor(I32, &value, "-1"));
+    ctx.record_lowered_value(
+        "Unary",
+        None,
+        "ordinary_expr_value.bitnot_i32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(Some(lowered))
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {

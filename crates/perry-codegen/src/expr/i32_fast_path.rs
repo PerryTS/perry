@@ -2,7 +2,7 @@
 //! (extracted from `expr.rs`, issue #1098). Pure move — no logic changes.
 
 use anyhow::{bail, Result};
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use super::{
     array_kind_fact, lower_expr, raw_f64_layout_fact, unbox_str_handle, unbox_to_i64,
@@ -422,6 +422,14 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
             let r = i32_chain_magnitude_bits(right, env)?;
             combine_i32_chain_bits(*op, left, right, l, r)
         }
+        // #10512: over a Number, `~x` IS `x ^ -1` — ToInt32 the operand, flip
+        // every bit — so it admits exactly what `x ^ -1` admits and resets
+        // the bound to 32 the same way. Without this arm one `~` dropped its
+        // whole enclosing chain onto the f64 path.
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => i32_chain_magnitude_bits(operand, env).map(|_| I32_CHAIN_LEAF_BITS),
         Expr::Call { callee, args, .. } => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
@@ -870,6 +878,10 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             let r = region_i32_chain_magnitude_bits(ctx, right)?;
             combine_i32_chain_bits(*op, left, right, l, r)
         }
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => region_i32_chain_magnitude_bits(ctx, operand).map(|_| I32_CHAIN_LEAF_BITS),
         Expr::Call { callee, args, .. } => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
@@ -1078,6 +1090,15 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
                 BinaryOp::UShr => blk.lshr(I32, &l, &r),
                 _ => unreachable!(),
             })
+        }
+        // `xor i32 %x, -1`. The operand goes through the binary bitwise
+        // operators' own operand path, which ToInt32-wraps a bare integer
+        // local that has no i32 slot (see `lower_bitwise_operand_i32`).
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => {
+            super::lower_bitwise_operand_i32(ctx, operand)?.map(|v| ctx.block().xor(I32, &v, "-1"))
         }
         Expr::Call { callee, args, .. } => {
             let fid = if let Expr::FuncRef(id) = callee.as_ref() {
