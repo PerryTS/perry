@@ -5,7 +5,7 @@ Perry natively implements HTTP servers, clients, and WebSocket support.
 ## Node.js compatibility — `node:http` / `node:https` / `node:http2`
 
 Perry exposes a faithful subset of Node.js's stdlib HTTP server modules
-on top of hyper + rustls + tokio-tungstenite. The whole shape — handler
+on top of turnloop (Perry's event loop), rustls and turnloop-websocket. The whole shape — handler
 signature, IncomingMessage / ServerResponse properties + methods,
 TLS opts, ALPN-negotiated HTTP/2, WebSocket upgrade dispatch — works
 unmodified, so unmodified Node servers (Express / Koa / Polka / hono via

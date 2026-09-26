@@ -87,8 +87,10 @@ Key rules:
 - **Document `# Safety` for unsafe fns** — at minimum say "the
   pointer must be null or a Perry-runtime `<Header>`".
 - **Async returns `*mut Promise`**. Pattern: `JsPromise::new()` →
-  `spawn_blocking(move || { tokio::runtime::Handle::current().block_on(async {...}); promise.resolve(...) })`
-  → return `promise.as_raw()`.
+  `perry_ffi::pool::submit(work, deliver)` (bounded CPU work; `deliver` settles
+  the promise on the owning thread) or `spawn_blocking(move || { …; promise.resolve_with(...) })`
+  → return `promise.as_raw()`. There is no tokio runtime to `block_on`: Perry
+  runs on turnloop, and socket I/O goes through `perry_ffi::turnloop_net`.
 
 ### `src/index.ts`
 
@@ -342,29 +344,36 @@ under `NativeLibraries/<package>/<backend>/` in app bundles.
 
 ## Common patterns
 
-### Async one-shot (HTTP request, DB query)
+### Async one-shot (hashing, compression, a blocking client call)
 
 ```rust
-use perry_ffi::{alloc_string, spawn_blocking, JsPromise, JsValue, Promise};
+use perry_ffi::{pool, JsPromise, Promise};
 
 #[no_mangle]
-pub extern "C" fn js_my_fetch(url_ptr: *const StringHeader) -> *mut Promise {
+pub extern "C" fn js_my_digest(input_ptr: *const StringHeader) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    let url = unsafe { read_str(url_ptr) }.unwrap_or_default();
+    let input = unsafe { read_str(input_ptr) }.unwrap_or_default();
 
-    spawn_blocking(move || {
-        let outcome = tokio::runtime::Handle::current().block_on(async move {
-            reqwest::get(&url).await.and_then(|r| Ok(r.text())).await
-        });
-        match outcome {
-            Ok(body) => promise.resolve(JsValue::from_string_ptr(alloc_string(&body).as_raw())),
-            Err(e)   => promise.reject_string(&format!("fetch: {}", e)),
-        }
-    });
+    // `work` runs on a pool thread with owned Rust data only; `deliver` runs
+    // on the thread that owns the JS heap, where the promise is settled.
+    let _ = pool::submit(
+        move || my_digest(&input),
+        move |outcome| match outcome {
+            pool::Outcome::Done(Ok(hex)) => promise.resolve_string(&hex),
+            pool::Outcome::Done(Err(e)) => promise.reject_string(&e),
+            pool::Outcome::Cancelled => promise.reject_string("cancelled"),
+            pool::Outcome::Failed => promise.reject_string("digest panicked"),
+        },
+    );
     raw
 }
 ```
+
+Perry has no tokio runtime (it runs on turnloop), so there is nothing for
+`Handle::current().block_on` to find. Network I/O belongs on
+`perry_ffi::turnloop_net`; the old `spawn_async` / `spawn_blocking_with_reactor`
+entry points were retired with tokio (see the ABI reference).
 
 `reject_string(message)` rejects with a real JavaScript `Error`: consumers can
 use `error instanceof Error`, `error.message`, and `error.stack`. Use

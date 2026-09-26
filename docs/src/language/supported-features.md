@@ -99,7 +99,7 @@ Perry performs closure conversion — captured variables are stored in heap-allo
 {{#include ../../examples/language/supported_features.ts:async-await}}
 ```
 
-Perry compiles async functions to a state machine backed by Tokio's async runtime.
+Perry compiles async functions to a state machine driven by its own event loop (turnloop).
 
 ## Promises
 

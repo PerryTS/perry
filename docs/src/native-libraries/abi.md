@@ -75,7 +75,7 @@ source of truth for exact signatures and safety requirements.
 | Arrays and objects | `js_array_alloc/get/length/push/set`, `js_object_alloc_with_shape/get_field/set_field`, `object_field_by_name` |
 | Closures | `JsClosure::call0` through `call4`, `alloc_closure`, capture accessors, arity registration |
 | Buffers and BigInts | `alloc_buffer`, `read_buffer_bytes`, `alloc_bigint_from_str`, `read_bigint_limbs` |
-| Async work | `JsPromise`, `JsNativeAsyncCompletion`, `spawn_async`, `spawn_blocking`, `spawn_blocking_with_reactor`, `run_pending` |
+| Async work | `JsPromise`, `JsNativeAsyncCompletion`, `spawn_blocking`, `run_pending`, `pool::{submit, run, cancel, turn}`, `agent_post`, `turnloop_net` |
 | Native state and GC | The typed handle registry, mutable root scanners, and `TransientRootScope` |
 | Errors and integration | Error/warning helpers, `json_stringify`, auxiliary event-pump hooks, and `RawNetVtable` registration |
 
@@ -105,6 +105,35 @@ Use `perry_ffi::StringHeader` in exported signatures:
 ```rust
 pub extern "C" fn js_my_module_thing() -> *mut perry_ffi::StringHeader
 ```
+
+### Retired: `spawn_async` and `spawn_blocking_with_reactor`
+
+Both were removed together with tokio, which Perry no longer contains in any
+crate. Their contract was "tokio's I/O reactor is ambient": `spawn_async`
+drove a boxed tokio future on perry-stdlib's shared runtime, and
+`spawn_blocking_with_reactor` ran a closure on a tokio blocking thread that
+carried that reactor. Nothing can honour that contract without tokio, so the
+Rust functions and their C symbols (`perry_ffi_spawn_async`,
+`perry_ffi_spawn_blocking_with_reactor`) were deleted rather than stubbed: a
+wrapper that still calls them fails to compile against current `perry-ffi` (or,
+if prebuilt, fails to link naming the symbol) instead of aborting at its first
+socket. No in-tree or known out-of-tree wrapper used them when they were
+retired — every in-tree caller had moved to turnloop first.
+
+This is a backwards-incompatible change to the `0.5.x` surface, made without a
+major bump because `perry-ffi` tracks Perry's workspace version (there is no
+independent major to raise) and the symbols had no remaining users. Migrate as
+follows:
+
+| Was | Use instead |
+| --- | --- |
+| `spawn_async(future)` for socket / TLS / HTTP I/O | `perry_ffi::turnloop_net` (sockets on the agent's turnloop loop) and `perry_ffi::agent_post` |
+| `spawn_blocking_with_reactor(closure)` | `spawn_blocking` for work that holds its thread, `pool::submit` for bounded CPU work |
+| `Handle::current().block_on(…)` inside `spawn_blocking` | a blocking client, or turnloop I/O; there is no ambient runtime |
+
+`spawn_blocking` and `run_pending` are unchanged in signature: `spawn_blocking`
+runs on turnloop's long-occupancy worker set (one plain OS thread when the
+caller has no event loop), and `run_pending` takes one bounded loop turn.
 
 ### Async promise rejection
 

@@ -46,7 +46,6 @@ SINKS = [
     "spawn_for_promise",
     "spawn_for_promise_deferred",
     "perry_ffi_spawn_blocking",
-    "perry_ffi_spawn_async",
     "spawn_blocking",
     "spawn",
 ]

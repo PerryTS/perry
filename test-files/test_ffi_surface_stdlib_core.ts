@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 73 unique FFI names, 74 declarations.
+// Inventory entries: 71 unique FFI names, 72 declarations.
 
 const testFfiSurfaceStdlibCoreVersion = 1;
 if (testFfiSurfaceStdlibCoreVersion !== 1) {
@@ -68,9 +68,7 @@ crates/perry-stdlib/src/perry_ffi_async.rs:
   - perry_ffi_promise_new
   - perry_ffi_promise_reject_bits
   - perry_ffi_promise_resolve_bits
-  - perry_ffi_spawn_async
   - perry_ffi_spawn_blocking
-  - perry_ffi_spawn_blocking_with_reactor
 crates/perry-stdlib/src/ratelimit.rs:
   - js_ratelimit_block
   - js_ratelimit_check

@@ -7,7 +7,47 @@ Node **26.5.1** (`/opt/node-v26.5.1-linux-x64/bin`, not the box default
 26.8.1). Nothing here ran on Windows or macOS, and nothing here was
 benchmarked — see "What P8 did not do".
 
-## The verdict, first
+## Epilogue: tokio is gone (final tokio lane)
+
+This report is a historical record of P8's starting point. Everything below
+describes the tree at `babc5f0d1f`, not the current one. The costed removal
+plan it laid out (groups A–N, "What it would cost to actually remove tokio")
+has since been carried out lane by lane, and the final tokio lane deleted the
+last edge — group **L**, perry-stdlib's own `tokio`:
+
+* `perry-stdlib`: `common/tokio_bridge.rs`, the `async-runtime` feature (and
+  its place in `full`) and `dep:tokio` are deleted. `common::async_bridge`
+  (the `async-bridge` feature) is the only async bridge; the bundled sharp
+  module's three async ops moved onto turnloop's pool
+  (`pool_for_promise_deferred`), which also moved their JS string
+  construction onto the main thread.
+* `perry-ffi`: `spawn_async` / `spawn_blocking_with_reactor` and their C
+  symbols are **retired** (no caller was left; see
+  `docs/src/native-libraries/abi.md`, "Retired"). `spawn_blocking` has one arm,
+  on turnloop's long-occupancy set; `run_pending` is one bounded loop turn.
+* CLI: the #7629 shared-tokio link check (`compile/shared_tokio.rs`),
+  `binding_bundles_tokio`, the driver's `async-runtime` selection and the
+  no-auto tokio warning are deleted. The #507 co-build set stays, renamed
+  `binding_cobuilds_with_stdlib` (cache-key segment `cobuild=`); it no longer
+  exists for tokio's sake.
+* Workspace: `tokio`, `tokio-tungstenite`, `tokio-rustls`, `reqwest`, `hyper`
+  and `hyper-util` are gone from `[workspace.dependencies]`; `tokio`,
+  `tokio-macros` and `mio` 1.x left `Cargo.lock`.
+  `cargo tree --workspace --all-features --target all -e normal,dev,build -i tokio`
+  matches no package.
+* `scripts/tokio_inventory.py` is no longer a ratchet but a **ban**: any tokio
+  manifest edge (normal, dev or build, any target), any tokio package in
+  `Cargo.lock` or any non-comment `tokio::` in `crates/*` fails `lint`, with no
+  allowlist. `deny.toml` bans the same crates for cargo-deny. The two crates the
+  old inventory tracked as "tokio family" that are not tokio — `tungstenite`
+  (synchronous; perry-ui-android and turnloop-websocket's codec) and `lettre`
+  (message builder only) — are listed as `not_tokio`, and the gate verifies
+  from `Cargo.lock` that neither depends on tokio.
+
+The #10671 hazard (two archives from separate cargo invocations bundling two
+tokio compilations) cannot occur any more: there is no tokio to duplicate.
+
+## The verdict, first (at P8)
 
 **tokio cannot leave Perry's dependency graph in this lane, and it is not
 close.** `Cargo.lock` holds 20 tokio-family packages and the workspace holds

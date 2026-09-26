@@ -173,7 +173,7 @@ User code runs. Calls into `js_mysql2_*` happen at native speed —
 function call overhead is one register-pass for the receiver handle
 plus one each per param. Promise resolution / closure invocation /
 async work bridge through perry-ffi's surface (`JsPromise`,
-`JsClosure`, `spawn_blocking + tokio::Handle::current().block_on`).
+`JsClosure`, `spawn_blocking` / `pool::submit`, `turnloop_net`).
 The wrapper sees Perry's NaN-boxed JsValues directly; user TypeScript
 sees a normal Promise / object / array.
 

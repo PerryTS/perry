@@ -53,7 +53,7 @@ perry fetch.ts -o fetch
 ./fetch
 ```
 
-Perry compiles async/await to a native async runtime backed by Tokio.
+Perry compiles async/await to native code driven by its own event loop (turnloop).
 
 ## Multi-Threading
 

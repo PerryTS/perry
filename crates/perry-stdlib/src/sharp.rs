@@ -12,6 +12,7 @@ use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
 use perry_runtime::{
     js_promise_new_cross_thread, js_string_from_bytes, JSValue, Promise, StringHeader,
 };
+use std::io::Cursor;
 
 /// Settle `promise` with a JS string built from `work`'s output on the main
 /// thread. The image work runs on turnloop's shared pool; until the final
@@ -36,7 +37,6 @@ fn format_name(format: ImageFormat) -> &'static str {
         _ => "unknown",
     }
 }
-use std::io::Cursor;
 
 /// Sharp image handle with pending operations
 pub struct SharpHandle {

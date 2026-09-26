@@ -6,6 +6,10 @@
 > [`src/native-libraries/overview.md`](src/native-libraries/overview.md),
 > [`src/native-libraries/zero-config-and-faithfulness.md`](src/native-libraries/zero-config-and-faithfulness.md),
 > and the generated [`src/api/reference.md`](src/api/reference.md).
+>
+> Its tokio / hyper / tokio-tungstenite backends are history too: Perry no
+> longer contains tokio in any crate, and its async work, sockets, HTTP and
+> WebSockets run on its own event loop, turnloop.
 
 Perry provides native Rust implementations of popular npm packages. When you import these packages in your TypeScript code, they are compiled directly to native code using high-performance Rust crates - no Node.js runtime required.
 
