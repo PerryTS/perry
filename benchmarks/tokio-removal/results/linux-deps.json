@@ -1,0 +1,296 @@
+{
+ "before": {
+  "tree": "/root/claude-tokio-measure-before",
+  "lock_packages": 1023,
+  "lock_distinct_names": 903,
+  "family": {
+   "tokio": [
+    "1.53.1"
+   ],
+   "tokio-util": [
+    "0.7.18"
+   ],
+   "tokio-rustls": [
+    "0.26.5"
+   ],
+   "tokio-macros": [
+    "2.7.0"
+   ],
+   "hyper": [
+    "1.11.1"
+   ],
+   "hyper-util": [
+    "0.1.20"
+   ],
+   "hyper-rustls": [
+    "0.27.9"
+   ],
+   "reqwest": [
+    "0.12.28"
+   ],
+   "h2": [
+    "0.4.19"
+   ],
+   "tower": [
+    "0.5.3"
+   ],
+   "tower-service": [
+    "0.3.3"
+   ],
+   "tower-layer": [
+    "0.3.3"
+   ],
+   "tower-http": [
+    "0.6.11"
+   ],
+   "mio": [
+    "0.8.11",
+    "1.2.1"
+   ],
+   "aws-lc-rs": [
+    "1.18.1"
+   ],
+   "aws-lc-sys": [
+    "0.45.0"
+   ],
+   "ring": [
+    "0.17.14"
+   ],
+   "rustls": [
+    "0.23.45"
+   ],
+   "turnloop": [
+    "0.1.0-alpha.6"
+   ],
+   "quinn": [
+    "0.11.9"
+   ],
+   "tungstenite": [
+    "0.24.0",
+    "0.30.0"
+   ],
+   "futures-util": [
+    "0.3.34"
+   ],
+   "bytes": [
+    "1.12.1"
+   ],
+   "http": [
+    "1.4.1"
+   ],
+   "http-body": [
+    "1.0.1"
+   ]
+  },
+  "turnloop_like": {
+   "perry-db-turnloop": [
+    "0.5.1643"
+   ],
+   "perry-tls-turnloop": [
+    "0.5.1643"
+   ],
+   "turnloop": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-http": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-mongodb": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-redis": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-smtp": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-tls": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-wasi-random": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-websocket": [
+    "0.1.0-alpha.6"
+   ],
+   "turnloop-zstd-decoder": [
+    "0.1.0-alpha.6"
+   ]
+  },
+  "crates": {
+   "perry": {
+    "deps_including_self": 321,
+    "async_http_stack": [
+     "mio@v0.8.11"
+    ]
+   },
+   "perry-runtime": {
+    "deps_including_self": 205,
+    "async_http_stack": [
+     "mio@v0.8.11"
+    ]
+   },
+   "perry-stdlib": {
+    "deps_including_self": 404,
+    "async_http_stack": [
+     "aws-lc-rs@v1.18.1",
+     "aws-lc-sys@v0.45.0",
+     "h2@v0.4.19",
+     "hyper-rustls@v0.27.9",
+     "hyper-util@v0.1.20",
+     "hyper@v1.11.1",
+     "mio@v0.8.11",
+     "mio@v1.2.1",
+     "reqwest@v0.12.28",
+     "tokio-macros@v2.7.0",
+     "tokio-rustls@v0.26.5",
+     "tokio-util@v0.7.18",
+     "tokio@v1.53.1",
+     "tower-http@v0.6.11",
+     "tower-layer@v0.3.3",
+     "tower-service@v0.3.3",
+     "tower@v0.5.3"
+    ]
+   },
+   "perry-ext-http": {
+    "deps_including_self": 177,
+    "async_http_stack": [
+     "aws-lc-rs@v1.18.1",
+     "aws-lc-sys@v0.45.0",
+     "h2@v0.4.19",
+     "hyper-rustls@v0.27.9",
+     "hyper-util@v0.1.20",
+     "hyper@v1.11.1",
+     "mio@v1.2.1",
+     "reqwest@v0.12.28",
+     "tokio-macros@v2.7.0",
+     "tokio-rustls@v0.26.5",
+     "tokio-util@v0.7.18",
+     "tokio@v1.53.1",
+     "tower-http@v0.6.11",
+     "tower-layer@v0.3.3",
+     "tower-service@v0.3.3",
+     "tower@v0.5.3"
+    ]
+   },
+   "perry-ext-net": {
+    "deps_including_self": 48,
+    "async_http_stack": [
+     "aws-lc-rs@v1.18.1",
+     "aws-lc-sys@v0.45.0",
+     "mio@v1.2.1",
+     "tokio-macros@v2.7.0",
+     "tokio-rustls@v0.26.5",
+     "tokio@v1.53.1"
+    ]
+   },
+   "perry-ext-ws": {
+    "deps_including_self": 95,
+    "async_http_stack": []
+   },
+   "perry-ext-zlib": {
+    "deps_including_self": 25,
+    "async_http_stack": []
+   }
+  }
+ },
+ "after": {
+  "tree": "/root/claude-tokio-measure",
+  "lock_packages": 921,
+  "lock_distinct_names": 813,
+  "family": {
+   "mio": [
+    "0.8.11"
+   ],
+   "ring": [
+    "0.17.14"
+   ],
+   "rustls": [
+    "0.23.45"
+   ],
+   "turnloop": [
+    "0.1.0-alpha.8"
+   ],
+   "tungstenite": [
+    "0.30.0"
+   ],
+   "futures-util": [
+    "0.3.34"
+   ],
+   "bytes": [
+    "1.12.1"
+   ],
+   "http": [
+    "1.5.0"
+   ],
+   "http-body": [
+    "1.0.1"
+   ]
+  },
+  "turnloop_like": {
+   "perry-db-turnloop": [
+    "0.5.1654"
+   ],
+   "perry-tls-turnloop": [
+    "0.5.1654"
+   ],
+   "turnloop": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-http": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-smtp": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-tls": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-wasi-random": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-websocket": [
+    "0.1.0-alpha.8"
+   ],
+   "turnloop-zstd-decoder": [
+    "0.1.0-alpha.8"
+   ]
+  },
+  "crates": {
+   "perry": {
+    "deps_including_self": 274,
+    "async_http_stack": [
+     "mio@v0.8.11"
+    ]
+   },
+   "perry-runtime": {
+    "deps_including_self": 203,
+    "async_http_stack": [
+     "mio@v0.8.11"
+    ]
+   },
+   "perry-stdlib": {
+    "deps_including_self": 365,
+    "async_http_stack": [
+     "mio@v0.8.11"
+    ]
+   },
+   "perry-ext-http": {
+    "deps_including_self": 134,
+    "async_http_stack": []
+   },
+   "perry-ext-net": {
+    "deps_including_self": 33,
+    "async_http_stack": []
+   },
+   "perry-ext-ws": {
+    "deps_including_self": 94,
+    "async_http_stack": []
+   },
+   "perry-ext-zlib": {
+    "deps_including_self": 25,
+    "async_http_stack": []
+   }
+  }
+ }
+}

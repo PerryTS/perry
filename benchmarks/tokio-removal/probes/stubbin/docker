@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stub docker CLI for the perry/container probe: answers `version`/`ps`/anything with empty JSON.
+case "$1" in
+  version) echo '{"Client":{"Version":"0.0.0-stub"},"Server":{"Version":"0.0.0-stub"}}' ;;
+  *) echo '[]' ;;
+esac
+exit 0

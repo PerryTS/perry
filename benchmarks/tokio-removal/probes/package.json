@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "dependencies": { "ws": "8.21.0" }
+}

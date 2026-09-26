@@ -1,0 +1,377 @@
+{
+ "sizes": {
+  "hello": {
+   "auto_before": 14472,
+   "auto_after": 14472,
+   "sym_before": 16320,
+   "sym_after": 16320,
+   "prebuilt_before": 14937936,
+   "prebuilt_after": 14196952,
+   "before_fell_back_to_prebuilt": false
+  },
+  "fetch_local": {
+   "auto_before": 20402104,
+   "auto_after": 13548672,
+   "sym_before": 31647696,
+   "sym_after": 23545680,
+   "prebuilt_before": 30867792,
+   "prebuilt_after": 25628120,
+   "before_fell_back_to_prebuilt": false
+  },
+  "http": {
+   "auto_before": 18190824,
+   "auto_after": 12308128,
+   "sym_before": 29031064,
+   "sym_after": 22056672,
+   "prebuilt_before": 30784240,
+   "prebuilt_after": 25536376,
+   "before_fell_back_to_prebuilt": false
+  },
+  "https": {
+   "auto_before": 18236144,
+   "auto_after": 12357608,
+   "sym_before": 29081216,
+   "sym_after": 22111144,
+   "prebuilt_before": 30821368,
+   "prebuilt_after": 25573504,
+   "before_fell_back_to_prebuilt": false
+  },
+  "net": {
+   "auto_before": 13707232,
+   "auto_after": 9958488,
+   "sym_before": 23644288,
+   "sym_after": 19368976,
+   "prebuilt_before": 28874040,
+   "prebuilt_after": 23998208,
+   "before_fell_back_to_prebuilt": false
+  },
+  "tls_net": {
+   "auto_before": 13756712,
+   "auto_after": 9995744,
+   "sym_before": 23698416,
+   "sym_after": 19410784,
+   "prebuilt_before": 28915328,
+   "prebuilt_after": 24039496,
+   "before_fell_back_to_prebuilt": false
+  },
+  "ws": {
+   "auto_before": 10990536,
+   "auto_after": 9531320,
+   "sym_before": 20466488,
+   "sym_after": 18729952,
+   "prebuilt_before": 28606928,
+   "prebuilt_after": 23780416,
+   "before_fell_back_to_prebuilt": false
+  },
+  "crypto": {
+   "auto_before": 11329896,
+   "auto_after": 10338160,
+   "sym_before": 16595392,
+   "sym_after": 15384552,
+   "prebuilt_before": 28541288,
+   "prebuilt_after": 23726888,
+   "before_fell_back_to_prebuilt": false
+  },
+  "zlib": {
+   "auto_before": 11395224,
+   "auto_after": 9915536,
+   "sym_before": 18822904,
+   "sym_after": 17066072,
+   "prebuilt_before": 28671928,
+   "prebuilt_after": 23828728,
+   "before_fell_back_to_prebuilt": false
+  },
+  "child": {
+   "auto_before": 8895272,
+   "auto_after": 7923864,
+   "sym_before": 13396080,
+   "sym_after": 12256016,
+   "prebuilt_before": 15204336,
+   "prebuilt_after": 14500400,
+   "before_fell_back_to_prebuilt": false
+  },
+  "timers": {
+   "auto_before": 8620856,
+   "auto_after": 7284776,
+   "sym_before": 13081032,
+   "sym_after": 11528792,
+   "prebuilt_before": 14946240,
+   "prebuilt_after": 14213632,
+   "before_fell_back_to_prebuilt": false
+  },
+  "worker": {
+   "auto_before": 9138016,
+   "auto_after": 7662480,
+   "sym_before": 13857336,
+   "sym_after": 12110392,
+   "prebuilt_before": 28327608,
+   "prebuilt_after": 23488560,
+   "before_fell_back_to_prebuilt": false
+  },
+  "backend": {
+   "auto_before": 24085816,
+   "auto_after": 17263936,
+   "sym_before": 35920336,
+   "sym_after": 27833904,
+   "prebuilt_before": 31306440,
+   "prebuilt_after": 26058576,
+   "before_fell_back_to_prebuilt": false
+  },
+  "container": {
+   "auto_before": 9027744,
+   "auto_after": 8158616,
+   "sym_before": 13741968,
+   "sym_after": 12814688,
+   "prebuilt_before": 28217272,
+   "prebuilt_after": null,
+   "before_fell_back_to_prebuilt": false
+  },
+  "bench_http_server": {
+   "auto_before": 18137288,
+   "auto_after": 12279232,
+   "sym_before": 28968992,
+   "sym_after": 22023744,
+   "prebuilt_before": 30738896,
+   "prebuilt_after": 25499224,
+   "before_fell_back_to_prebuilt": false
+  },
+  "bench_fetch_client": {
+   "auto_before": 28300336,
+   "auto_after": 10270736,
+   "sym_before": 38057696,
+   "sym_after": 17002320,
+   "prebuilt_before": 28300336,
+   "prebuilt_after": 23457200,
+   "before_fell_back_to_prebuilt": true
+  }
+ },
+ "excluded_samples": 18,
+ "runtime": {
+  "http c=1 req/s": {
+   "before": 20579.008361088243,
+   "after": 20404.064975661346
+  },
+  "http c=1 p50 ms": {
+   "before": 0.047167,
+   "after": 0.047416
+  },
+  "http c=1 p99 ms": {
+   "before": 0.056875,
+   "after": 0.058249999999999996
+  },
+  "http c=1 CPU \u00b5s/req": {
+   "before": 26.71,
+   "after": 27.77
+  },
+  "http c=1 RSS peak KiB": {
+   "before": 32816,
+   "after": 25568
+  },
+  "http c=1 threads after load": {
+   "before": 1,
+   "after": 1
+  },
+  "http c=64 req/s": {
+   "before": 99506.99101018482,
+   "after": 100506.54519611842
+  },
+  "http c=64 p50 ms": {
+   "before": 0.630625,
+   "after": 0.6292920000000001
+  },
+  "http c=64 p99 ms": {
+   "before": 0.872459,
+   "after": 0.866625
+  },
+  "http c=64 CPU \u00b5s/req": {
+   "before": 9.5,
+   "after": 9.64
+  },
+  "http c=64 RSS peak KiB": {
+   "before": 33712,
+   "after": 28784
+  },
+  "http c=64 threads after load": {
+   "before": 1,
+   "after": 1
+  },
+  "http c=256 req/s": {
+   "before": 107081.49587958252,
+   "after": 97422.0872739105
+  },
+  "http c=256 p50 ms": {
+   "before": 2.0292079999999997,
+   "after": 2.235875
+  },
+  "http c=256 p99 ms": {
+   "before": 2.322792,
+   "after": 2.5231250000000003
+  },
+  "http c=256 CPU \u00b5s/req": {
+   "before": 9.17,
+   "after": 10.07
+  },
+  "http c=256 RSS peak KiB": {
+   "before": 36256,
+   "after": 31440
+  },
+  "http c=256 threads after load": {
+   "before": 1,
+   "after": 1
+  },
+  "backend c=1 req/s": {
+   "before": 12731.062679033845,
+   "after": 12388.561355078715
+  },
+  "backend c=1 p50 ms": {
+   "before": 0.07525,
+   "after": 0.077833
+  },
+  "backend c=1 p99 ms": {
+   "before": 0.090292,
+   "after": 0.094208
+  },
+  "backend c=1 CPU \u00b5s/req": {
+   "before": 55.95,
+   "after": 58.35
+  },
+  "backend c=1 RSS peak KiB": {
+   "before": 219440,
+   "after": 207040
+  },
+  "backend c=1 threads after load": {
+   "before": 1,
+   "after": 1
+  },
+  "http_idle RSS KiB": {
+   "before": 14784,
+   "after": 14448
+  },
+  "http_idle threads": {
+   "before": 1,
+   "after": 1
+  },
+  "backend_idle RSS KiB": {
+   "before": 20400,
+   "after": 19952
+  },
+  "backend_idle threads": {
+   "before": 1,
+   "after": 1
+  },
+  "fetch client c=1 req/s": {
+   "before": 17446.860309252927,
+   "after": 19049.050326740107
+  },
+  "fetch client c=1 CPU \u00b5s/req": {
+   "before": 33.33,
+   "after": 30.0
+  },
+  "fetch client c=1 max RSS KiB": {
+   "before": 26032.0,
+   "after": 22944.0
+  },
+  "fetch client c=16 req/s": {
+   "before": 2685.380035821851,
+   "after": 64779.280580311795
+  },
+  "fetch client c=16 CPU \u00b5s/req": {
+   "before": 61.67,
+   "after": 13.33
+  },
+  "fetch client c=16 max RSS KiB": {
+   "before": 32368.0,
+   "after": 29968.0
+  },
+  "hello startup warm ms": {
+   "before": 1.559375,
+   "after": 1.5581245000000001
+  },
+  "hello startup cold (fresh copy) ms": {
+   "before": 490.0,
+   "after": 380.0
+  },
+  "hello max RSS KiB": {
+   "before": 1312.0,
+   "after": 1312.0
+  },
+  "backend startup warm ms": {
+   "before": 7.476416500000001,
+   "after": 7.1250415
+  },
+  "backend startup cold (fresh copy) ms": {
+   "before": 340.0,
+   "after": 290.0
+  },
+  "backend startup max RSS KiB": {
+   "before": 20560.0,
+   "after": 20144.0
+  },
+  "backend fresh c=8 req/s": {
+   "before": 26538.6,
+   "after": 25926.8
+  },
+  "backend fresh c=16 req/s": {
+   "before": 30573.2,
+   "after": 30528.0
+  },
+  "backend fresh c=32 req/s": {
+   "before": 35051.6,
+   "after": 33974.2
+  },
+  "backend fresh c=64 req/s": {
+   "before": 35127.6,
+   "after": 34845.6
+  }
+ },
+ "instructions": {
+  "hello": {
+   "per_op_before": null,
+   "per_op_after": null,
+   "fixed_before": 113378,
+   "fixed_after": 113378
+  },
+  "ops_crypto": {
+   "per_op_before": 94586.3925,
+   "per_op_after": 78094.4175,
+   "fixed_before": 1514132.75,
+   "fixed_after": 1625796.25
+  },
+  "ops_fetch": {
+   "per_op_before": 426349.1875,
+   "per_op_after": 419992.21,
+   "fixed_before": 1872556.25,
+   "fixed_after": 1659920.0
+  },
+  "ops_http": {
+   "per_op_before": 1578976.74,
+   "per_op_after": 2220906.895,
+   "fixed_before": -53762481.0,
+   "fixed_after": -108896072.5
+  },
+  "ops_loop": {
+   "per_op_before": 37999.98,
+   "per_op_after": 38000.7175,
+   "fixed_before": 792431.9999999995,
+   "fixed_after": 695848.25
+  },
+  "ops_net": {
+   "per_op_before": 76629.0925,
+   "per_op_after": 59649.3075,
+   "fixed_before": 1820202.75,
+   "fixed_after": 1705467.25
+  },
+  "ops_timers": {
+   "per_op_before": 33339.2625,
+   "per_op_after": 25684.8075,
+   "fixed_before": 1116521.7500000005,
+   "fixed_after": 1114640.25
+  },
+  "ops_zlib": {
+   "per_op_before": 224545.07,
+   "per_op_after": 203295.295,
+   "fixed_before": 1222350.0,
+   "fixed_after": 1324484.5
+  }
+ }
+}

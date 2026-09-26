@@ -1,0 +1,131 @@
+[14:04:42] lock acquired after 0 s
+[14:04:43] correctness backend {'before': True, 'after': True}
+[14:04:44] correctness crypto {'before': True, 'after': True}
+[14:04:44] correctness hello {'before': True, 'after': True}
+[14:04:45] correctness http {'before': True, 'after': True}
+[14:04:45] correctness net {'before': True, 'after': True}
+[14:04:46] correctness timers {'before': True, 'after': True}
+[14:04:47] correctness worker {'before': False, 'after': False}
+[14:05:47] correctness ws {'before': False, 'after': False}
+[14:05:48] correctness zlib {'before': True, 'after': True}
+[14:05:48] round 1/7 order=['before', 'after'] load=[1.1, 1.12, 1.12]
+[14:05:49]   startup before: hello warm 1.35ms cold 150ms; backend warm 7.52ms
+[14:06:03]   http before c=1: 20603 rps p50=0.047208 p99=0.056875 cpu/req=26.79us rss=32816 thr=1
+[14:06:13]   http before c=64: 101224 rps p50=0.621958 p99=0.852709 cpu/req=9.4us rss=33712 thr=1
+[14:06:24]   http before c=256: 50748 rps p50=2.276875 p99=7.8625 cpu/req=12.6us rss=36336 thr=1
+[14:06:37]   backend before c=1: 12722 rps p50=0.07525 p99=0.09079100000000001 cpu/req=56.1us rss=219216 thr=1
+[14:06:47]   backend before c=64: 8000 rps p50=1.7799580000000002 p99=2.150125 cpu/req=-112.84us rss=299168 thr=0
+[14:06:48]   fetch before c=1: 17447 rps cpu/req=36.7us rss=26673152
+[14:06:51]   fetch before c=16: 2685 rps cpu/req=61.7us rss=32997376
+[14:06:52]   startup after: hello warm 1.56ms cold 190ms; backend warm 7.13ms
+[14:07:06]   http after c=1: 20423 rps p50=0.047375 p99=0.058249999999999996 cpu/req=27.81us rss=25568 thr=1
+[14:07:16]   http after c=64: 101270 rps p50=0.625291 p99=0.8637910000000001 cpu/req=9.6us rss=28800 thr=1
+[14:07:27]   http after c=256: 97752 rps p50=2.229209 p99=2.5224159999999998 cpu/req=10.02us rss=31280 thr=1
+[14:07:40]   backend after c=1: 12387 rps p50=0.077875 p99=0.094208 cpu/req=58.6us rss=208992 thr=1
+[14:07:51]   backend after c=64: 8237 rps p50=1.835125 p99=2.174625 cpu/req=-111.75us rss=292352 thr=0
+[14:07:51]   fetch after c=1: 19049 rps cpu/req=36.7us rss=23461888
+[14:07:51]   fetch after c=16: 74800 rps cpu/req=11.7us rss=30343168
+[14:07:51] round 2/7 order=['after', 'before'] load=[3.93, 2.26, 1.58]
+[14:07:52]   startup after: hello warm 1.47ms cold 190ms; backend warm 7.12ms
+[14:08:06]   http after c=1: 20440 rps p50=0.047375 p99=0.057459 cpu/req=27.69us rss=25568 thr=1
+[14:08:16]   http after c=64: 96551 rps p50=0.650833 p99=0.89725 cpu/req=9.85us rss=28752 thr=1
+[14:08:27]   http after c=256: 97322 rps p50=2.239875 p99=2.5231250000000003 cpu/req=10.08us rss=31488 thr=1
+[14:08:40]   backend after c=1: 12488 rps p50=0.07662500000000001 p99=0.093 cpu/req=57.81us rss=206384 thr=1
+[14:08:51]   backend after c=64: 8309 rps p50=1.7845840000000002 p99=2.131833 cpu/req=-109.69us rss=292880 thr=0
+[14:08:51]   fetch after c=1: 17962 rps cpu/req=33.3us rss=23511040
+[14:08:51]   fetch after c=16: 55406 rps cpu/req=15.0us rss=30703616
+[14:08:52]   startup before: hello warm 1.57ms cold 500ms; backend warm 7.48ms
+[14:09:06]   http before c=1: 20579 rps p50=0.047208 p99=0.056709 cpu/req=26.68us rss=32816 thr=1
+[14:09:16]   http before c=64: 100363 rps p50=0.627292 p99=0.865916 cpu/req=9.46us rss=33760 thr=1
+[14:09:27]   http before c=256: 107105 rps p50=2.0288329999999997 p99=2.312166 cpu/req=9.17us rss=36240 thr=1
+[14:09:40]   backend before c=1: 12728 rps p50=0.07525 p99=0.090083 cpu/req=56.01us rss=219440 thr=1
+[14:09:50]   backend before c=64: 7914 rps p50=1.774167 p99=2.180708 cpu/req=-113.95us rss=299472 thr=0
+[14:09:51]   fetch before c=1: 18141 rps cpu/req=33.3us rss=26656768
+[14:09:53]   fetch before c=16: 2698 rps cpu/req=60.0us rss=33226752
+[14:09:53] round 3/7 order=['before', 'after'] load=[4.64, 3.07, 1.98]
+[14:09:54]   startup before: hello warm 1.56ms cold 490ms; backend warm 7.50ms
+[14:10:08]   http before c=1: 20611 rps p50=0.047125 p99=0.056749999999999995 cpu/req=26.73us rss=32816 thr=1
+[14:10:18]   http before c=64: 99507 rps p50=0.630625 p99=0.882542 cpu/req=9.5us rss=33680 thr=1
+[14:10:29]   http before c=256: 74547 rps p50=2.442459 p99=3.671334 cpu/req=11.21us rss=36288 thr=1
+[14:10:42]   backend before c=1: 12742 rps p50=0.075209 p99=0.089958 cpu/req=55.94us rss=214224 thr=1
+[14:10:53]   backend before c=64: 7734 rps p50=1.78125 p99=2.1225419999999997 cpu/req=-116.01us rss=295312 thr=0
+[14:10:53]   fetch before c=1: 17994 rps cpu/req=33.3us rss=26640384
+[14:10:55]   fetch before c=16: 2686 rps cpu/req=61.7us rss=33112064
+[14:10:56]   startup after: hello warm 1.55ms cold 380ms; backend warm 7.13ms
+[14:11:10]   http after c=1: 20393 rps p50=0.047459 p99=0.057834 cpu/req=27.75us rss=25552 thr=1
+[14:11:20]   http after c=64: 100507 rps p50=0.6292920000000001 p99=0.866625 cpu/req=9.64us rss=28784 thr=1
+[14:11:31]   http after c=256: 97422 rps p50=2.235875 p99=2.52675 cpu/req=10.07us rss=31440 thr=1
+[14:11:44]   backend after c=1: 12353 rps p50=0.077916 p99=0.094666 cpu/req=58.68us rss=211360 thr=1
+[14:11:55]   backend after c=64: 8442 rps p50=1.833208 p99=2.178166 cpu/req=-108.52us rss=286624 thr=0
+[14:11:55]   fetch after c=1: 15087 rps cpu/req=30.0us rss=23511040
+[14:11:55]   fetch after c=16: 66917 rps cpu/req=13.3us rss=30638080
+[14:11:55] round 4/7 order=['after', 'before'] load=[4.45, 3.34, 2.22]
+[14:11:56]   startup after: hello warm 1.60ms cold 390ms; backend warm 7.13ms
+[14:12:10]   http after c=1: 20404 rps p50=0.047416 p99=0.057707999999999995 cpu/req=27.78us rss=25552 thr=1
+[14:12:20]   http after c=64: 96387 rps p50=0.6525 p99=0.8945420000000001 cpu/req=9.86us rss=28720 thr=1
+[14:12:31]   http after c=256: 45795 rps p50=2.505875 p99=7.775916 cpu/req=13.53us rss=31488 thr=1
+[14:12:44]   backend after c=1: 12505 rps p50=0.076584 p99=0.093417 cpu/req=57.81us rss=207088 thr=1
+[14:12:54]   backend after c=64: 8144 rps p50=1.807625 p99=2.1567499999999997 cpu/req=-112.29us rss=282432 thr=0
+[14:12:55]   fetch after c=1: 19610 rps cpu/req=30.0us rss=23494656
+[14:12:55]   fetch after c=16: 39493 rps cpu/req=13.3us rss=30687232
+[14:12:56]   startup before: hello warm 1.52ms cold 400ms; backend warm 7.46ms
+[14:13:10]   http before c=1: 20556 rps p50=0.047167 p99=0.056875 cpu/req=26.71us rss=32832 thr=1
+[14:13:20]   http before c=64: 99027 rps p50=0.63375 p99=0.885375 cpu/req=9.52us rss=33696 thr=1
+[14:13:31]   http before c=256: 107359 rps p50=2.024584 p99=2.311166 cpu/req=9.15us rss=36256 thr=1
+[14:13:44]   backend before c=1: 12731 rps p50=0.07525 p99=0.09129200000000001 cpu/req=55.99us rss=218880 thr=1
+[14:13:55]   backend before c=64: 8130 rps p50=1.783709 p99=2.173416 cpu/req=-110.76us rss=295376 thr=0
+[14:13:55]   fetch before c=1: 18894 rps cpu/req=33.3us rss=26624000
+[14:13:57]   fetch before c=16: 2678 rps cpu/req=61.7us rss=33161216
+[14:13:57] round 5/7 order=['before', 'after'] load=[5.69, 4.14, 2.68]
+[14:13:58]   startup before: hello warm 1.56ms cold 430ms; backend warm 7.51ms
+[14:14:12]   http before c=1: 20571 rps p50=0.047166 p99=0.057207999999999995 cpu/req=26.64us rss=32800 thr=1
+[14:14:22]   http before c=64: 101266 rps p50=0.622458 p99=0.865125 cpu/req=9.45us rss=33728 thr=1
+[14:14:33]   http before c=256: 91647 rps p50=2.307458 p99=2.630458 cpu/req=10.41us rss=36336 thr=1
+[14:14:46]   backend before c=1: 12744 rps p50=0.075209 p99=0.091083 cpu/req=55.93us rss=221360 thr=1
+[14:14:57]   backend before c=64: 7914 rps p50=1.784125 p99=2.106458 cpu/req=-114.28us rss=297040 thr=0
+[14:14:57]   fetch before c=1: 13324 rps cpu/req=30.0us rss=26673152
+[14:14:59]   fetch before c=16: 2681 rps cpu/req=61.7us rss=33144832
+[14:15:01]   startup after: hello warm 1.57ms cold 730ms; backend warm 7.09ms
+[14:15:14]   http after c=1: 20381 rps p50=0.047583 p99=0.059040999999999996 cpu/req=27.77us rss=25552 thr=1
+[14:15:25]   http after c=64: 98462 rps p50=0.641708 p99=0.8771249999999999 cpu/req=9.77us rss=28864 thr=1
+[14:15:35]   http after c=256: 97769 rps p50=2.2298750000000003 p99=2.514959 cpu/req=10.04us rss=31376 thr=1
+[14:15:49]   backend after c=1: 12389 rps p50=0.077833 p99=0.095 cpu/req=58.35us rss=205392 thr=1
+[14:15:59]   backend after c=64: 8411 rps p50=1.850209 p99=2.166833 cpu/req=-108.7us rss=286352 thr=0
+[14:15:59]   fetch after c=1: 0 rps cpu/req=0.0us rss=28672000
+[14:15:59]   fetch after c=16: 0 rps cpu/req=0.0us rss=29720576
+[14:15:59] round 6/7 order=['after', 'before'] load=[4.13, 4.04, 2.83]
+[14:16:00]   startup after: hello warm 1.56ms cold 220ms; backend warm 7.15ms
+[14:16:14]   http after c=1: 20415 rps p50=0.047334 p99=0.059167 cpu/req=27.67us rss=25568 thr=1
+[14:16:24]   http after c=64: 101369 rps p50=0.621083 p99=0.842375 cpu/req=9.58us rss=28768 thr=1
+[14:16:35]   http after c=256: 97171 rps p50=2.241917 p99=2.5382909999999996 cpu/req=10.09us rss=31392 thr=1
+[14:16:48]   backend after c=1: 12303 rps p50=0.077916 p99=0.09562499999999999 cpu/req=58.84us rss=203632 thr=1
+[14:16:58]   backend after c=64: 8609 rps p50=1.871375 p99=2.247667 cpu/req=-105.97us rss=287632 thr=0
+[14:16:58]   fetch after c=1: 0 rps cpu/req=3.3us rss=28704768
+[14:16:58]   fetch after c=16: 0 rps cpu/req=1.7us rss=29720576
+[14:17:00]   startup before: hello warm 1.59ms cold 570ms; backend warm 7.47ms
+[14:17:13]   http before c=1: 20539 rps p50=0.047208 p99=0.058041999999999996 cpu/req=26.77us rss=32832 thr=1
+[14:17:24]   http before c=64: 97916 rps p50=0.644084 p99=0.874667 cpu/req=9.59us rss=33696 thr=1
+[14:17:34]   http before c=256: 107081 rps p50=2.0292079999999997 p99=2.322792 cpu/req=9.17us rss=36080 thr=1
+[14:17:48]   backend before c=1: 12721 rps p50=0.07525 p99=0.09025 cpu/req=55.95us rss=219968 thr=1
+[14:17:58]   backend before c=64: 7864 rps p50=1.784333 p99=2.1193750000000002 cpu/req=-115.02us rss=301504 thr=0
+[14:17:58]   fetch before c=1: 14413 rps cpu/req=26.7us rss=26624000
+[14:18:00]   fetch before c=16: 2679 rps cpu/req=61.7us rss=33144832
+[14:18:00] round 7/7 order=['before', 'after'] load=[4.09, 4.08, 3.01]
+[14:18:02]   startup before: hello warm 1.56ms cold 490ms; backend warm 7.47ms
+[14:18:15]   http before c=1: 20595 rps p50=0.047167 p99=0.057166 cpu/req=26.56us rss=32832 thr=1
+[14:18:26]   http before c=64: 98322 rps p50=0.641833 p99=0.872459 cpu/req=9.56us rss=33728 thr=1
+[14:18:36]   http before c=256: 107313 rps p50=2.024083 p99=2.2965839999999997 cpu/req=9.15us rss=36240 thr=1
+[14:18:50]   backend before c=1: 12787 rps p50=0.07525 p99=0.090292 cpu/req=55.74us rss=220128 thr=1
+[14:19:00]   backend before c=64: 7884 rps p50=1.780375 p99=2.0886250000000004 cpu/req=-114.69us rss=298480 thr=0
+[14:19:00]   fetch before c=1: 13279 rps cpu/req=23.3us rss=26673152
+[14:19:02]   fetch before c=16: 2701 rps cpu/req=61.7us rss=33177600
+[14:19:04]   startup after: hello warm 1.56ms cold 550ms; backend warm 7.12ms
+[14:19:17]   http after c=1: 20358 rps p50=0.048042 p99=0.058292 cpu/req=27.85us rss=25568 thr=1
+[14:19:28]   http after c=64: 102345 rps p50=0.620042 p99=0.835041 cpu/req=9.54us rss=28816 thr=1
+[14:19:38]   http after c=256: 97671 rps p50=2.2320830000000003 p99=2.50675 cpu/req=10.04us rss=31488 thr=1
+[14:19:52]   backend after c=1: 12487 rps p50=0.07662500000000001 p99=0.093791 cpu/req=57.72us rss=207040 thr=1
+[14:20:02]   backend after c=64: 8410 rps p50=1.802875 p99=2.120542 cpu/req=-108.14us rss=287696 thr=0
+[14:20:02]   fetch after c=1: 22165 rps cpu/req=23.3us rss=23494656
+[14:20:02]   fetch after c=16: 64779 rps cpu/req=13.3us rss=30883840
+[14:20:02] lock released
+[14:20:02] DONE

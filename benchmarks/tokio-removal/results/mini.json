@@ -1,0 +1,3072 @@
+{
+ "host": "perry-macos.fritz.box",
+ "rounds": 7,
+ "duration": "10s",
+ "samples": [
+  {
+   "round": 0,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.15,
+   "hello_warm_median_s": 0.0013540205000000002,
+   "hello_warm_mean_s": 0.0015064938,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.48,
+   "backend_warm_median_s": 0.0075174165000000005,
+   "backend_maxrss_bytes": 21053440,
+   "load": [
+    1.1,
+    1.12,
+    1.12
+   ]
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.5276448726654053
+  },
+  {
+   "rps": 20602.991814525914,
+   "oha_requests_per_sec": 20603.091797016063,
+   "total": 206066,
+   "ok": 206066,
+   "success_rate": 1.0,
+   "p50_ms": 0.047208,
+   "p99_ms": 0.056875,
+   "p999_ms": 0.079292,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.52,
+   "cpu_us_per_req": 26.79,
+   "rss_peak_kb": 32816,
+   "threads_after": 1,
+   "load_before": [
+    1.73,
+    1.25,
+    1.16
+   ],
+   "round": 0
+  },
+  {
+   "rps": 101224.35005625458,
+   "oha_requests_per_sec": 101230.0484546724,
+   "total": 1012528,
+   "ok": 1012528,
+   "success_rate": 1.0,
+   "p50_ms": 0.621958,
+   "p99_ms": 0.852709,
+   "p999_ms": 1.053084,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.52,
+   "cpu_us_per_req": 9.4,
+   "rss_peak_kb": 33712,
+   "threads_after": 1,
+   "load_before": [
+    1.62,
+    1.24,
+    1.16
+   ],
+   "round": 0
+  },
+  {
+   "rps": 50748.11568391543,
+   "oha_requests_per_sec": 321905.5034530973,
+   "total": 507781,
+   "ok": 507781,
+   "success_rate": 0.15765899610495054,
+   "p50_ms": 2.276875,
+   "p99_ms": 7.8625,
+   "p999_ms": 601.648666,
+   "errors": {
+    "Connection refused (os error 61)": 554421,
+    "No buffer space available (os error 55)": 2158499,
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 202,
+    "connection error": 13
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 6.4,
+   "cpu_us_per_req": 12.6,
+   "rss_peak_kb": 36336,
+   "threads_after": 1,
+   "load_before": [
+    2.83,
+    1.51,
+    1.26
+   ],
+   "round": 0
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20400,
+   "listen_s": 0.014626026153564453
+  },
+  {
+   "rps": 12722.44683258959,
+   "oha_requests_per_sec": 12722.546799170343,
+   "total": 127267,
+   "ok": 127267,
+   "success_rate": 1.0,
+   "p50_ms": 0.07525,
+   "p99_ms": 0.09079100000000001,
+   "p999_ms": 0.116292,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.14,
+   "cpu_us_per_req": 56.1,
+   "rss_peak_kb": 219216,
+   "threads_after": 1,
+   "load_before": [
+    3.55,
+    1.71,
+    1.33
+   ],
+   "round": 0
+  },
+  {
+   "rps": 8000.370522789574,
+   "oha_requests_per_sec": 158603.3461280782,
+   "total": 80114,
+   "ok": 80114,
+   "success_rate": 0.05044434901641264,
+   "p50_ms": 1.7799580000000002,
+   "p99_ms": 2.150125,
+   "p999_ms": 26.317875,
+   "errors": {
+    "Connection refused (os error 61)": 590417,
+    "No buffer space available (os error 55)": 917571,
+    "aborted due to deadline": 54,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.04,
+   "cpu_us_per_req": -112.84,
+   "rss_peak_kb": 299168,
+   "threads_after": 0,
+   "load_before": [
+    3.23,
+    1.7,
+    1.33
+   ],
+   "round": 0
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 171.950709,
+   "rps": 17446.860309252927,
+   "real": 0.92,
+   "user": 0.07,
+   "sys": 0.04,
+   "maxrss_bytes": 26673152,
+   "cpu_us_per_req": 36.67,
+   "load": [
+    3.88,
+    1.91,
+    1.41
+   ]
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2234.320625,
+   "rps": 2685.380035821851,
+   "real": 2.24,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 32997376,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    3.88,
+    1.91,
+    1.41
+   ]
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.19,
+   "hello_warm_median_s": 0.0015585,
+   "hello_warm_mean_s": 0.0017016218750000004,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.3,
+   "backend_warm_median_s": 0.007134666500000001,
+   "backend_maxrss_bytes": 20627456,
+   "load": [
+    3.88,
+    1.91,
+    1.41
+   ]
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14448,
+   "listen_s": 0.4427158832550049
+  },
+  {
+   "rps": 20423.29150090521,
+   "oha_requests_per_sec": 20423.391485197673,
+   "total": 204265,
+   "ok": 204265,
+   "success_rate": 1.0,
+   "p50_ms": 0.047375,
+   "p99_ms": 0.058249999999999996,
+   "p999_ms": 0.078,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.68,
+   "cpu_us_per_req": 27.81,
+   "rss_peak_kb": 25568,
+   "threads_after": 1,
+   "load_before": [
+    3.65,
+    1.9,
+    1.41
+   ],
+   "round": 0
+  },
+  {
+   "rps": 101269.52015609444,
+   "oha_requests_per_sec": 101275.31868570794,
+   "total": 1012952,
+   "ok": 1012952,
+   "success_rate": 1.0,
+   "p50_ms": 0.625291,
+   "p99_ms": 0.8637910000000001,
+   "p999_ms": 1.034458,
+   "errors": {
+    "aborted due to deadline": 58
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.72,
+   "cpu_us_per_req": 9.6,
+   "rss_peak_kb": 28800,
+   "threads_after": 1,
+   "load_before": [
+    3.46,
+    1.92,
+    1.42
+   ],
+   "round": 0
+  },
+  {
+   "rps": 97752.17403977123,
+   "oha_requests_per_sec": 97776.8642836263,
+   "total": 977908,
+   "ok": 977908,
+   "success_rate": 0.9999580755233657,
+   "p50_ms": 2.229209,
+   "p99_ms": 2.5224159999999998,
+   "p999_ms": 2.8165,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 206
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.8,
+   "cpu_us_per_req": 10.02,
+   "rss_peak_kb": 31280,
+   "threads_after": 1,
+   "load_before": [
+    4.0,
+    2.08,
+    1.49
+   ],
+   "round": 0
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.019030094146728516
+  },
+  {
+   "rps": 12386.775327510482,
+   "oha_requests_per_sec": 12386.875303904806,
+   "total": 123897,
+   "ok": 123897,
+   "success_rate": 1.0,
+   "p50_ms": 0.077875,
+   "p99_ms": 0.094208,
+   "p999_ms": 0.11675,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.26,
+   "cpu_us_per_req": 58.6,
+   "rss_peak_kb": 208992,
+   "threads_after": 1,
+   "load_before": [
+    3.98,
+    2.18,
+    1.53
+   ],
+   "round": 0
+  },
+  {
+   "rps": 8236.605687580699,
+   "oha_requests_per_sec": 209817.58116515796,
+   "total": 82418,
+   "ok": 82418,
+   "success_rate": 0.03925670516698794,
+   "p50_ms": 1.835125,
+   "p99_ms": 2.174625,
+   "p999_ms": 32.303290999999994,
+   "errors": {
+    "Connection refused (os error 61)": 524250,
+    "No buffer space available (os error 55)": 1492731,
+    "aborted due to deadline": 36,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.21,
+   "cpu_us_per_req": -111.75,
+   "rss_peak_kb": 292352,
+   "threads_after": 0,
+   "load_before": [
+    3.52,
+    2.14,
+    1.52
+   ],
+   "round": 0
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 157.48816599999998,
+   "rps": 19049.050326740107,
+   "real": 0.78,
+   "user": 0.07,
+   "sys": 0.04,
+   "maxrss_bytes": 23461888,
+   "cpu_us_per_req": 36.67,
+   "load": [
+    3.93,
+    2.26,
+    1.58
+   ]
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 80.21424999999999,
+   "rps": 74799.67711472712,
+   "real": 0.08,
+   "user": 0.05,
+   "sys": 0.02,
+   "maxrss_bytes": 30343168,
+   "cpu_us_per_req": 11.67,
+   "load": [
+    3.93,
+    2.26,
+    1.58
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.19,
+   "hello_warm_median_s": 0.00147225,
+   "hello_warm_mean_s": 0.0016707427,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.29,
+   "backend_warm_median_s": 0.0071216875,
+   "backend_maxrss_bytes": 20627456,
+   "load": [
+    3.93,
+    2.26,
+    1.58
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14448,
+   "listen_s": 0.004074811935424805
+  },
+  {
+   "rps": 20439.708386814822,
+   "oha_requests_per_sec": 20439.80836973524,
+   "total": 204432,
+   "ok": 204432,
+   "success_rate": 1.0,
+   "p50_ms": 0.047375,
+   "p99_ms": 0.057459,
+   "p999_ms": 0.07825,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.66,
+   "cpu_us_per_req": 27.69,
+   "rss_peak_kb": 25568,
+   "threads_after": 1,
+   "load_before": [
+    3.93,
+    2.29,
+    1.59
+   ],
+   "round": 1
+  },
+  {
+   "rps": 96550.68068529769,
+   "oha_requests_per_sec": 96555.87868690414,
+   "total": 965878,
+   "ok": 965878,
+   "success_rate": 1.0,
+   "p50_ms": 0.650833,
+   "p99_ms": 0.89725,
+   "p999_ms": 0.983083,
+   "errors": {
+    "aborted due to deadline": 52
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.51,
+   "cpu_us_per_req": 9.85,
+   "rss_peak_kb": 28752,
+   "threads_after": 1,
+   "load_before": [
+    3.64,
+    2.28,
+    1.59
+   ],
+   "round": 1
+  },
+  {
+   "rps": 97321.6000654658,
+   "oha_requests_per_sec": 97345.7913903551,
+   "total": 973565,
+   "ok": 973565,
+   "success_rate": 0.9999578885093149,
+   "p50_ms": 2.239875,
+   "p99_ms": 2.5231250000000003,
+   "p999_ms": 2.797625,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 201
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.81,
+   "cpu_us_per_req": 10.08,
+   "rss_peak_kb": 31488,
+   "threads_after": 1,
+   "load_before": [
+    4.39,
+    2.49,
+    1.67
+   ],
+   "round": 1
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.020865678787231445
+  },
+  {
+   "rps": 12488.411466641148,
+   "oha_requests_per_sec": 12488.511457124965,
+   "total": 124896,
+   "ok": 124896,
+   "success_rate": 1.0,
+   "p50_ms": 0.07662500000000001,
+   "p99_ms": 0.093,
+   "p999_ms": 0.119125,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.22,
+   "cpu_us_per_req": 57.81,
+   "rss_peak_kb": 206384,
+   "threads_after": 1,
+   "load_before": [
+    4.36,
+    2.58,
+    1.72
+   ],
+   "round": 1
+  },
+  {
+   "rps": 8309.17345698974,
+   "oha_requests_per_sec": 160504.43626167226,
+   "total": 83141,
+   "ok": 83141,
+   "success_rate": 0.05177050635977516,
+   "p50_ms": 1.7845840000000002,
+   "p99_ms": 2.131833,
+   "p999_ms": 30.66225,
+   "errors": {
+    "Connection refused (os error 61)": 585284,
+    "No buffer space available (os error 55)": 937464,
+    "aborted due to deadline": 43,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.12,
+   "cpu_us_per_req": -109.69,
+   "rss_peak_kb": 292880,
+   "threads_after": 0,
+   "load_before": [
+    3.99,
+    2.56,
+    1.72
+   ],
+   "round": 1
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 167.018083,
+   "rps": 17962.126891373795,
+   "real": 0.18,
+   "user": 0.07,
+   "sys": 0.03,
+   "maxrss_bytes": 23511040,
+   "cpu_us_per_req": 33.33,
+   "load": [
+    4.4,
+    2.69,
+    1.78
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 108.291167,
+   "rps": 55406.18100458738,
+   "real": 0.11,
+   "user": 0.07,
+   "sys": 0.02,
+   "maxrss_bytes": 30703616,
+   "cpu_us_per_req": 15.0,
+   "load": [
+    4.4,
+    2.69,
+    1.78
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.5,
+   "hello_warm_median_s": 0.0015650835,
+   "hello_warm_mean_s": 0.0016900750249999996,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.34,
+   "backend_warm_median_s": 0.007476416500000001,
+   "backend_maxrss_bytes": 21069824,
+   "load": [
+    4.4,
+    2.69,
+    1.78
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.004188060760498047
+  },
+  {
+   "rps": 20579.008361088243,
+   "oha_requests_per_sec": 20579.108351897008,
+   "total": 205809,
+   "ok": 205809,
+   "success_rate": 1.0,
+   "p50_ms": 0.047208,
+   "p99_ms": 0.056709,
+   "p999_ms": 0.079041,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.49,
+   "cpu_us_per_req": 26.68,
+   "rss_peak_kb": 32816,
+   "threads_after": 1,
+   "load_before": [
+    4.21,
+    2.68,
+    1.78
+   ],
+   "round": 1
+  },
+  {
+   "rps": 100363.12509783718,
+   "oha_requests_per_sec": 100369.22371390872,
+   "total": 1003859,
+   "ok": 1003859,
+   "success_rate": 1.0,
+   "p50_ms": 0.627292,
+   "p99_ms": 0.865916,
+   "p999_ms": 0.95475,
+   "errors": {
+    "aborted due to deadline": 61
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.5,
+   "cpu_us_per_req": 9.46,
+   "rss_peak_kb": 33760,
+   "threads_after": 1,
+   "load_before": [
+    3.79,
+    2.64,
+    1.77
+   ],
+   "round": 1
+  },
+  {
+   "rps": 107105.35644343839,
+   "oha_requests_per_sec": 107130.94656543889,
+   "total": 1071467,
+   "ok": 1071467,
+   "success_rate": 0.9999617361699586,
+   "p50_ms": 2.0288329999999997,
+   "p99_ms": 2.312166,
+   "p999_ms": 2.5789590000000002,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 215
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.82,
+   "cpu_us_per_req": 9.17,
+   "rss_peak_kb": 36240,
+   "threads_after": 1,
+   "load_before": [
+    4.67,
+    2.86,
+    1.86
+   ],
+   "round": 1
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20384,
+   "listen_s": 0.01948690414428711
+  },
+  {
+   "rps": 12727.71716501811,
+   "oha_requests_per_sec": 12727.817151012572,
+   "total": 127295,
+   "ok": 127295,
+   "success_rate": 1.0,
+   "p50_ms": 0.07525,
+   "p99_ms": 0.090083,
+   "p999_ms": 0.114167,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.13,
+   "cpu_us_per_req": 56.01,
+   "rss_peak_kb": 219440,
+   "threads_after": 1,
+   "load_before": [
+    4.59,
+    2.93,
+    1.91
+   ],
+   "round": 1
+  },
+  {
+   "rps": 7913.825331216686,
+   "oha_requests_per_sec": 190823.63288894345,
+   "total": 79420,
+   "ok": 79420,
+   "success_rate": 0.04147297468070196,
+   "p50_ms": 1.774167,
+   "p99_ms": 2.180708,
+   "p999_ms": 30.459875,
+   "errors": {
+    "Connection refused (os error 61)": 557191,
+    "No buffer space available (os error 55)": 1278307,
+    "aborted due to deadline": 48,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.05,
+   "cpu_us_per_req": -113.95,
+   "rss_peak_kb": 299472,
+   "threads_after": 0,
+   "load_before": [
+    4.04,
+    2.87,
+    1.9
+   ],
+   "round": 1
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 165.368166,
+   "rps": 18141.339246635896,
+   "real": 0.2,
+   "user": 0.06,
+   "sys": 0.04,
+   "maxrss_bytes": 26656768,
+   "cpu_us_per_req": 33.33,
+   "load": [
+    4.87,
+    3.09,
+    1.98
+   ]
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2223.662792,
+   "rps": 2698.250841623112,
+   "real": 2.23,
+   "user": 0.25,
+   "sys": 0.11,
+   "maxrss_bytes": 33226752,
+   "cpu_us_per_req": 60.0,
+   "load": [
+    4.64,
+    3.07,
+    1.98
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.49,
+   "hello_warm_median_s": 0.0015576665000000003,
+   "hello_warm_mean_s": 0.0016799270500000006,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.34,
+   "backend_warm_median_s": 0.0075032915,
+   "backend_maxrss_bytes": 21053440,
+   "load": [
+    4.64,
+    3.07,
+    1.98
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.0041620731353759766
+  },
+  {
+   "rps": 20610.787110204124,
+   "oha_requests_per_sec": 20610.88710140907,
+   "total": 206126,
+   "ok": 206126,
+   "success_rate": 1.0,
+   "p50_ms": 0.047125,
+   "p99_ms": 0.056749999999999995,
+   "p999_ms": 0.078666,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.51,
+   "cpu_us_per_req": 26.73,
+   "rss_peak_kb": 32816,
+   "threads_after": 1,
+   "load_before": [
+    4.64,
+    3.07,
+    1.98
+   ],
+   "round": 2
+  },
+  {
+   "rps": 99506.99101018482,
+   "oha_requests_per_sec": 99512.6896065966,
+   "total": 995315,
+   "ok": 995315,
+   "success_rate": 1.0,
+   "p50_ms": 0.630625,
+   "p99_ms": 0.882542,
+   "p999_ms": 1.06025,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.46,
+   "cpu_us_per_req": 9.5,
+   "rss_peak_kb": 33680,
+   "threads_after": 1,
+   "load_before": [
+    3.84,
+    2.97,
+    1.97
+   ],
+   "round": 2
+  },
+  {
+   "rps": 74546.56036832686,
+   "oha_requests_per_sec": 248884.37693523348,
+   "total": 745888,
+   "ok": 745888,
+   "success_rate": 0.2995480001365437,
+   "p50_ms": 2.442459,
+   "p99_ms": 3.671334,
+   "p999_ms": 67.115041,
+   "errors": {
+    "Connection refused (os error 61)": 548337,
+    "No buffer space available (os error 55)": 1195775,
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 209,
+    "connection error": 4
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 8.36,
+   "cpu_us_per_req": 11.21,
+   "rss_peak_kb": 36288,
+   "threads_after": 1,
+   "load_before": [
+    3.79,
+    2.98,
+    1.98
+   ],
+   "round": 2
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20400,
+   "listen_s": 0.05694389343261719
+  },
+  {
+   "rps": 12742.496119843401,
+   "oha_requests_per_sec": 12742.59608764752,
+   "total": 127466,
+   "ok": 127466,
+   "success_rate": 1.0,
+   "p50_ms": 0.075209,
+   "p99_ms": 0.089958,
+   "p999_ms": 0.114375,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.13,
+   "cpu_us_per_req": 55.94,
+   "rss_peak_kb": 214224,
+   "threads_after": 1,
+   "load_before": [
+    4.3,
+    3.12,
+    2.04
+   ],
+   "round": 2
+  },
+  {
+   "rps": 7734.318440726693,
+   "oha_requests_per_sec": 163224.57729112112,
+   "total": 78008,
+   "ok": 78008,
+   "success_rate": 0.04738578766540803,
+   "p50_ms": 1.78125,
+   "p99_ms": 2.1225419999999997,
+   "p999_ms": 30.803625,
+   "errors": {
+    "Connection refused (os error 61)": 595831,
+    "No buffer space available (os error 55)": 972329,
+    "aborted due to deadline": 44,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.05,
+   "cpu_us_per_req": -116.01,
+   "rss_peak_kb": 295312,
+   "threads_after": 0,
+   "load_before": [
+    3.79,
+    3.05,
+    2.03
+   ],
+   "round": 2
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 166.723041,
+   "rps": 17993.913630690073,
+   "real": 0.18,
+   "user": 0.07,
+   "sys": 0.03,
+   "maxrss_bytes": 26640384,
+   "cpu_us_per_req": 33.33,
+   "load": [
+    3.8,
+    3.08,
+    2.05
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2233.909333,
+   "rps": 2685.8744494980806,
+   "real": 2.24,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 33112064,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    3.66,
+    3.06,
+    2.05
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.38,
+   "hello_warm_median_s": 0.001551667,
+   "hello_warm_mean_s": 0.00168560515,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.43,
+   "backend_warm_median_s": 0.0071250415,
+   "backend_maxrss_bytes": 20627456,
+   "load": [
+    3.66,
+    3.06,
+    2.05
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14432,
+   "listen_s": 0.004858255386352539
+  },
+  {
+   "rps": 20392.892338906848,
+   "oha_requests_per_sec": 20392.892338906848,
+   "total": 203964,
+   "ok": 203964,
+   "success_rate": 1.0,
+   "p50_ms": 0.047459,
+   "p99_ms": 0.057834,
+   "p999_ms": 0.078,
+   "errors": {},
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.66,
+   "cpu_us_per_req": 27.75,
+   "rss_peak_kb": 25552,
+   "threads_after": 1,
+   "load_before": [
+    3.53,
+    3.04,
+    2.05
+   ],
+   "round": 2
+  },
+  {
+   "rps": 100506.54519611842,
+   "oha_requests_per_sec": 100512.44343234936,
+   "total": 1005366,
+   "ok": 1005366,
+   "success_rate": 1.0,
+   "p50_ms": 0.6292920000000001,
+   "p99_ms": 0.866625,
+   "p999_ms": 1.0270839999999999,
+   "errors": {
+    "aborted due to deadline": 59
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.69,
+   "cpu_us_per_req": 9.64,
+   "rss_peak_kb": 28784,
+   "threads_after": 1,
+   "load_before": [
+    3.45,
+    3.04,
+    2.06
+   ],
+   "round": 2
+  },
+  {
+   "rps": 97422.0872739105,
+   "oha_requests_per_sec": 97447.67673766376,
+   "total": 974622,
+   "ok": 974622,
+   "success_rate": 0.9999579341782749,
+   "p50_ms": 2.235875,
+   "p99_ms": 2.52675,
+   "p999_ms": 2.9384580000000002,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 215
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.81,
+   "cpu_us_per_req": 10.07,
+   "rss_peak_kb": 31440,
+   "threads_after": 1,
+   "load_before": [
+    4.22,
+    3.22,
+    2.14
+   ],
+   "round": 2
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.01918506622314453
+  },
+  {
+   "rps": 12353.132627432487,
+   "oha_requests_per_sec": 12353.232613127455,
+   "total": 123549,
+   "ok": 123549,
+   "success_rate": 1.0,
+   "p50_ms": 0.077916,
+   "p99_ms": 0.094666,
+   "p999_ms": 0.118916,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.25,
+   "cpu_us_per_req": 58.68,
+   "rss_peak_kb": 211360,
+   "threads_after": 1,
+   "load_before": [
+    3.9,
+    3.19,
+    2.15
+   ],
+   "round": 2
+  },
+  {
+   "rps": 8441.873320464345,
+   "oha_requests_per_sec": 173474.38291078593,
+   "total": 84504,
+   "ok": 84504,
+   "success_rate": 0.04866488870665215,
+   "p50_ms": 1.833208,
+   "p99_ms": 2.178166,
+   "p999_ms": 30.22675,
+   "errors": {
+    "Connection refused (os error 61)": 568969,
+    "No buffer space available (os error 55)": 1082910,
+    "aborted due to deadline": 49,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.17,
+   "cpu_us_per_req": -108.52,
+   "rss_peak_kb": 286624,
+   "threads_after": 0,
+   "load_before": [
+    3.45,
+    3.12,
+    2.13
+   ],
+   "round": 2
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 198.843875,
+   "rps": 15087.213523675297,
+   "real": 0.21,
+   "user": 0.06,
+   "sys": 0.03,
+   "maxrss_bytes": 23511040,
+   "cpu_us_per_req": 30.0,
+   "load": [
+    4.45,
+    3.34,
+    2.22
+   ]
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 89.66345799999999,
+   "rps": 66916.8927212243,
+   "real": 0.09,
+   "user": 0.06,
+   "sys": 0.02,
+   "maxrss_bytes": 30638080,
+   "cpu_us_per_req": 13.33,
+   "load": [
+    4.45,
+    3.34,
+    2.22
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.39,
+   "hello_warm_median_s": 0.0015968125000000001,
+   "hello_warm_mean_s": 0.0017073429,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.29,
+   "backend_warm_median_s": 0.0071271665000000005,
+   "backend_maxrss_bytes": 20611072,
+   "load": [
+    4.45,
+    3.34,
+    2.22
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14432,
+   "listen_s": 0.004127979278564453
+  },
+  {
+   "rps": 20404.064975661346,
+   "oha_requests_per_sec": 20404.16495882918,
+   "total": 204075,
+   "ok": 204075,
+   "success_rate": 1.0,
+   "p50_ms": 0.047416,
+   "p99_ms": 0.057707999999999995,
+   "p999_ms": 0.078667,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.67,
+   "cpu_us_per_req": 27.78,
+   "rss_peak_kb": 25552,
+   "threads_after": 1,
+   "load_before": [
+    4.65,
+    3.41,
+    2.25
+   ],
+   "round": 3
+  },
+  {
+   "rps": 96386.97824842639,
+   "oha_requests_per_sec": 96392.676384946,
+   "total": 964185,
+   "ok": 964185,
+   "success_rate": 1.0,
+   "p50_ms": 0.6525,
+   "p99_ms": 0.8945420000000001,
+   "p999_ms": 1.01975,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.51,
+   "cpu_us_per_req": 9.86,
+   "rss_peak_kb": 28720,
+   "threads_after": 1,
+   "load_before": [
+    4.41,
+    3.39,
+    2.26
+   ],
+   "round": 3
+  },
+  {
+   "rps": 45794.55228272735,
+   "oha_requests_per_sec": 332275.17069855565,
+   "total": 458133,
+   "ok": 458133,
+   "success_rate": 0.13782975145198192,
+   "p50_ms": 2.505875,
+   "p99_ms": 7.775916,
+   "p999_ms": 651.929541,
+   "errors": {
+    "Connection refused (os error 61)": 521645,
+    "No buffer space available (os error 55)": 2344075,
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 207,
+    "connection error": 11
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 6.2,
+   "cpu_us_per_req": 13.53,
+   "rss_peak_kb": 31488,
+   "threads_after": 1,
+   "load_before": [
+    4.67,
+    3.48,
+    2.3
+   ],
+   "round": 3
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.008943796157836914
+  },
+  {
+   "rps": 12504.914024966585,
+   "oha_requests_per_sec": 12505.014011485902,
+   "total": 125066,
+   "ok": 125066,
+   "success_rate": 1.0,
+   "p50_ms": 0.076584,
+   "p99_ms": 0.093417,
+   "p999_ms": 0.11925,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.23,
+   "cpu_us_per_req": 57.81,
+   "rss_peak_kb": 207088,
+   "threads_after": 1,
+   "load_before": [
+    5.01,
+    3.62,
+    2.37
+   ],
+   "round": 3
+  },
+  {
+   "rps": 8143.940210273764,
+   "oha_requests_per_sec": 156232.18080492775,
+   "total": 81482,
+   "ok": 81482,
+   "success_rate": 0.05212869611724958,
+   "p50_ms": 1.807625,
+   "p99_ms": 2.1567499999999997,
+   "p999_ms": 29.430457999999998,
+   "errors": {
+    "Connection refused (os error 61)": 596361,
+    "No buffer space available (os error 55)": 885186,
+    "aborted due to deadline": 46,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.15,
+   "cpu_us_per_req": -112.29,
+   "rss_peak_kb": 282432,
+   "threads_after": 0,
+   "load_before": [
+    4.47,
+    3.55,
+    2.36
+   ],
+   "round": 3
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 152.985166,
+   "rps": 19609.74438528243,
+   "real": 0.16,
+   "user": 0.06,
+   "sys": 0.03,
+   "maxrss_bytes": 23494656,
+   "cpu_us_per_req": 30.0,
+   "load": [
+    5.48,
+    3.79,
+    2.46
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 151.92725000000002,
+   "rps": 39492.58608972386,
+   "real": 0.15,
+   "user": 0.06,
+   "sys": 0.02,
+   "maxrss_bytes": 30687232,
+   "cpu_us_per_req": 13.33,
+   "load": [
+    5.48,
+    3.79,
+    2.46
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.4,
+   "hello_warm_median_s": 0.0015152085000000003,
+   "hello_warm_mean_s": 0.001680200025,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.47,
+   "backend_warm_median_s": 0.0074627085,
+   "backend_maxrss_bytes": 21069824,
+   "load": [
+    5.48,
+    3.79,
+    2.46
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.027577877044677734
+  },
+  {
+   "rps": 20555.609092557814,
+   "oha_requests_per_sec": 20555.70908384607,
+   "total": 205574,
+   "ok": 205574,
+   "success_rate": 1.0,
+   "p50_ms": 0.047167,
+   "p99_ms": 0.056875,
+   "p999_ms": 0.079708,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.49,
+   "cpu_us_per_req": 26.71,
+   "rss_peak_kb": 32832,
+   "threads_after": 1,
+   "load_before": [
+    5.52,
+    3.83,
+    2.48
+   ],
+   "round": 3
+  },
+  {
+   "rps": 99027.10050553545,
+   "oha_requests_per_sec": 99033.29798344578,
+   "total": 990674,
+   "ok": 990674,
+   "success_rate": 1.0,
+   "p50_ms": 0.63375,
+   "p99_ms": 0.885375,
+   "p999_ms": 1.050625,
+   "errors": {
+    "aborted due to deadline": 62
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.43,
+   "cpu_us_per_req": 9.52,
+   "rss_peak_kb": 33696,
+   "threads_after": 1,
+   "load_before": [
+    5.19,
+    3.82,
+    2.49
+   ],
+   "round": 3
+  },
+  {
+   "rps": 107359.40394939903,
+   "oha_requests_per_sec": 107384.29537181486,
+   "total": 1073964,
+   "ok": 1073964,
+   "success_rate": 0.9999618251311679,
+   "p50_ms": 2.024584,
+   "p99_ms": 2.311166,
+   "p999_ms": 2.5561249999999998,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 208
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.83,
+   "cpu_us_per_req": 9.15,
+   "rss_peak_kb": 36256,
+   "threads_after": 1,
+   "load_before": [
+    5.71,
+    3.97,
+    2.56
+   ],
+   "round": 3
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20400,
+   "listen_s": 0.016273021697998047
+  },
+  {
+   "rps": 12731.062679033845,
+   "oha_requests_per_sec": 12731.162655967086,
+   "total": 127340,
+   "ok": 127340,
+   "success_rate": 1.0,
+   "p50_ms": 0.07525,
+   "p99_ms": 0.09129200000000001,
+   "p999_ms": 0.11725000000000001,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.13,
+   "cpu_us_per_req": 55.99,
+   "rss_peak_kb": 218880,
+   "threads_after": 1,
+   "load_before": [
+    5.55,
+    4.02,
+    2.61
+   ],
+   "round": 3
+  },
+  {
+   "rps": 8130.106929291055,
+   "oha_requests_per_sec": 170865.5652771733,
+   "total": 81350,
+   "ok": 81350,
+   "success_rate": 0.047583172578054535,
+   "p50_ms": 1.783709,
+   "p99_ms": 2.173416,
+   "p999_ms": 25.514499999999998,
+   "errors": {
+    "Connection refused (os error 61)": 592605,
+    "No buffer space available (os error 55)": 1035619,
+    "aborted due to deadline": 46,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.01,
+   "cpu_us_per_req": -110.76,
+   "rss_peak_kb": 295376,
+   "threads_after": 0,
+   "load_before": [
+    4.92,
+    3.94,
+    2.59
+   ],
+   "round": 3
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 158.782916,
+   "rps": 18893.720279075867,
+   "real": 0.19,
+   "user": 0.06,
+   "sys": 0.04,
+   "maxrss_bytes": 26624000,
+   "cpu_us_per_req": 33.33,
+   "load": [
+    5.69,
+    4.14,
+    2.68
+   ]
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2240.3075,
+   "rps": 2678.203773365933,
+   "real": 2.25,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 33161216,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    5.69,
+    4.14,
+    2.68
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.43,
+   "hello_warm_median_s": 0.001562833,
+   "hello_warm_mean_s": 0.0016805926999999999,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.34,
+   "backend_warm_median_s": 0.007512479000000001,
+   "backend_maxrss_bytes": 21053440,
+   "load": [
+    5.69,
+    4.14,
+    2.68
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.004215240478515625
+  },
+  {
+   "rps": 20571.1201379734,
+   "oha_requests_per_sec": 20571.22013029399,
+   "total": 205727,
+   "ok": 205727,
+   "success_rate": 1.0,
+   "p50_ms": 0.047166,
+   "p99_ms": 0.057207999999999995,
+   "p999_ms": 0.080166,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.48,
+   "cpu_us_per_req": 26.64,
+   "rss_peak_kb": 32800,
+   "threads_after": 1,
+   "load_before": [
+    5.32,
+    4.08,
+    2.67
+   ],
+   "round": 4
+  },
+  {
+   "rps": 101266.01384917251,
+   "oha_requests_per_sec": 101271.71161621761,
+   "total": 1013057,
+   "ok": 1013057,
+   "success_rate": 1.0,
+   "p50_ms": 0.622458,
+   "p99_ms": 0.865125,
+   "p999_ms": 1.051167,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.57,
+   "cpu_us_per_req": 9.45,
+   "rss_peak_kb": 33728,
+   "threads_after": 1,
+   "load_before": [
+    4.73,
+    4.0,
+    2.65
+   ],
+   "round": 4
+  },
+  {
+   "rps": 91647.09446744247,
+   "oha_requests_per_sec": 119358.00983222955,
+   "total": 916864,
+   "ok": 916864,
+   "success_rate": 0.7679712667458484,
+   "p50_ms": 2.307458,
+   "p99_ms": 2.630458,
+   "p999_ms": 26.939625,
+   "errors": {
+    "Connection refused (os error 61)": 276971,
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 214,
+    "connection error": 1,
+    "error writing a body to connection": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.54,
+   "cpu_us_per_req": 10.41,
+   "rss_peak_kb": 36336,
+   "threads_after": 1,
+   "load_before": [
+    5.31,
+    4.15,
+    2.72
+   ],
+   "round": 4
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20384,
+   "listen_s": 0.022548913955688477
+  },
+  {
+   "rps": 12744.044284004447,
+   "oha_requests_per_sec": 12744.044284004447,
+   "total": 127470,
+   "ok": 127470,
+   "success_rate": 1.0,
+   "p50_ms": 0.075209,
+   "p99_ms": 0.091083,
+   "p999_ms": 0.11383399999999999,
+   "errors": {},
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.13,
+   "cpu_us_per_req": 55.93,
+   "rss_peak_kb": 221360,
+   "threads_after": 1,
+   "load_before": [
+    4.98,
+    4.14,
+    2.74
+   ],
+   "round": 4
+  },
+  {
+   "rps": 7913.797899563757,
+   "oha_requests_per_sec": 174480.29186171395,
+   "total": 79193,
+   "ok": 79193,
+   "success_rate": 0.045357724811207555,
+   "p50_ms": 1.784125,
+   "p99_ms": 2.106458,
+   "p999_ms": 31.412834,
+   "errors": {
+    "Connection refused (os error 61)": 589510,
+    "No buffer space available (os error 55)": 1077198,
+    "aborted due to deadline": 51,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.05,
+   "cpu_us_per_req": -114.28,
+   "rss_peak_kb": 297040,
+   "threads_after": 0,
+   "load_before": [
+    4.37,
+    4.03,
+    2.72
+   ],
+   "round": 4
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 225.163584,
+   "rps": 13323.646509375158,
+   "real": 0.23,
+   "user": 0.06,
+   "sys": 0.03,
+   "maxrss_bytes": 26673152,
+   "cpu_us_per_req": 30.0,
+   "load": [
+    4.57,
+    4.08,
+    2.75
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2237.781708,
+   "rps": 2681.2266712835244,
+   "real": 2.24,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 33144832,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    4.28,
+    4.03,
+    2.74
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.73,
+   "hello_warm_median_s": 0.0015693540000000002,
+   "hello_warm_mean_s": 0.001689843825,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.29,
+   "backend_warm_median_s": 0.0070859585000000004,
+   "backend_maxrss_bytes": 20627456,
+   "load": [
+    4.28,
+    4.03,
+    2.74
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14448,
+   "listen_s": 0.021184921264648438
+  },
+  {
+   "rps": 20380.99893396404,
+   "oha_requests_per_sec": 20381.098919731896,
+   "total": 203839,
+   "ok": 203839,
+   "success_rate": 1.0,
+   "p50_ms": 0.047583,
+   "p99_ms": 0.059040999999999996,
+   "p999_ms": 0.079458,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.66,
+   "cpu_us_per_req": 27.77,
+   "rss_peak_kb": 25552,
+   "threads_after": 1,
+   "load_before": [
+    4.5,
+    4.08,
+    2.77
+   ],
+   "round": 4
+  },
+  {
+   "rps": 98461.64674244885,
+   "oha_requests_per_sec": 98467.74523406317,
+   "total": 984860,
+   "ok": 984860,
+   "success_rate": 1.0,
+   "p50_ms": 0.641708,
+   "p99_ms": 0.8771249999999999,
+   "p999_ms": 0.96075,
+   "errors": {
+    "aborted due to deadline": 61
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.62,
+   "cpu_us_per_req": 9.77,
+   "rss_peak_kb": 28864,
+   "threads_after": 1,
+   "load_before": [
+    3.96,
+    3.98,
+    2.75
+   ],
+   "round": 4
+  },
+  {
+   "rps": 97768.51632978216,
+   "oha_requests_per_sec": 97793.50953402495,
+   "total": 977951,
+   "ok": 977951,
+   "success_rate": 0.9999580773666861,
+   "p50_ms": 2.2298750000000003,
+   "p99_ms": 2.514959,
+   "p999_ms": 2.805708,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 209
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.82,
+   "cpu_us_per_req": 10.04,
+   "rss_peak_kb": 31376,
+   "threads_after": 1,
+   "load_before": [
+    4.49,
+    4.09,
+    2.8
+   ],
+   "round": 4
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.019394874572753906
+  },
+  {
+   "rps": 12388.561355078715,
+   "oha_requests_per_sec": 12388.661341853383,
+   "total": 123902,
+   "ok": 123902,
+   "success_rate": 1.0,
+   "p50_ms": 0.077833,
+   "p99_ms": 0.095,
+   "p999_ms": 0.117625,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.23,
+   "cpu_us_per_req": 58.35,
+   "rss_peak_kb": 205392,
+   "threads_after": 1,
+   "load_before": [
+    4.34,
+    4.07,
+    2.81
+   ],
+   "round": 4
+  },
+  {
+   "rps": 8411.467330359108,
+   "oha_requests_per_sec": 147330.32913079724,
+   "total": 84179,
+   "ok": 84179,
+   "success_rate": 0.05709423645216622,
+   "p50_ms": 1.850209,
+   "p99_ms": 2.166833,
+   "p999_ms": 26.058459,
+   "errors": {
+    "Connection refused (os error 61)": 592520,
+    "No buffer space available (os error 55)": 797624,
+    "aborted due to deadline": 43,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.15,
+   "cpu_us_per_req": -108.7,
+   "rss_peak_kb": 286352,
+   "threads_after": 0,
+   "load_before": [
+    3.98,
+    4.0,
+    2.8
+   ],
+   "round": 4
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "error": "",
+   "real": 0.03,
+   "user": 0.0,
+   "sys": 0.0,
+   "maxrss_bytes": 28672000,
+   "cpu_us_per_req": 0.0,
+   "load": [
+    4.13,
+    4.04,
+    2.83
+   ]
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "error": "",
+   "real": 0.01,
+   "user": 0.0,
+   "sys": 0.0,
+   "maxrss_bytes": 29720576,
+   "cpu_us_per_req": 0.0,
+   "load": [
+    4.13,
+    4.04,
+    2.83
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.22,
+   "hello_warm_median_s": 0.0015581245,
+   "hello_warm_mean_s": 0.0017057145750000013,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.44,
+   "backend_warm_median_s": 0.007150500000000001,
+   "backend_maxrss_bytes": 20611072,
+   "load": [
+    4.13,
+    4.04,
+    2.83
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14448,
+   "listen_s": 0.004854917526245117
+  },
+  {
+   "rps": 20414.969331103355,
+   "oha_requests_per_sec": 20415.069315280856,
+   "total": 204182,
+   "ok": 204182,
+   "success_rate": 1.0,
+   "p50_ms": 0.047334,
+   "p99_ms": 0.059167,
+   "p999_ms": 0.078833,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.65,
+   "cpu_us_per_req": 27.67,
+   "rss_peak_kb": 25568,
+   "threads_after": 1,
+   "load_before": [
+    4.13,
+    4.04,
+    2.83
+   ],
+   "round": 5
+  },
+  {
+   "rps": 101368.7263232864,
+   "oha_requests_per_sec": 101373.72366738542,
+   "total": 1014226,
+   "ok": 1014226,
+   "success_rate": 1.0,
+   "p50_ms": 0.621083,
+   "p99_ms": 0.842375,
+   "p999_ms": 1.005541,
+   "errors": {
+    "aborted due to deadline": 50
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.72,
+   "cpu_us_per_req": 9.58,
+   "rss_peak_kb": 28768,
+   "threads_after": 1,
+   "load_before": [
+    3.64,
+    3.93,
+    2.81
+   ],
+   "round": 5
+  },
+  {
+   "rps": 97171.22360140762,
+   "oha_requests_per_sec": 97195.81464872946,
+   "total": 972066,
+   "ok": 972066,
+   "success_rate": 0.9999578235729194,
+   "p50_ms": 2.241917,
+   "p99_ms": 2.5382909999999996,
+   "p999_ms": 2.839375,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 205
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.81,
+   "cpu_us_per_req": 10.09,
+   "rss_peak_kb": 31392,
+   "threads_after": 1,
+   "load_before": [
+    4.2,
+    4.05,
+    2.87
+   ],
+   "round": 5
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19952,
+   "listen_s": 0.023939132690429688
+  },
+  {
+   "rps": 12302.894920877994,
+   "oha_requests_per_sec": 12302.994907020744,
+   "total": 123046,
+   "ok": 123046,
+   "success_rate": 1.0,
+   "p50_ms": 0.077916,
+   "p99_ms": 0.09562499999999999,
+   "p999_ms": 0.12029200000000001,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.24,
+   "cpu_us_per_req": 58.84,
+   "rss_peak_kb": 203632,
+   "threads_after": 1,
+   "load_before": [
+    4.47,
+    4.11,
+    2.91
+   ],
+   "round": 5
+  },
+  {
+   "rps": 8609.421362061285,
+   "oha_requests_per_sec": 188516.5505825556,
+   "total": 86160,
+   "ok": 86160,
+   "success_rate": 0.045670353971746507,
+   "p50_ms": 1.871375,
+   "p99_ms": 2.247667,
+   "p999_ms": 31.132165999999998,
+   "errors": {
+    "Connection refused (os error 61)": 546229,
+    "No buffer space available (os error 55)": 1254110,
+    "aborted due to deadline": 43,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.13,
+   "cpu_us_per_req": -105.97,
+   "rss_peak_kb": 287632,
+   "threads_after": 0,
+   "load_before": [
+    4.01,
+    4.03,
+    2.89
+   ],
+   "round": 5
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "error": "",
+   "real": 0.02,
+   "user": 0.01,
+   "sys": 0.0,
+   "maxrss_bytes": 28704768,
+   "cpu_us_per_req": 3.33,
+   "load": [
+    4.41,
+    4.11,
+    2.93
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "error": "",
+   "real": 0.01,
+   "user": 0.01,
+   "sys": 0.0,
+   "maxrss_bytes": 29720576,
+   "cpu_us_per_req": 1.67,
+   "load": [
+    4.41,
+    4.11,
+    2.93
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.57,
+   "hello_warm_median_s": 0.0015923540000000003,
+   "hello_warm_mean_s": 0.0018163363999999997,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.34,
+   "backend_warm_median_s": 0.0074736875,
+   "backend_maxrss_bytes": 21053440,
+   "load": [
+    4.22,
+    4.07,
+    2.93
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14784,
+   "listen_s": 0.022979021072387695
+  },
+  {
+   "rps": 20539.434705380037,
+   "oha_requests_per_sec": 20539.53469094504,
+   "total": 205424,
+   "ok": 205424,
+   "success_rate": 1.0,
+   "p50_ms": 0.047208,
+   "p99_ms": 0.058041999999999996,
+   "p999_ms": 0.08,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.5,
+   "cpu_us_per_req": 26.77,
+   "rss_peak_kb": 32832,
+   "threads_after": 1,
+   "load_before": [
+    4.22,
+    4.07,
+    2.93
+   ],
+   "round": 5
+  },
+  {
+   "rps": 97916.3754836718,
+   "oha_requests_per_sec": 97922.77298621986,
+   "total": 979546,
+   "ok": 979546,
+   "success_rate": 1.0,
+   "p50_ms": 0.644084,
+   "p99_ms": 0.874667,
+   "p999_ms": 0.9600420000000001,
+   "errors": {
+    "aborted due to deadline": 64
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.39,
+   "cpu_us_per_req": 9.59,
+   "rss_peak_kb": 33696,
+   "threads_after": 1,
+   "load_before": [
+    3.87,
+    4.0,
+    2.92
+   ],
+   "round": 5
+  },
+  {
+   "rps": 107081.49587958252,
+   "oha_requests_per_sec": 107107.08065887752,
+   "total": 1071452,
+   "ok": 1071452,
+   "success_rate": 0.9999617356342972,
+   "p50_ms": 2.0292079999999997,
+   "p99_ms": 2.322792,
+   "p999_ms": 2.566083,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 215
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.83,
+   "cpu_us_per_req": 9.17,
+   "rss_peak_kb": 36080,
+   "threads_after": 1,
+   "load_before": [
+    4.67,
+    4.17,
+    2.99
+   ],
+   "round": 5
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20400,
+   "listen_s": 0.019088029861450195
+  },
+  {
+   "rps": 12720.959714129505,
+   "oha_requests_per_sec": 12721.059680021972,
+   "total": 127253,
+   "ok": 127253,
+   "success_rate": 1.0,
+   "p50_ms": 0.07525,
+   "p99_ms": 0.09025,
+   "p999_ms": 0.114875,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.12,
+   "cpu_us_per_req": 55.95,
+   "rss_peak_kb": 219968,
+   "threads_after": 1,
+   "load_before": [
+    4.49,
+    4.16,
+    3.0
+   ],
+   "round": 5
+  },
+  {
+   "rps": 7863.53197337321,
+   "oha_requests_per_sec": 173982.14405907242,
+   "total": 78680,
+   "ok": 78680,
+   "success_rate": 0.045198337289432504,
+   "p50_ms": 1.784333,
+   "p99_ms": 2.1193750000000002,
+   "p999_ms": 29.27175,
+   "errors": {
+    "Connection refused (os error 61)": 593132,
+    "No buffer space available (os error 55)": 1068896,
+    "aborted due to deadline": 38,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.05,
+   "cpu_us_per_req": -115.02,
+   "rss_peak_kb": 301504,
+   "threads_after": 0,
+   "load_before": [
+    3.95,
+    4.05,
+    2.98
+   ],
+   "round": 5
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 208.149875,
+   "rps": 14412.691816413533,
+   "real": 0.23,
+   "user": 0.05,
+   "sys": 0.03,
+   "maxrss_bytes": 26624000,
+   "cpu_us_per_req": 26.67,
+   "load": [
+    4.36,
+    4.14,
+    3.02
+   ]
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2239.362125,
+   "rps": 2679.334410909535,
+   "real": 2.25,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 33144832,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    4.09,
+    4.08,
+    3.01
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "kind": "startup",
+   "hello_cold_s": 0.49,
+   "hello_warm_median_s": 0.001559375,
+   "hello_warm_mean_s": 0.001674909325,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.47,
+   "backend_warm_median_s": 0.0074730005,
+   "backend_maxrss_bytes": 21069824,
+   "load": [
+    4.09,
+    4.08,
+    3.01
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14800,
+   "listen_s": 0.004220247268676758
+  },
+  {
+   "rps": 20594.653771556164,
+   "oha_requests_per_sec": 20594.75375433996,
+   "total": 205982,
+   "ok": 205982,
+   "success_rate": 1.0,
+   "p50_ms": 0.047167,
+   "p99_ms": 0.057166,
+   "p999_ms": 0.080084,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.47,
+   "cpu_us_per_req": 26.56,
+   "rss_peak_kb": 32832,
+   "threads_after": 1,
+   "load_before": [
+    4.4,
+    4.15,
+    3.04
+   ],
+   "round": 6
+  },
+  {
+   "rps": 98322.17478868991,
+   "oha_requests_per_sec": 98328.17309726706,
+   "total": 983499,
+   "ok": 983499,
+   "success_rate": 1.0,
+   "p50_ms": 0.641833,
+   "p99_ms": 0.872459,
+   "p999_ms": 0.9645,
+   "errors": {
+    "aborted due to deadline": 60
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.4,
+   "cpu_us_per_req": 9.56,
+   "rss_peak_kb": 33728,
+   "threads_after": 1,
+   "load_before": [
+    3.88,
+    4.04,
+    3.01
+   ],
+   "round": 6
+  },
+  {
+   "rps": 107312.85395853691,
+   "oha_requests_per_sec": 107338.34551477755,
+   "total": 1073484,
+   "ok": 1073484,
+   "success_rate": 0.9999618080622249,
+   "p50_ms": 2.024083,
+   "p99_ms": 2.2965839999999997,
+   "p999_ms": 2.5239160000000003,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 214
+   },
+   "arm": "before",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.82,
+   "cpu_us_per_req": 9.15,
+   "rss_peak_kb": 36240,
+   "threads_after": 1,
+   "load_before": [
+    4.67,
+    4.21,
+    3.08
+   ],
+   "round": 6
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 20384,
+   "listen_s": 0.021097898483276367
+  },
+  {
+   "rps": 12787.265573953973,
+   "oha_requests_per_sec": 12787.36554944789,
+   "total": 127904,
+   "ok": 127904,
+   "success_rate": 1.0,
+   "p50_ms": 0.07525,
+   "p99_ms": 0.090292,
+   "p999_ms": 0.11425,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.13,
+   "cpu_us_per_req": 55.74,
+   "rss_peak_kb": 220128,
+   "threads_after": 1,
+   "load_before": [
+    4.42,
+    4.18,
+    3.09
+   ],
+   "round": 6
+  },
+  {
+   "rps": 7883.73418755442,
+   "oha_requests_per_sec": 171982.42337958518,
+   "total": 78906,
+   "ok": 78906,
+   "success_rate": 0.0458413869189436,
+   "p50_ms": 1.780375,
+   "p99_ms": 2.0886250000000004,
+   "p999_ms": 29.126334,
+   "errors": {
+    "Connection refused (os error 61)": 578988,
+    "No buffer space available (os error 55)": 1063325,
+    "aborted due to deadline": 39,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "before",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.05,
+   "cpu_us_per_req": -114.69,
+   "rss_peak_kb": 298480,
+   "threads_after": 0,
+   "load_before": [
+    3.97,
+    4.09,
+    3.07
+   ],
+   "round": 6
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 225.92525,
+   "rps": 13278.728251932884,
+   "real": 0.23,
+   "user": 0.05,
+   "sys": 0.02,
+   "maxrss_bytes": 26673152,
+   "cpu_us_per_req": 23.33,
+   "load": [
+    4.9,
+    4.28,
+    3.15
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 2221.479208,
+   "rps": 2700.9030642253033,
+   "real": 2.23,
+   "user": 0.26,
+   "sys": 0.11,
+   "maxrss_bytes": 33177600,
+   "cpu_us_per_req": 61.67,
+   "load": [
+    4.9,
+    4.28,
+    3.15
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "kind": "startup",
+   "hello_cold_s": 0.55,
+   "hello_warm_median_s": 0.001557125,
+   "hello_warm_mean_s": 0.0016902300999999998,
+   "hello_maxrss_bytes": 1343488,
+   "backend_cold_s": 0.29,
+   "backend_warm_median_s": 0.007124021,
+   "backend_maxrss_bytes": 20611072,
+   "load": [
+    4.9,
+    4.28,
+    3.15
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "kind": "http_idle",
+   "threads": 1,
+   "rss_kb": 14448,
+   "listen_s": 0.005126953125
+  },
+  {
+   "rps": 20357.74054936835,
+   "oha_requests_per_sec": 20357.840532868995,
+   "total": 203611,
+   "ok": 203611,
+   "success_rate": 1.0,
+   "p50_ms": 0.048042,
+   "p99_ms": 0.058292,
+   "p999_ms": 0.078625,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 1,
+   "cpu_s": 5.67,
+   "cpu_us_per_req": 27.85,
+   "rss_peak_kb": 25568,
+   "threads_after": 1,
+   "load_before": [
+    4.67,
+    4.24,
+    3.15
+   ],
+   "round": 6
+  },
+  {
+   "rps": 102345.40042889878,
+   "oha_requests_per_sec": 102351.59943558545,
+   "total": 1023618,
+   "ok": 1023618,
+   "success_rate": 1.0,
+   "p50_ms": 0.620042,
+   "p99_ms": 0.835041,
+   "p999_ms": 0.99875,
+   "errors": {
+    "aborted due to deadline": 62
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 64,
+   "cpu_s": 9.77,
+   "cpu_us_per_req": 9.54,
+   "rss_peak_kb": 28816,
+   "threads_after": 1,
+   "load_before": [
+    4.1,
+    4.14,
+    3.12
+   ],
+   "round": 6
+  },
+  {
+   "rps": 97670.99963948804,
+   "oha_requests_per_sec": 97696.58669798115,
+   "total": 977204,
+   "ok": 977204,
+   "success_rate": 0.9999580453212858,
+   "p50_ms": 2.2320830000000003,
+   "p99_ms": 2.50675,
+   "p999_ms": 2.702708,
+   "errors": {
+    "Too many open files (os error 24)": 41,
+    "aborted due to deadline": 215
+   },
+   "arm": "after",
+   "kind": "http",
+   "conc": 256,
+   "cpu_s": 9.81,
+   "cpu_us_per_req": 10.04,
+   "rss_peak_kb": 31488,
+   "threads_after": 1,
+   "load_before": [
+    4.53,
+    4.23,
+    3.17
+   ],
+   "round": 6
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "kind": "backend_idle",
+   "threads": 1,
+   "rss_kb": 19968,
+   "listen_s": 0.021417856216430664
+  },
+  {
+   "rps": 12486.887288845852,
+   "oha_requests_per_sec": 12486.98725512015,
+   "total": 124911,
+   "ok": 124911,
+   "success_rate": 1.0,
+   "p50_ms": 0.07662500000000001,
+   "p99_ms": 0.093791,
+   "p999_ms": 0.11675,
+   "errors": {
+    "aborted due to deadline": 1
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 1,
+   "cpu_s": 7.21,
+   "cpu_us_per_req": 57.72,
+   "rss_peak_kb": 207040,
+   "threads_after": 1,
+   "load_before": [
+    4.34,
+    4.2,
+    3.17
+   ],
+   "round": 6
+  },
+  {
+   "rps": 8409.800348083827,
+   "oha_requests_per_sec": 222920.77001912444,
+   "total": 84152,
+   "ok": 84152,
+   "success_rate": 0.03772623998249795,
+   "p50_ms": 1.802875,
+   "p99_ms": 2.120542,
+   "p999_ms": 32.682750000000006,
+   "errors": {
+    "Connection refused (os error 61)": 522410,
+    "No buffer space available (os error 55)": 1623970,
+    "aborted due to deadline": 43,
+    "connection closed before message completed": 32,
+    "connection error": 32
+   },
+   "arm": "after",
+   "kind": "backend",
+   "conc": 64,
+   "cpu_s": -9.1,
+   "cpu_us_per_req": -108.14,
+   "rss_peak_kb": 287696,
+   "threads_after": 0,
+   "load_before": [
+    3.9,
+    4.11,
+    3.15
+   ],
+   "round": 6
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 1,
+   "n": 3000,
+   "requests": 3000,
+   "bytes": 33000,
+   "ms": 135.347791,
+   "rps": 22165.119783890674,
+   "real": 0.15,
+   "user": 0.05,
+   "sys": 0.02,
+   "maxrss_bytes": 23494656,
+   "cpu_us_per_req": 23.33,
+   "load": [
+    4.83,
+    4.31,
+    3.23
+   ]
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "kind": "fetch",
+   "conc": 16,
+   "n": 6000,
+   "requests": 6000,
+   "bytes": 66000,
+   "ms": 92.622208,
+   "rps": 64779.280580311795,
+   "real": 0.09,
+   "user": 0.06,
+   "sys": 0.02,
+   "maxrss_bytes": 30883840,
+   "cpu_us_per_req": 13.33,
+   "load": [
+    4.83,
+    4.31,
+    3.23
+   ]
+  }
+ ],
+ "load_start": [
+  1.27,
+  1.17,
+  1.14
+ ],
+ "correctness": {
+  "backend": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "fetch 200 6a50dc8584134c7d true\npbkdf2 0a38253555ce37f5c72a6b703f996814\nticks 3\nclosed\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "fetch 200 6a50dc8584134c7d true\npbkdf2 0a38253555ce37f5c72a6b703f996814\nticks 3\nclosed\n"
+   },
+   "node": "fetch 200 6a50dc8584134c7d true\npbkdf2 0a38253555ce37f5c72a6b703f996814\nticks 3\nclosed\n"
+  },
+  "crypto": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "pbkdf2 0a38253555ce37f5c72a6b703f996814\nscrypt c0b515908e61334cae6d6003c00be60e\ndigest ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nrandomBytes 8\nhash 11f6ad8ec52a2984abaafd7c3b516503785c2072\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "pbkdf2 0a38253555ce37f5c72a6b703f996814\nscrypt c0b515908e61334cae6d6003c00be60e\ndigest ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nrandomBytes 8\nhash 11f6ad8ec52a2984abaafd7c3b516503785c2072\n"
+   },
+   "node": "pbkdf2 0a38253555ce37f5c72a6b703f996814\nscrypt c0b515908e61334cae6d6003c00be60e\ndigest ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\nrandomBytes 8\nhash 11f6ad8ec52a2984abaafd7c3b516503785c2072\n"
+  },
+  "hello": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "hello world\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "hello world\n"
+   },
+   "node": "hello world\n"
+  },
+  "http": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "http got: hi\nhttp server closed\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "http got: hi\nhttp server closed\n"
+   },
+   "node": "http got: hi\nhttp server closed\n"
+  },
+  "net": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "net client got: echo:ping\nnet server closed\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "net client got: echo:ping\nnet server closed\n"
+   },
+   "node": "net client got: echo:ping\nnet server closed\n"
+  },
+  "timers": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "micro,t0,imm,t0b,iv,iv,iv,t20\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "micro,t0,imm,t0b,iv,iv,iv,t20\n"
+   },
+   "node": "micro,t0,imm,t0b,iv,iv,iv,t20\n"
+  },
+  "worker": {
+   "before": {
+    "rc": 0,
+    "matches_node": false,
+    "out": "worker exit 0\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": false,
+    "out": "worker exit 0\n"
+   },
+   "node": "main got 42\nworker exit 0\n"
+  },
+  "ws": {
+   "before": {
+    "rc": "timeout",
+    "matches_node": false,
+    "out": "TIMEOUT"
+   },
+   "after": {
+    "rc": "timeout",
+    "matches_node": false,
+    "out": "TIMEOUT"
+   },
+   "node": "ws client got: echo:hello\nws client closed\nws server closed\n"
+  },
+  "zlib": {
+   "before": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "gzip roundtrip hello hello hello hello tokio-free world\ndeflate roundtrip true\n"
+   },
+   "after": {
+    "rc": 0,
+    "matches_node": true,
+    "out": "gzip roundtrip hello hello hello hello tokio-free world\ndeflate roundtrip true\n"
+   },
+   "node": "gzip roundtrip hello hello hello hello tokio-free world\ndeflate roundtrip true\n"
+  }
+ },
+ "load_end": [
+  4.83,
+  4.31,
+  3.23
+ ]
+}

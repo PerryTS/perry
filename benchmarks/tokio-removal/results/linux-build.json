@@ -1,0 +1,48 @@
+{
+ "before": {
+  "head": "d8f24f15edc4295c173fc626ea8ac6fd82ba9728",
+  "events": [
+   "[2026-09-26T18:24:33+00:00] arm=before head=d8f24f15edc4295c173fc626ea8ac6fd82ba9728 load=50.14 48.20 46.63",
+   "[2026-09-26T18:54:42+00:00] core rc=0 wall=1808.761153500 load=35.85 40.42 44.86",
+   "[2026-09-26T19:37:54+00:00] ext rc=0 wall=2592.437548635 load=56.71 56.75 56.81 pkgs=-p perry-ext-ads -p perry-ext-argon2 -p perry-ext-bcrypt -p perry-ext-better-sqlite3 -p perry-ext-cheerio -p perry-ext-decimal -p perry-ext-ethers -p perry-ext-events -p perry-ext-http -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-net -p perry-ext-nodemailer -p perry-ext-parcel-watcher -p perry-ext-pdf -p perry-ext-sharp -p perry-ext-streams -p perry-ext-typescript -p perry-ext-undici -p perry-ext-ws -p perry-ext-zlib ",
+   "[2026-09-26T19:37:54+00:00] DONE"
+  ],
+  "core": {
+   "wall": 1808.75,
+   "user": 1755.77,
+   "sys": 100.12,
+   "maxrss_kb": 3516844,
+   "what": "-p perry -p perry-runtime-static -p perry-stdlib-static"
+  },
+  "ext": {
+   "wall": 2592.43,
+   "user": 1992.2,
+   "sys": 91.39,
+   "maxrss_kb": 4037144,
+   "what": "same + every governed perry-ext-* (incremental on top of core)"
+  }
+ },
+ "after": {
+  "head": "bd8936e98e99be1870999846db9e98d5563bd891",
+  "events": [
+   "[2026-09-26T18:24:33+00:00] arm=after head=bd8936e98e99be1870999846db9e98d5563bd891 load=50.14 48.20 46.63",
+   "[2026-09-26T18:53:53+00:00] core rc=0 wall=1759.842130344 load=40.11 41.91 45.56",
+   "[2026-09-26T19:33:15+00:00] ext rc=0 wall=2362.571704291 load=54.46 58.82 57.65 pkgs=-p perry-ext-ads -p perry-ext-argon2 -p perry-ext-bcrypt -p perry-ext-better-sqlite3 -p perry-ext-cheerio -p perry-ext-ethers -p perry-ext-events -p perry-ext-http -p perry-ext-net -p perry-ext-nodemailer -p perry-ext-parcel-watcher -p perry-ext-pdf -p perry-ext-sharp -p perry-ext-streams -p perry-ext-typescript -p perry-ext-undici -p perry-ext-ws -p perry-ext-zlib ",
+   "[2026-09-26T19:33:15+00:00] DONE"
+  ],
+  "core": {
+   "wall": 1759.83,
+   "user": 1634.97,
+   "sys": 82.92,
+   "maxrss_kb": 3555992,
+   "what": "-p perry -p perry-runtime-static -p perry-stdlib-static"
+  },
+  "ext": {
+   "wall": 2362.56,
+   "user": 1771.95,
+   "sys": 77.38,
+   "maxrss_kb": 3882204,
+   "what": "same + every governed perry-ext-* (incremental on top of core)"
+  }
+ }
+}

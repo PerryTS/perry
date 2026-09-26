@@ -1,0 +1,29 @@
+[14:20:39] lock acquired after 0 s
+[14:20:44] backend before c=8: alive=True exit=None ok=131571/131571 ''
+[14:20:50] backend before c=16: alive=True exit=None ok=154228/154228 ''
+[14:20:56] backend before c=32: alive=True exit=None ok=175323/175323 ''
+[14:21:02] backend before c=64: alive=True exit=None ok=175858/175858 ''
+[14:21:07] backend after c=8: alive=True exit=None ok=125052/125052 ''
+[14:21:13] backend after c=16: alive=True exit=None ok=152640/152640 ''
+[14:21:19] backend after c=32: alive=True exit=None ok=169871/169871 ''
+[14:21:25] backend after c=64: alive=True exit=None ok=174228/174228 ''
+[14:21:30] backend before c=8: alive=True exit=None ok=132693/132693 ''
+[14:21:36] backend before c=16: alive=True exit=None ok=152866/152866 ''
+[14:21:42] backend before c=32: alive=True exit=None ok=175258/175258 ''
+[14:21:48] backend before c=64: alive=True exit=None ok=175638/175638 ''
+[14:21:53] backend after c=8: alive=True exit=None ok=129906/129906 ''
+[14:21:59] backend after c=16: alive=True exit=None ok=154184/154184 ''
+[14:22:05] backend after c=32: alive=True exit=None ok=169708/169708 ''
+[14:22:11] backend after c=64: alive=True exit=None ok=174135/174135 ''
+[14:22:16] backend before c=8: alive=True exit=None ok=134610/134610 ''
+[14:22:22] backend before c=16: alive=True exit=None ok=152554/152554 ''
+[14:22:28] backend before c=32: alive=True exit=None ok=174709/174709 ''
+[14:22:33] backend before c=64: alive=True exit=None ok=175089/175089 ''
+[14:22:39] backend after c=8: alive=True exit=None ok=129634/129634 ''
+[14:22:45] backend after c=16: alive=True exit=None ok=151732/151732 ''
+[14:22:51] backend after c=32: alive=True exit=None ok=171985/171985 ''
+[14:22:56] backend after c=64: alive=True exit=None ok=174687/174687 ''
+[14:23:27] threads before [{'arm': 'before', 'kind': 'http_server', 'idle': 1, 'peak_under_load': 1}, {'arm': 'before', 'kind': 'backend', 'idle': 1, 'peak_under_load': 1}, {'arm': 'before', 'kind': 'fetch_client_c1', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'fetch_client_c16', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'crypto', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'zlib', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'worker', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'timers', 'peak_under_load': 1}, {'arm': 'before', 'kind': 'net', 'peak_under_load': 1}]
+[14:23:36] threads after [{'arm': 'after', 'kind': 'http_server', 'idle': 1, 'peak_under_load': 1}, {'arm': 'after', 'kind': 'backend', 'idle': 1, 'peak_under_load': 1}, {'arm': 'after', 'kind': 'fetch_client_c1', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'fetch_client_c16', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'crypto', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'zlib', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'worker', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'timers', 'peak_under_load': 1}, {'arm': 'after', 'kind': 'net', 'peak_under_load': 1}]
+[14:23:36] lock released
+[14:23:36] DIAG DONE

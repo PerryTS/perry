@@ -1,0 +1,774 @@
+{
+ "backend": [
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 131571,
+   "total": 131571,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 154228,
+   "total": 154228,
+   "errors": {
+    "aborted due to deadline": 16
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 175323,
+   "total": 175323,
+   "errors": {
+    "aborted due to deadline": 32
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 175858,
+   "total": 175858,
+   "errors": {
+    "aborted due to deadline": 64
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 125052,
+   "total": 125052,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 152640,
+   "total": 152640,
+   "errors": {
+    "aborted due to deadline": 16
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 169871,
+   "total": 169871,
+   "errors": {
+    "aborted due to deadline": 32
+   },
+   "tail": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 174228,
+   "total": 174228,
+   "errors": {
+    "aborted due to deadline": 62
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 132693,
+   "total": 132693,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 152866,
+   "total": 152866,
+   "errors": {
+    "aborted due to deadline": 15
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 175258,
+   "total": 175258,
+   "errors": {
+    "aborted due to deadline": 31
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 175638,
+   "total": 175638,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 129906,
+   "total": 129906,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 154184,
+   "total": 154184,
+   "errors": {
+    "aborted due to deadline": 16
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 169708,
+   "total": 169708,
+   "errors": {
+    "aborted due to deadline": 27
+   },
+   "tail": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 174135,
+   "total": 174135,
+   "errors": {
+    "aborted due to deadline": 63
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 134610,
+   "total": 134610,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 152554,
+   "total": 152554,
+   "errors": {
+    "aborted due to deadline": 16
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 174709,
+   "total": 174709,
+   "errors": {
+    "aborted due to deadline": 32
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 175089,
+   "total": 175089,
+   "errors": {
+    "aborted due to deadline": 57
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 8,
+   "alive_after": true,
+   "exit": null,
+   "ok": 129634,
+   "total": 129634,
+   "errors": {
+    "aborted due to deadline": 8
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 16,
+   "alive_after": true,
+   "exit": null,
+   "ok": 151732,
+   "total": 151732,
+   "errors": {
+    "aborted due to deadline": 16
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 32,
+   "alive_after": true,
+   "exit": null,
+   "ok": 171985,
+   "total": 171985,
+   "errors": {
+    "aborted due to deadline": 26
+   },
+   "tail": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 64,
+   "alive_after": true,
+   "exit": null,
+   "ok": 174687,
+   "total": 174687,
+   "errors": {
+    "aborted due to deadline": 60
+   },
+   "tail": ""
+  }
+ ],
+ "fetch": [
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":157.582792,\"rps\":19037.611670187947}\n",
+   "stderr": ""
+  },
+  {
+   "round": 0,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1091.824708,\"rps\":2740.366634018324}\n",
+   "stderr": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":165.545792,\"rps\":18121.87409753067}\n",
+   "stderr": ""
+  },
+  {
+   "round": 0,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":39.00075,\"rps\":76716.47340115254}\n",
+   "stderr": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":131.622584,\"rps\":22792.441151284496}\n",
+   "stderr": ""
+  },
+  {
+   "round": 1,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1092.739958,\"rps\":2738.07137562366}\n",
+   "stderr": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":163.916584,\"rps\":18301.9919448785}\n",
+   "stderr": ""
+  },
+  {
+   "round": 1,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.540959,\"rps\":81880.71911303696}\n",
+   "stderr": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":134.11525,\"rps\":22368.820846249775}\n",
+   "stderr": ""
+  },
+  {
+   "round": 2,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1100.344917,\"rps\":2719.14738167505}\n",
+   "stderr": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":162.45904199999998,\"rps\":18466.192851241856}\n",
+   "stderr": ""
+  },
+  {
+   "round": 2,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.617917,\"rps\":81708.63460092501}\n",
+   "stderr": ""
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":134.26262499999999,\"rps\":22344.267438536976}\n",
+   "stderr": ""
+  },
+  {
+   "round": 3,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1096.1685,\"rps\":2729.5073704453284}\n",
+   "stderr": ""
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":161.36425,\"rps\":18591.478595785622}\n",
+   "stderr": ""
+  },
+  {
+   "round": 3,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.329584000000004,\"rps\":82357.12250379745}\n",
+   "stderr": ""
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":134.62566700000002,\"rps\":22284.012156463443}\n",
+   "stderr": ""
+  },
+  {
+   "round": 4,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1095.7162079999998,\"rps\":2730.6340621366444}\n",
+   "stderr": ""
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":163.453541,\"rps\":18353.83914992701}\n",
+   "stderr": ""
+  },
+  {
+   "round": 4,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":35.93020799999999,\"rps\":83272.54882576801}\n",
+   "stderr": ""
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":133.78674999999998,\"rps\":22423.745251304783}\n",
+   "stderr": ""
+  },
+  {
+   "round": 5,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1094.048083,\"rps\":2734.7975344882534}\n",
+   "stderr": ""
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":162.931125,\"rps\":18412.6881834272}\n",
+   "stderr": ""
+  },
+  {
+   "round": 5,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.095708,\"rps\":82890.74146987226}\n",
+   "stderr": ""
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":133.754417,\"rps\":22429.165834575768}\n",
+   "stderr": ""
+  },
+  {
+   "round": 6,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1085.6883340000002,\"rps\":2755.85534660447}\n",
+   "stderr": ""
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":162.47062499999998,\"rps\":18464.876343031243}\n",
+   "stderr": ""
+  },
+  {
+   "round": 6,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.138333,\"rps\":82792.97221595694}\n",
+   "stderr": ""
+  },
+  {
+   "round": 7,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":133.987708,\"rps\":22390.1135766872}\n",
+   "stderr": ""
+  },
+  {
+   "round": 7,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1095.0575,\"rps\":2732.2766156115094}\n",
+   "stderr": ""
+  },
+  {
+   "round": 7,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":162.303125,\"rps\":18483.932456630147}\n",
+   "stderr": ""
+  },
+  {
+   "round": 7,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.408542,\"rps\":82178.51733804667}\n",
+   "stderr": ""
+  },
+  {
+   "round": 8,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":133.049916,\"rps\":22547.9285533709}\n",
+   "stderr": ""
+  },
+  {
+   "round": 8,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1093.835041,\"rps\":2735.330180375891}\n",
+   "stderr": ""
+  },
+  {
+   "round": 8,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":160.87425000000002,\"rps\":18648.105585573823}\n",
+   "stderr": ""
+  },
+  {
+   "round": 8,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.344,\"rps\":82324.45520581113}\n",
+   "stderr": ""
+  },
+  {
+   "round": 9,
+   "arm": "before",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":133.60775,\"rps\":22453.787299015214}\n",
+   "stderr": ""
+  },
+  {
+   "round": 9,
+   "arm": "before",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":1090.9134999999999,\"rps\":2742.655581767024}\n",
+   "stderr": ""
+  },
+  {
+   "round": 9,
+   "arm": "after",
+   "conc": 1,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":3000,\"bytes\":33000,\"ms\":162.170583,\"rps\":18499.03937263394}\n",
+   "stderr": ""
+  },
+  {
+   "round": 9,
+   "arm": "after",
+   "conc": 16,
+   "rc": 0,
+   "ok": true,
+   "stdout": "{\"requests\":2992,\"bytes\":32912,\"ms\":36.711917,\"rps\":81499.42156384805}\n",
+   "stderr": ""
+  }
+ ],
+ "threads": [
+  {
+   "arm": "before",
+   "kind": "http_server",
+   "idle": 1,
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "backend",
+   "idle": 1,
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "fetch_client_c1",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "fetch_client_c16",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "crypto",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "zlib",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "worker",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "timers",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "before",
+   "kind": "net",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "http_server",
+   "idle": 1,
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "backend",
+   "idle": 1,
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "fetch_client_c1",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "fetch_client_c16",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "crypto",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "zlib",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "worker",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "timers",
+   "peak_under_load": 1
+  },
+  {
+   "arm": "after",
+   "kind": "net",
+   "peak_under_load": 1
+  }
+ ]
+}
