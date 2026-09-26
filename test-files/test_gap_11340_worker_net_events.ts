@@ -7,10 +7,11 @@
 // run on the wrong thread (a `TypeError` after the worker exited, as mysql2
 // showed), or a crash.
 //
-// The worker runs its own echo server and 25 sequential client sockets in
-// node-postgres' shape (construct, `connect()`, then `once('connect')`), which
-// lost roughly one round in five before the fix. Everything stays inside the
-// worker, so the primary's only job is to keep pumping while it waits.
+// The worker opens 25 sequential client sockets, in node-postgres' shape
+// (construct, `connect()`, then `once('connect')`), to the harness's echo
+// server (test-files/test_net_echo_server.py on 127.0.0.1:17891, the one
+// test_net_min.ts uses). Before the fix the worker stalled within the 25
+// rounds; the primary does nothing but wait.
 import { Worker } from 'node:worker_threads';
 
 const worker = new Worker(new URL('./_helpers/gap_11340_worker_net_events_worker.ts', import.meta.url));
