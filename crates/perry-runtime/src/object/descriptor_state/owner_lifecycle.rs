@@ -128,7 +128,7 @@ fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize
 pub(crate) fn clear_object_descriptors(obj: usize) {
     // Charter step 3: an ordinary object's attributes live with its keys; its
     // accessor closures still live in the tables and are dropped below.
-    if unsafe { super::super::key_attrs::attrs_live_in_keys(obj) }
+    if unsafe { super::super::key_attrs::attrs_live_in_keys_for_install(obj) }
         && unsafe { super::super::key_attrs::object_summary(obj as *const ObjectHeader) } != 0
     {
         // The accessor pairs live in the keys' slots: clear those first, or

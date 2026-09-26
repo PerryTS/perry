@@ -346,8 +346,8 @@ pub(crate) use descriptor_state::{
     plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
     prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
-    DescriptorTables, PropertyAttrs,
+    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs,
+    transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{

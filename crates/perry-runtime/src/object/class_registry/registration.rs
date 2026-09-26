@@ -337,9 +337,11 @@ pub unsafe extern "C" fn js_register_class_getter(
         getters: HashMap::new(),
         setters: HashMap::new(),
     });
-    vtable.getters.insert(name, func_ptr as usize);
+    vtable.getters.insert(name.clone(), func_ptr as usize);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
+    drop(registry);
+    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }
 
 /// Register a class setter in the vtable registry.
@@ -380,9 +382,11 @@ pub unsafe extern "C" fn js_register_class_setter(
         getters: HashMap::new(),
         setters: HashMap::new(),
     });
-    vtable.setters.insert(name, func_ptr as usize);
+    vtable.setters.insert(name.clone(), func_ptr as usize);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
+    drop(registry);
+    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }
 
 /// Register a `static get name()` accessor on the class *constructor*

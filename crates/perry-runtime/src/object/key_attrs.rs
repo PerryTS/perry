@@ -591,14 +591,17 @@ pub(crate) unsafe fn copy_entries(
 // ---------------------------------------------------------------------------
 
 /// Is `addr` a heap object whose attributes live with its keys? The ONE
-/// predicate that routes a descriptor operation to the keys instead of the
-/// owner-keyed tables, so installs and reads cannot disagree about where an
-/// owner's attributes are. Every other cell kind (arrays, closures, exotic
-/// cells, typed arrays) keeps the tables for now.
+/// predicate that routes a descriptor LOOKUP to the keys instead of the
+/// owner-keyed tables. Every other cell kind (arrays, closures, exotic cells,
+/// typed arrays) keeps the tables for now.
+///
+/// Reads the header through the same reader the meta summary probe uses.
+/// Handle owners never reach it (they probe the tables through
+/// `get_handle_*`); anything that WRITES must use
+/// [`attrs_live_in_keys_for_install`] instead.
 ///
 /// # Safety
-/// `addr` is any address; it is classified through the ownership-checking
-/// header reader.
+/// `addr` is a descriptor owner.
 #[inline]
 pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
@@ -606,6 +609,25 @@ pub(crate) unsafe fn attrs_live_in_keys(addr: usize) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
+}
+
+/// [`attrs_live_in_keys`] for a site that WRITES the owner (its keys, slots or
+/// header). Descriptor owners are arbitrary addresses — a native `Box`
+/// backing (an `AsyncResource`'s, #11258) is heap-plausible and the bytes
+/// before it may decode as an object header — so ownership is proved by
+/// allocator metadata (`try_read_tracked_gc_header`) before anything is
+/// written. Installs are rare; the lookup path never pays for this.
+///
+/// # Safety
+/// `addr` is any address.
+pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
+        return false;
+    };
+    let header = header.as_ptr();
+    (*header).obj_type == crate::gc::GC_TYPE_OBJECT
+        && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray::lookup_typed_array_kind(addr).is_none()
 }
 
