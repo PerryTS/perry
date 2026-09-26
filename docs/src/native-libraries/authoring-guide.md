@@ -347,13 +347,23 @@ under `NativeLibraries/<package>/<backend>/` in app bundles.
 ### Async one-shot (hashing, compression, a blocking client call)
 
 ```rust
-use perry_ffi::{pool, JsPromise, Promise};
+use perry_ffi::{pool, read_string, JsPromise, JsString, Promise, StringHeader};
 
+/// Stand-in for your real CPU-bound work. Owned Rust data in, owned out.
+fn my_digest(input: &str) -> Result<String, String> {
+    Ok(format!("{:08x}", input.len()))
+}
+
+/// # Safety
+/// `input_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub extern "C" fn js_my_digest(input_ptr: *const StringHeader) -> *mut Promise {
+pub unsafe extern "C" fn js_my_digest(input_ptr: *mut StringHeader) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    let input = unsafe { read_str(input_ptr) }.unwrap_or_default();
+    // Copy the argument out of the JS heap before crossing threads.
+    let input = read_string(JsString::from_raw(input_ptr))
+        .unwrap_or_default()
+        .to_owned();
 
     // `work` runs on a pool thread with owned Rust data only; `deliver` runs
     // on the thread that owns the JS heap, where the promise is settled.
