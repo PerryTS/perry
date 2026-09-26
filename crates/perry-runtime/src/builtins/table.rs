@@ -538,7 +538,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             let mut nested_keys: Vec<String> = Vec::new();
             let mut all_nested = true;
             for (slot, _) in &keys {
-                let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
+                let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
                 if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
                     let vp =
                         JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
@@ -560,7 +560,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 }
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
                 for (slot, key) in &keys {
-                    let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
+                    let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
                     let mut row = vec![key.clone()];
                     if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
                         let vp = JSValue::from_bits(v.to_bits())
@@ -596,7 +596,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             for (slot, key) in &keys {
                 // Read the value by the key's OWN slot index — never by its
                 // position in the compacted name list (#9462).
-                let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
+                let v = crate::object::key_attrs::object_slot_data_f64(obj_ptr, *slot);
                 rows.push(vec![key.clone(), format_table_cell(v)]);
             }
             render_table(&headers, &rows);

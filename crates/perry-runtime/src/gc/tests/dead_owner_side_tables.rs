@@ -282,10 +282,11 @@ fn test_live_owner_descriptor_entries_survive_full_gc() {
 #[test]
 fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     let _guard = GcTestIsolationGuard::new();
-    let (obj, _) = unsafe { alloc_old_test_object(0) };
-    let addr = obj as usize;
-    // An accessor: an ordinary object's DATA attributes live with its keys
-    // (charter step 3); its accessor closures are still owner-keyed.
+    // An array owner: an ordinary object's attributes AND accessor pairs
+    // live with its keys and slots (charter step 3); an array's are still
+    // owner-keyed, which is the table this test is about.
+    let (arr, _) = unsafe { alloc_old_test_array(0) };
+    let addr = arr as usize;
     crate::object::set_accessor_descriptor(
         addr,
         "oldKey".to_string(),

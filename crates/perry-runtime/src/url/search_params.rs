@@ -601,7 +601,7 @@ pub(crate) fn read_record_entries(obj: *mut ObjectHeader) -> Vec<(String, String
             if key.is_empty() {
                 continue;
             }
-            let val_f64 = crate::object::js_object_get_field_f64(obj, i as u32);
+            let val_f64 = crate::object::key_attrs::object_slot_data_f64(obj, i as u32);
             let val = stringify_field_value(val_f64);
             out.push((key, val));
         }

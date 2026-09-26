@@ -604,7 +604,12 @@ impl Serializer {
             if key.to_bits() == crate::value::TAG_UNDEFINED {
                 continue;
             }
-            let val = if f < alloc_limit {
+            // An accessor key's slot holds its accessor pair, never a value
+            // (`accessor_pair.rs`); serialization runs no user code here, so
+            // it carries `undefined` for it, as the slot always read before.
+            let val = if crate::object::key_attrs::key_is_accessor_at(keys_arr, f) {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            } else if f < alloc_limit {
                 *fields_ptr.add(f as usize)
             } else {
                 f64::from_bits(crate::object::js_object_get_field(obj, f).bits())

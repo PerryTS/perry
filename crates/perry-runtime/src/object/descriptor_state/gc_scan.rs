@@ -304,11 +304,13 @@ mod owner_index_tests {
     #[test]
     fn accessor_keys_for_obj_agrees_with_a_full_scan() {
         let _lock = crate::gc::global_side_table_test_lock();
-        let obj = crate::object::js_object_alloc(0, 0);
+        // Array owners: an ordinary object's accessors live in its key slots
+        // (charter step 3), an array's still live in these tables.
+        let obj = crate::array::js_array_alloc(0);
         let addr = obj as usize;
         // A second owner with its own accessors: the whole point of the index
         // is that this one's keys never leak into the first one's answer.
-        let other = crate::object::js_object_alloc(0, 0);
+        let other = crate::array::js_array_alloc(0);
         let other_addr = other as usize;
 
         for k in ["z", "m", "a"] {
@@ -334,8 +336,9 @@ mod owner_index_tests {
     #[test]
     fn transfer_moves_both_tables_and_the_index() {
         let _lock = crate::gc::global_side_table_test_lock();
-        let old = crate::object::js_object_alloc(0, 0) as usize;
-        let new = crate::object::js_object_alloc(0, 0) as usize;
+        // Array owners: an ordinary object's descriptors live with its keys.
+        let old = crate::array::js_array_alloc(0) as usize;
+        let new = crate::array::js_array_alloc(0) as usize;
 
         set_property_attrs(old, "p".to_string(), PropertyAttrs::new(true, true, true));
         set_accessor_descriptor(old, "acc".to_string(), AccessorDescriptor::default());

@@ -1277,10 +1277,15 @@ pub extern "C" fn js_object_rest(
                 None => continue,
             };
 
-            // Check if field was deleted
+            // Check if field was deleted. An accessor key's slot holds its
+            // accessor pair (`accessor_pair.rs`), not a value: it is copied
+            // below through [[Get]].
+            let is_accessor = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::object::key_attrs::key_is_accessor_at(keys, i as u32)
+            });
             let field_val = src_handle
                 .with_const_ptr::<ObjectHeader, _>(|obj| js_object_get_field(obj, i as u32));
-            if field_val.is_undefined() {
+            if !is_accessor && field_val.is_undefined() {
                 continue;
             }
 
@@ -1322,8 +1327,28 @@ pub extern "C" fn js_object_rest(
                 crate::array::js_array_set(rest_keys, new_idx as u32, key_val)
             });
 
-            let field_val = src_handle
-                .with_const_ptr::<ObjectHeader, _>(|obj| js_object_get_field(obj, src_idx as u32));
+            let is_accessor = keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::object::key_attrs::key_is_accessor_at(keys, src_idx as u32)
+            });
+            let field_val = if is_accessor {
+                // CopyDataProperties reads every key with [[Get]]: run the
+                // getter. It is user code; every pointer is re-read after it.
+                let key_ptr =
+                    crate::value::js_get_string_pointer_unified(f64::from_bits(key_val.bits()))
+                        as *const crate::StringHeader;
+                let key_h = scope.root_string_ptr(key_ptr);
+                // A self-rooting entry point: it runs the getter.
+                let value = src_handle.with_const_ptr(|src: *const ObjectHeader| {
+                    key_h.with_const_ptr(|key: *const crate::StringHeader| {
+                        crate::object::js_object_get_field_by_name_f64(src, key)
+                    })
+                });
+                crate::JSValue::from_bits(value.to_bits())
+            } else {
+                src_handle.with_const_ptr::<ObjectHeader, _>(|obj| {
+                    js_object_get_field(obj, src_idx as u32)
+                })
+            };
             rest_handle.with_mut_ptr::<ObjectHeader, _>(|rest| {
                 js_object_set_field(rest, new_idx as u32, field_val)
             });

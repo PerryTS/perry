@@ -186,11 +186,11 @@ pub(super) unsafe fn format_error_subclass_headline(
             let key_str = string_header_to_string(key_ptr as *mut StringHeader, "");
             if key_str == "name" {
                 own_name = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
-                    |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
+                    |obj_ptr| crate::object::key_attrs::object_slot_data_f64(obj_ptr, index),
                 ));
             } else if key_str == "message" {
                 own_message = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
-                    |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
+                    |obj_ptr| crate::object::key_attrs::object_slot_data_f64(obj_ptr, index),
                 ));
             }
         }

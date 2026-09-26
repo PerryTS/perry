@@ -89,6 +89,7 @@ pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
+pub(crate) mod accessor_pair;
 #[cfg(feature = "attr-census")]
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;

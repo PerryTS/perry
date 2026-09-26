@@ -2305,7 +2305,10 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     // validates CLOSURE_MAGIC before calling the func
                     // pointer, so non-callable field values (numbers,
                     // strings, booleans) safely return undefined.
-                    let field_val = js_object_get_field(obj as *mut _, i as u32);
+                    // An accessor key's slot holds its accessor pair, never a
+                    // callable (`accessor_pair.rs`).
+                    let field_val =
+                        crate::object::key_attrs::object_slot_data(obj as *const _, i as u32);
                     let bound = crate::closure::clone_closure_rebind_this(
                         field_val.bits(),
                         f64::from_bits(jsval().bits()),

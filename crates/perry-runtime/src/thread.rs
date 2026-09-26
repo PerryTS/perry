@@ -695,7 +695,16 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
         if hole_at(i) {
             continue;
         }
-        let field_bits = (*fields_ptr.add(i)).to_bits();
+        // An accessor key's slot holds its accessor pair, never a value
+        // (`accessor_pair.rs`): it crosses as `undefined`, as it always read.
+        let field_bits = if crate::object::key_attrs::key_is_accessor_at(
+            crate::object::object_keys(obj).arr(),
+            i as u32,
+        ) {
+            crate::value::TAG_UNDEFINED
+        } else {
+            (*fields_ptr.add(i)).to_bits()
+        };
         fields.push(serialize_nanbox_for_thread(field_bits));
     }
 

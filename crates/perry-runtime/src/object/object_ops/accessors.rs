@@ -191,6 +191,11 @@ pub extern "C" fn js_object_get_own_field_or_undef(
             // hono's `c.req.X` dispatch decided to invoke the vtable
             // getter, and pre-fix a SSO-stored `X` was invisible here.
             if crate::string::js_string_key_matches_bytes(key_val, key_bytes) {
+                // An accessor key's slot holds its accessor pair, never a
+                // data value (`accessor_pair.rs`).
+                if crate::object::key_attrs::key_is_accessor_at(keys, i as u32) {
+                    return f64::from_bits(TAG_UNDEF);
+                }
                 let val = if i < alloc_limit {
                     js_object_get_field(obj, i as u32)
                 } else {

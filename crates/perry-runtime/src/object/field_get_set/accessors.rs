@@ -123,6 +123,10 @@ pub(crate) unsafe fn own_data_field_by_name(
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
     if let Some(islot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
         let i = islot as usize;
+        // An accessor key's slot holds its accessor pair, never a data value.
+        if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
+            return Some(JSValue::undefined());
+        }
         {
             if i < alloc_limit {
                 return Some(js_object_get_field(obj, i as u32));

@@ -437,7 +437,13 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let inner_depth = depth + 1;
     // A function replacer only sees own ENUMERABLE keys (EnumerableOwnProperty
     // Names); gated for the common no-descriptor case.
-    let filter_non_enum = crate::object::descriptors_in_use();
+    // A per-object attribute (a builtin accessor installs no process gate)
+    // must filter too: an accessor key's slot holds its accessor pair
+    // (`accessor_pair.rs`), never a value to serialize.
+    let filter_non_enum = crate::object::descriptors_in_use()
+        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+            & crate::object::key_attrs::SUMMARY_KEY_BITS
+            != 0;
     buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
@@ -1036,7 +1042,13 @@ pub(crate) unsafe fn stringify_object_pretty(
     let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
-    let filter_non_enum = crate::object::descriptors_in_use();
+    // A per-object attribute (a builtin accessor installs no process gate)
+    // must filter too: an accessor key's slot holds its accessor pair
+    // (`accessor_pair.rs`), never a value to serialize.
+    let filter_non_enum = crate::object::descriptors_in_use()
+        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+            & crate::object::key_attrs::SUMMARY_KEY_BITS
+            != 0;
 
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
@@ -1242,7 +1254,13 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     // (`get key()`) holds no value in its raw slot, so resolve it through the
     // getter — matching the function-replacer walk (test262
     // replacer-array-duplicates, whose whitelisted key is a getter).
-    let filter_non_enum = crate::object::descriptors_in_use();
+    // A per-object attribute (a builtin accessor installs no process gate)
+    // must filter too: an accessor key's slot holds its accessor pair
+    // (`accessor_pair.rs`), never a value to serialize.
+    let filter_non_enum = crate::object::descriptors_in_use()
+        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+            & crate::object::key_attrs::SUMMARY_KEY_BITS
+            != 0;
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not

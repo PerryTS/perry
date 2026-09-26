@@ -997,7 +997,11 @@ mod tests {
             0,
             "an accessor over `num` must take the generic fallback"
         );
+        // Back to a data property (what `defineProperty(o, "num", {value})`
+        // does): the accessor's pair left the slot, so the value is re-stored.
         crate::object::clear_accessor_descriptor(object as usize, "num");
+        let num_key = crate::string::js_string_from_bytes(b"num".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(object, num_key, 7.0);
         assert_eq!(guard(value, &union), 1, "and validate again once cleared");
     }
 

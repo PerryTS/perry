@@ -456,9 +456,9 @@ pub(crate) static REGEXP_PROTOTYPE_TEST_WALKS: std::sync::atomic::AtomicU64 =
 ///   closure -> decline;
 /// * the prototype reshaped so the index means a different key -> the slot does
 ///   not hold the recorded closure -> decline;
-/// * an accessor installed with `defineProperty(proto,"test",{get})`, which
-///   leaves the old closure in the data slot -> the per-key accessor Bloom bit
-///   catches it, read straight off the meta record;
+/// * an accessor installed with `defineProperty(proto,"test",{get})` puts its
+///   pair in the slot -> decline; the per-key accessor Bloom bit on the meta
+///   record is a second witness;
 /// * the receiver reparented, so the `test` it would resolve is not this one ->
 ///   `object_static_prototype` says a prototype was recorded -> decline.
 ///
@@ -498,8 +498,8 @@ pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
         if current.bits() != canonical {
             return false;
         }
-        // `defineProperty(proto, "test", { get })` leaves the data slot alone
-        // and records the accessor. The prototype is an ObjectHeader, so its
+        // `defineProperty(proto, "test", { get })` also records the accessor
+        // in the meta Bloom bits. The prototype is an ObjectHeader, so its
         // meta edge can be read directly: no cell classification and no key
         // hash on this per-call path. A null meta proves no accessor was ever
         // installed; the Bloom bit is monotonic once set.
