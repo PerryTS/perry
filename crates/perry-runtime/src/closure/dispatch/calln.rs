@@ -39,7 +39,7 @@ fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity, synth)
         },
-        DispatchKind::Arity(declared) if declared > 0 => unsafe {
+        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 0) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[], declared)
         },
         _ => {
@@ -84,7 +84,7 @@ fn dispatch_call1_resolved(
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity, synth)
         },
-        DispatchKind::Arity(declared) if declared > 1 => unsafe {
+        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 1) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
         },
         _ => {
@@ -152,7 +152,7 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity, synth)
         },
-        DispatchKind::Arity(declared) if declared > 2 => unsafe {
+        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 2) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
         },
         _ => {
@@ -183,7 +183,7 @@ pub extern "C" fn js_closure_call3(
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity, synth)
         },
-        DispatchKind::Arity(declared) if declared > 3 => unsafe {
+        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 3) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
         },
         _ => {
@@ -223,7 +223,7 @@ pub extern "C" fn js_closure_call4(
                 synth,
             )
         },
-        DispatchKind::Arity(declared) if declared > 4 => unsafe {
+        DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 4) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
         },
         _ => {
@@ -265,8 +265,8 @@ pub extern "C" fn js_closure_call5(
             )
         };
     }
-    if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared > 5 {
+    if let Some(declared) = dispatch_arity(func_ptr) {
+        if arity_needs_dispatch(declared, 5) {
             return unsafe {
                 dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3, arg4], declared)
             };
@@ -309,8 +309,8 @@ pub extern "C" fn js_closure_call6(
             )
         };
     }
-    if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared > 6 {
+    if let Some(declared) = dispatch_arity(func_ptr) {
+        if arity_needs_dispatch(declared, 6) {
             return unsafe {
                 dispatch_with_arity(
                     closure,
@@ -351,8 +351,8 @@ pub(crate) fn dispatch_rest_or_declared_arity(
     if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
         return Some(unsafe { dispatch_rest_bundled(closure, func_ptr, args, fixed_arity, synth) });
     }
-    if let Some(declared) = lookup_closure_arity(func_ptr) {
-        if declared > provided {
+    if let Some(declared) = dispatch_arity(func_ptr) {
+        if arity_needs_dispatch(declared, provided) {
             return Some(unsafe { dispatch_with_arity(closure, func_ptr, args, declared) });
         }
     }

@@ -17,6 +17,9 @@
 # Liveness: a green run must mean perry-runtime was actually checked FOR
 # WASI, so each build asserts cargo reported a wasm32-wasip2 perry-runtime
 # artifact.
+#
+# `--print-features` prints the feature list of build 2 and exits;
+# `scripts/wasi_build_runtime.sh` builds the linkable archive with it.
 
 set -euo pipefail
 
@@ -26,9 +29,6 @@ cd "$ROOT"
 
 # Default features WASI cannot build yet — each one must name its blocker.
 WASI_EXCLUDED=(
-  # zstd-sys compiles C; needs the wasi-sdk sysroot that the `--target wasi`
-  # link brings (#11379).
-  bun-cli-utils
   # dgram is built on turnloop, which is not compiled for wasm32; WASI sockets
   # arrive with the WASI event-loop backend (phase 2b, #11377).
   mod-dgram
@@ -36,6 +36,12 @@ WASI_EXCLUDED=(
   # so on wasm32 this feature enables nothing — excluded to say so explicitly.
   alloc-mimalloc
 )
+# zstd-sys compiles C, which needs wasi-sdk's clang and sysroot
+# (`scripts/wasi_toolchain.sh`). Built whenever a C compiler for the target is
+# configured, as it is for the archive a `--target wasi` link uses.
+if [[ -z "${CC_wasm32_wasip2:-}" ]]; then
+  WASI_EXCLUDED+=(bun-cli-utils)
+fi
 
 features="$(
   cargo metadata --format-version 1 --no-deps --locked |
@@ -51,6 +57,11 @@ if stale:
 print(",".join(f for f in defaults if f not in excluded))
 ' "${WASI_EXCLUDED[@]}"
 )"
+
+if [[ "${1:-}" == "--print-features" ]]; then
+  echo "$features"
+  exit 0
+fi
 
 # `cargo check` with JSON artifact messages; fails unless cargo reports the
 # perry-runtime lib artifact built (or fresh) under the WASI target directory.

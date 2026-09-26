@@ -1,0 +1,7 @@
+42 5.25 -0 1e+21 0.30000000000000004
+hello wasi 84
+{ a: 1, b: 'two', c: [ 1, 2, { d: null } ] }
+[ 1, 'x', true, undefined, null ]
+number string object undefined function
+000123 [ 'a', 'b', 'c' ] wasi
+exit 0

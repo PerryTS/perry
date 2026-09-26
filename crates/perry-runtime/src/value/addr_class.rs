@@ -189,6 +189,10 @@ pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {
         target_os = "tvos",
         target_os = "watchos",
         target_os = "visionos",
+        // WASI (#11378): the whole wasm32 heap lives below 4 GiB, so the
+        // 2 TiB floor below would reject every object. The link reserves a
+        // stack-first region that keeps the heap above the handle band.
+        target_os = "wasi",
     ))]
     const HEAP_MIN: u64 = 0x1000;
     #[cfg(not(any(
@@ -200,6 +204,7 @@ pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {
         target_os = "tvos",
         target_os = "watchos",
         target_os = "visionos",
+        target_os = "wasi",
     )))]
     const HEAP_MIN: u64 = 0x200_0000_0000;
     #[cfg(all(

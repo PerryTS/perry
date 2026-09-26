@@ -42,3 +42,34 @@ pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
 pub use value_call::{
     js_closure_call_apply_with_spread, js_closure_call_array, js_native_call_value,
 };
+
+/// Whether a body declaring `declared` parameters must go through
+/// `dispatch_with_arity` instead of the caller's `n`-argument signature.
+///
+/// On native C ABIs a body simply reads the first `declared` of `n` arguments,
+/// so only a shortfall (`declared > n`) needs the padded path. A wasm
+/// `call_indirect` must match its target's type exactly (a mismatch traps), so
+/// on WASI any difference goes through the body's own signature, which drops
+/// the surplus arguments (#11379).
+#[inline(always)]
+pub(crate) const fn arity_needs_dispatch(declared: u32, n: u32) -> bool {
+    #[cfg(not(target_os = "wasi"))]
+    {
+        declared > n
+    }
+    #[cfg(target_os = "wasi")]
+    {
+        declared != n
+    }
+}
+
+/// The arity to dispatch a body with: its registered arity, or on WASI its
+/// real parameter count (see `registry::wasi_exact_arity`).
+#[inline(always)]
+pub(crate) fn dispatch_arity(func_ptr: *const u8) -> Option<u32> {
+    #[cfg(target_os = "wasi")]
+    if let Some(params) = super::registry::wasi_body_params(func_ptr) {
+        return Some(params);
+    }
+    lookup_closure_arity(func_ptr)
+}

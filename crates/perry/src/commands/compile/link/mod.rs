@@ -51,6 +51,8 @@ mod linux_ui_libs;
 mod native_features;
 mod pkg_config;
 mod platform_cmd;
+#[cfg(feature = "target-wasi")]
+pub(super) mod wasi;
 mod watchos_frameworks;
 mod windows_link;
 mod winui_assets;
