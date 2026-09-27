@@ -133,6 +133,9 @@ fn forward_split(
     // Each search starts where the previous one stood, so on non-ASCII
     // storage it does not seek from an end of the subject (#10164).
     let mut near: Option<Position> = None;
+    // A piece is usually a few units; the loop polls once per POLL_UNITS of
+    // them rather than once per piece.
+    let mut stride = host::PieceStride::new();
     while q < size {
         let local = RuntimeHandleScope::new();
         let (found, position) = host::find_near(
@@ -160,7 +163,7 @@ fn forward_split(
             // Only an empty match at `p` itself: step past it, as the
             // sticky loop does.
             q = advance(&mut units, start, size, unicode, budget)?;
-            host::poll()?;
+            stride.tick(0)?;
             continue;
         }
         push_span(&mut output, &mut copies, p, start, budget)?;
@@ -196,8 +199,8 @@ fn forward_split(
                 }
             }
         }
+        stride.tick(p - q)?;
         q = p;
-        host::poll()?;
     }
     push_span(&mut output, &mut copies, p, size, budget)?;
     charged(budget);

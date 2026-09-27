@@ -229,7 +229,7 @@ pub(super) fn call_native(
 /// This value is therefore a measured trade rather than a bound inherited from
 /// elsewhere: small enough to keep the collector's openings, large enough that
 /// a piece of two or three units no longer buys a poll of its own.
-const POLL_UNITS: usize = 512;
+pub(super) const POLL_UNITS: usize = 512;
 
 /// A reusable original-input reader. A read retains only Perex offsets across
 /// collection, and adjacent reads do not repeat the initial Unicode seek.
