@@ -781,6 +781,10 @@ js_crypto_argon2_sync	ptr	i64,f64
 js_crypto_certificate_export_challenge	f64	f64
 js_crypto_certificate_export_public_key	f64	f64
 js_crypto_certificate_verify_spkac	f64	f64
+js_crypto_chain_digest	f64	f64,f64
+js_crypto_chain_hash_init	f64	ptr,i64,f64
+js_crypto_chain_hmac_init	f64	ptr,i64,i64
+js_crypto_chain_update	f64	f64,f64,f64
 js_crypto_check_prime_async	f64	f64,f64,f64
 js_crypto_check_prime_sync	f64	f64,f64
 js_crypto_create_cipheriv	f64	i64,i64,i64,f64
@@ -1885,6 +1889,8 @@ js_message_channel_new	f64
 js_message_port_constructor_error	f64	
 js_method_direct_shape_class	i32u	f64,ptr,i32u
 js_method_direct_shape_guard	i32s	f64,i32u,i32u,i32u
+js_method_site_miss	f64	ptr,i64,f64,i64,ptr,usize
+js_method_site_stats	f64	i32s
 js_microtasks_pending	i32s	
 js_migrate_stdin_listeners_to_provider	void	
 js_mod	i64	i64,i64
@@ -1976,6 +1982,8 @@ js_native_call_method_apply	f64	f64,ptr,usize,i64
 js_native_call_method_apply_by_id	f64	f64,i64,i64
 js_native_call_method_by_id	f64	f64,i64,ptr,usize
 js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
+js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
+js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
 js_native_call_method_str_key	f64	f64,i64,ptr,usize
 js_native_call_method_value	f64	f64,f64,ptr,usize
 js_native_call_method_value_apply	f64	f64,f64,i64
@@ -4539,6 +4547,7 @@ perry_ffi_callback_dispatch	i64	usize,ptr,ptr
 perry_ffi_gc_register_fetch_trace	void	ptr,ptr
 perry_ffi_gc_register_mutable_root_scanner	void	ptr
 perry_ffi_gc_register_mutable_root_scanner_named	void	ptr,usize,usize,ptr
+perry_ffi_gc_register_pool_handle_trace	void	ptr,ptr
 perry_ffi_gc_register_root_scanner	void	ptr
 perry_ffi_gc_request_handle_collection	void	
 perry_ffi_gc_root_visitor_is_full_mark	bool	ptr
@@ -4604,6 +4613,7 @@ perry_i18n_plural_category	i32s	i32s,f64
 perry_i18n_set_currencies	void	ptr,i32u
 perry_i18n_set_locale_index	void	i32s
 perry_i18n_set_plural_locales	void	ptr,ptr,i32u
+perry_implicit_this_cell	ptr	
 perry_init_guard_check_and_set	i32s	i64
 perry_ios_classes_registered	void	
 perry_ios_get_connected_scene	i64	
