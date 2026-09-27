@@ -52,11 +52,14 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
-    let mut guard = CLASS_NAMES.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(new_ptr_hash_map());
+    {
+        let mut guard = CLASS_NAMES.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(new_ptr_hash_map());
+        }
+        guard.as_mut().unwrap().insert(class_id, name);
     }
-    guard.as_mut().unwrap().insert(class_id, name);
+    crate::object::class_value::note_intrinsic_registration(class_id, "name");
 }
 
 /// Look up the user-visible name of a registered class. Returns `None`
@@ -214,11 +217,14 @@ pub extern "C" fn js_register_class_length(class_id: u32, length: u32) {
     if class_id == 0 {
         return;
     }
-    let mut guard = CLASS_LENGTHS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(new_ptr_hash_map());
+    {
+        let mut guard = CLASS_LENGTHS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(new_ptr_hash_map());
+        }
+        guard.as_mut().unwrap().insert(class_id, length);
     }
-    guard.as_mut().unwrap().insert(class_id, length);
+    crate::object::class_value::note_intrinsic_registration(class_id, "length");
 }
 
 pub fn class_length_for_id(class_id: u32) -> Option<u32> {

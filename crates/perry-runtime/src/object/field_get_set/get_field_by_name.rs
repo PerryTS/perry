@@ -97,6 +97,27 @@ pub(crate) fn class_value_get_field(
     bits: u64,
     class_id: u32,
 ) -> JSValue {
+    // A class function object's own data property (a static field, a runtime
+    // `C.x = v`): its bag answers first — own data wins [[Get]] — unless a
+    // per-evaluation class object exists for some class (the redirect below
+    // then decides).
+    if bits >> 48 != 0x7FFE
+        && !super::super::class_registry::CLASS_OBJECT_EVER
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let ptr = (bits & crate::value::POINTER_MASK) as usize;
+        // SAFETY: a class function object (the caller decoded `class_id` from
+        // it); `key` is a live string header.
+        unsafe {
+            let bytes = std::slice::from_raw_parts(
+                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                (*key).byte_len as usize,
+            );
+            if let Some(v) = crate::closure::props::bag_get(ptr, bytes) {
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+    }
     let class_value = crate::object::class_value::boxed_class_word(bits);
     let is_prototype_ref = super::super::class_prototype_ref_id(class_value).is_some();
     unsafe {
@@ -219,7 +240,9 @@ pub(crate) fn class_value_get_field(
         }
         if !name.is_empty() {
             if super::super::class_registry::class_is_key_deleted(class_id, name) {
-                return JSValue::undefined();
+                // Not an own property any more: the read continues on the
+                // class's [[Prototype]].
+                return crate::object::class_value::class_prototype_get(class_id, key, class_value);
             }
             let result = crate::object::class_value::class_static_get(class_id, name);
             if let Some(v) = result {

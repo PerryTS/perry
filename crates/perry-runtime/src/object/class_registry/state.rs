@@ -228,6 +228,23 @@ pub(crate) fn class_static_set_defined_attrs(
     class_static_alias_sync(class_id, name);
 }
 
+/// Forget the recorded attributes of static `name` (it becomes an ordinary
+/// writable, enumerable, configurable data property again) and re-sync its
+/// compiled alias. A static FIELD definition does this: DefineField creates
+/// the property with CreateDataPropertyOrThrow, replacing e.g. the class's
+/// own intrinsic `name`.
+pub(crate) fn class_static_clear_defined_attrs(class_id: u32, name: &str) {
+    let removed = crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
+        m.borrow_mut()
+            .get_mut(&class_id)
+            .and_then(|k| k.remove(name))
+            .is_some()
+    });
+    if removed {
+        class_static_alias_sync(class_id, name);
+    }
+}
+
 /// `(writable, enumerable)` if this static key was installed by
 /// `Object.defineProperty`; `None` for a declared `static x = …` field.
 pub(crate) fn class_static_defined_attrs(class_id: u32, name: &str) -> Option<(bool, bool, bool)> {
@@ -579,12 +596,21 @@ crate::perry_thread_local! {
     pub static CLASS_OBJECT_VALUES: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
 }
 
+/// Monotone: has any per-evaluation class object (`ClassExprFresh`) been
+/// recorded in this process? While clear, `class_object_value_for_cid` is
+/// `None` for every class, so a read of a class function object's own data
+/// property answers from its own-property object without consulting the
+/// per-evaluation table first.
+pub(crate) static CLASS_OBJECT_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Store the marked class object for its template class id (see
 /// `CLASS_OBJECT_VALUES`).
 pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectHeader) {
     if class_id == 0 || obj_ptr.is_null() {
         return;
     }
+    CLASS_OBJECT_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let bits = crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits();
     CLASS_OBJECT_VALUES.with(|table| {
         let mut guard = table.write().unwrap();

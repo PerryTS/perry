@@ -610,16 +610,22 @@ pub unsafe extern "C" fn js_register_class_static_method(
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
-    let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_ptr_hash_map());
+    {
+        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id as u32)
+            .or_default()
+            .insert(
+                name.clone(),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id as u32)
-        .or_default()
-        .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
 }
 
 fn property_key_string(key: f64) -> Option<String> {
@@ -746,16 +752,17 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
     if is_static != 0 {
-        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        {
+            let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            }
+            guard.as_mut().unwrap().entry(class_id).or_default().insert(
+                name.clone(),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
         }
-        guard
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_default()
-            .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+        crate::object::class_value::note_intrinsic_registration(class_id, &name);
     } else {
         let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
         if registry.is_none() {
@@ -850,23 +857,26 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             drop(registry);
             super::decl_accessors::note_instance_accessor_registered(class_id, &name);
         } else {
-            let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            {
+                let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+                if guard.is_none() {
+                    *guard = Some(crate::fast_hash::new_ptr_hash_map());
+                }
+                let entry = guard
+                    .as_mut()
+                    .unwrap()
+                    .entry(class_id)
+                    .or_default()
+                    .entry(name.clone())
+                    .or_insert((0, 0));
+                if getter_ptr != 0 {
+                    entry.0 = getter_ptr as usize;
+                }
+                if setter_ptr != 0 {
+                    entry.1 = setter_ptr as usize;
+                }
             }
-            let entry = guard
-                .as_mut()
-                .unwrap()
-                .entry(class_id)
-                .or_default()
-                .entry(name)
-                .or_insert((0, 0));
-            if getter_ptr != 0 {
-                entry.0 = getter_ptr as usize;
-            }
-            if setter_ptr != 0 {
-                entry.1 = setter_ptr as usize;
-            }
+            crate::object::class_value::note_intrinsic_registration(class_id, &name);
         }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);

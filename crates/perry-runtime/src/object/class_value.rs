@@ -252,7 +252,106 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     // SAFETY: the slot is this agent's table entry for `class_id`.
     unsafe { *class_value_slot(class_id) = ptr };
     crate::gc::runtime_write_barrier_root_heap_word(ptr as u64);
+    // Still inside the no-collect scope: the own-property object and its
+    // keys allocate.
+    for key in INTRINSIC_OWN_DATA_KEYS {
+        install_intrinsic_own_data(class_id, key);
+    }
     ptr
+}
+
+/// A class constructor's `length` and `name`, in creation order
+/// (ClassDefinitionEvaluation: SetFunctionLength, then SetFunctionName).
+const INTRINSIC_OWN_DATA_KEYS: [&str; 2] = ["length", "name"];
+
+/// The attributes of a function's own `length` / `name`.
+const INTRINSIC_ATTRS: (bool, bool, bool) = (false, false, true);
+
+/// The value of intrinsic own data property `key` of class `class_id`, if
+/// the class registered one.
+fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
+    match key {
+        "length" => super::class_registry::class_length_for_id(class_id).map(f64::from),
+        "name" => super::class_registry::class_name_for_id(class_id).map(|name| {
+            let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
+        }),
+        _ => None,
+    }
+}
+
+/// Does a static method or accessor of class `class_id` own `key`? Then it,
+/// not the intrinsic data property, is the class's own `key`.
+fn static_member_owns(class_id: u32, key: &str) -> bool {
+    super::class_registry::class_has_own_static_method(class_id, key)
+        || super::class_registry::class_own_static_accessor_ptrs(class_id, key).is_some()
+}
+
+/// Is own `key` of class `class_id` still the intrinsic data property (not
+/// replaced by a static field, a `defineProperty`, or deleted)?
+fn holds_intrinsic(class_id: u32, key: &str) -> bool {
+    class_static_get(class_id, key).is_some()
+        && super::class_registry::class_static_defined_attrs(class_id, key) == Some(INTRINSIC_ATTRS)
+}
+
+/// ClassDefinitionEvaluation's SetFunctionLength / SetFunctionName: `length`
+/// and `name` are own DATA properties of the class's function object,
+/// `{ writable: false, enumerable: false, configurable: true }`, kept in its
+/// own-property object with every other own data property — so `C.name` and
+/// `x.constructor.name` are one lookup in that object's shape. A static
+/// method or accessor of the same name is the class's own property instead,
+/// and a static field or `defineProperty` of that name replaces it.
+fn install_intrinsic_own_data(class_id: u32, key: &str) {
+    if static_member_owns(class_id, key) {
+        return;
+    }
+    let Some(value) = intrinsic_own_data_value(class_id, key) else {
+        return;
+    };
+    class_static_set(class_id, key, value);
+    let (writable, enumerable, configurable) = INTRINSIC_ATTRS;
+    super::class_registry::class_static_set_defined_attrs(
+        class_id,
+        key,
+        writable,
+        enumerable,
+        configurable,
+    );
+}
+
+/// A static field `key` was defined on class `class_id`: if it replaced the
+/// intrinsic `name` / `length`, the property keeps the field's (ordinary)
+/// attributes, not the intrinsic's.
+pub(crate) fn note_static_field_defined(class_id: u32, key: &str) {
+    if INTRINSIC_OWN_DATA_KEYS.contains(&key)
+        && super::class_registry::class_static_defined_attrs(class_id, key) == Some(INTRINSIC_ATTRS)
+    {
+        super::class_registry::class_static_clear_defined_attrs(class_id, key);
+    }
+}
+
+/// The registry changed what class `class_id`'s intrinsic `key` is (its
+/// name or length registered, or a static method / accessor of that name
+/// registered) after this agent minted its function object: bring the own
+/// property in line. A key the program already redefined or deleted is left
+/// alone.
+pub(crate) fn note_intrinsic_registration(class_id: u32, key: &str) {
+    if !INTRINSIC_OWN_DATA_KEYS.contains(&key) || class_value_cached(class_id).is_none() {
+        return;
+    }
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    if holds_intrinsic(class_id, key) {
+        if static_member_owns(class_id, key) {
+            class_static_remove(class_id, key);
+            super::class_registry::class_static_clear_defined_attrs(class_id, key);
+        } else if let Some(value) = intrinsic_own_data_value(class_id, key) {
+            class_static_set(class_id, key, value);
+        }
+    } else if class_static_get(class_id, key).is_none()
+        && !super::class_registry::class_is_key_deleted(class_id, key)
+    {
+        install_intrinsic_own_data(class_id, key);
+    }
 }
 
 /// The class function object for `class_id` on this agent (minted on first
@@ -357,6 +456,44 @@ pub unsafe extern "C" fn js_class_static_field_put(
     let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
     let receiver = class_value_ptr(class_id as u32) as *mut crate::object::ObjectHeader;
     crate::object::js_object_set_field_by_name(receiver, key, value);
+}
+
+/// [[Get]] of `key` on class `class_id`'s [[Prototype]], `receiver` as the
+/// receiver: the continuation of a read of a key the class does not own
+/// (e.g. its own `name` was deleted — `Sub.name` then reads `Base.name`, a
+/// base class reads `Function.prototype.name`). The [[Prototype]] is the
+/// recorded one (`Object.setPrototypeOf(C, p)`), else the parent class's
+/// function object, else the parent function (`extends <function>`), else
+/// %Function.prototype%.
+pub(crate) fn class_prototype_get(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> crate::value::JSValue {
+    use crate::value::JSValue;
+    if super::class_registry::class_static_prototype_is_nulled(class_id) {
+        return JSValue::undefined();
+    }
+    let proto = super::class_registry::class_static_prototype(class_id) as usize;
+    let proto = if proto != 0 {
+        proto
+    } else if let Some(parent) = super::get_parent_class_id(class_id)
+        .filter(|&p| p != 0 && p != class_id && super::is_class_id_registered(p))
+    {
+        class_value_ptr(parent) as usize
+    } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
+        parent
+    } else {
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
+            as usize
+    };
+    if proto == 0 {
+        return JSValue::undefined();
+    }
+    let prev = super::field_get_set::accessor_receiver_override_begin(receiver);
+    let value = super::js_object_get_field_by_name(proto as *const super::ObjectHeader, key);
+    super::field_get_set::accessor_receiver_override_end(prev);
+    value
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +653,59 @@ mod tests {
             unsafe { (*f).shape_id },
             class_shape,
             "a dictionary function is not a class"
+        );
+    }
+
+    /// A class constructor's `length` and `name` are own data properties of
+    /// its function object (in its own-property object, intrinsic
+    /// attributes); a static method of that name owns the key instead.
+    #[test]
+    fn name_and_length_are_own_data_of_the_function_object() {
+        let cid = 0x6D01;
+        register(cid);
+        unsafe { crate::object::js_register_class_name(cid, b"Zed".as_ptr(), 3) };
+        crate::object::js_register_class_length(cid, 2);
+        let ptr = class_value_ptr(cid) as usize;
+        assert_eq!(
+            unsafe { crate::closure::props::bag_get(ptr, b"length") },
+            Some(2.0),
+            "own length"
+        );
+        let name = unsafe { crate::closure::props::bag_get(ptr, b"name") }.expect("own name");
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        // SAFETY: a live string value just read from the object.
+        let bytes = unsafe {
+            crate::string::js_string_key_bytes(
+                crate::value::JSValue::from_bits(name.to_bits()),
+                &mut scratch,
+            )
+        }
+        .expect("a string");
+        assert_eq!(bytes, b"Zed");
+        for key in ["length", "name"] {
+            assert_eq!(
+                crate::object::class_registry::class_static_defined_attrs(cid, key),
+                Some(INTRINSIC_ATTRS),
+                "{key}: non-writable, non-enumerable, configurable"
+            );
+        }
+        extern "C" fn static_name() -> f64 {
+            0.0
+        }
+        unsafe {
+            crate::object::class_registry::js_register_class_static_method(
+                cid as i64,
+                b"name".as_ptr(),
+                4,
+                static_name as usize as i64,
+                0,
+                0,
+            )
+        };
+        assert_eq!(
+            unsafe { crate::closure::props::bag_get(ptr, b"name") },
+            None,
+            "a static method named `name` is the class's own `name`"
         );
     }
 
