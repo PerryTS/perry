@@ -62,10 +62,16 @@ use crate::types::{DOUBLE, I16, I32, I64, I8, PTR};
 /// both arms of the diamond reach the same dispatcher — but staying close
 /// keeps the emitted diamonds where the bug is.
 fn shadowable_builtin_name(property: &str) -> bool {
-    matches!(
-        property,
-        // Map / Set
-        "get" | "set" | "has" | "delete" | "add" | "clear" | "entries" | "keys" | "values"
+    // Date: every name the chain can lower to a direct Date builtin, from the
+    // table that lowering itself uses. The hand-kept list below stopped at
+    // `getTime`/`toISOString` and a few setters, so a proven Date's
+    // `getUTCHours`, `setTime` or `toUTCString` reached the direct call with no
+    // guard at all (#11493).
+    super::builtin_kind_guard::is_direct_date_builtin_name(property)
+        || matches!(
+            property,
+            // Map / Set
+            "get" | "set" | "has" | "delete" | "add" | "clear" | "entries" | "keys" | "values"
             | "forEach"
         // Array. `push` is ABSENT, and needs no diamond: a proven array's
         // push is folded by HIR into `Expr::ArrayPush`, whose slow arms honour
@@ -76,14 +82,16 @@ fn shadowable_builtin_name(property: &str) -> bool {
             | "lastIndexOf" | "includes" | "join" | "concat" | "reverse" | "sort" | "fill"
             | "find" | "findIndex" | "filter" | "map" | "some" | "every" | "reduce"
             | "flat" | "flatMap" | "at"
-        // Date
-            | "getTime" | "getHours" | "getMinutes" | "getSeconds" | "getMilliseconds"
-            | "getDate" | "getDay" | "getMonth" | "getFullYear" | "setHours" | "setMinutes"
-            | "setSeconds" | "setDate" | "setMonth" | "setFullYear" | "toISOString"
-            | "toJSON" | "getTimezoneOffset" | "valueOf"
+        // The rest of the names the receiver-kind guard lowers directly on an
+        // UNPROVEN array (`is_array_method_on_values`), which now tests an own
+        // property first (#11493). A proven array has to test it too, or the
+        // same call answers differently depending on what the compiler proved.
+            | "toReversed" | "toSorted" | "toSpliced" | "reduceRight" | "copyWithin"
+        // Date names with no direct builtin in the table above
+            | "toJSON" | "valueOf"
         // Number
             | "toFixed" | "toPrecision" | "toExponential"
-    )
+        )
 }
 
 /// Is the receiver's KIND proven to be one whose builtins are lowered
