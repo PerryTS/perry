@@ -219,8 +219,63 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
     if buf_ptr.is_null() || index < 0 || index as u32 >= (*buf_ptr).length {
         return None;
     }
-    let data = buffer_data(buf_ptr);
+    let data = byte_access_data(buf_ptr);
     Some(*data.add(index as usize))
+}
+
+/// The byte data of a buffer an element access is about to touch, resolving a
+/// registered view to its backing exactly as [`buffer_data`] does — and, for an
+/// owning buffer, admitting it to the inline-access cache (#10515) so the next
+/// access through ANY site (the emitted guards, and the cache test at the top
+/// of the runtime accessors) skips the registry probes entirely. A view is
+/// answered from its one registry lookup and never pays for the admission
+/// attempt; only the (rare) non-admissible owning buffers — foreign-backed
+/// spans, a stale-hint ArrayBuffer — retry it on each access.
+#[inline]
+pub(crate) unsafe fn byte_access_data(buf_ptr: *const BufferHeader) -> *mut u8 {
+    let addr = buf_ptr as usize;
+    if let Some(info) = super::view::lookup(addr) {
+        return (buffer_data(info.backing as *const BufferHeader) as *mut u8)
+            .add(info.offset as usize);
+    }
+    super::header::u8_inline_cache_try_prime(addr);
+    buffer_data(buf_ptr) as *mut u8
+}
+
+/// #10515: the inline-access cache hit shared by every runtime byte accessor.
+/// `Some(byte)` when `addr` is an admitted owning byte view and `index` is in
+/// bounds; `None` sends the caller down its unchanged dispatch (which answers
+/// out-of-range reads itself). The cache contract makes this read exactly what
+/// `read_buffer_byte` would return, without the typed-array and buffer
+/// registry probes that precede it.
+#[inline(always)]
+pub(crate) fn cached_u8_read(addr: usize, index: i32) -> Option<u8> {
+    if !super::header::u8_inline_cache_hit(addr) {
+        return None;
+    }
+    unsafe {
+        let len = *(addr as *const u32);
+        if index < 0 || index as u32 >= len {
+            return None;
+        }
+        Some(*((addr + std::mem::size_of::<BufferHeader>()) as *const u8).add(index as usize))
+    }
+}
+
+/// Store twin of [`cached_u8_read`]: `true` when the byte was written.
+#[inline(always)]
+pub(crate) fn cached_u8_write(addr: usize, index: i32, byte: u8) -> bool {
+    if !super::header::u8_inline_cache_hit(addr) {
+        return false;
+    }
+    unsafe {
+        let len = *(addr as *const u32);
+        if index < 0 || index as u32 >= len {
+            return false;
+        }
+        *((addr + std::mem::size_of::<BufferHeader>()) as *mut u8).add(index as usize) = byte;
+    }
+    true
 }
 
 /// Get a byte at the specified index. Native i32 accessor: an out-of-range
@@ -269,7 +324,7 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
             return;
         }
         let byte = (value & 0xFF) as u8;
-        let data = buffer_data_mut(buf_ptr);
+        let data = byte_access_data(buf_ptr);
         *data.add(index as usize) = byte;
     }
 }

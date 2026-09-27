@@ -100,6 +100,12 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.ic_globals.push(cache_name.clone());
     let slot_ref = format!("@{cache_name}");
 
+    let u8_brand_idx = ctx.new_block("arrlike.u8.brand");
+    let u8_bounds_idx = ctx.new_block("arrlike.u8.bounds");
+    let u8_load_idx = ctx.new_block("arrlike.u8.load");
+    let u8_brand_label = ctx.block_label(u8_brand_idx);
+    let u8_bounds_label = ctx.block_label(u8_bounds_idx);
+    let u8_load_label = ctx.block_label(u8_load_idx);
     let object_header_idx = ctx.new_block("arrlike.ic.header");
     let object_brand_idx = ctx.new_block("arrlike.ic.brand");
     let object_array_guard_idx = ctx.new_block("arrlike.ic.array_guard");
@@ -476,7 +482,55 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.current_block = elem_kind_idx;
     let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     ctx.block()
-        .cond_br(&elem_is_object, &elem_meta_label, &object_miss_label);
+        .cond_br(&elem_is_object, &elem_meta_label, &u8_brand_label);
+
+    // ---- #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) ----
+    //
+    // A `GC_TYPE_BUFFER` receiver whose full address is in
+    // `PERRY_U8_INLINE_CACHE` is, by that cache's contract, a live registered
+    // byte view with `length` at offset 0 and its bytes inline at `+8` — the
+    // same proof `u8_buffer_read.rs` loads on for a `Uint8Array`-typed
+    // receiver. Untyped `b[i]` over a Buffer used to leave through the exit
+    // and the typed-array + buffer registry probes on every element. The
+    // cache is primed by the runtime byte accessors on a miss, and anything
+    // it does not hold (views, ArrayBuffers, DataViews, foreign spans, an
+    // out-of-range index) still leaves through the exit.
+    ctx.current_block = u8_brand_idx;
+    {
+        let blk = ctx.block();
+        let is_buffer = blk.icmp_eq(I8, &gc_type, "10"); // GC_TYPE_BUFFER
+        let slot = blk.lshr(I64, &object_raw, "3");
+        let slot = blk.and(I64, &slot, "63");
+        let entry_ptr = blk.gep(
+            "[64 x i64]",
+            "@PERRY_U8_INLINE_CACHE",
+            &[(I64, "0"), (I64, &slot)],
+        );
+        let entry = blk.load(I64, &entry_ptr);
+        let admitted = blk.icmp_eq(I64, &entry, &object_raw);
+        let hit = blk.and(I1, &is_buffer, &admitted);
+        blk.cond_br(&hit, &u8_bounds_label, &object_miss_label);
+    }
+    ctx.current_block = u8_bounds_idx;
+    {
+        let blk = ctx.block();
+        let len_ptr = blk.inttoptr(I64, &object_raw);
+        let len = blk.load(I32, &len_ptr);
+        let len_i64 = blk.zext(I32, &len, I64);
+        let in_bounds = blk.icmp_ult(I64, &object_idx_i64, &len_i64);
+        blk.cond_br(&in_bounds, &u8_load_label, &object_miss_label);
+    }
+    ctx.current_block = u8_load_idx;
+    let u8_value = {
+        let blk = ctx.block();
+        let data = blk.add(I64, &object_raw, "8");
+        let addr = blk.add(I64, &data, &object_idx_i64);
+        let ptr = blk.inttoptr(I64, &addr);
+        let byte = blk.load(I8, &ptr);
+        blk.uitofp(I8, &byte, DOUBLE)
+    };
+    let u8_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
 
     ctx.current_block = elem_meta_idx;
     let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
@@ -596,6 +650,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
             (ta_w1_value.as_str(), ta_w1_end.as_str()),
             (array_value.as_str(), array_end_label.as_str()),
             (elem_value.as_str(), elem_end_label.as_str()),
+            (u8_value.as_str(), u8_end_label.as_str()),
             (slow_val.as_str(), slow_end_label.as_str()),
         ],
     )

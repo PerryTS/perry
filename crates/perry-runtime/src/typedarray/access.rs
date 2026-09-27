@@ -652,6 +652,12 @@ pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32)
     if addr < 0x1000 || index < 0 {
         return 0;
     }
+    // #10515: an admitted owning byte view answers before the typed-array and
+    // buffer registry probes (`is_registered_buffer_slow` was ~48% of a
+    // `Uint8Array`-parameter loop).
+    if let Some(byte) = crate::buffer::cached_u8_read(addr, index) {
+        return i32::from(byte);
+    }
     let value = if lookup_typed_array_kind(addr).is_some() {
         js_typed_array_get(addr as *const TypedArrayHeader, index)
     } else if crate::buffer::is_registered_buffer(addr) {
@@ -704,6 +710,9 @@ pub extern "C" fn js_uint8array_index_get_value(
     if addr < 0x1000 || index < 0 {
         return undefined;
     }
+    if let Some(byte) = crate::buffer::cached_u8_read(addr, index) {
+        return f64::from(byte);
+    }
     if lookup_typed_array_kind(addr).is_some() {
         js_typed_array_get(addr as *const TypedArrayHeader, index)
     } else if crate::buffer::is_registered_buffer(addr) {
@@ -735,6 +744,9 @@ static KEEP_JS_UINT8ARRAY_INDEX_GET_VALUE: extern "C" fn(*const TypedArrayHeader
 pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, value: i32) {
     let addr = strip_nanbox(target as u64);
     if addr < 0x1000 || index < 0 {
+        return;
+    }
+    if crate::buffer::cached_u8_write(addr, index, (value & 0xFF) as u8) {
         return;
     }
     if lookup_typed_array_kind(addr).is_some() {
