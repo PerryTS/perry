@@ -1497,8 +1497,13 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                         "join" => Type::String,
                         "includes" | "every" | "some" => Type::Boolean,
                         "pop" | "shift" | "find" | "at" => *elem_ty.clone(),
-                        "map" | "filter" | "slice" | "concat" | "flat" | "flatMap" | "reverse"
-                        | "sort" | "splice" => obj_ty.clone(),
+                        // Mapping callbacks can replace every element (#11446).
+                        // This early table sees only the callee, so defer the
+                        // result element type to callback-aware HIR inference.
+                        "map" | "flatMap" => Type::Array(Box::new(Type::Any)),
+                        "filter" | "slice" | "concat" | "flat" | "reverse" | "sort" | "splice" => {
+                            obj_ty.clone()
+                        }
                         "reduce" => Type::Any, // depends on accumulator
                         "fill" => obj_ty.clone(),
                         "forEach" => Type::Void,
@@ -1638,6 +1643,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
     }
 }
 
+mod array_mapping_tests;
 mod branded_intersection_tests;
 mod buffer_backed_generic_tests;
 mod extract;
