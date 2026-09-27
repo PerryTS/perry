@@ -161,7 +161,7 @@ pub(crate) const NODE_CORE_DGRAM_FS_OS_ROWS: &[NativeModSig] = &[
         method: "eventNames",
         class_filter: Some("Socket"),
         runtime: "js_dgram_socket_event_names",
-        args: &[],
+        args: &[NA_VARARGS],
         ret: NR_F64,
     },
     NativeModSig {

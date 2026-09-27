@@ -8,7 +8,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         method: "createTransport",
         class_filter: None,
         runtime: "js_nodemailer_create_transport",
-        args: &[NA_PTR],
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

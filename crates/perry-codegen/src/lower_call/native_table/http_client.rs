@@ -583,7 +583,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_sockets",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -592,7 +592,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_sockets",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -601,7 +601,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_free_sockets",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -610,7 +610,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_free_sockets",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -619,7 +619,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_requests",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",
@@ -628,7 +628,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         class_filter: Some("Agent"),
         runtime: "js_http_agent_requests",
         args: &[],
-        ret: NR_JS_VALUE,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",

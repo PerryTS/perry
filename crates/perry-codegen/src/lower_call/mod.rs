@@ -84,6 +84,8 @@ pub(crate) use method_override::emit_inline_direct_method_shape_guard;
 mod named_import_install_tests;
 mod namespace_call;
 mod native;
+#[cfg(test)]
+mod native_abi_tests;
 mod native_module_dispatch;
 #[cfg(test)]
 mod native_module_rooting_tests;

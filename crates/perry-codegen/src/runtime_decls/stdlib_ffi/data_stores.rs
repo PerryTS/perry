@@ -13,7 +13,7 @@ pub(crate) fn declare_data_stores(module: &mut LlModule) {
     module.declare_function("js_sqlite_prepare", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_all", I64, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_columns", I64, &[I64]);
-    module.declare_function("js_sqlite_stmt_get", I64, &[I64, I64]);
+    module.declare_function("js_sqlite_stmt_get", DOUBLE, &[I64, I64]);
     module.declare_function("js_sqlite_stmt_run", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction", I64, &[I64, I64]);
     module.declare_function("js_sqlite_transaction_commit", VOID, &[I64]);

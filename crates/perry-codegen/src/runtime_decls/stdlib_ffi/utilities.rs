@@ -2,7 +2,7 @@
 //! @perryts/pdf, decimal.js, ethers, lodash.
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I64, VOID};
+use crate::types::{DOUBLE, I1, I64, VOID};
 
 pub(crate) fn declare_utilities(module: &mut LlModule) {
     // ========== @perryts/pdf (issue #516) ==========
@@ -53,14 +53,14 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_lodash_mean_by", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_lodash_min", DOUBLE, &[I64]);
     module.declare_function("js_lodash_min_by", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_lodash_pad", I64, &[I64, DOUBLE]);
-    module.declare_function("js_lodash_pad_end", I64, &[I64, DOUBLE]);
-    module.declare_function("js_lodash_pad_start", I64, &[I64, DOUBLE]);
-    module.declare_function("js_lodash_random", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_lodash_pad", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_lodash_pad_end", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_lodash_pad_start", I64, &[I64, DOUBLE, I64]);
+    module.declare_function("js_lodash_random", DOUBLE, &[DOUBLE, DOUBLE, I1]);
     module.declare_function("js_lodash_repeat", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_replace", I64, &[I64, I64, I64]);
     module.declare_function("js_lodash_reverse", I64, &[I64]);
-    module.declare_function("js_lodash_size", DOUBLE, &[I64]);
+    module.declare_function("js_lodash_size", DOUBLE, &[DOUBLE]);
     module.declare_function("js_lodash_snake_case", I64, &[I64]);
     module.declare_function("js_lodash_split", I64, &[I64, I64]);
     module.declare_function("js_lodash_start_case", I64, &[I64]);
@@ -70,9 +70,9 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_lodash_tail", I64, &[I64]);
     module.declare_function("js_lodash_take", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_take_right", I64, &[I64, DOUBLE]);
-    module.declare_function("js_lodash_trim", I64, &[I64]);
-    module.declare_function("js_lodash_trim_end", I64, &[I64]);
-    module.declare_function("js_lodash_trim_start", I64, &[I64]);
+    module.declare_function("js_lodash_trim", I64, &[I64, I64]);
+    module.declare_function("js_lodash_trim_end", I64, &[I64, I64]);
+    module.declare_function("js_lodash_trim_start", I64, &[I64, I64]);
     module.declare_function("js_lodash_truncate", I64, &[I64, DOUBLE]);
     module.declare_function("js_lodash_unescape", I64, &[I64]);
     module.declare_function("js_lodash_uniq", I64, &[I64]);

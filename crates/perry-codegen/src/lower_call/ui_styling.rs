@@ -15,7 +15,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
-use crate::types::{DOUBLE, I64, VOID};
+use crate::types::{DOUBLE, I32, I64, VOID};
 
 // `extract_options_fields` and `get_raw_string_ptr` stay in
 // `lower_call.rs` (the parent module) — they're used by other parts
@@ -428,27 +428,27 @@ fn lower_color_with_runtime_fallback(
     ctx.pending_declares.push((
         "js_color_parse_channel".to_string(),
         DOUBLE,
-        vec![DOUBLE, I64],
+        vec![DOUBLE, I32],
     ));
     let r = ctx.block().call(
         DOUBLE,
         "js_color_parse_channel",
-        &[(DOUBLE, &value), (I64, "0")],
+        &[(DOUBLE, &value), (I32, "0")],
     );
     let g = ctx.block().call(
         DOUBLE,
         "js_color_parse_channel",
-        &[(DOUBLE, &value), (I64, "1")],
+        &[(DOUBLE, &value), (I32, "1")],
     );
     let b = ctx.block().call(
         DOUBLE,
         "js_color_parse_channel",
-        &[(DOUBLE, &value), (I64, "2")],
+        &[(DOUBLE, &value), (I32, "2")],
     );
     let a = ctx.block().call(
         DOUBLE,
         "js_color_parse_channel",
-        &[(DOUBLE, &value), (I64, "3")],
+        &[(DOUBLE, &value), (I32, "3")],
     );
     Ok((r, g, b, a))
 }

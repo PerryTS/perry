@@ -12,7 +12,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         // codegen can't emit precise per-module installs). Mirrors
         // js_process_get_builtin_module_devirt.
         runtime: "js_module_create_require_devirt",
-        args: &[NA_F64, NA_F64],
+        args: &[NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

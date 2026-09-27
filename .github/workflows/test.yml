@@ -659,6 +659,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
 
+      - name: Native runtime ABI consistency
+        run: |
+          python3 scripts/runtime_abi_check.py --self-test
+          python3 scripts/runtime_abi_check.py --check-native
+
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of
       # failing it. #6367 made `.node-version` the single pin, and the pin has

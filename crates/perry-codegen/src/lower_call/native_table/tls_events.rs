@@ -293,7 +293,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         method: "setKeyCert",
         class_filter: Some("Socket"),
         runtime: "js_tls_socket_set_key_cert",
-        args: &[NA_JSV],
+        args: &[NA_F64],
         ret: NR_F64,
     },
 ];
