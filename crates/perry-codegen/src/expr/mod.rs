@@ -97,7 +97,7 @@ pub(crate) use helpers::{
     expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_function_name, is_global_this_builtin_name,
     lower_expr_with_expected_type, lower_js_args_array, store_needs_string_addref,
-    unbox_str_handle, unbox_to_i64,
+    unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,

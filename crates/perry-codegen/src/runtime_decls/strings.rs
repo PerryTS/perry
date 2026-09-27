@@ -1437,6 +1437,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);
+    module.declare_function("js_ffi_arg_ptr", I64, &[DOUBLE]);
     // Strict-equality (`===`) compare for switch case dispatch.
     module.declare_function("js_switch_strict_equals", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_value_to_str_ptr_for_ffi", I64, &[DOUBLE]);

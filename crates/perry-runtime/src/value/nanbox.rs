@@ -389,3 +389,71 @@ pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {
         0
     }
 }
+
+/// Scratch copies of SSO string arguments for native entry points that take a
+/// `*const StringHeader` as an `i64` (#11430).
+///
+/// An SSO value keeps its characters inline in the NaN-box, so the usual
+/// `bits & POINTER_MASK` unboxing turns it into a garbage address. Those
+/// entries (crypto: `createHmac(alg, key)`, `pbkdf2Sync(password, salt, …)`,
+/// `createCipheriv(alg, key, iv)`, …) only read the argument's bytes for the
+/// duration of the call, so the characters are copied into a small per-thread
+/// ring of NON-GC `StringHeader`-shaped slots rather than materialized onto the
+/// GC heap: a heap copy would be an unrooted temporary that the next argument's
+/// materialization could move or free before the call runs.
+const FFI_SSO_SLOTS: usize = 16;
+
+#[repr(C)]
+struct FfiSsoSlot {
+    header: crate::string::StringHeader,
+    bytes: [u8; crate::value::SHORT_STRING_MAX_LEN],
+}
+
+crate::perry_thread_local! {
+    static FFI_SSO_RING: std::cell::UnsafeCell<(usize, Box<[FfiSsoSlot]>)> = std::cell::UnsafeCell::new((
+        0,
+        (0..FFI_SSO_SLOTS)
+            .map(|_| FfiSsoSlot {
+                header: crate::string::StringHeader {
+                    utf16_len: 0,
+                    byte_len: 0,
+                    capacity: 0,
+                    refcount: 0,
+                    flags: 0,
+                },
+                bytes: [0; crate::value::SHORT_STRING_MAX_LEN],
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    ));
+}
+
+/// Unbox `value` to the raw pointer a native entry expects, copying an SSO
+/// string into a scratch `StringHeader` first (see [`FFI_SSO_SLOTS`]). Every
+/// other value unboxes exactly as `bits & POINTER_MASK` does.
+#[no_mangle]
+pub extern "C" fn js_ffi_arg_ptr(value: f64) -> i64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_short_string() {
+        return (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    }
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let n = jsval.short_string_to_buf(&mut buf);
+    FFI_SSO_RING.with(|cell| {
+        // SAFETY: thread-local, and no reference escapes this closure; the
+        // slot's address is handed out as an integer.
+        let (next, slots) = unsafe { &mut *cell.get() };
+        let slot = &mut slots[*next];
+        *next = (*next + 1) % FFI_SSO_SLOTS;
+        slot.bytes[..n].copy_from_slice(&buf[..n]);
+        // SSO holds ASCII only, so UTF-16 length equals byte length.
+        slot.header = crate::string::StringHeader {
+            utf16_len: n as u32,
+            byte_len: n as u32,
+            capacity: n as u32,
+            refcount: 0,
+            flags: 0,
+        };
+        &slot.header as *const crate::string::StringHeader as i64
+    })
+}
