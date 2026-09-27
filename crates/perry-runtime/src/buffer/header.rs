@@ -829,7 +829,8 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
     }
 }
 
-/// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
+/// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec (P-256), 3 ed25519,
+/// 4 x25519, 5 ec (P-384), 6 ec (P-521).
 pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
     ASYMMETRIC_KEY_EVER_MARKED.arm();
     ASYMMETRIC_KEY_REGISTRY.with(|r| {
