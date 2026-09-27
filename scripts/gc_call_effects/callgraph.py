@@ -630,6 +630,20 @@ def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
             # std's io::Error OS-function table (errno decoding): a call
             # through the table in a function that loads OS_FUNCTIONS.
             return "io_os_functions"
+        return None
+    # AArch64
+    reg = ins.ops.split(",")[0].strip()
+    window = insns[max(0, i - 16):i]
+    near = window[-4:]
+    m = next((re.match(rf"^{reg}, \[(x\d+), #0x17\]$", w.ops) for w in near
+              if w.mn in ("ldur", "ldr") and re.match(rf"^{reg}, \[(x\d+), #0x17\]$", w.ops)), None)
+    if m and any(w.mn == "sub" and w.ops.endswith(f", {m.group(1)}, #0x1") for w in near):
+        # untag (tagged pointer - 1) and load the owner-drop fn at +0x18
+        return "io_error_drop"
+    if (ins.mn.startswith("bl")
+            and any(w.mn == "ldr" and re.match(rf"^{reg}, \[{reg}, #0x[0-9a-f]+\]$", w.ops) for w in near)
+            and any("OS_FUNCTIONS" in t for w in insns for _, t in w.relocs)):
+        return "io_os_functions"
     return None
 
 
@@ -702,12 +716,18 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
             if g is not None:
                 node.calls.add(_norm(g, fmt))
                 continue
-            if ins.mn.startswith("bl") and i - last_tlvp <= 3:
+            if (ins.mn.startswith("bl") and i - last_tlvp <= 6
+                    and any(w.mn == "ldr" and re.match(rf"^{reg}, \[x\d+\]$", w.ops)
+                            for w in insns[max(0, i - 4):i])):
                 # Mach-O thread-local access: `ldr x0,[TLVP]; ldr x8,[x0]; blr x8`
                 # calls dyld's TLV getter, which never enters Perry code.
                 node.calls.add("__tlv_get_addr")
                 continue
             if i in switch_at:
+                continue
+            idiom = _idiom(insns, i, arch)
+            if idiom is not None:
+                node.idioms.add(idiom)
                 continue
             if ins.mn.startswith("bl"):
                 node.indirect_calls += 1
@@ -990,12 +1010,11 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
     for i, n in enumerate(g.nodes):
         if n.indirect_calls or n.indirect_jmps:
             r = _match_any(by_kind["indirect"], spell[i])
+            crate = crate_of(n.obj) if r is None else None
             if r is not None:
                 exempt_ind[i] = r
                 hits[r.line] += 1
-                continue
-            crate = crate_of(n.obj)
-            if crate is not None:
+            elif crate is not None:
                 if crate not in crate_trust:
                     crate_trust[crate] = _match_any(by_kind["trusted"], [crate])
                 t = crate_trust[crate]
@@ -1065,6 +1084,21 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
         for name in sorted(n.idioms):
             if name not in idiom_rules:
                 unknown_idiom[i] = name
+
+    # AArch64 machine-outlined fragments (OUTLINED_FUNCTION_N) are pieces of
+    # their callers: an indirect branch in one is exempt exactly when every
+    # function that calls it would be.
+    def rule_exempt(i: int) -> bool:
+        if _match_any(by_kind["indirect"], spell[i]) is not None:
+            return True
+        crate = crate_of(g.nodes[i].obj)
+        return crate is not None and crate_trust.get(crate, _match_any(by_kind["trusted"], [crate])) is not None
+
+    for i, n in enumerate(g.nodes):
+        if (n.indirect_calls or n.indirect_jmps) and i not in exempt_ind and i not in trusted_ind \
+                and any(nm.startswith("OUTLINED_FUNCTION_") for nm in n.names) \
+                and g.pred[i] and all(rule_exempt(c) for c in g.pred[i]):
+            trusted_ind.add(i)
 
     def base_seed(i: int) -> str | None:
         kn = named.get(i)

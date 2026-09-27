@@ -361,7 +361,13 @@ fn is_collecting(callee: &str) -> bool {
     if callee.starts_with("llvm.") {
         return false;
     }
-    !NON_COLLECTING.contains(&callee)
+    // `NON_COLLECTING` is a hand-kept list; the generated call-graph table
+    // (`gc_call_effects`) is the authority it must agree with. A name the
+    // table does not prove `Leaf` (e.g. `js_array_length`'s Proxy arm,
+    // #11522, or a GcRootRegistryGuard flush, #11523) stays collecting.
+    !(NON_COLLECTING.contains(&callee)
+        && crate::gc_call_effects::classify_direct_callee(callee)
+            == crate::gc_call_effects::GcCallEffect::CannotCollect)
 }
 
 /// Is `name` (no `@`) a string-literal handle global — `<mod>_.str.<N>.handle`?

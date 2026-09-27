@@ -20,7 +20,7 @@
 # is not Leaf. AllocOnly cuts these (under RFC D1/D2 they stop reading frame
 # roots at allocation points), so they stay seeds only for the Leaf class.
 collector regex ^perry_runtime::gc::policy::gc_check_trigger -- the allocation-point trigger (RFC A1/A2): OldReclaim full, the slack valve, a mutator assist, or a direct minor can run inside it
-collector contains flush_deferred_gc_request -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523)
+collector regex flush_deferred_gc_request|gc::roots::exit_gc_root_lock -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523)
 collector regex ^perry_runtime::gc::gc_collect_(minor|full) -- the minor and full collectors themselves
 collector regex ^perry_runtime::gc::copying::run_copied_minor_attempt -- the copying (moving) minor
 collector contains gc::roots::stack_maps::visit_stack_map_root_slots -- reads (and rewrites) the native frame roots of every generated frame: the chokepoint every precise collection passes
@@ -28,15 +28,16 @@ collector contains gc::roots::mark_mutable_root_slots -- the mutable-root markin
 collector regex ^perry_runtime::gc::native_stack_scan:: -- the conservative native-stack scan (the valve / OldReclaim / emergency arms)
 collector regex ^<*perry_runtime::gc::cycle::registered_root_scan:: -- a budgeted cycle's RootScan subphase, reachable from a mutator assist (RFC arm A-assist)
 collector regex ^perry_runtime::gc::(mod::)?gc_try_emergency_reclaim -- emergency full collection when a block reservation fails (RFC arm A-emerg)
-collector exact js_gc_collect -- explicit gc()
-collector exact js_gc_memory_pressure -- memory-pressure collection entry
-collector regex ^perry_runtime::gc::idle_reclaim::(?![A-Z][A-Z0-9_]*::) -- idle reclaim / compaction collections
+poll exact js_gc_collect -- explicit gc(): a declared poll (RFC D1), never cut
+poll exact js_gc_memory_pressure -- memory-pressure collection: a declared poll (RFC D1)
+poll regex ^perry_runtime::gc::idle_reclaim::(?![A-Z][A-Z0-9_]*::) -- idle reclaim / compaction: a declared poll (RFC D1)
 
 # --------------------------------------------------------------------- poll
 # Declared polls (RFC D1). Never cut: reaching one means a precise, possibly
 # moving collection can begin inside the call.
 poll exact js_gc_loop_safepoint -- the loop back-edge poll
 poll exact js_gc_safepoint -- the explicit safepoint entry
+poll regex ^perry_runtime::gc::policy::manual_gc_collect_now -- the collection behind gc() / perry/gc: a declared poll
 poll regex ^perry_runtime::gc::policy::gc_safepoint_moving_minor -- the poll body: runs the moving minor at a declared safepoint
 
 # ----------------------------------------------------------------------- js
@@ -68,7 +69,6 @@ panic regex ^core::panicking:: -- panic entry points (panic, panic_fmt, bounds c
 panic regex ^std::panicking:: -- the std panic runtime and hook dispatch: never returns under panic=abort
 panic regex ^core::(result|option)::(unwrap_failed|expect_failed) -- unwrap/expect failure: diverges into the panic runtime
 panic regex ^alloc::alloc::handle_alloc_error|^alloc::raw_vec::(handle_error|capacity_overflow)|^std::alloc::rust_oom|^__rg_oom|^__rust_alloc_error_handler -- allocation failure: aborts the process
-panic regex ^std::process::abort|^std::sys::.*abort_internal -- process abort
 panic regex ^core::slice::index::|^core::str::slice_error_fail|^core::cell::panic_already -- index / borrow failures: diverge into the panic runtime
 
 # ---------------------------------------------------------------- teardown
@@ -83,6 +83,9 @@ teardown regex ^core::ptr::drop_glue::<perry_runtime::tls_hot::HotCell< -- a per
 teardown regex ^std::sys::thread_local::destructors::|^std::sys::thread_local::guard:: -- std's TLS destructor runner: thread exit only
 
 # ------------------------------------------------------------------- extern
+extern regex ^(memset_pattern(4|8|16)|__strlcat_chk|__strlcpy_chk|strlcpy|strlcat|atoi|atol|random|srandom|confstr|getloadavg|getpriority|setpriority|getgroups|setgroups|initgroups|setuid|setgid|seteuid|setegid|setpgid|getpeereid|gethostuuid|chroot|lchmod|fsctl|pathconf|fpathconf|statvfs|fstatvfs|seekdir|telldir|pause|sigismember|sigpending|sigwait|clock|openpty|cfsetispeed|cfsetospeed|gnu_get_libc_version|pidfd_getpid|pidfd_spawnp|waitid|qsort_r|realpath\$DARWIN_EXTSN|__realpath_chk|_setjmp|setjmp|longjmp|_longjmp|sigsetjmp|siglongjmp|pthread_attr_\w+|pthread_setname_np|proc_pid_rusage|host_processor_info|host_statistics64|getsectiondata|_dyld_\w+|malloc_create_zone|malloc_default_zone|malloc_set_zone_name|malloc_zone_\w+|copyfile_state_\w+|posix_spawn_file_actions_\w+|posix_spawnattr_\w+|__addtf3|__subtf3|__multf3|__divtf3|__eqtf2|__netf2|__gttf2|__getf2|__lttf2|__letf2|__unordtf2|__floatsitf|__floattitf|__fixtfsi|__extenddftf2|__trunctfdf2|CF\w+)$ -- more libc / libSystem / CoreFoundation / soft-float primitives: none takes a Perry callback (qsort_r's comparator is the calling C code's own)
+extern regex ^(\?\?3@YAXPEAX_K@Z|\?\?2@YAPEAX_K@Z|\?\?3@YAXPEAX@Z|\?get_new_handler@std@@.*|LoadLibrary\w*|FreeLibrary|GetProcAddress|AdjustTokenPrivileges|LookupPrivilegeValue\w*|OpenProcess\w*|K32\w+|CoTaskMemFree|SHGetKnownFolderPath|ConnectNamedPipe|DisconnectNamedPipe|FreeEnvironmentStrings\w*|GetSystemDirectory\w*|GetWindowsDirectory\w*|ConvertFiberToThread|ConvertThreadToFiber|IsThreadAFiber|PostQueuedCompletionStatus|ReadConsole\w*|ReadFileEx|RemoveDirectory\w*|ResetEvent|ResizePseudoConsole|UpdateProcThreadAttribute|_close|_gmtime64_s|_localtime64_s|_hypot|_wgetenv|qsort_s|strspn|strcspn|srandomdev|fork|pthread_setname_np|sel_registerName|objc_getClass)$ -- Win32 / MSVC CRT / libc leaves: operator new/delete, library loading for backtrace symbolization (DllMain cannot call into Perry), process tokens, console and pipe I/O, time conversion. NOT listed: objc_msgSend and RegisterWaitForSingleObject / UnregisterWaitEx, which run callbacks and stay seeds
+extern regex ^compiler_builtins:: -- compiler_builtins arithmetic resolved at final link (demangled spelling on targets where the crate's objects are not in the graph)
 # Undefined symbols (defined by no archive in the graph) that are system or C
 # runtime leaves: they cannot call back into Perry code. Any other undefined
 # symbol is a seed -- it could be generated code, a UI crate, or a native
@@ -143,8 +146,8 @@ indirect regex ^<?std::panic::get_backtrace_style|^std::panicking:: -- panic run
 # static visitors (bitmap and arena iteration) and the error / output /
 # deferred-free hooks. Perry never registers a hook (forbid rule below), so no
 # mimalloc indirect call can reach Perry code.
-indirect regex ^_?mi_|^mi_ -- mimalloc internals: static visitors and unregistered hooks only
-forbid regex ^_?mi_register_ -- the mimalloc exemption assumes no hook is registered
+indirect regex ^_?mi_|^mi_|^\?_?mi_|^\?win_\w+@@ -- mimalloc internals (C; MSVC-mangled static helpers on Windows, incl. its win_* OS layer calling kernel32 entry points resolved at init): static visitors, OS entry points and unregistered hooks only
+forbid regex ^_?mi_register_|^\?mi_register_ -- the mimalloc exemption assumes no hook is registered
 #
 # TRUST BOUNDARY. Indirect calls inside third-party Rust crates and std/core/
 # alloc are not seeds, except where a rule above names the function as a
