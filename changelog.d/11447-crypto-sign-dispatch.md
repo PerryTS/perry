@@ -1,0 +1,1 @@
+#11447: Route captured/CommonJS `crypto.createSign` and `crypto.createVerify` calls (including legacy `Sign`/`Verify` aliases) through the existing implementations instead of returning undefined from the generic crypto dispatcher. Add dispatcher regressions and a CommonJS native parity fixture covering computed algorithm names, detached calls, and RSA signature verification.

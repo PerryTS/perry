@@ -315,6 +315,8 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
     };
     match method {
         "createHash" => js_crypto_create_hash(str_ptr(0)),
+        "createSign" | "Sign" => js_crypto_create_sign(str_ptr(0)),
+        "createVerify" | "Verify" => js_crypto_create_verify(str_ptr(0)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
         "createDiffieHellman" | "DiffieHellman" => {
             js_crypto_create_diffie_hellman(arg(0), arg(1), arg(2))
@@ -755,6 +757,35 @@ mod tests {
 
     fn catch_runtime_throw(f: impl FnOnce()) -> bool {
         perry_runtime::exception::catch_js_throw(f).is_err()
+    }
+
+    #[test]
+    fn crypto_native_dispatch_creates_sign_and_verify_handles() {
+        for method in ["createSign", "Sign", "createVerify", "Verify"] {
+            for algorithm in ["sha256", "RSA-SHA256", "RSA-SHA384", "RSA-SHA512"] {
+                let ptr = js_string_from_bytes(algorithm.as_ptr(), algorithm.len() as u32);
+                let args = [f64::from_bits(JSValue::string_ptr(ptr).bits())];
+                let result = unsafe {
+                    js_crypto_native_dispatch(
+                        method.as_ptr(),
+                        method.len(),
+                        args.as_ptr(),
+                        args.len(),
+                    )
+                };
+                assert_ne!(
+                    result.to_bits(),
+                    undefined().to_bits(),
+                    "{method}({algorithm})"
+                );
+                let handle = perry_runtime::js_nanbox_get_pointer(result);
+                if method == "createSign" || method == "Sign" {
+                    assert!(crate::common::take_handle::<SignHandle>(handle).is_some());
+                } else {
+                    assert!(crate::common::take_handle::<VerifyHandle>(handle).is_some());
+                }
+            }
+        }
     }
 
     #[test]
