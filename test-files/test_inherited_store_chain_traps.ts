@@ -19,13 +19,18 @@ function setK1(o: any, v: number) { o.k = v; }
   }
   log("T1 " + r.join(" ")); }
 
-// T2: non-writable inherited data property (sloppy store is ignored)
+// T2: non-writable inherited data property. The repo's package.json makes
+// this file an ES module, so the store is STRICT under node and perry alike
+// (there is no sloppy store to test here): it must throw and leave the
+// receiver untouched, i.e. no own `k` and the inherited value still read.
 class A2 { constructor() {} }
 function setK2(o: any, v: number) { o.k = v; }
 { const r: string[] = [];
   for (let i = 0; i < N; i++) {
     if (i === CHANGE) Object.defineProperty(A2.prototype, "k", { value: 5, writable: false, configurable: true });
-    const o: any = new A2(); setK2(o, i); r.push(own(o, "k") + ":" + o.k);
+    const o: any = new A2(); let threw = false;
+    try { setK2(o, i); } catch (e) { threw = e instanceof TypeError; }
+    r.push(threw + ":" + own(o, "k") + ":" + o.k);
   }
   log("T2 " + r.join(" ")); }
 
@@ -61,7 +66,7 @@ function setK5(o: any, v: number) { o.zz5 = v; }
   delete (Object.prototype as any).zz5;
   log("T5 " + r.join(" ")); }
 
-// T6: frozen and non-extensible receivers
+// T6: frozen and non-extensible receivers (a refused store throws: see T2)
 class A6 { constructor() {} }
 function setK6(o: any, v: number) { o.k = v; }
 { const r: string[] = [];
@@ -69,7 +74,10 @@ function setK6(o: any, v: number) { o.k = v; }
     let o: any = new A6();
     if (i === CHANGE) o = Object.freeze(o);
     if (i === CHANGE + 1) o = Object.preventExtensions(o);
-    setK6(o, i); r.push(String(own(o, "k")));
+    // Strict (ES module): a store the receiver refuses throws.
+    let threw = false;
+    try { setK6(o, i); } catch (e) { threw = e instanceof TypeError; }
+    r.push(threw + ":" + own(o, "k"));
   }
   log("T6 " + r.join(" ")); }
 
