@@ -142,6 +142,30 @@ unsafe fn canonical_buffer_index(key_ptr: *const crate::StringHeader) -> Option<
     (val <= i32::MAX as u64).then_some(val as u32)
 }
 
+/// #10515: the cache-hit arm of `js_dyn_index_get` for an admitted owning
+/// byte view, kept out of line so the dispatcher's other receivers pay only
+/// the inline admission test.
+#[inline(never)]
+fn cached_u8_index_get(addr: usize, index: f64) -> Option<f64> {
+    let idx = finite_nonnegative_i32_index(index)?;
+    crate::buffer::cached_u8_read(addr, idx).map(f64::from)
+}
+
+/// #10515: the cache-hit store arm of `js_dyn_index_set_strict`. Only a
+/// Number (or int32 box) is stored here: any other value's ToNumber may run
+/// user code, which the full path orders against the bounds check.
+#[inline(never)]
+fn cached_u8_index_set(addr: usize, index: f64, value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !(v.is_number() || v.is_int32()) {
+        return false;
+    }
+    let Some(idx) = finite_nonnegative_i32_index(index) else {
+        return false;
+    };
+    crate::buffer::cached_u8_write(addr, idx, crate::typedarray::jsvalue_to_uint8(value))
+}
+
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
 /// static type. Issue #514. Strings → js_string_char_at; objects stringify
 /// numeric keys (`obj[0]` is `obj["0"]`), while arrays/buffers keep numeric
@@ -168,19 +192,6 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return js_dyn_index_get(boxed, index.get_nanbox_f64());
     }
     let jsval = JSValue::from_bits(bits);
-    // #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) with a
-    // canonical in-bounds index answers from the inline-access cache before
-    // the string / symbol / typed-array / registry dispatch below.
-    if jsval.is_pointer() {
-        let raw_ptr = (bits & POINTER_MASK) as usize;
-        if crate::buffer::u8_inline_cache_hit(raw_ptr) {
-            if let Some(byte) = finite_nonnegative_i32_index(index)
-                .and_then(|idx| crate::buffer::cached_u8_read(raw_ptr, idx))
-            {
-                return f64::from(byte);
-            }
-        }
-    }
     if jsval.is_any_string() {
         return crate::string::js_string_index_get_boxed(value, index);
     }
@@ -282,6 +293,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             raw_ptr as *const crate::typedarray::TypedArrayHeader,
             index,
         );
+    }
+    // #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) with a
+    // canonical in-bounds index answers from the inline-access cache instead
+    // of the buffer-registry probes below. Placed where buffers are handled so
+    // no other receiver pays for it.
+    if crate::buffer::u8_inline_cache_hit(raw_ptr) {
+        if let Some(byte) = cached_u8_index_get(raw_ptr, index) {
+            return byte;
+        }
     }
     // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a registered
     // buffer too, but it is NOT an integer-indexed exotic object — node answers
@@ -563,27 +583,6 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, strict: i32) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
-    // #10515: a Number stored at a canonical in-bounds index of an admitted
-    // owning byte view (`Uint8Array` / `Buffer`) is one byte write. Only a
-    // Number: any other value's ToNumber may run user code, which the full
-    // path below orders against the bounds check.
-    if jsval.is_pointer() {
-        let raw_ptr = (bits & POINTER_MASK) as usize;
-        if crate::buffer::u8_inline_cache_hit(raw_ptr) && {
-            let v = JSValue::from_bits(value.to_bits());
-            v.is_number() || v.is_int32()
-        } {
-            if let Some(idx) = finite_nonnegative_i32_index(index) {
-                if crate::buffer::cached_u8_write(
-                    raw_ptr,
-                    idx,
-                    crate::typedarray::jsvalue_to_uint8(value),
-                ) {
-                    return value;
-                }
-            }
-        }
-    }
     // Proxies use small tagged handles rather than heap addresses. They must
     // take their [[Set]] path before any direct-property fast path.
     if crate::proxy::js_proxy_is_proxy(obj) != 0 {
@@ -726,6 +725,14 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             index,
             value,
         );
+        return value;
+    }
+    // #10515: a Number stored at a canonical in-bounds index of an admitted
+    // owning byte view (`Uint8Array` / `Buffer`) is one byte write, instead of
+    // the buffer-registry probes below. Only a Number: any other value's
+    // ToNumber may run user code, which the full path orders against the
+    // bounds check.
+    if crate::buffer::u8_inline_cache_hit(raw_ptr) && cached_u8_index_set(raw_ptr, index, value) {
         return value;
     }
     // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /
