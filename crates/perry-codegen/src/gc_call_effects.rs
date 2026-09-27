@@ -726,6 +726,42 @@ mod tests {
         assert!(external_callee_cannot_collect("js_array_length_leaf"));
     }
 
+    /// RFC S2 (#11554, `expr/ic_fast_split.rs`): each full-outline IC hit is
+    /// a GC-leaf `_fast` export and its decline continues into a collecting
+    /// call. S2 hand-listed the four hits because this table did not exist
+    /// yet; the graph now proves them `Leaf` on every checked target. Two
+    /// edges S2's census had to cut are modelled here without a hand entry:
+    /// the `Arena as Drop` TLS destructor registered by `tls_hot::fill`'s lazy
+    /// init is a `teardown` cut in `seeds.txt` (it runs at thread exit), and
+    /// `typed_feedback::invalidate_representation_change` takes the registry
+    /// through `NonCollectingRootRegistryGuard`, whose drop has no path to a
+    /// flush. The continuations are the control: a `_fast_miss` classified
+    /// `CannotCollect` SIGSEGVs S2's evacuating slow-path test.
+    #[test]
+    fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
+        for name in [
+            "js_object_get_field_ic_fast",
+            "js_class_field_get_ic_fast",
+            "js_class_field_set_ic_fast",
+            "js_put_value_set_packed_fast",
+        ] {
+            assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
+            assert!(external_callee_cannot_collect(name), "{name}");
+        }
+        for name in [
+            "js_object_get_field_ic_fast_miss",
+            "js_class_field_get_ic_fast_miss",
+            "js_class_field_set_ic_fast_miss",
+            "js_put_value_set_packed_miss",
+        ] {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::Unknown,
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn register_global_root_tracks_the_barrier_it_wraps() {
         assert_eq!(
