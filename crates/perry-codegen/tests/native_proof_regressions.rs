@@ -7660,10 +7660,32 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
         throwing_body.contains("\n  unreachable"),
         "fixture should terminate the assignment before its store:\n{throwing_body}"
     );
+    // #11450: the store after the throw is lowered into a predecessor-less
+    // block (dead code), so whatever it emits must be well-formed IR rather
+    // than a barrier naming registers dropped from the terminated block.
+    assert_code_after_unresolved_worker_is_dead(throwing_body);
+    perry_codegen::testing::verify_ir(&ir, "abrupt_captured_local_set_barrier")
+        .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
+}
+
+/// Everything lowered after an unresolved Worker's `unreachable` sits in the
+/// `worker.unresolved.after` block, which no branch targets (#11450).
+fn assert_code_after_unresolved_worker_is_dead(after_throw: &str) {
+    let dead_label = after_throw
+        .lines()
+        .find_map(|l| {
+            l.strip_suffix(':')
+                .filter(|l| l.starts_with("worker.unresolved.after"))
+        })
+        .unwrap_or_else(|| panic!("no dead continuation block after the throw:\n{after_throw}"));
+    let (before_dead, _) = after_throw.split_once(&format!("\n{dead_label}:")).unwrap();
     assert!(
-        !throwing_body.contains("wb.maybe")
-            && !throwing_body.contains("call void @js_write_barrier("),
-        "a terminated assignment cannot reach or supply operands to a write barrier:\n{throwing_body}"
+        before_dead.trim_end().ends_with("unreachable"),
+        "the throw must be followed directly by its dead continuation:\n{after_throw}"
+    );
+    assert!(
+        !after_throw.contains(&format!("label %{dead_label}")),
+        "the dead continuation block must have no predecessors:\n{after_throw}"
     );
 }
 
@@ -7747,12 +7769,13 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         after_throw.contains("\n  unreachable"),
         "the dynamic Worker fallback must terminate the path:\n{after_throw}"
     );
-    assert!(
-        !after_throw.contains("js_array_alloc")
-            && !after_throw.contains("js_object_alloc")
-            && !after_throw.contains("ctor_prologue"),
-        "nothing after an abruptly-completing constructor argument may be lowered:\n{after_throw}"
-    );
+    // #11450: the later field, allocation and constructor diamond are lowered
+    // into a predecessor-less block after the throw. They are dead, and the
+    // module must verify: none of them may name a register dropped from the
+    // terminated block.
+    assert_code_after_unresolved_worker_is_dead(after_throw);
+    perry_codegen::testing::verify_ir(&ir, "abrupt_anonymous_object_constructor_arg")
+        .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
 }
 
 fn boxed_param_capture_module(name: &str) -> Module {
