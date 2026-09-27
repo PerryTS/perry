@@ -872,3 +872,9 @@ test_gap_gc_store_ic_rhs_collects
 test_gap_gc_store_ic_rhs_reshapes
 test_gap_gc_store_ic_old_to_young
 test_gap_gc_store_ic_generic_receivers
+
+# --- #11590: packed-range loop's cached module-global copy -----------------
+# A module global grown from `[]` inside a top-level counted loop: the slow
+# clone polls and grows through a cached copy of the global, which must be a
+# GC root. SIGSEGV'd on every seed under the seeded schedule before the fix.
+test_gap_gc_11590_packed_loop_global_cache_rooting
