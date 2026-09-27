@@ -509,6 +509,19 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #11471. The other half of the census above: a process-global cache
+      # KEYED by (or holding) a heap address is not a GC root, so that audit
+      # cannot see it, yet it goes stale the moment its thread exits and
+      # `Arena::drop` hands the blocks to another thread's arena. #11319,
+      # #11462 and #11470 were all this shape, each found by chasing a flake.
+      # Every such static must carry a thread-exit verdict; a new unclassified
+      # one fails, and so does a stale entry. Build-free, so it lives in `lint`.
+      - name: Thread-exit custody of address-keyed globals (#11471)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/thread_exit_address_globals.py --self-test
+          python3 scripts/thread_exit_address_globals.py
+
       # #8821. The poll-reach audit is static, build-free and sub-second, but it
       # lived ONLY in `gc-root-dominance.yml`, which is label-gated behind
       # `run-extended-tests` — so it is skipped on every PR and speaks only on
