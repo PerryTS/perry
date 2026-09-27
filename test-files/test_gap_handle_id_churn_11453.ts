@@ -10,19 +10,19 @@ import * as crypto from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 
 const held = crypto.createHash("sha256");
-held.update("a");
+held.update("the-first-and-only-update");
 const heldDigest = held.digest("hex");
-const heldHmac = crypto.createHmac("sha256", "k").update("x");
+const heldHmac = crypto.createHmac("sha256", "k").update("hmac-payload-for-the-held-handle");
 const heldDecoder = new StringDecoder("utf8");
 const partial = heldDecoder.write(Buffer.from([0xe2, 0x82]));
 
 const N = 1_100_000;
 let sum = 0;
 for (let i = 0; i < N; i++) {
-  const h = crypto.createHash("sha1").update("x" + (i & 7)).digest("hex");
+  const h = crypto.createHash("sha1").update("request-path-/api/items/" + (i & 7)).digest("hex");
   sum += h.charCodeAt(i & 31);
   if ((i & 15) === 0) {
-    sum += crypto.createHmac("sha256", "key").update("v" + (i & 3)).digest("base64").length;
+    sum += crypto.createHmac("sha256", "key").update("session-cookie-value-" + (i & 3)).digest("base64").length;
   }
   if ((i & 63) === 0) {
     const d = new StringDecoder("utf8");
@@ -33,7 +33,7 @@ console.log("cycles", N, "sum", sum);
 
 // The finalized hash is still the same object: using it again throws.
 try {
-  held.update("b");
+  held.update("an-update-after-digest");
   console.log("stale update: no throw");
 } catch (e: any) {
   console.log("stale update:", e.code);
