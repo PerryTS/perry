@@ -1979,7 +1979,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // user method and falls through to the native arms — dispatching it by
     // name again is how an earlier attempt recursed until the stack ran out.
     if let Some(result) =
-        crate::object::own_override::call_own_user_method(object(), method_name, &refreshed_args())
+        crate::object::own_override::call_own_user_method(object, method_name, refreshed_args)
     {
         return result;
     }

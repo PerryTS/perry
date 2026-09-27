@@ -226,7 +226,7 @@ const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data)
 
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
-pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 2;
+pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 3;
 /// Slots of each [`HotTls`] box-pointer cache; `box` indexes with this.
 pub(crate) const INLINE_BOX_PTR_CACHE_SLOTS: usize = 8;
 
