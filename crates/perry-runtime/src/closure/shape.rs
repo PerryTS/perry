@@ -136,13 +136,30 @@ fn mint(kind: ShapeObjectKind, proto_id: u64) -> u32 {
     id
 }
 
+#[inline]
 fn base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
-    let mut ids = BASE_SHAPES.with(std::cell::Cell::get);
-    if ids[index] == 0 {
-        ids[index] = mint(kind, proto_id);
-        BASE_SHAPES.with(|c| c.set(ids));
+    // One element read in place: every closure birth and every function
+    // receiver test asks for one of these ids, and copying the whole array
+    // out of the cell per call showed up at ~3% of Zod.
+    // SAFETY: a plain `[u32; 5]` read through the agent's own cell; nothing
+    // else holds a reference into it.
+    let id = BASE_SHAPES.with(|c| unsafe { (*c.as_ptr())[index] });
+    if id != 0 {
+        return id;
     }
-    ids[index]
+    mint_base_slot(index, kind, proto_id)
+}
+
+#[cold]
+#[inline(never)]
+fn mint_base_slot(index: usize, kind: ShapeObjectKind, proto_id: u64) -> u32 {
+    let id = mint(kind, proto_id);
+    BASE_SHAPES.with(|c| {
+        let mut ids = c.get();
+        ids[index] = id;
+        c.set(ids);
+    });
+    id
 }
 
 /// The base ShapeId for a closure of `kind`'s bodies.
