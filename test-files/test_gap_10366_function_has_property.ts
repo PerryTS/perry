@@ -1,0 +1,44 @@
+function report(label: string, fn: any) {
+  console.log(label, "call" in fn, "apply" in fn, "bind" in fn, "toString" in fn, "length" in fn, "absent10366" in fn);
+}
+function ordinary() {}
+report("ordinary", ordinary);
+report("arrow", () => 1);
+report("bound", ordinary.bind(null));
+report("async", async function () {});
+report("generator", function* () { yield 1; });
+let gets = 0;
+const fp: any = Function.prototype;
+fp.absent10366 = undefined;
+Object.defineProperty(fp, "getter10366", {get() { gets++; return undefined; }, configurable: true});
+console.log("inherited", "absent10366" in ordinary, "getter10366" in ordinary, gets);
+delete fp.absent10366;
+delete fp.getter10366;
+const own: any = function () {};
+own.call = undefined;
+Object.defineProperty(own, "own10366", {get() { gets++; return undefined; }, configurable: true});
+console.log("own", "call" in own, "own10366" in own, gets);
+delete own.call;
+report("restored", own);
+const bare: any = function () {};
+Object.setPrototypeOf(bare, null);
+report("null", bare);
+const proto: any = Object.create(null);
+proto.custom10366 = undefined;
+Object.defineProperty(proto, "customGetter10366", {get() { gets++; return undefined; }});
+Object.setPrototypeOf(bare, proto);
+console.log("custom", "custom10366" in bare, "customGetter10366" in bare, "call" in bare, gets);
+const parent: any = function () {};
+parent.parent10366 = undefined;
+const child: any = function () {};
+Object.setPrototypeOf(child, parent);
+console.log("function-parent", "parent10366" in child, "toString" in child);
+const middle: any = {};
+Object.setPrototypeOf(middle, parent);
+Object.setPrototypeOf(child, middle);
+console.log("mixed-parent", "parent10366" in child, "toString" in child);
+const trapped: any = function () {};
+const proxy = new Proxy({}, {has(_target, key) { console.log("has-trap", key); return key === "trap10366"; }});
+Object.setPrototypeOf(trapped, proxy);
+console.log("proxy", "trap10366" in trapped, Reflect.has(trapped, "call"));
+console.log("poisoned", "caller" in ordinary, "arguments" in ordinary);

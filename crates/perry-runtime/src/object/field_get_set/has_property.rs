@@ -952,40 +952,13 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 }
                 return nanbox_false;
             }
-            // #1758: a CLOSURE receiver (functions ARE objects in JS, so
-            // `key in fn` is valid). Pre-fix this fell through to the
-            // keys_array scan below, which read `crate::object::object_keys_array(obj_ptr)` at
-            // the closure's capture-slot offset — a NaN-boxed value, not a
-            // real *ArrayHeader — and SIGSEGV'd in `js_array_length`. effect's
-            // `dual`-wrapped helpers reach here (`<key> in someClosure` deep in
-            // the fiber runtime). Mirror the closure read path
-            // (`js_object_get_field_by_name`: `length` → arity, others →
-            // CLOSURE_DYNAMIC_PROPS): present-and-not-undefined ⇒ true.
+            // Functions have a different own-property layout. HasProperty
+            // must inspect presence, not read a value or invoke a getter.
             if (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE {
-                if !key_val.is_any_string() {
-                    return nanbox_false;
-                }
-                let key_str =
-                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
-                if key_str.is_null() {
-                    return nanbox_false;
-                }
-                // `'caller' in fn` / `'arguments' in fn` — HasProperty must
-                // NOT run the poisoned getter (which throws). The accessor
-                // exists on Function.prototype, so the answer is true.
-                // Refs test262 S13.2_A8_T1/T2.
-                if let Some(key_name) =
-                    super::super::has_own_helpers::str_from_string_header(key_str)
-                {
-                    if matches!(key_name, "caller" | "arguments") {
-                        return nanbox_true;
-                    }
-                }
-                let v = js_object_get_field_by_name(obj_ptr, key_str);
-                return if v.is_undefined() {
-                    nanbox_false
-                } else {
+                return if function_has_property(obj, key) {
                     nanbox_true
+                } else {
+                    nanbox_false
                 };
             }
         }
@@ -1097,6 +1070,43 @@ unsafe fn object_string_key_has_property(
     }
 }
 
+unsafe fn function_has_property(receiver: f64, key: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(receiver);
+    let key = scope.root_nanbox_f64(key);
+    for _ in 0..1024 {
+        let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
+            as *const crate::StringHeader;
+        let Some(name) = super::super::has_own_helpers::str_from_string_header(key_ptr) else {
+            return false;
+        };
+        let addr = crate::value::js_nanbox_get_pointer(current.get_nanbox_f64()) as usize;
+        // Keep the existing synthetic poisoned-accessor presence behavior.
+        if matches!(name, "caller" | "arguments")
+            || super::super::has_own_helpers::closure_own_key_present(addr, name)
+        {
+            return true;
+        }
+        // This resolves explicit, generator and default Function prototypes.
+        // Both inputs stay rooted across lazy prototype materialization.
+        let proto = crate::object::js_object_get_prototype_of(current.get_nanbox_f64());
+        if JSValue::from_bits(proto.to_bits()).is_null() {
+            return false;
+        }
+        current.set_nanbox_f64(proto);
+        let addr = crate::value::js_nanbox_get_pointer(proto) as usize;
+        if !crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|hdr| hdr.obj_type == crate::gc::GC_TYPE_CLOSURE)
+        {
+            return crate::value::js_is_truthy(js_object_has_property(
+                current.get_nanbox_f64(),
+                key.get_nanbox_f64(),
+            )) != 0;
+        }
+    }
+    false
+}
+
 /// `OrdinaryHasProperty(O, P)` (ECMA-262 10.1.7.1) for ordinary heap objects:
 /// true when `P` is an own property of `O` OR of any object in `O`'s
 /// `[[Prototype]]` chain.
@@ -1148,8 +1158,15 @@ unsafe fn ordinary_has_property(
         // `crate::object::object_keys_array(cur)` off an array node finds garbage (or nothing) and
         // every indexed/`"length"` lookup wrongly reports absent. Detect the
         // GC type and route to the array-aware own-key check instead.
-        let cur_is_array = crate::value::addr_class::try_read_gc_header(cur as usize)
-            .is_some_and(|hdr| hdr.obj_type == crate::gc::GC_TYPE_ARRAY);
+        let cur_type =
+            crate::value::addr_class::try_read_gc_header(cur as usize).map(|hdr| hdr.obj_type);
+        if cur_type == Some(crate::gc::GC_TYPE_CLOSURE) {
+            return function_has_property(
+                crate::value::js_nanbox_pointer(cur as i64),
+                crate::value::js_nanbox_string(key as i64),
+            );
+        }
+        let cur_is_array = cur_type == Some(crate::gc::GC_TYPE_ARRAY);
         if cur_is_array {
             if super::super::has_own_helpers::array_own_key_present(
                 cur as *const crate::array::ArrayHeader,
@@ -1471,3 +1488,6 @@ pub(crate) fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u
 
 #[cfg(test)]
 mod evaluation_accessor_tests;
+
+#[cfg(test)]
+mod function_presence_tests;

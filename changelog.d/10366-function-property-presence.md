@@ -1,0 +1,1 @@
+Fix string-keyed `in` and `Reflect.has` checks on functions to inspect own property presence and follow the actual prototype chain. Inherited Function.prototype members, undefined-valued properties, accessor properties, custom prototypes and proxy `has` traps are now handled without invoking getters. Ordinary objects can also inherit properties through a function prototype.
