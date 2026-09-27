@@ -212,8 +212,16 @@ pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, 
 
     // `headers`: build a fresh Headers store from whatever the init carries
     // (a Headers handle, a plain object, or an iterable of `[name, value]`).
+    // Only `undefined` means "absent". `headers: null` is a HeadersInit that
+    // fails conversion — `new Headers(null)` throws a TypeError, and so does
+    // `new Request(url, { headers: null })` in Node — so it must reach
+    // `js_headers_init_from_value`, which raises it. #10380 routed every
+    // literal RequestInit through this function, and folding null into the
+    // absent case turned that TypeError into a silently header-less request
+    // (#11560). `request_copy.rs`'s override path already tests exactly
+    // `TAG_UNDEFINED`.
     let headers_val = field(b"headers");
-    let headers_handle = if matches!(headers_val.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+    let headers_handle = if headers_val.to_bits() == TAG_UNDEFINED {
         0.0
     } else {
         let h = js_headers_new();
