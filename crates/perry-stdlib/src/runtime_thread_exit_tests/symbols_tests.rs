@@ -155,24 +155,67 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
     );
 }
 
+/// Is the symbol `(addr, id)` still in `SYMBOL_POINTERS`?
+///
+/// #11539: the address alone is not an identity. The dead thread's `Symbol()`
+/// header is returned to the system allocator at thread exit, and a
+/// concurrently running test's `Symbol()` can be handed the same block and
+/// register the same address. An address-only check then reports the live
+/// newcomer as the dead symbol (~6 in 1000 runs of this module on Linux, every
+/// one showing a live symbol with the next id at the dead one's address).
+/// Symbol ids are monotonic and never reissued, so the id pins the symbol.
+fn symbol_still_registered(addr: usize, id: u64) -> bool {
+    perry_runtime::symbol::registered_symbol_id_for_test(addr) == Some(id)
+}
+
 /// `SYMBOL_POINTERS`: `Symbol()` headers are `gc_malloc`'d, not arena cells;
 /// `MallocState`'s TLS destructor (`gc/malloc.rs`) reports their freed ranges
 /// to `arena::thread_exit::release_freed_ranges` before freeing them.
 #[test]
 fn thread_exit_releases_the_threads_fresh_symbol_pointers() {
-    let (sym, alive) = std::thread::spawn(|| {
+    let (sym, id) = std::thread::spawn(|| {
         let sym = addr_of(unsafe { perry_runtime::symbol::js_symbol_new(string_value("t11471p")) });
         (
             sym,
-            perry_runtime::symbol::symbol_pointer_registered_for_test(sym),
+            perry_runtime::symbol::registered_symbol_id_for_test(sym),
         )
     })
     .join()
     .unwrap();
-    assert!(alive, "Symbol() must be registered while its thread lives");
+    let id = id.expect("Symbol() must be registered while its thread lives");
     assert!(
-        !perry_runtime::symbol::symbol_pointer_registered_for_test(sym),
+        !symbol_still_registered(sym, id),
         "a dead thread's Symbol() stayed in SYMBOL_POINTERS"
+    );
+}
+
+/// #11539 regression: the verdict above must not be fooled by another symbol
+/// registered at the dead one's address, and must still go red for the dead
+/// symbol itself. Models the reuse with a live symbol standing at an address
+/// whose previous (dead) occupant had a different id — exactly what the
+/// flaky runs showed — so it needs no allocator cooperation to reproduce.
+#[test]
+fn symbol_verdict_is_by_identity_not_by_address() {
+    let scope = RuntimeHandleScope::new();
+    let sym = scope
+        .root_nanbox_f64(unsafe { perry_runtime::symbol::js_symbol_new(string_value("t11539")) });
+    let addr = addr_of(sym.get_nanbox_f64());
+    let live_id = perry_runtime::symbol::registered_symbol_id_for_test(addr)
+        .expect("a live Symbol() is registered");
+    assert!(
+        perry_runtime::symbol::symbol_pointer_registered_for_test(addr),
+        "the reused address is registered, so an address-only verdict would fail"
+    );
+    // A symbol created earlier at this address was necessarily a different
+    // one: ids are monotonic, so any earlier occupant's id is smaller.
+    let dead_id = live_id.wrapping_sub(1);
+    assert!(
+        !symbol_still_registered(addr, dead_id),
+        "a newcomer at a dead symbol's address was reported as the dead symbol"
+    );
+    assert!(
+        symbol_still_registered(addr, live_id),
+        "the verdict must still see a symbol that really is registered"
     );
 }
 
