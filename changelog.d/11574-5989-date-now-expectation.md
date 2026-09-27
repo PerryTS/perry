@@ -1,0 +1,1 @@
+**Test: #5989 expects the syntactic `Date.now()` to reach a reassigned `Date` (#11560).** Perry now intercepts it, matching Node (`io calls: 2`); the test pinned the old gap (`1`). The fixture logs the count per step and matches `node --experimental-strip-types` byte for byte.
