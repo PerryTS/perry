@@ -64,6 +64,34 @@ pub fn is_external_buffer(addr: usize) -> bool {
             .unwrap_or(false)
 }
 
+/// Test probe (#11547): is `addr` in each of the three PROCESS-GLOBAL
+/// external registries (`EXTERNAL_BUFFER_REGISTRY`,
+/// `EXTERNAL_UINT8ARRAY_REGISTRY`, `EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
+///
+/// Unlike `is_uint8array_buffer` / `crypto_key_meta`, which consult this
+/// thread's registries first, it touches no thread-local, so a thread-exit
+/// range hook may call it from a TLS destructor. Plain locks, no allocation.
+#[doc(hidden)]
+pub fn external_registries_hold_for_test(addr: usize) -> [bool; 3] {
+    use std::sync::PoisonError;
+    let in_set = |set: &OnceLock<Mutex<HashSet<usize>>>| {
+        set.get().is_some_and(|s| {
+            s.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&addr)
+        })
+    };
+    [
+        in_set(&EXTERNAL_BUFFER_REGISTRY),
+        in_set(&EXTERNAL_UINT8ARRAY_REGISTRY),
+        EXTERNAL_CRYPTO_KEY_META_REGISTRY.get().is_some_and(|m| {
+            m.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&addr)
+        }),
+    ]
+}
+
 fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
     crate::once_init::get_or_init(&EXTERNAL_UINT8ARRAY_REGISTRY, || Mutex::new(HashSet::new()))
 }

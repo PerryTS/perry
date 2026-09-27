@@ -227,46 +227,118 @@ fn thread_exit_releases_the_threads_buffer_own_props() {
     );
 }
 
+/// Membership of `addr` in the three process-global external-buffer
+/// registries and `PERRY_U8_INLINE_CACHE`, in that order. Reads no
+/// thread-local, so the thread-exit probe below may call it.
+fn external_buffer_registrations(addr: usize) -> [bool; 4] {
+    let [ext, u8a, meta] = perry_runtime::buffer::external_registries_hold_for_test(addr);
+    [ext, u8a, meta, u8_cache_holds(addr)]
+}
+
+/// #11547: the external-buffer test's buffer address, and what the tables held
+/// for it when its thread's arena was released.
+///
+/// Checking the tables after `join` cannot tell the dead buffer from a new one.
+/// The dying thread's arena goes back to the allocator, and a concurrent test
+/// (`thread_exit_releases_the_threads_crypto_key_entries` registers a CryptoKey
+/// Buffer through the same `js_buffer_mark_as_crypto_key_external`) can be
+/// given the same address and register it again. So the verdict is taken
+/// INSIDE the release instead: [`record_external_buffer_release`] is a
+/// thread-exit range hook that runs after the external-buffer registries' own
+/// hook, while the block is still owned by the exiting thread and so cannot
+/// belong to anyone else.
+static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, Option<[bool; 4]>)> =
+    std::sync::Mutex::new((0, None));
+
+fn record_external_buffer_release(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut probe = EXTERNAL_BUFFER_EXIT_PROBE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (addr, seen) = *probe;
+    // First release only: once the address is back with the allocator, a later
+    // tenant's own thread exit reports it again.
+    if addr != 0 && seen.is_none() && freed.contains(addr) {
+        probe.1 = Some(external_buffer_registrations(addr));
+    }
+}
+
+/// Verdict on what [`record_external_buffer_release`] saw: `Err` names the
+/// first table that still held the dead buffer when its thread was released.
+fn external_buffer_release_verdict(seen: Option<[bool; 4]>) -> Result<(), &'static str> {
+    const TABLES: [&str; 4] = [
+        "EXTERNAL_BUFFER_REGISTRY outlived the thread",
+        "EXTERNAL_UINT8ARRAY_REGISTRY outlived the thread",
+        "EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread",
+        "PERRY_U8_INLINE_CACHE outlived the thread",
+    ];
+    let seen = seen.ok_or("the thread's release never reported the buffer's range")?;
+    match seen.iter().position(|&held| held) {
+        Some(i) => Err(TABLES[i]),
+        None => Ok(()),
+    }
+}
+
 #[test]
 fn thread_exit_releases_the_threads_external_buffer_registrations() {
-    let (addr, alive) = std::thread::spawn(|| {
+    let alive = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
         let addr = buf.get_raw_mut_ptr::<u8>() as usize;
         // webcrypto's CryptoKey registration: all three external registries.
+        // This also registers their thread-exit hook, so it runs before the
+        // probe registered below.
         unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
         // The codegen inline-read slow arm primes PERRY_U8_INLINE_CACHE.
         unsafe { js_u8_buffer_read_f64(addr as *const u8, 0) };
-        let cached = u8_cache_holds(addr);
-        let alive = [
-            perry_runtime::buffer::is_external_buffer(addr),
-            perry_runtime::buffer::is_uint8array_buffer(addr),
-            perry_runtime::buffer::crypto_key_meta(addr).is_some(),
-            cached,
-        ];
-        (addr, alive)
+        *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, None);
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            record_external_buffer_release,
+        );
+        external_buffer_registrations(addr)
     })
     .join()
     .unwrap();
+    let seen = std::mem::replace(&mut *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap(), (0, None)).1;
     assert_eq!(
         alive, [true; 4],
         "every registration must exist while its thread lives"
     );
+    if let Err(table) = external_buffer_release_verdict(seen) {
+        panic!("{table}");
+    }
+}
+
+/// #11547 regression: a buffer registered at the dead one's address after the
+/// release must not fail the verdict, and the verdict must still fail when
+/// the release left an entry behind or never saw the range. The newcomer is a
+/// real registered buffer on this thread, which is exactly what the
+/// address-only check used to report as "outlived".
+#[test]
+fn external_buffer_verdict_is_taken_at_release_not_by_address() {
+    let scope = RuntimeHandleScope::new();
+    let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
+    let addr = buf.get_raw_mut_ptr::<u8>() as usize;
+    unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
     assert!(
-        !perry_runtime::buffer::is_external_buffer(addr),
-        "EXTERNAL_BUFFER_REGISTRY outlived the thread"
+        perry_runtime::buffer::is_external_buffer(addr),
+        "the newcomer is registered, so an address-only check would fail"
+    );
+    assert_eq!(
+        external_buffer_release_verdict(Some([false; 4])),
+        Ok(()),
+        "a newcomer at a released address was reported as the dead buffer"
+    );
+    assert_eq!(
+        external_buffer_release_verdict(Some([true, false, false, false])),
+        Err("EXTERNAL_BUFFER_REGISTRY outlived the thread")
+    );
+    assert_eq!(
+        external_buffer_release_verdict(Some([false, false, false, true])),
+        Err("PERRY_U8_INLINE_CACHE outlived the thread")
     );
     assert!(
-        !perry_runtime::buffer::is_uint8array_buffer(addr),
-        "EXTERNAL_UINT8ARRAY_REGISTRY outlived the thread"
-    );
-    assert!(
-        perry_runtime::buffer::crypto_key_meta(addr).is_none(),
-        "EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread"
-    );
-    assert!(
-        !u8_cache_holds(addr),
-        "PERRY_U8_INLINE_CACHE outlived the thread"
+        external_buffer_release_verdict(None).is_err(),
+        "a release that never reported the range must not pass"
     );
 }
 
