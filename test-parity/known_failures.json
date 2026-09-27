@@ -191,15 +191,6 @@
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #3680 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. node:v8 Serializer / Deserializer classes still absent from the surface."
   },
-  "test_guarded_raw_numeric_arrays": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_hono_bundle": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -335,15 +326,6 @@
       "linux"
     ]
   },
-  "test_issue_3199_3200_tls_server_tlssocket": {
-    "issue": "8841",
-    "added": "2026-08-25",
-    "category": "bug-open",
-    "reason": "Reproduces 5/5 on both pre-#8835 r13 and r14: Perry exits 1 after the initial TLS server-address line while Node completes with exit 0. Tracked in #8841.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_issue_339_sqlite_stmt_all_bound_params": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -367,15 +349,6 @@
     "added": "2026-08-17",
     "category": "ci-env",
     "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_3558_computed_accessors": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
     "platforms": [
       "linux"
     ]
@@ -790,24 +763,6 @@
     "added": "2026-08-17",
     "category": "ci-env",
     "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lodash' after the repository's CI-equivalent npm ci because lodash is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_node_http2_basic": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_node_https_basic": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
     "platforms": [
       "linux"
     ]
