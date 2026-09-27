@@ -208,6 +208,14 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).summary() }
     }
 
+    /// The record's logical key count (how many entries of `keys` the shape
+    /// describes).
+    #[inline]
+    pub(crate) fn logical_key_count(self) -> u32 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).logical_key_count }
+    }
+
     /// The record's current `keys` word (0 for a keyless shape).
     #[inline]
     pub(crate) fn keys(self) -> u64 {

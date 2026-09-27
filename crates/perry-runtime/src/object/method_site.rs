@@ -316,7 +316,8 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.
     let megamorphic = site_is_megamorphic(slot);
-    if megamorphic || !prime_candidate(recv) {
+    if megamorphic || !prime_candidate(recv, std::slice::from_raw_parts(name_ref.ptr, name_ref.len))
+    {
         refuse(if megamorphic { 18 } else { 1 });
         return crate::typed_feedback::js_typed_feedback_native_call_method(
             site_id,
@@ -355,18 +356,47 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
 }
 
 /// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: a heap
-/// pointer whose GcHeader says ordinary object or function object.
+/// pointer whose GcHeader says ordinary object, or a function object whose
+/// SHAPE lists `name` as an own key. Most calls on functions (`fn.bind`,
+/// `fn.call`) name an inherited builtin a site never memoizes; they leave
+/// here on the shape's key list, before the miss roots anything.
 #[inline]
-fn prime_candidate(recv: f64) -> bool {
+fn prime_candidate(recv: f64, name: &[u8]) -> bool {
     let bits = recv.to_bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return false;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    crate::value::addr_class::is_above_handle_band(addr)
-        && unsafe { crate::value::addr_class::try_read_gc_header(addr) }.is_some_and(|h| {
-            h.obj_type == crate::gc::GC_TYPE_OBJECT || h.obj_type == crate::gc::GC_TYPE_CLOSURE
-        })
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return false;
+    }
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => true,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => unsafe {
+            function_shape_lists_key(addr, name)
+        },
+        _ => false,
+    }
+}
+
+/// Does the (claimed) function object at `addr` sit on a KEYED Function shape
+/// whose key list holds `name`? Reads the ShapeId word and the shape's key
+/// list only; [`prime_function`] re-proves ownership before trusting it.
+#[inline]
+unsafe fn function_shape_lists_key(addr: usize, name: &[u8]) -> bool {
+    let id = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
+    if !super::shapes::is_exotic_shape_id(id)
+        || id == crate::closure::shape::function_dictionary_shape()
+    {
+        return false;
+    }
+    // The record in place (no descriptor copy): its key list and count.
+    let Some(record) = super::shapes::shape_record_by_id(id) else {
+        return false;
+    };
+    let keys = record.keys() as usize as *const crate::array::ArrayHeader;
+    !keys.is_null()
+        && super::keys_find_slot_by_bytes_resolved(keys, record.logical_key_count(), name).is_some()
 }
 
 unsafe fn site_of(slot: *mut MethodSiteSlot) -> *mut MethodSite {
