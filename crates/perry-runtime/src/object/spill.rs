@@ -106,6 +106,75 @@ pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
     }
 }
 
+/// The stored bits of a spill-located key, INCLUDING a stored `undefined`,
+/// or `None` when the position has no storage (no meta record, no buffer,
+/// past its length, a `TAG_HOLE`) or the value does not live in object-owned
+/// spill storage at all (spill disabled, index past
+/// [`SPILL_MAX_FIELD_INDEX`], an exotic owner).
+///
+/// This is the read the emitted `pic.spill.hit` performs, with its checks
+/// spelled out: `Some` here is exactly "the compact word may name this
+/// receiver's ShapeId flipped". [`overflow_get`] keeps the legacy table's
+/// convention that `undefined` reads as absent, which cost every read of an
+/// own spill key holding `undefined` the full by-name walk — its site could
+/// never prime.
+pub(crate) fn spill_get_present(obj_ptr: usize, field_index: usize) -> Option<u64> {
+    if !object_spill_enabled()
+        || field_index >= SPILL_MAX_FIELD_INDEX
+        || unsafe { !spill_capable_owner(obj_ptr) }
+    {
+        return None;
+    }
+    unsafe {
+        let obj = obj_ptr as *const ObjectHeader;
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return None;
+        }
+        let spill = (*meta).spill as *const crate::array::ArrayHeader;
+        if spill.is_null() || field_index >= (*spill).length as usize {
+            return None;
+        }
+        let bits = *spill_elements(spill).add(field_index);
+        (bits != crate::value::TAG_HOLE).then_some(bits)
+    }
+}
+
+/// Give a spill-located key that was CLAIMED without a value (an accessor
+/// install, a generic descriptor, a keys list installed wholesale) real
+/// storage holding `undefined`.
+///
+/// # Why a keys-only claim must reserve
+///
+/// A ShapeId names the key list and the live inline-slot bound, so it fixes
+/// every key's position; a position at or past the bound lives in the spill
+/// buffer at that same index. The emitted spill read loads
+/// `meta -> spill -> [index]` on nothing but a ShapeId match, so EVERY
+/// carrier of a shape with a spill-located key must have that storage — not
+/// just the one that primed the site. A claim that grows the key list without
+/// writing a value produces the same ShapeId as a data write of the same key
+/// (the canonical list is the same), so without this it would carry the
+/// shape and no storage.
+///
+/// No-op when the position already has storage, and when the key's value
+/// does not live in spill storage (spill disabled, an exotic owner): the
+/// prime never publishes a spill entry for those (see
+/// [`spill_get_present`]).
+///
+/// May allocate (meta record, buffer): the caller must hold `obj_ptr` in a
+/// handle and re-read it afterwards.
+pub(crate) fn spill_reserve_claimed(obj_ptr: usize, field_index: usize) {
+    if !object_spill_enabled()
+        || field_index >= SPILL_MAX_FIELD_INDEX
+        || unsafe { !spill_capable_owner(obj_ptr) }
+    {
+        return;
+    }
+    if spill_get_present(obj_ptr, field_index).is_none() {
+        spill_set(obj_ptr, field_index, crate::value::TAG_UNDEFINED);
+    }
+}
+
 pub(crate) fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
@@ -330,7 +399,12 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
                         as *const u64;
                 for i in 0..old_len {
                     let bits = *elements.add(i);
-                    if bits != crate::value::TAG_HOLE && bits != crate::value::TAG_UNDEFINED {
+                    // S5: a stored `undefined` is a VALUE and is carried over.
+                    // Dropping it left the new buffer's slot `TAG_HOLE`, and
+                    // the emitted spill read (`pic.spill.hit`) loads a spill
+                    // slot with no hole test — its ShapeId proves the key is
+                    // present, so the slot must hold its value.
+                    if bits != crate::value::TAG_HOLE {
                         // In range by construction (old_len <= old cap < new_cap).
                         spill_store_slot(new_spill, i, bits);
                     }

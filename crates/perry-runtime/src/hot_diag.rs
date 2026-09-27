@@ -1554,7 +1554,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 8] = [
+const RECV_ROUTE_NAMES: [&str; 11] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1563,11 +1563,39 @@ const RECV_ROUTE_NAMES: [&str; 8] = [
     "class_write",
     "in_presence",
     "cached_field_index",
+    "generic_spill_hit",
+    // Counted by the RUNTIME (`recv_route_note_runtime`), not emitted code:
+    // a spill-located read a latched megamorphic site's slow entry answered
+    // from the receiver's shape (S5).
+    "rt_mega_spill_answer",
+    // Also runtime-counted: a read of an own SPILL-located key that reached
+    // the miss handler's key scan (primed or not) — the spill reads the
+    // inline routes did not serve.
+    "rt_spill_miss",
 ];
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 8] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+/// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
+pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
+pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
+
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 11] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 11];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
+/// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
+/// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
+/// relaxed load and a not-taken branch everywhere else.
+static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Count a runtime-side route in a census build (see
+/// [`RECV_ROUTES_ARMED`]); nothing otherwise.
+#[inline]
+pub(crate) fn recv_route_note_runtime(route: u32) {
+    if RECV_ROUTES_ARMED.load(Ordering::Relaxed) {
+        if let Some(counter) = RECV_ROUTES.get(route as usize) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 /// Receiver-route admission census (S4 of the parity read plan): one call per
 /// execution of an inline property route that passed its receiver test.
@@ -1578,6 +1606,7 @@ static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 #[no_mangle]
 pub extern "C" fn js_recv_route_note(route: u32) {
     RECV_ROUTES_REPORT.call_once(|| unsafe {
+        RECV_ROUTES_ARMED.store(true, Ordering::Relaxed);
         libc::atexit(recv_route_report);
     });
     if let Some(counter) = RECV_ROUTES.get(route as usize) {

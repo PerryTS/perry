@@ -630,6 +630,79 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     );
 }
 
+/// S5: a matched SPILL entry is served inline. `pic.token.miss` branches to
+/// `pic.spill.hit` (not to the slow exit) on the un-flipped compare, and that
+/// block is exactly the three dependent loads the ShapeId licenses —
+/// `ObjectHeader.meta`, `ObjectMeta.spill`, the element at the word's index —
+/// with no call, no compare and no hole test, straight to the merge.
+#[test]
+fn a_spill_entry_is_served_inline_by_three_loads() {
+    let ir = emit(false, None);
+    let main_start = ir
+        .find("define i32 @main()")
+        .expect("entry module should define main");
+    let main_rest = &ir[main_start..];
+    let main = &main_rest[..main_rest.find("\n}\n").expect("main closes")];
+    // A block: its label line (by prefix, labels carry a numeric suffix) and
+    // every indented line after it.
+    let block = |prefix: &str| -> String {
+        let mut lines = main
+            .lines()
+            .skip_while(|l| !(l.starts_with(prefix) && l.ends_with(':')));
+        let label = lines
+            .next()
+            .unwrap_or_else(|| panic!("expected a {prefix} block:\n{main}"));
+        let body: Vec<&str> = lines.take_while(|l| l.starts_with(' ')).collect();
+        format!("{label}\n{}", body.join("\n"))
+    };
+    let token_miss = block("pic.token.miss");
+    let spill_label = main
+        .lines()
+        .filter(|l| !l.starts_with(' ') && l.ends_with(':'))
+        .map(|l| l.trim_end_matches(':'))
+        .find(|l| l.starts_with("pic.spill.hit"))
+        .unwrap_or_else(|| panic!("expected a pic.spill.hit block:\n{main}"))
+        .to_string();
+    assert!(
+        token_miss.contains(&format!("label %{spill_label}")),
+        "the spill compare in pic.token.miss must branch to {spill_label}, not \
+         to the slow exit:\n{token_miss}"
+    );
+    assert!(
+        !token_miss.contains("label %pic.miss.call"),
+        "a matched spill entry must no longer call out:\n{token_miss}"
+    );
+    let hit = block(&spill_label);
+    let loads: Vec<&str> = hit.lines().filter(|l| l.contains(" = load ")).collect();
+    assert_eq!(
+        loads.len(),
+        3,
+        "the spill hit is exactly meta, spill and the value:\n{hit}"
+    );
+    assert!(loads[0].contains("load i64") && loads[1].contains("load i64"));
+    assert!(loads[2].contains("load double"), "{hit}");
+    for forbidden in ["call ", "icmp", "select", "atomic"] {
+        assert!(
+            !hit.contains(forbidden),
+            "the ShapeId match is the whole proof: no `{forbidden}` on the spill \
+             hit:\n{hit}"
+        );
+    }
+    let meta = crate::target_layout::object_meta_slot_offset_bytes("x86_64-unknown-linux-gnu");
+    let spill = crate::target_layout::OBJECT_META_SPILL_OFFSET_BYTES;
+    let elems = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
+    assert_eq!((meta, spill, elems), (8, 32, 8));
+    assert!(
+        hit.contains(&format!("i64 {spill}")) && hit.contains(&format!("i64 {elems}")),
+        "the loads use the paired layout constants:\n{hit}"
+    );
+    assert!(
+        hit.contains("lshr i64") && hit.contains(", 32"),
+        "the spill index is the compact word's high half:\n{hit}"
+    );
+    assert!(hit.contains("br label %pget.recv_merge"), "{hit}");
+}
+
 /// #8067: an exact ShapeId match proves the cached slot's descriptor facts, so
 /// the hit path must not reload the compatibility `field_count` mirror merely
 /// to re-prove the slot bound.
@@ -1427,11 +1500,12 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 ///
 /// Taking the overflow-bit test off the hit path is only sound if the entry it
 /// used to catch is caught somewhere else. `pic.token.miss` un-flips
-/// `PACKED_SPILL_FLIP` and branches straight to the one exit, skipping the
-/// full cache's resolution and the ways (neither can hold an encoded slot).
-/// Without this test, deleting the spill compare would leave every spill read
-/// correct-but-slow — it would walk the ways, miss, call out, and re-scan the
-/// keys array on every read, which is invisible in program output.
+/// `PACKED_SPILL_FLIP` and branches straight to `pic.spill.hit` (S5), skipping
+/// the full cache's resolution and the ways (neither can hold an encoded
+/// slot). Without this test, deleting the spill compare would leave every
+/// spill read correct-but-slow — it would walk the ways, miss, call out, and
+/// re-scan the keys array on every read, which is invisible in program
+/// output.
 #[test]
 fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
     use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
@@ -1460,9 +1534,9 @@ fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
          entry:\n{body}"
     );
     assert!(
-        body.contains("pic.miss.call"),
-        "a recognised spill entry must branch straight to the one exit, not \
-         walk the ways:\n{body}"
+        body.contains("label %pic.spill.hit"),
+        "a recognised spill entry must branch straight to the inline spill \
+         hit, not walk the ways or call out:\n{body}"
     );
 }
 
@@ -1519,10 +1593,12 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // the descriptor state (#10824) that word was loaded for.
         "pic.token",
         "pic.token.miss",
-        // The spill entry's landing block. `pic.token.miss` recognises a
-        // SPILL-located key by un-flipping PACKED_SPILL_FLIP and branches
-        // straight to the one exit; everything else continues here to the full
-        // cache and the ways. `pic.hit.inline` is GONE: with spill entries
+        // `pic.token.miss` recognises a SPILL-located key by un-flipping
+        // PACKED_SPILL_FLIP and branches to `pic.spill.hit` (S5: three
+        // dependent loads, no call); everything else continues here to the
+        // full cache and the ways.
+        "pic.spill.hit",
+        // `pic.hit.inline` is GONE: with spill entries
         // refused by the ShapeId compare itself, the hit block has nothing to
         // decide between and the load sits directly in `pic.hit`.
         "pic.token.ways",

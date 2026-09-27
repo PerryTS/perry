@@ -100,6 +100,9 @@ pub(crate) enum Route {
     InPresence = 6,
     /// The cached field-index early return's receiver test passed.
     CachedFieldIndex = 7,
+    /// A generic read served from the receiver's SPILL buffer by the compact
+    /// word's flipped entry (S5, `pic.spill.hit`).
+    GenericSpillHit = 8,
 }
 
 /// `PERRY_RECV_ROUTE_COUNT=1` at COMPILE time: emit one

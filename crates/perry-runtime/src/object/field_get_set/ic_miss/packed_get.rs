@@ -61,6 +61,16 @@ pub(super) unsafe fn prime_get(
     // Relaxed suffices: this publishes a numeric layout fact, not an object.
     let raw = slot as u32;
     let (key32, index) = if raw & crate::proxy::IC_SLOT_OVERFLOW_BIT != 0 {
+        // S5: the emitted `pic.spill.hit` loads `meta -> spill -> [index]` on
+        // this entry's ShapeId match alone, so a spill entry is published only
+        // while that is where every carrier's value lives: object-owned spill
+        // storage (not the legacy side table) at an index it can address.
+        let index = raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT;
+        if !crate::object::object_spill_enabled()
+            || index as usize >= crate::object::SPILL_MAX_FIELD_INDEX
+        {
+            return;
+        }
         (
             stamp ^ super::PACKED_SPILL_FLIP,
             raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT,
@@ -74,6 +84,43 @@ pub(super) unsafe fn prime_get(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A spill entry is published only at an index the emitted load can
+    /// address: past `SPILL_MAX_FIELD_INDEX` the value lives in the legacy
+    /// side table and the compact word stays empty.
+    #[test]
+    fn no_spill_entry_is_published_past_the_spill_index_ceiling() {
+        let mut cache: PicCache = [0; super::super::PIC_CACHE_WORDS];
+        let packed = AtomicU64::new(super::super::PACKED_GET_EMPTY);
+        let token = (crate::object::shapes::PIC_ID_TOKEN_BIT
+            | crate::object::shapes::SHAPE_ID_BASE as u64) as i64;
+        let far = crate::object::SPILL_MAX_FIELD_INDEX as u32;
+        unsafe {
+            prime_get(
+                &mut cache,
+                token,
+                (far | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
+                &packed,
+            );
+        }
+        assert_eq!(
+            packed.load(Ordering::Relaxed),
+            super::super::PACKED_GET_EMPTY
+        );
+        unsafe {
+            prime_get(
+                &mut cache,
+                token,
+                (7 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
+                &packed,
+            );
+        }
+        assert_ne!(
+            packed.load(Ordering::Relaxed),
+            super::super::PACKED_GET_EMPTY,
+            "control: an addressable spill index is published"
+        );
+    }
 
     #[test]
     fn packed_pair_preserves_identity_overflow_and_empty_site() {
@@ -91,7 +138,9 @@ mod tests {
             crate::object::shapes::SHAPE_ID_BASE,
             crate::object::shapes::DICTIONARY_SHAPE_ID_BASE - 1,
         ] {
-            for slot in [0, 1, 1 << 30, 0x7fff_ffff] {
+            // Spill indices stay below `SPILL_MAX_FIELD_INDEX`: past it
+            // nothing is published (see the test above).
+            for slot in [0, 1, 0x3fff_ffff, 1 << 30, (1 << 30) | 12_345] {
                 unsafe {
                     prime_get(&mut cache, (bit | stamp as u64) as i64, slot, &packed);
                 }

@@ -1156,6 +1156,9 @@ pub(super) fn get_field_ic_miss_impl(
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
                 if !k_ptr.is_null() && crate::string::js_string_equals(k_ptr, key) != 0 {
                     if i >= alloc_limit {
+                        crate::hot_diag::recv_route_note_runtime(
+                            crate::hot_diag::RT_ROUTE_SPILL_MISS,
+                        );
                         // #9287: a field past the inline region primes too,
                         // with IC_SLOT_OVERFLOW_BIT — the emitted MRU hit path
                         // tests the bit and routes through
@@ -1175,24 +1178,28 @@ pub(super) fn get_field_ic_miss_impl(
                                     & crate::object::key_attrs::ENTRY_ACCESSOR
                                     != 0;
                         if !key_is_accessor && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
-                            if let Some(bits) = crate::object::overflow_get(obj as usize, i) {
-                                if bits != crate::value::TAG_HOLE {
-                                    let stamp = crate::object::shapes::object_shape_stamp(obj);
-                                    let token = (stamp as u64
-                                        | crate::object::shapes::PIC_ID_TOKEN_BIT)
-                                        as i64;
-                                    let cache = pic_slot_resolve(cache_slot);
-                                    packed_get::prime_get(
-                                        cache,
-                                        token,
-                                        (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
-                                        packed,
-                                    );
-                                    if diag {
-                                        ic_diag_note(cache_slot, key, R::OwnOverflowPrimed);
-                                    }
-                                    return f64::from_bits(bits);
+                            // S5: `spill_get_present`, not `overflow_get` — a
+                            // stored `undefined` is a value the site can serve
+                            // (the legacy convention read it as absent, so such
+                            // a site never primed and every read took the
+                            // by-name walk), and `None` for any value that does
+                            // not live in object-owned spill storage, which the
+                            // emitted spill read could not reach.
+                            if let Some(bits) = crate::object::spill_get_present(obj as usize, i) {
+                                let stamp = crate::object::shapes::object_shape_stamp(obj);
+                                let token =
+                                    (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+                                let cache = pic_slot_resolve(cache_slot);
+                                packed_get::prime_get(
+                                    cache,
+                                    token,
+                                    (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
+                                    packed,
+                                );
+                                if diag {
+                                    ic_diag_note(cache_slot, key, R::OwnOverflowPrimed);
                                 }
+                                return f64::from_bits(bits);
                             }
                         }
                         // Field is in the overflow map — fall through to the

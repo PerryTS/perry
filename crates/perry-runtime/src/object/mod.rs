@@ -230,10 +230,11 @@ pub(crate) mod regex_proto_thunks;
 mod spill;
 pub(crate) use spill::{
     learned_inline_field_count, learned_inline_fields_hot_addr, object_spill_enabled, overflow_get,
-    overflow_set, reserve_object_spill, spill_store_would_be_in_capacity,
+    overflow_set, reserve_object_spill, spill_get_present, spill_reserve_claimed,
+    spill_store_would_be_in_capacity, SPILL_MAX_FIELD_INDEX,
 };
 #[cfg(test)]
-use spill::{spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
+use spill::{spill_capable_owner, spill_get};
 #[cfg(test)]
 pub(crate) use spill::{
     test_set_spill_safepoint_hook, SpillSafepointHook, TEST_LAYOUT_NOTE_SLOT_CALLS,

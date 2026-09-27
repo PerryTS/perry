@@ -198,11 +198,11 @@ unsafe fn overflow_arm(
     cache_slot: *mut PicCacheSlot,
     index: u32,
 ) -> f64 {
-    let idx = index as usize;
-    if let Some(v) = crate::object::overflow_get(obj as usize, idx) {
-        if v != crate::value::TAG_HOLE {
-            return f64::from_bits(v);
-        }
+    // The emitted `pic.spill.hit` serves a matched spill entry inline (S5), so
+    // this arm is reached only from a runtime caller of the slow entry; it
+    // reads exactly what that block loads, stored `undefined` included.
+    if let Some(v) = crate::object::spill_get_present(obj as usize, index as usize) {
+        return f64::from_bits(v);
     }
     super::ic_miss::get_field_ic_miss_impl(obj, key, cache_slot, std::ptr::null())
 }
@@ -321,6 +321,22 @@ pub extern "C" fn js_object_get_field_ic_slow(
                                     as *const f64;
                                 return *field;
                             }
+                            // S5: a SPILL-located own data key is answered the
+                            // same way — its position in the shape's key list
+                            // is its index in the receiver's spill buffer. The
+                            // site keeps no guess for it (the word's high half
+                            // is an inline-slot guess).
+                            if let Some(pos) = rec.spill_position_of_key(key) {
+                                if let Some(bits) = crate::object::spill_get_present(addr, pos) {
+                                    #[cfg(test)]
+                                    crate::object::shapes::SHAPE_ANSWERED_SPILL_READS
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    crate::hot_diag::recv_route_note_runtime(
+                                        crate::hot_diag::RT_ROUTE_MEGA_SPILL,
+                                    );
+                                    return f64::from_bits(bits);
+                                }
+                            }
                         }
                     }
                 }
@@ -353,6 +369,9 @@ unsafe fn key_is_length(key: *const crate::StringHeader) -> bool {
 mod tests {
     use super::*;
     use crate::object::{PicCache, PIC_CACHE_WORDS};
+
+    /// The compact word an emitted site is born holding.
+    const PACKED_GET_EMPTY_WORD: u64 = 0xFFFF_FFFF;
 
     fn key_of(bytes: &[u8]) -> *const crate::StringHeader {
         crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
@@ -601,6 +620,206 @@ mod tests {
             read(&mut slot, &packed).to_bits(),
             crate::value::TAG_UNDEFINED,
             "a tombstoned overflow slot must miss, not answer the hole"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // S5: the ShapeId alone proves where a spill-located key's value lives.
+    //
+    // The emitted `pic.spill.hit` loads `meta -> spill -> [index]` with no
+    // null, bound or hole test, so every carrier of a shape that has a key at
+    // a spill position must have storage there. These tests hold the
+    // producers that used to break that, and the read-side changes.
+    // ------------------------------------------------------------------
+
+    /// An object with two inline slots (`INLINE_SLOT_FLOOR`) and the given
+    /// keys written by name, in order; keys from the third on live in spill.
+    fn spilled_object<'s>(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        names: &[&str],
+        value: impl Fn(usize) -> f64,
+    ) -> crate::gc::RuntimeHandle<'s> {
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        for (i, name) in names.iter().enumerate() {
+            let key = scope.root_string_ptr(key_of(name.as_bytes()));
+            obj.with_mut_ptr(|o| {
+                key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, value(i)))
+            });
+        }
+        obj
+    }
+
+    fn live_slots(obj: &crate::gc::RuntimeHandle<'_>) -> u32 {
+        obj.with_mut_ptr(|o: *mut ObjectHeader| unsafe { crate::object::object_live_slot_count(o) })
+    }
+
+    fn present(obj: &crate::gc::RuntimeHandle<'_>, index: usize) -> Option<u64> {
+        obj.with_mut_ptr(|o: *mut ObjectHeader| crate::object::spill_get_present(o as usize, index))
+    }
+
+    /// `Object.defineProperty` with no `value` (and every other keys-only
+    /// claim) at a spill position must give the key storage holding
+    /// `undefined` — the same state a data write of `undefined` leaves.
+    #[test]
+    fn a_keys_only_claim_at_a_spill_position_reserves_storage() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = spilled_object(&scope, &["s5_ka", "s5_kb", "s5_kc"], |i| i as f64);
+        assert_eq!(live_slots(&obj), 2, "test premise: two inline slots");
+        assert!(present(&obj, 3).is_none(), "test premise: nothing at 3 yet");
+        let claimed = scope.root_string_ptr(key_of(b"s5_kd"));
+        obj.with_mut_ptr(|o| {
+            claimed.with_const_ptr(|k| unsafe { crate::object::ensure_key_in_keys_array(o, k) })
+        });
+        assert_eq!(
+            present(&obj, 3),
+            Some(crate::value::TAG_UNDEFINED),
+            "a keys-only claim at spill position 3 must reserve storage"
+        );
+        // ...and a value written later lands in that same storage.
+        obj.with_mut_ptr(|o| {
+            claimed.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 9.0))
+        });
+        assert_eq!(present(&obj, 3), Some(9.0f64.to_bits()));
+    }
+
+    /// A keys list installed wholesale (`js_object_set_keys`, perry-stdlib)
+    /// longer than the live inline bound puts the tail at spill positions,
+    /// and each of them must have storage.
+    #[test]
+    fn a_wholesale_keys_list_reserves_every_spill_position() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+        let list = scope.root_raw_mut_ptr(crate::array::js_array_alloc(5));
+        for name in ["s5_w0", "s5_w1", "s5_w2", "s5_w3", "s5_w4"] {
+            let key = key_of(name.as_bytes());
+            let grown = list.with_mut_ptr(|l| {
+                crate::array::js_array_push(l, crate::JSValue::string_ptr(key as *mut _))
+            });
+            list.set_raw_mut_ptr(grown);
+        }
+        obj.with_mut_ptr(|o| list.with_mut_ptr(|l| crate::object::js_object_set_keys(o, l)));
+        let live = live_slots(&obj) as usize;
+        assert!(
+            live < 5,
+            "test premise: some keys past the inline bound ({live})"
+        );
+        for index in live..5 {
+            assert_eq!(
+                present(&obj, index),
+                Some(crate::value::TAG_UNDEFINED),
+                "spill position {index} of a wholesale keys list must have storage"
+            );
+        }
+    }
+
+    /// A stored `undefined` is a VALUE: the spill buffer's growth copy must
+    /// carry it over instead of leaving the new slot a hole.
+    #[test]
+    fn a_stored_undefined_survives_spill_growth() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let names: Vec<String> = (0..24).map(|i| format!("s5_g{i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        // Key 2 (the first spill position) holds `undefined`; the rest grow the
+        // buffer well past its first capacity of 8.
+        let obj = spilled_object(&scope, &refs, |i| if i == 2 { undef } else { i as f64 });
+        assert_eq!(
+            present(&obj, 2),
+            Some(crate::value::TAG_UNDEFINED),
+            "spill position 2 held `undefined` before growth, and must after it"
+        );
+        assert_eq!(present(&obj, 23), Some(23.0f64.to_bits()));
+    }
+
+    /// A spill key holding `undefined` primes the site (the legacy read
+    /// reported it absent, so such a site never primed), and the published
+    /// entry is the flipped one.
+    #[test]
+    fn a_spill_key_holding_undefined_primes_the_site() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let obj = spilled_object(&scope, &["s5_ua", "s5_ub", "s5_uc"], |i| {
+            if i == 2 {
+                undef
+            } else {
+                i as f64
+            }
+        });
+        let key = scope.root_string_ptr(key_of(b"s5_uc"));
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(PACKED_GET_EMPTY_WORD);
+        let v = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
+        });
+        assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
+        let word = packed.load(Ordering::Relaxed);
+        assert_eq!(
+            super::super::ic_miss::packed_get_decode(word).map(|(_, i, s)| (i, s)),
+            Some((2, true)),
+            "the site must publish the flipped spill entry for index 2 (word {word:#x})"
+        );
+    }
+
+    /// A latched megamorphic site answers a SPILL-located key from the
+    /// receiver's shape too (S3 answered inline keys only), with each
+    /// receiver's own value — including a stored `undefined`.
+    #[test]
+    fn a_latched_megamorphic_site_answers_a_spill_key_from_the_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let objs: Vec<_> = (0..48)
+            .map(|i| {
+                let extra = format!("s5_mx{i}");
+                spilled_object(
+                    &scope,
+                    &["s5_ma", "s5_mb", "s5_mk", extra.as_str()],
+                    move |k| match (k, i) {
+                        (2, 7) => undef,
+                        (2, _) => 100.0 + i as f64,
+                        _ => k as f64,
+                    },
+                )
+            })
+            .collect();
+        let key = scope.root_string_ptr(key_of(b"s5_mk"));
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(PACKED_GET_EMPTY_WORD);
+        let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
+            o.with_mut_ptr(|p: *mut ObjectHeader| {
+                key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+            })
+        };
+        let want = |i: usize| {
+            if i == 7 {
+                undef.to_bits()
+            } else {
+                (100.0 + i as f64).to_bits()
+            }
+        };
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(read(o, &mut slot).to_bits(), want(i), "priming read {i}");
+        }
+        // A rotation whose every shape holds the key in spill never arms the
+        // ways, so it never latches by itself: latch it, as a site that also
+        // saw inline shapes would be.
+        // SAFETY: `slot` points at `cache`, alive for the whole test.
+        unsafe { (*slot)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] = -1_000_000 };
+        let before = crate::object::shapes::SHAPE_ANSWERED_SPILL_READS.load(Ordering::Relaxed);
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(read(o, &mut slot).to_bits(), want(i), "latched read {i}");
+        }
+        let answered =
+            crate::object::shapes::SHAPE_ANSWERED_SPILL_READS.load(Ordering::Relaxed) - before;
+        assert!(
+            answered >= 47,
+            "every latched spill read the word cannot serve must be answered by the shape: {answered}"
         );
     }
 

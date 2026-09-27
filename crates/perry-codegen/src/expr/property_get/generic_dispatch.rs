@@ -938,21 +938,50 @@ pub(crate) fn lower_generic_property_get(
     // Now a spill entry publishes the SAME ShapeId with `PACKED_SPILL_FLIP`
     // flipped into it, which lands it outside the ShapeId range, so the hit
     // path's compare refuses it for free. Un-flipping the bit here recognises
-    // it in three instructions ON THE MISS PATH ONLY, and a match branches
-    // straight to the slow entry — skipping the full cache's resolution and
-    // the polymorphic ways, neither of which can serve a spill key anyway
-    // (`pic_prime_get` refuses to cascade an encoded slot into a way). The
-    // slow entry decodes the same word and reads the spill buffer, so a spill
-    // read pays the same three instructions it paid before, just in a block
-    // the inline hit never enters.
+    // it in three instructions ON THE MISS PATH ONLY, and a match is served
+    // by `pic.spill.hit` below — skipping the full cache's resolution and the
+    // polymorphic ways, neither of which can serve a spill key anyway
+    // (`pic_prime_get` refuses to cascade an encoded slot into a way).
     let spill_stamp = ctx
         .block()
         .xor(I32, &packed_stamp, &PACKED_SPILL_FLIP.to_string());
     let is_spill = ctx.block().icmp_eq(I32, &pcid, &spill_stamp);
     let ways_entry_idx = ctx.new_block("pic.token.ways");
     let ways_entry_label = ctx.block_label(ways_entry_idx);
+    let spill_hit_idx = ctx.new_block("pic.spill.hit");
+    let spill_hit_label = ctx.block_label(spill_hit_idx);
     ctx.block()
-        .cond_br(&is_spill, &call_label, &ways_entry_label);
+        .cond_br(&is_spill, &spill_hit_label, &ways_entry_label);
+
+    // S5: the SPILL hit. The flipped entry is a `(ShapeId, index)` fact like
+    // the inline one, and the ShapeId alone proves where the value is: the
+    // key list and the live inline-slot bound it names fix the key's
+    // position, a position at or past the bound IS its index in the spill
+    // buffer, and every carrier of the shape has that storage (the runtime
+    // reserves it for a key claimed without a value, keeps a stored
+    // `undefined` across buffer growth, and publishes no spill entry while
+    // spill storage is disabled — `spill_reserve_claimed`,
+    // `spill_get_present`, `packed_get::prime_get`). So the hit is two
+    // dependent loads to reach the buffer and one at the fixed index, with no
+    // null, bound or hole test:
+    //
+    //   meta  = [handle + META]           ObjectHeader.meta
+    //   spill = [meta + 32]               ObjectMeta.spill
+    //   value = [spill + 8 + index * 8]   past the u32 length/capacity words
+    //
+    // Nothing here allocates or can collect, so the receiver needs no root.
+    ctx.current_block = spill_hit_idx;
+    crate::expr::receiver_range::emit_route_note(
+        ctx.block(),
+        crate::expr::receiver_range::Route::GenericSpillHit,
+    );
+    let (val_spill, spill_end_label) = emit_spill_hit(
+        ctx,
+        fused_recv.as_ref(),
+        &entry_handle,
+        &packed_word,
+        &merge_label,
+    );
 
     // Every way load still requires a resolved full cache. A site that has
     // never primed has no cache, so there is nothing to compare against.
@@ -1350,5 +1379,63 @@ pub(crate) fn lower_generic_property_get(
     if let Some((len, array_end_label)) = array_length_arm.as_ref() {
         incoming.push((len, array_end_label));
     }
+    incoming.push((&val_spill, &spill_end_label));
     Ok(ctx.block().phi(DOUBLE, &incoming))
+}
+
+/// `pic.spill.hit`'s loads (see the note at its branch): the value at spill
+/// index `packed_word >> 32` of the receiver's spill buffer. Returns the value
+/// and the label of the block that branches to `merge_label`.
+fn emit_spill_hit(
+    ctx: &mut FnCtx<'_>,
+    fused_recv: Option<&crate::expr::receiver_range::FusedReceiver>,
+    entry_handle: &str,
+    packed_word: &str,
+    merge_label: &str,
+) -> (String, String) {
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
+    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple);
+    let meta_slot = match fused_recv {
+        // `handle + META`, addressed from the biased value (`receiver_range`).
+        Some(f) => {
+            crate::expr::receiver_range::emit_field_ptr(ctx.block(), &f.biased, meta_offset as i64)
+        }
+        None => {
+            let addr = ctx.block().add(I64, entry_handle, &meta_offset.to_string());
+            ctx.block().inttoptr(I64, &addr)
+        }
+    };
+    let meta = if ilp32 {
+        let narrow = ctx.block().load(I32, &meta_slot);
+        ctx.block().zext(I32, &narrow, I64)
+    } else {
+        ctx.block().load(I64, &meta_slot)
+    };
+    let meta_ptr = ctx.block().inttoptr(I64, &meta);
+    let spill_slot = ctx.block().gep(
+        I8,
+        &meta_ptr,
+        &[(
+            I64,
+            &crate::target_layout::OBJECT_META_SPILL_OFFSET_BYTES.to_string(),
+        )],
+    );
+    // `ObjectMeta.spill` is a `u64` on every target (the buffer address,
+    // zero-extended on ILP32).
+    let spill = ctx.block().load(I64, &spill_slot);
+    let spill_ptr = ctx.block().inttoptr(I64, &spill);
+    let index = ctx.block().lshr(I64, packed_word, "32");
+    let elements = ctx.block().gep(
+        I8,
+        &spill_ptr,
+        &[(
+            I64,
+            &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
+        )],
+    );
+    let value_ptr = ctx.block().gep(DOUBLE, &elements, &[(I64, &index)]);
+    let value = ctx.block().load(DOUBLE, &value_ptr);
+    let end_label = ctx.block().label.clone();
+    ctx.block().br(merge_label);
+    (value, end_label)
 }

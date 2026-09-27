@@ -227,6 +227,12 @@ impl ShapeRecordRef {
 pub(crate) static SHAPE_ANSWERED_READS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Test instrument: SPILL-located reads the receiver's shape answered at a
+/// latched megamorphic site (S5; test builds only).
+#[cfg(test)]
+pub(crate) static SHAPE_ANSWERED_SPILL_READS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl ShapeRecordRef {
     /// The INLINE slot at which this shape stores `key`, answered from the
     /// shape's own canonical key list — or `None` when the shape cannot answer
@@ -267,38 +273,87 @@ impl ShapeRecordRef {
         let bound = len
             .min(r.logical_key_count as usize)
             .min(r.live_inline_slot_count as usize);
-        // A canonical list holds heap strings of its own (NOT the site's pooled
-        // key — measured: every stored key of a literal-born shape is a
-        // distinct heap string) or SSO immediates, so a stored key matches by
-        // identity, by SSO identity, or by (byte length, bytes).
-        let klen = (*key).byte_len as usize;
-        let kdata = crate::string::string_data(key);
-        let heap_bits = crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
-        let matches = |bits: u64| -> bool {
-            if bits == heap_bits {
-                return true;
-            }
-            match bits >> 48 {
-                0x7FFF => {
-                    let sp = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-                    !sp.is_null()
-                        && (*sp).byte_len as usize == klen
-                        && bytes_eq(crate::string::string_data(sp), kdata, klen)
-                }
-                // An SSO immediate in the list: rare; compare its bytes.
-                0x7FF9 => {
-                    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                    crate::string::js_string_key_bytes(crate::JSValue::from_bits(bits), &mut buf)
-                        == Some(std::slice::from_raw_parts(kdata, klen))
-                }
-                _ => false,
-            }
-        };
         // The site's slot guess first: the receiver's shape confirms it.
-        if hint < bound && matches((*slots.add(hint)).to_bits()) {
+        if hint < bound && stored_key_matches(key, (*slots.add(hint)).to_bits()) {
             return Some(hint);
         }
-        (0..bound).find(|&i| i != hint && matches((*slots.add(i)).to_bits()))
+        (0..bound).find(|&i| i != hint && stored_key_matches(key, (*slots.add(i)).to_bits()))
+    }
+
+    /// The SPILL position at which this shape stores `key` as an own DATA
+    /// property — a position at or past `live_inline_slot_count`, which is
+    /// also the key's index in the receiver's spill buffer — or `None` when
+    /// the shape cannot answer by position alone (the same refusals as
+    /// [`Self::inline_slot_of_key`]), the key is not spill-located, or it is
+    /// an accessor.
+    ///
+    /// Scanned back to front, as the read cache's prime scans (#10595: a
+    /// shadowed field's most-derived position wins). Only meaningful after
+    /// [`Self::inline_slot_of_key`] declined, which is the one order the
+    /// megamorphic read asks in. Allocation-free, never calls user code.
+    #[inline]
+    pub(crate) unsafe fn spill_position_of_key(
+        self,
+        key: *const crate::StringHeader,
+    ) -> Option<usize> {
+        let r = &*self.0.as_ptr();
+        if r.object_kind() != ShapeObjectKind::Ordinary
+            || r.semantic_generation != 0
+            || r.hole_count != 0
+            || r.keys == 0
+        {
+            return None;
+        }
+        let keys = r.keys as usize as *const ArrayHeader;
+        let (slots, len) = super::keys_array_dense_slots_resolved(keys);
+        if slots.is_null() {
+            return None;
+        }
+        let lo = r.live_inline_slot_count as usize;
+        let hi = len.min(r.logical_key_count as usize);
+        let pos = (lo..hi)
+            .rev()
+            .find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))?;
+        let accessor = r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+            && crate::object::key_attrs::keys_entry(keys, pos as u32)
+                & crate::object::key_attrs::ENTRY_ACCESSOR
+                != 0;
+        (!accessor).then_some(pos)
+    }
+}
+
+/// Does the key-list entry `bits` name `key`? A canonical list holds heap
+/// strings of its own (NOT the site's pooled key — measured: every stored key
+/// of a literal-born shape is a distinct heap string) or SSO immediates, so a
+/// stored key matches by identity, by SSO identity, or by (byte length,
+/// bytes).
+#[inline]
+unsafe fn stored_key_matches(key: *const crate::StringHeader, bits: u64) -> bool {
+    if bits == crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits() {
+        return true;
+    }
+    let klen = (*key).byte_len as usize;
+    match bits >> 48 {
+        0x7FFF => {
+            let sp = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+            !sp.is_null()
+                && (*sp).byte_len as usize == klen
+                && bytes_eq(
+                    crate::string::string_data(sp),
+                    crate::string::string_data(key),
+                    klen,
+                )
+        }
+        // An SSO immediate in the list: rare; compare its bytes.
+        0x7FF9 => {
+            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            crate::string::js_string_key_bytes(crate::JSValue::from_bits(bits), &mut buf)
+                == Some(std::slice::from_raw_parts(
+                    crate::string::string_data(key),
+                    klen,
+                ))
+        }
+        _ => false,
     }
 }
 

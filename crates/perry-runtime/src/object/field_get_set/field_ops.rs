@@ -359,5 +359,17 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
             None => keys,
         });
         set_object_keys(obj, published);
+        // S5: every key the list places past the live inline bound is a
+        // SPILL position, and the ShapeId just published proves storage for
+        // it (`spill_reserve_claimed`). The caller's later
+        // `js_object_set_field` writes inline slots only.
+        let live = crate::object::object_live_slot_count(obj);
+        // `spill_reserve_claimed` roots the receiver itself across its
+        // allocations; the handle re-reads it for every position.
+        for index in live..len {
+            obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+                crate::object::spill_reserve_claimed(obj as usize, index as usize)
+            });
+        }
     }
 }

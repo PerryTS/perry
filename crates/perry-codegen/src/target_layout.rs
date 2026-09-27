@@ -162,6 +162,19 @@ pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
     object_header_size_bytes(target_triple) - pointer_size
 }
 
+/// Byte offset of `ObjectMeta::spill` (a `u64` on every target: the record is
+/// all 8-byte words). **Must equal the runtime's
+/// `offset_of!(ObjectMeta, spill)`**, which `object/meta_record.rs`
+/// const-asserts as 32; `spill_layout_matches_codegen` in the runtime pins
+/// this copy against it.
+pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
+
+/// `size_of::<perry_runtime::array::ArrayHeader>()` — the `u32` length and
+/// capacity words — on every target: a spill buffer's elements start right
+/// after it (a spill buffer is private and never shifted, so it has no front
+/// reserve). Pinned by `spill_layout_matches_codegen` in the runtime.
+pub const ARRAY_HEADER_SIZE_BYTES: u64 = 8;
+
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
 /// target.
 ///

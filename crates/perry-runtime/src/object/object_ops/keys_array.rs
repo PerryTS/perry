@@ -390,6 +390,15 @@ unsafe fn ensure_key_in_keys_array_inner(
     if new_index < inline_capacity && new_index >= live_slots {
         set_object_live_slot_count(obj, new_index + 1);
     }
+    // S5: a keys-only claim at a SPILL position gets real storage (holding
+    // `undefined`), so the ShapeId it now carries proves where the value
+    // lives for this receiver exactly as it does for a data-bearing sibling
+    // of the same shape. A value-writing claim stores right after returning.
+    // See `spill_reserve_claimed`.
+    if !writes_value && new_index >= inline_capacity {
+        crate::object::spill_reserve_claimed(obj as usize, new_index as usize);
+        refresh_define_property_roots!();
+    }
     // #10287: teach the edge this append just built, so the NEXT receiver with
     // the same predecessor shape takes the branch above instead of cloning a
     // private keys array of its own. Inline targets only, for the reason given
