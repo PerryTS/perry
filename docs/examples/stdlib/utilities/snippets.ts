@@ -6,13 +6,12 @@
 // Each ANCHOR block below is the exact code that the utilities docs page
 // renders inline (via {{#include ... :NAME}}). The whole file is compiled
 // and run by the doc-tests harness, so every snippet is a tested artifact —
-// if any snippet drifts from the real native binding, CI fails.
+// if any snippet drifts from the real package API, CI fails.
 //
-// Only the packages that have a wired NativeModSig dispatch (uuid, nanoid,
-// validator) are anchored here. lodash / dayjs / moment have
-// runtime declarations but no dispatch path from user-visible imports yet,
-// so the markdown page keeps those snippets as `,no-test` with a clear
-// status note above each fence.
+// uuid, nanoid and validator are compiled from their real npm source (the
+// native bindings were removed), so they must be installed: the doc-tests job
+// runs `npm ci` at the repo root, whose devDependencies list them. lodash /
+// dayjs / moment snippets stay `,no-test` on the markdown page.
 
 // ANCHOR: uuid
 import { v4 as uuidv4 } from "uuid"

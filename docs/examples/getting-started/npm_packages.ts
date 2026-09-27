@@ -4,10 +4,12 @@
 // requires: auto-optimize
 // run: false
 
-// These four imports are Perry's most-used built-in stdlib shims:
-// fastify (HTTP server), mysql2 (db), ioredis (Redis), bcrypt (password
-// hashing). They're compiled to native code via Perry's per-package
-// implementations — no `compilePackages` needed.
+// Four common npm packages: fastify (HTTP server), mysql2 (db), ioredis
+// (Redis), bcrypt (password hashing). With no `perry.compilePackages` entry,
+// Perry compiles each installed package's real source to native code (bcrypt,
+// a Node native addon, routes to Perry's perry-ext-bcrypt wrapper). They must
+// be installed: the doc-tests job runs `npm ci` at the repo root, whose
+// devDependencies list them.
 //
 // `// run: false` because each one needs a live external service (DB,
 // Redis, network port) to actually do anything; the binary still has to

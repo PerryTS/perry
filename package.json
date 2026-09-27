@@ -25,9 +25,13 @@
     "iovalkey": "0.4.0",
     "moment": "^2.30.1",
     "mongodb": "7.5.0",
+    "mysql2": "^3.24.4",
+    "nanoid": "^6.0.1",
     "rate-limiter-flexible": "^11.2.0",
     "redis": "6.1.0",
     "slugify": "^1.6.9",
+    "uuid": "^14.0.2",
+    "validator": "^13.15.35",
     "zod": "^4.3.5"
   },
   "dependencies": {
