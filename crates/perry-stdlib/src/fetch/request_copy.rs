@@ -24,6 +24,12 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         return js_request_new_from_init(url, init_root.get_nanbox_f64());
     };
     let signal_root = scope.root_nanbox_f64(request.signal);
+    let body_error_root = scope.root_nanbox_f64(
+        request
+            .body_error
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
+    );
+    let mut body_error = request.body_error.is_some();
     request.headers = request_headers_snapshot(&request);
     request.cached_headers_id = None;
     request.body_used = false;
@@ -122,6 +128,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         throw_fetch_type_error("Request with GET/HEAD method cannot have body.");
     }
     if has_override_body {
+        body_error = false;
         let form_data = body_metadata::serialize_form_data(handle_id(body_root.get_nanbox_f64()));
         let content_type = if let Some((bytes, content_type)) = form_data {
             request.body = Some(bytes);
@@ -140,9 +147,16 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             } else {
                 dispatch::body_bytes_from_header(ptr)
             };
-            request.body = stream
-                .map(crate::streams::drain_readable_into_bytes)
-                .or(bytes);
+            request.body = match stream.map(drain_body_stream) {
+                Some((drained, error)) => {
+                    if let Some(error) = error {
+                        body_error = true;
+                        body_error_root.set_nanbox_f64(error);
+                    }
+                    Some(drained)
+                }
+                None => bytes,
+            };
             content_type
         };
         if let Some(content_type) = content_type {
@@ -169,6 +183,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         }
     }
     request.signal = signal_root.get_nanbox_f64();
+    request.body_error = body_error.then(|| body_error_root.get_nanbox_f64());
     let id = alloc_fetch_handle_id();
     gc::ensure_gc_registered();
     REQUEST_REGISTRY.lock().unwrap().insert(id, request);

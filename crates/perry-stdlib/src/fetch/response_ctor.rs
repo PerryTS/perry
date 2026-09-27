@@ -90,6 +90,10 @@ pub unsafe extern "C" fn js_response_new(
     headers_handle: f64,
 ) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[status, headers_handle]);
+    // Taking the stream can run an async-iterable body's JS: root the one
+    // string argument still read afterwards.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let status_text = (!status_text_ptr.is_null()).then(|| scope.root_string_ptr(status_text_ptr));
     let body_stream_id = take_pending_fetch_body_stream_id();
     // Consume before validation so a throwing constructor cannot leak body
     // metadata into the next Response construction on this thread.
@@ -98,6 +102,7 @@ pub unsafe extern "C" fn js_response_new(
     let body_opt = dispatch::body_bytes_from_header(body_ptr);
     let body_present = body_opt.is_some() || body_stream_id.is_some();
     let body = body_opt.unwrap_or_default();
+    let status_text_ptr = status_text.map_or(std::ptr::null(), |h| h.get_raw_const_ptr());
     let (status_u16, status_text) = response_init(status, status_text_ptr, body_present);
     let headers_id = handle_id(headers_handle);
     let registered = (headers_id != 0)

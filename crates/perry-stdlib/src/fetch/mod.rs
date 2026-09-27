@@ -412,6 +412,11 @@ fn request_headers_snapshot(request: &RequestRecord) -> HeadersStore {
 
 thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
+    // An async-iterable BodyInit (NaN-boxed bits, 0 = none). The classifier
+    // only stashes it: converting it runs the iterator's JS, so that happens
+    // in `take_pending_fetch_body_stream_id`, whose callers must not hold
+    // unrooted heap pointers across the call. Visited by the fetch GC scanner.
+    static PENDING_FETCH_BODY_ITERABLE: Cell<u64> = const { Cell::new(0) };
     // Codegen coerces BodyInit to a StringHeader before js_response_new, so
     // preserve whether the original value was a string long enough for the
     // Response constructor to install Fetch's default Content-Type.
@@ -427,7 +432,22 @@ pub(super) fn set_pending_fetch_body_content_type(content_type: Option<&'static 
 
 pub(super) fn reset_pending_fetch_body_init() {
     PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(0));
+    PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.set(0));
     PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.set(None));
+}
+
+fn set_pending_fetch_body_iterable(value: f64) {
+    PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.set(value.to_bits()));
+}
+
+fn visit_pending_fetch_body_iterable<V: gc::FetchRootVisitor>(visitor: &mut V) {
+    PENDING_FETCH_BODY_ITERABLE.with(|pending| {
+        let mut bits = pending.get();
+        if bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut bits);
+            pending.set(bits);
+        }
+    });
 }
 
 fn take_pending_fetch_body_content_type() -> Option<&'static str> {
@@ -435,7 +455,7 @@ fn take_pending_fetch_body_content_type() -> Option<&'static str> {
 }
 
 fn take_pending_fetch_body_stream_id() -> Option<usize> {
-    PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
+    let stream = PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
         let id = pending.get();
         pending.set(0);
         if id != 0 && crate::streams::js_stream_handle_kind(id) == 1 {
@@ -443,7 +463,20 @@ fn take_pending_fetch_body_stream_id() -> Option<usize> {
         } else {
             None
         }
+    });
+    let iterable = PENDING_FETCH_BODY_ITERABLE.with(|pending| pending.replace(0));
+    stream.or_else(|| {
+        (iterable != 0).then(|| unsafe {
+            crate::streams::js_readable_stream_from_iterable(f64::from_bits(iterable)) as usize
+        })
     })
+}
+
+/// Drain a body stream, returning the error it ended with (if any) alongside
+/// the bytes it produced before that.
+fn drain_body_stream(stream_id: usize) -> (Vec<u8>, Option<f64>) {
+    let bytes = crate::streams::drain_readable_into_bytes(stream_id);
+    (bytes, crate::streams::readable_stream_error(stream_id))
 }
 
 /// Extract the registry id from a Web Fetch handle f64 value.
@@ -731,6 +764,9 @@ pub unsafe extern "C" fn js_fetch_with_options(
     // `Request` object and call `fetch(request, init)`; its handle id lands in
     // the `url_ptr` slot. Recover url/method/body/headers from the Request
     // registry so the request is dispatched (`init` members override).
+    let url = string_from_header(url_ptr);
+    let method = string_from_header(method_ptr);
+    let headers_json = string_from_header(headers_json_ptr);
     let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
     let form_data_content_type = form_data_body
         .as_ref()
@@ -738,14 +774,18 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let body_bytes = form_data_body
         .map(|(body, _)| body)
         .or_else(|| fetch_request_body_bytes(body_ptr));
+    // Last: may run an async-iterable body's JS (the strings above are owned).
+    let body_bytes = take_pending_fetch_body_stream_id()
+        .map(crate::streams::drain_readable_into_bytes)
+        .or(body_bytes);
     let mut inputs = match request_handle::resolve_fetch_inputs(
-        string_from_header(url_ptr),
-        string_from_header(method_ptr),
+        url,
+        method,
         // Read the body as raw bytes (binary bodies probe the buffer/typed-array
         // registry first) so a Buffer/Uint8Array body isn't corrupted by a lossy
         // StringHeader read (#5757).
         body_bytes,
-        string_from_header(headers_json_ptr),
+        headers_json,
         url_ptr as usize,
         pending_redirect,
     ) {
@@ -1088,6 +1128,9 @@ struct RequestRecord {
     /// repeat reads return the same handle (preserves `req.headers ===
     /// req.headers`). Mirrors `FetchResponse::cached_headers_id` (#1649).
     cached_headers_id: Option<usize>,
+    /// The error the body's stream ended with; consuming the body rejects
+    /// with it. A GC root, visited with `signal`.
+    body_error: Option<f64>,
 }
 
 static HEADERS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, HeadersRecord>>> =
@@ -1539,6 +1582,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 duplex: req.duplex.clone(),
                 signal: req.signal,
                 cached_headers_id: None,
+                body_error: req.body_error,
             })
         })
     };
@@ -1556,19 +1600,42 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
 
 /// Read and consume a request's stored body. Bodiless requests are reusable and
 /// resolve to an empty body, matching Node's Fetch Body behavior.
-fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
+fn consume_request_body(handle: f64) -> Result<Vec<u8>, RequestBodyError> {
     let id = handle_id(handle);
     let mut guard = REQUEST_REGISTRY.lock().unwrap();
-    let req = guard.get_mut(&id).ok_or("Invalid request handle")?;
+    let req = guard
+        .get_mut(&id)
+        .ok_or(RequestBodyError::Message("Invalid request handle"))?;
     let body = match &req.body {
         Some(body) => body.clone(),
         None => return Ok(Vec::new()),
     };
     if req.body_used {
-        return Err(BODY_ALREADY_USED_MESSAGE);
+        return Err(RequestBodyError::Message(BODY_ALREADY_USED_MESSAGE));
     }
     req.body_used = true;
-    Ok(body)
+    match req.body_error {
+        Some(error) => Err(RequestBodyError::Thrown(error)),
+        None => Ok(body),
+    }
+}
+
+enum RequestBodyError {
+    Message(&'static str),
+    /// The body's stream ended with this error; reject with it unchanged.
+    Thrown(f64),
+}
+
+unsafe fn reject_request_body(promise: *mut perry_runtime::Promise, err: RequestBodyError) {
+    match err {
+        RequestBodyError::Message(msg) if msg == BODY_ALREADY_USED_MESSAGE => {
+            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
+        }
+        RequestBodyError::Message(msg) => {
+            perry_runtime::js_promise_reject(promise, f64::from_bits(fetch_error_bits(msg)));
+        }
+        RequestBodyError::Thrown(error) => perry_runtime::js_promise_reject(promise, error),
+    }
 }
 
 /// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`: the
@@ -1586,13 +1653,7 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
             let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
             perry_runtime::js_promise_resolve(promise, result_nan);
         }
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
+        Err(err) => reject_request_body(promise, err),
     }
     promise
 }
@@ -1605,13 +1666,8 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Pro
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
+        Err(err) => {
+            reject_request_body(promise, err);
             return promise;
         }
     };
@@ -1634,13 +1690,8 @@ pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut perry_runt
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
+        Err(err) => {
+            reject_request_body(promise, err);
             return promise;
         }
     };

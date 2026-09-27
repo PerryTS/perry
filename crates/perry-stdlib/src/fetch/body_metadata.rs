@@ -572,13 +572,7 @@ pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut perry_runtime::Pro
             let blob_id = alloc_blob(BlobData::blob(body, content_type));
             perry_runtime::js_promise_resolve(promise, handle_to_f64(blob_id));
         }
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
+        Err(err) => reject_request_body(promise, err),
     }
     promise
 }
@@ -589,13 +583,7 @@ pub unsafe extern "C" fn js_request_bytes(handle: f64) -> *mut perry_runtime::Pr
     let promise = perry_runtime::js_promise_new();
     match consume_request_body(handle) {
         Ok(body) => resolve_bytes_promise(promise, body),
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
+        Err(err) => reject_request_body(promise, err),
     }
     promise
 }
@@ -613,13 +601,7 @@ pub unsafe extern "C" fn js_request_form_data(handle: f64) -> *mut perry_runtime
             }
             Err(message) => reject_fetch_type_error(promise, message),
         },
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
+        Err(err) => reject_request_body(promise, err),
     }
     promise
 }

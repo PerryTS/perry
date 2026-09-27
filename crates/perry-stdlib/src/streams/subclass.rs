@@ -389,6 +389,24 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+/// A Fetch body chunk's bytes. Unlike `read_bytes_from_chunk`, a string chunk
+/// (valid in an async-iterable body) is UTF-8 encoded rather than dropped.
+unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
+    if JSValue::from_bits(chunk_bits).is_any_string() {
+        let mut scratch = [0u8; perry_runtime::value::SHORT_STRING_MAX_LEN];
+        let (ptr, len) = perry_runtime::string::str_bytes_from_jsvalue(
+            f64::from_bits(chunk_bits),
+            &mut scratch,
+        )?;
+        return Some(if ptr.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(ptr, len as usize).to_vec()
+        });
+    }
+    read_bytes_from_chunk(chunk_bits)
+}
+
 /// Drain a ReadableStream's body to bytes, DRIVING its `pull` source. Used by
 /// `new Response(stream)` / `new Request(url, { body: stream })` to materialize
 /// the body at construction time.
@@ -435,7 +453,7 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
         let mut got_chunk = false;
         for chunk in chunks {
             unsafe {
-                if let Some(bytes) = read_bytes_from_chunk(chunk) {
+                if let Some(bytes) = body_chunk_bytes(chunk) {
                     out.extend_from_slice(&bytes);
                     got_chunk = true;
                 }

@@ -580,6 +580,17 @@ pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class:
 
 static READABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, ReadableStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The error a readable stream ended with, if any. A stream built from an
+/// iterable that threw keeps it in `pending_error_after_chunks` until a reader
+/// has popped the queued chunks, so check both.
+pub(crate) fn readable_stream_error(stream_id: usize) -> Option<f64> {
+    let g = READABLE_STREAMS.lock().unwrap();
+    let s = g.get(&stream_id)?;
+    match s.state {
+        ReadableState::Errored => Some(f64::from_bits(s.error_value)),
+        _ => s.pending_error_after_chunks.map(f64::from_bits),
+    }
+}
 static WRITABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, WritableStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static TRANSFORM_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, TransformStreamData>>> =
@@ -1705,16 +1716,23 @@ unsafe fn is_callable_value(value: f64) -> bool {
     raw >= 0x10000 && perry_runtime::closure::is_closure_ptr(raw as usize)
 }
 
-unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+unsafe fn async_iterator_method(value: f64) -> Option<f64> {
     let sym = perry_runtime::symbol::well_known_symbol("asyncIterator");
     if sym.is_null() {
         return None;
     }
     let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
     let method = perry_runtime::symbol::js_object_get_symbol_property(value, sym_value);
-    if !is_callable_value(method) {
-        return None;
-    }
+    is_callable_value(method).then_some(method)
+}
+
+/// Whether `value` has a callable `Symbol.asyncIterator` (without calling it).
+pub(crate) unsafe fn has_async_iterator(value: f64) -> bool {
+    async_iterator_method(value).is_some()
+}
+
+unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
+    let method = async_iterator_method(value)?;
     let iterator = with_implicit_this(value, || js_native_call_value(method, std::ptr::null(), 0));
     if iterator.to_bits() == TAG_UNDEFINED {
         None
@@ -1796,29 +1814,31 @@ unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
     } else {
         return None;
     };
-    let done_key = js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = js_string_from_bytes(b"value".as_ptr(), 5);
+    // Each `next()` runs JS, which can move heap values: keep everything we
+    // hold across it in runtime handles.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(iterator);
+    let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
+    let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
     let mut chunks = Vec::new();
+    let finish =
+        |chunks: &[perry_runtime::gc::RuntimeHandle<'_>], error: Option<u64>| ReadableFromSource {
+            chunks: perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(chunks)
+                .into_iter()
+                .map(f64::to_bits)
+                .collect(),
+            error,
+        };
 
     for _ in 0..100_000 {
-        let step = match try_call_iterator_next(iterator) {
+        let step = match try_call_iterator_next(iterator.get_nanbox_f64()) {
             Ok(Some(step)) => step,
             Ok(None) => break,
-            Err(reason) => {
-                return Some(ReadableFromSource {
-                    chunks,
-                    error: Some(reason),
-                });
-            }
+            Err(reason) => return Some(finish(&chunks, Some(reason))),
         };
         let step_result = match await_maybe_promise(step) {
             SettledValue::Fulfilled(result) => result,
-            SettledValue::Rejected(reason) => {
-                return Some(ReadableFromSource {
-                    chunks,
-                    error: Some(reason),
-                });
-            }
+            SettledValue::Rejected(reason) => return Some(finish(&chunks, Some(reason))),
             SettledValue::Pending => break,
         };
         let result_ptr = js_nanbox_get_pointer(step_result);
@@ -1826,16 +1846,16 @@ unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {
             break;
         }
         let result_obj = result_ptr as *const ObjectHeader;
-        let done_val = js_object_get_field_by_name(result_obj, done_key);
+        let done_val = js_object_get_field_by_name(result_obj, done_key.get_raw_const_ptr());
         let done = f64::from_bits(done_val.bits());
         if perry_runtime::value::js_is_truthy(done) != 0 {
             break;
         }
-        let item = js_object_get_field_by_name(result_obj, value_key);
-        chunks.push(item.bits());
+        let item = js_object_get_field_by_name(result_obj, value_key.get_raw_const_ptr());
+        chunks.push(scope.root_nanbox_u64(item.bits()));
     }
 
-    Some(ReadableFromSource::closed(chunks))
+    Some(finish(&chunks, None))
 }
 
 /// `ReadableStream.from(iterable)` (Node 20+, #1645) — build a Web

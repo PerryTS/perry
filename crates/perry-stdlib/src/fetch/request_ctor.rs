@@ -38,6 +38,19 @@ pub unsafe extern "C" fn js_request_new(
         throw_fetch_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
     }
     let method = normalize_method(&raw_method);
+    // Copy every string argument now: taking or draining the body stream below
+    // can run JS, which may move heap strings. Root `signal` for the same reason.
+    let referrer = string_from_header(referrer_ptr).unwrap_or_else(|| "about:client".to_string());
+    let referrer_policy = string_from_header(referrer_policy_ptr).unwrap_or_default();
+    let mode = string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string());
+    let credentials =
+        string_from_header(credentials_ptr).unwrap_or_else(|| "same-origin".to_string());
+    let cache = string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string());
+    let redirect = string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string());
+    let integrity = string_from_header(integrity_ptr).unwrap_or_default();
+    let duplex = string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string());
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let signal_root = scope.root_nanbox_f64(signal);
     // A Buffer / Uint8Array / typed-array / ArrayBuffer body reaches us as a
     // BufferHeader/TypedArrayHeader pointer (codegen ran the value through
     // `js_get_string_pointer_unified`), NOT a StringHeader — the same for both
@@ -85,9 +98,11 @@ pub unsafe extern "C" fn js_request_new(
     {
         throw_fetch_type_error("Request with GET/HEAD method cannot have body.");
     }
-    let body = pending_stream_id
-        .map(crate::streams::drain_readable_into_bytes)
-        .or(non_stream_body);
+    let (body, body_error) = match pending_stream_id.map(drain_body_stream) {
+        Some((bytes, error)) => (Some(bytes), error),
+        None => (non_stream_body, None),
+    };
+    let body_error = body_error.map(|error| scope.root_nanbox_f64(error));
     let headers_id_in = handle_id(headers_handle);
     let mut headers = if headers_id_in != 0 {
         HEADERS_REGISTRY
@@ -110,7 +125,7 @@ pub unsafe extern "C" fn js_request_new(
     // lock: the scanner takes that same lock during a collection on this
     // thread, and a collection triggered by the allocation under the guard
     // would deadlock.
-    let signal = body_metadata::signal_or_default(signal);
+    let signal = body_metadata::signal_or_default(signal_root.get_nanbox_f64());
     let id = alloc_fetch_handle_id();
     let record = RequestRecord {
         url,
@@ -119,18 +134,18 @@ pub unsafe extern "C" fn js_request_new(
         body_used: false,
         headers,
         destination: String::new(),
-        referrer: string_from_header(referrer_ptr).unwrap_or_else(|| "about:client".to_string()),
-        referrer_policy: string_from_header(referrer_policy_ptr).unwrap_or_default(),
-        mode: string_from_header(mode_ptr).unwrap_or_else(|| "cors".to_string()),
-        credentials: string_from_header(credentials_ptr)
-            .unwrap_or_else(|| "same-origin".to_string()),
-        cache: string_from_header(cache_ptr).unwrap_or_else(|| "default".to_string()),
-        redirect: string_from_header(redirect_ptr).unwrap_or_else(|| "follow".to_string()),
-        integrity: string_from_header(integrity_ptr).unwrap_or_default(),
+        referrer,
+        referrer_policy,
+        mode,
+        credentials,
+        cache,
+        redirect,
+        integrity,
         keepalive: body_metadata::bool_from_js(keepalive),
-        duplex: string_from_header(duplex_ptr).unwrap_or_else(|| "half".to_string()),
+        duplex,
         signal,
         cached_headers_id: None,
+        body_error: body_error.map(|error| error.get_nanbox_f64()),
     };
     super::gc::ensure_gc_registered();
     REQUEST_REGISTRY.lock().unwrap().insert(id, record);

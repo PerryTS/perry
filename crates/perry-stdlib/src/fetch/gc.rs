@@ -132,6 +132,8 @@ extern "C" fn scan_fetch_roots_ffi(
     ctx: *mut c_void,
 ) {
     let mut visitor = FfiFetchRootVisitor { visit, ctx };
+    // Owned by no handle yet, so a root on every mark kind.
+    visit_pending_fetch_body_iterable(&mut visitor);
     if unsafe { perry_ffi_gc_root_visitor_is_full_mark(ctx) } {
         // Full marking reaches registry edges only through live handles
         // (`lifecycle::observe`), except for young ids, which are roots.
@@ -144,6 +146,7 @@ extern "C" fn scan_fetch_roots_ffi(
 #[cfg(test)]
 pub(super) fn scan_fetch_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
+    visit_pending_fetch_body_iterable(&mut visitor);
     scan_fetch_roots_with(&mut visitor);
 }
 
@@ -167,6 +170,9 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
     if let Ok(mut requests) = REQUEST_REGISTRY.lock() {
         for (_, request) in requests.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
             visitor.visit_nanbox_f64_slot(&mut request.signal);
+            if let Some(error) = &mut request.body_error {
+                visitor.visit_nanbox_f64_slot(error);
+            }
         }
     }
 }
