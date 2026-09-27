@@ -421,8 +421,7 @@ pub(crate) fn lower_generic_property_get(
         // instructions on a string-`.length` loop, measured). It keeps the
         // single call.
         let val = if property == "length" {
-            ctx.block()
-                .call(DOUBLE, "js_object_get_field_ic", &ic_args)
+            ctx.block().call(DOUBLE, "js_object_get_field_ic", &ic_args)
         } else {
             crate::expr::ic_fast_split::emit_hole_declining_split(
                 ctx,
