@@ -70,6 +70,14 @@ pub(super) fn emit_guarded_inbounds_array_store(
     value_is_numeric: bool,
     fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
 ) -> Result<()> {
+    // An operand may have emitted a throw + unreachable. LlBlock drops
+    // instructions after a terminator; opening the store diamond would then
+    // reference those dropped values from fresh blocks (#11450). Match the
+    // local-array fast path and leave the terminated path untouched.
+    if ctx.block().is_terminated() {
+        return Ok(());
+    }
+
     let deref_idx = ctx.new_block(&format!("{}.deref", block_prefix));
     let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
     let slow_idx = ctx.new_block(&format!("{}.slow", block_prefix));
@@ -343,4 +351,68 @@ pub(super) fn emit_guarded_inbounds_array_store(
 
     ctx.current_block = merge_idx;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use perry_hir::{types::Type, Expr, Stmt};
+
+    fn store_ir(value: Expr, ty: Type) -> String {
+        let mut module = perry_hir::Module::new("terminated_guarded_store");
+        module.init = vec![Stmt::Let {
+            id: 1,
+            name: "items".into(),
+            ty,
+            mutable: true,
+            init: Some(Expr::Array(vec![])),
+        }];
+        module.functions.push(perry_hir::Function {
+            id: 2,
+            name: "store".into(),
+            type_params: vec![],
+            params: vec![],
+            return_type: Type::Any,
+            body: vec![Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(value),
+            })],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: vec![],
+            decorators: vec![],
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        String::from_utf8(
+            crate::compile_module(&module, crate::temp_root_coverage::entry_opts())
+                .expect("store module compiles"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn throwing_operand_does_not_create_guarded_store_blocks() {
+        for (ty, block) in [
+            (Type::Array(Box::new(Type::Any)), "idxset.recv_global.deref"),
+            (Type::Any, "tav.set.fast"),
+        ] {
+            let live = store_ir(Expr::Number(42.0), ty.clone());
+            assert!(live.contains(block), "store arm {block} not exercised");
+            let dead = store_ir(
+                Expr::WorkerNew {
+                    paths: vec![],
+                    filename: Box::new(Expr::String("unresolved-worker".into())),
+                    options: None,
+                    is_eval: false,
+                    partial: false,
+                },
+                ty,
+            );
+            assert!(dead.contains("call void @js_throw_error_with_code("));
+            assert!(!dead.contains(block), "store emitted after throw:\n{dead}");
+        }
+    }
 }
