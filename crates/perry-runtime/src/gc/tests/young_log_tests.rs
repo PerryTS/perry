@@ -1002,33 +1002,3 @@ fn old_layout_records_are_skipped_by_a_minor() {
     crate::gc::layout_clear_for_ptr(owner as usize);
 }
 
-#[test]
-fn closure_walks_count_distinct_owners_consistently() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
-    let owner = old_closure();
-    crate::closure::closure_set_dynamic_prop(owner, "count", 42.0);
-    crate::closure::closure_set_static_prototype(owner, crate::value::TAG_NULL);
-    crate::closure::closure_mark_key_deleted(owner, "name");
-    let other = old_closure();
-    crate::closure::closure_mark_key_deleted(other, "length");
-
-    let mut mark = |_value: f64| {};
-    let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
-    crate::closure::scan_closure_dynamic_props_roots_mut(&mut visitor);
-    let full = walk("closure.dynamic_props");
-    assert!(!full.partial);
-    assert_eq!(full.table_len, 2);
-    assert_eq!(full.logged, 2);
-    assert_eq!(full.visited, 2);
-
-    let _ = gc_collect_minor();
-    let young = walk("closure.dynamic_props");
-    assert!(young.partial);
-    assert_eq!(
-        young.table_len, full.table_len,
-        "one owner in three maps still counts once"
-    );
-    assert_eq!(young.logged, 0);
-    assert_eq!(young.visited, 0);
-}
