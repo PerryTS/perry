@@ -81,7 +81,7 @@
     { "id": "pg/insert_batch", "n1": 500, "n2": 2000, "warm": 200, "servers": ["pg"] },
     { "id": "mysql2/select", "n1": 500, "n2": 2000, "warm": 200, "servers": ["mysql"] },
     { "id": "mysql2/insert_batch", "n1": 500, "n2": 2000, "warm": 200, "servers": ["mysql"] },
-    { "id": "mongodb/insert_find", "n1": 500, "n2": 2000, "warm": 200, "servers": ["mongo"] },
+    { "id": "mongodb/insert_find", "n1": 500, "n2": 2000, "warm": 200, "servers": ["mongo"], "known_hang": "perry: 'Cannot read properties of undefined (reading state)' then hangs (seen 2febf4214e and 36420d2e56)" },
     { "id": "mongodb/batch_query", "n1": 125, "n2": 500, "warm": 50, "servers": ["mongo"] },
     { "id": "redis/set_get", "n1": 500, "n2": 2000, "warm": 200, "servers": ["redis"] },
     { "id": "redis/pipeline", "n1": 125, "n2": 500, "warm": 50, "servers": ["redis"] },

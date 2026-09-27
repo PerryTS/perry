@@ -434,13 +434,20 @@ def run_once(cmd: list[str], env: dict, timeout: float, prefix: list[str] | None
     """Returns (rc, stdout, stderr, wall_s, load1)."""
     load1 = os.getloadavg()[0]
     t0 = time.perf_counter()
+    # Own process group, so a timeout kills the workload AND any wrapper
+    # (perf stat, /usr/bin/time) — never leave an orphan hanging.
+    p = subprocess.Popen((prefix or []) + cmd, cwd=PKG_DIR, env=env, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        p = subprocess.run((prefix or []) + cmd, cwd=PKG_DIR, env=env, capture_output=True, text=True,
-                           timeout=timeout)
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        rc, out, err = -999, (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or ""), \
-            f"TIMEOUT after {timeout}s"
+        out, err = p.communicate(timeout=timeout)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        out, _err = p.communicate()
+        rc, err = -999, f"TIMEOUT after {timeout:.0f}s"
     return rc, out, err, time.perf_counter() - t0, load1
 
 
@@ -529,6 +536,10 @@ def cmd_run(args) -> None:
         "load_threshold": threshold, "servers": server_status, "workloads": {},
     }
     out_path = Path(args.out)
+    if args.resume and out_path.exists():
+        prev = json.loads(out_path.read_text())
+        results["workloads"] = prev.get("workloads", {})
+        results["resumed_from"] = prev.get("started")
 
     def save():
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -536,6 +547,17 @@ def cmd_run(args) -> None:
 
     for w in wls:
         wid, n1, n2, warm = w["id"], w["n1"], w["n2"], w["warm"]
+        if args.resume and wid in results["workloads"]:
+            log(f"{wid}: kept from previous run (--resume)")
+            continue
+        if w.get("known_hang") and not args.include_known_hangs:
+            results["workloads"][wid] = {"n1": n1, "n2": n2, "warm": warm, "arms": {
+                arm: ({"status": "FAIL", "reason": "known hang, skipped: " + w["known_hang"]} if arm == "perry"
+                      else {"status": "SKIP", "reason": "workload skipped (perry arm is a known hang)"})
+                for arm in args.arms}}
+            log(f"{wid}: skipped (known hang: {w['known_hang']})")
+            save()
+            continue
         if args.scale != 1.0:
             n1, n2 = max(1, int(n1 * args.scale)), max(2, int(n2 * args.scale))
         entry = {"n1": n1, "n2": n2, "warm": warm, "arms": {}}
@@ -561,6 +583,10 @@ def cmd_run(args) -> None:
                     a.update(status="FAIL", reason="perry " + (ci or {}).get("reason", "binary not compiled"))
                     continue
             rc, out, err, wall, load1 = run_once(arm_cmd(args, arm, wid, n1, warm), env, args.timeout)
+            # Hard per-arm budget for every later run of this arm: 5x the
+            # n2 extrapolation of this n1 run, at least --min-timeout. A hang
+            # is recorded as FAIL (TIMEOUT) and the matrix moves on.
+            a["timeout_s"] = round(max(args.min_timeout, 5 * wall * n2 / max(n1, 1)), 1)
             a["correctness_output"] = out.strip()[:400]
             if rc != 0 or out.startswith("ERROR") or "\nERROR" in out:
                 a.update(status="FAIL", reason=f"exit {rc}: " + tail(out + "\n" + err, 400))
@@ -595,10 +621,11 @@ def cmd_run(args) -> None:
                 for n in (n1, n2):
                     samples = []
                     for _ in range(args.instr_reps):
-                        rc, out, err, instr, load1 = perf_instructions(arm_cmd(args, arm, wid, n, warm), env, args.timeout)
+                        rc, out, err, instr, load1 = perf_instructions(arm_cmd(args, arm, wid, n, warm), env,
+                                                                       entry["arms"][arm]["timeout_s"])
                         loads[arm].append(load1)
                         if rc != 0 or instr is None:
-                            entry["arms"][arm].update(status="FAIL", reason=f"perf run exit {rc}: " + tail(err, 300))
+                            entry["arms"][arm].update(status="FAIL", reason=f"perf run at n={n} exit {rc}: " + tail(err, 300))
                             break
                         check_out(arm, n, out)
                         samples.append(instr)
@@ -616,7 +643,8 @@ def cmd_run(args) -> None:
                     if entry["arms"][arm]["status"] != "OK":
                         continue
                     for n in (n1, n2):
-                        rc, out, err, wall, load1 = run_once(arm_cmd(args, arm, wid, n, warm), env, args.timeout)
+                        rc, out, err, wall, load1 = run_once(arm_cmd(args, arm, wid, n, warm), env,
+                                                             entry["arms"][arm]["timeout_s"])
                         loads[arm].append(load1)
                         if rc != 0:
                             entry["arms"][arm].update(status="FAIL", reason=f"wall run exit {rc}: " + tail(err, 300))
@@ -636,7 +664,7 @@ def cmd_run(args) -> None:
                     continue
                 ts = []
                 for _ in range(args.wall_reps):
-                    rc, out, err, wall, load1 = run_once(arm_cmd(args, arm, wid, 0, 0), env, args.timeout)
+                    rc, out, err, wall, load1 = run_once(arm_cmd(args, arm, wid, 0, 0), env, args.min_timeout)
                     loads[arm].append(load1)
                     if rc == 0:
                         ts.append(wall)
@@ -646,7 +674,7 @@ def cmd_run(args) -> None:
             for arm in order:
                 if entry["arms"][arm]["status"] != "OK":
                     continue
-                rc, out, kb = peak_rss_kb(arm_cmd(args, arm, wid, n2, warm), env, args.timeout)
+                rc, out, kb = peak_rss_kb(arm_cmd(args, arm, wid, n2, warm), env, entry["arms"][arm]["timeout_s"])
                 if rc == 0:
                     entry["arms"][arm]["peak_rss_kb"] = kb
         for arm in order:
@@ -1136,7 +1164,11 @@ def main() -> None:
     pr.add_argument("--instr-reps", type=int, default=3)
     pr.add_argument("--wall-reps", type=int, default=7)
     pr.add_argument("--scale", type=float, default=1.0, help="multiply n1/n2 (smoke runs)")
-    pr.add_argument("--timeout", type=float, default=600)
+    pr.add_argument("--timeout", type=float, default=600, help="budget for the correctness (n1) run")
+    pr.add_argument("--min-timeout", type=float, default=120,
+                    help="floor of the per-arm budget for every later run (5x the n2 extrapolation of the n1 run)")
+    pr.add_argument("--resume", action="store_true", help="keep workloads already in --out; run the rest")
+    pr.add_argument("--include-known-hangs", action="store_true", help="run manifest known_hang workloads too")
     pr.add_argument("--load-threshold", type=float, default=None, help="default 0.5 x ncpu")
     pr.add_argument("--owner", default=os.environ.get("USER", "unknown") + ":package_bench")
     pr.add_argument("--lock-timeout", type=float, default=4 * 3600)
