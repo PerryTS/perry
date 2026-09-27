@@ -126,3 +126,103 @@ fn only_fetch_band_words_reach_the_provider() {
     abort_full_trace();
     assert!(!handle_trace_active() || crate::proxy::gc_full_trace_active());
 }
+
+// #11453: the shared native-handle pool's weak-owner provider.
+thread_local! {
+    static POOL_CALLS: Cell<usize> = const { Cell::new(0) };
+    static POOL_ARM: Cell<bool> = const { Cell::new(true) };
+    static POOL_PHASES: Cell<u32> = const { Cell::new(0) };
+}
+
+extern "C" fn pool_phase(phase: u32) -> bool {
+    POOL_PHASES.with(|seen| seen.set(seen.get() | (1 << phase)));
+    phase != 0 || POOL_ARM.with(Cell::get)
+}
+extern "C" fn pool_observe(
+    bits: u64,
+    _mark: extern "C" fn(u64, *mut c_void),
+    _ctx: *mut c_void,
+) -> bool {
+    POOL_CALLS.with(|calls| calls.set(calls.get() + 1));
+    bits & crate::value::POINTER_MASK == 7 || bits == 7
+}
+
+#[test]
+fn only_pool_band_words_reach_the_pool_provider() {
+    let _guard = GcTestIsolationGuard::new();
+    let valid = build_valid_pointer_set();
+    POOL_ARM.with(|arm| arm.set(true));
+    perry_ffi_gc_register_pool_handle_trace(pool_phase, pool_observe);
+    begin_full_trace();
+    assert!(handle_trace_active(), "an armed pool provider activates observation");
+    POOL_CALLS.with(|calls| calls.set(0));
+    let heap = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    for bits in [
+        ptr_bits(heap as usize),
+        heap as u64,
+        42.5f64.to_bits(),
+        crate::value::TAG_UNDEFINED,
+        ptr_bits(crate::value::addr_class::COMMON_HANDLE_BAND_END),
+        ptr_bits(0),
+    ] {
+        observe_handle(bits, &valid);
+    }
+    assert_eq!(POOL_CALLS.with(Cell::get), 0, "non-pool words reached the provider");
+    assert!(observe_handle(ptr_bits(7), &valid), "a boxed parked id is claimed");
+    assert!(observe_handle(7, &valid), "a raw parked id is claimed");
+    assert!(!observe_handle(ptr_bits(8), &valid));
+    assert_eq!(POOL_CALLS.with(Cell::get), 3);
+    abort_full_trace();
+    assert!(POOL_PHASES.with(Cell::get) & 0b101 == 0b101, "begin and abort were reported");
+    perry_ffi_gc_register_pool_handle_trace(pool_phase_unregistered, pool_observe);
+}
+
+extern "C" fn pool_phase_unregistered(_: u32) -> bool {
+    false
+}
+
+#[test]
+fn a_pool_provider_with_nothing_parked_costs_no_observation() {
+    let _guard = GcTestIsolationGuard::new();
+    let valid = build_valid_pointer_set();
+    POOL_ARM.with(|arm| arm.set(false));
+    perry_ffi_gc_register_pool_handle_trace(pool_phase, pool_observe);
+    begin_full_trace();
+    POOL_CALLS.with(|calls| calls.set(0));
+    observe_handle(ptr_bits(7), &valid);
+    assert_eq!(POOL_CALLS.with(Cell::get), 0, "an unarmed provider must not be called");
+    POOL_PHASES.with(|seen| seen.set(0));
+    abort_full_trace();
+    assert_eq!(
+        POOL_PHASES.with(Cell::get) & 0b100,
+        0,
+        "an unarmed provider is not told about the abort"
+    );
+    POOL_ARM.with(|arm| arm.set(true));
+    perry_ffi_gc_register_pool_handle_trace(pool_phase_unregistered, pool_observe);
+}
+
+/// A parked id stored into an already-scanned object during incremental
+/// marking must still reach the provider, or the id would be released while
+/// the heap holds it.
+#[test]
+fn a_pool_id_stored_during_incremental_marking_reaches_the_provider() {
+    let _guard = GcTestIsolationGuard::new();
+    clear_marks();
+    clear_mark_seeds();
+    let parent = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid = build_valid_pointer_set();
+    POOL_ARM.with(|arm| arm.set(true));
+    perry_ffi_gc_register_pool_handle_trace(pool_phase, pool_observe);
+    begin_full_trace();
+    let active = IncrementalMarkBarrierTestGuard::new(&valid);
+    POOL_CALLS.with(|calls| calls.set(0));
+    crate::gc::js_write_barrier(ptr_bits(parent as usize), ptr_bits(7));
+    assert!(
+        POOL_CALLS.with(Cell::get) >= 1,
+        "the store barrier must offer a stored pool id to the provider"
+    );
+    drop(active);
+    abort_full_trace();
+    perry_ffi_gc_register_pool_handle_trace(pool_phase_unregistered, pool_observe);
+}
