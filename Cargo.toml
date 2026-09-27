@@ -381,7 +381,7 @@ regex = "1.12"
 aho-corasick = "1.1"
 memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
-perex = "0.1.9"
+perex = "0.1.10"
 # turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
 # stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
 # 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
