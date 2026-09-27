@@ -3,3 +3,5 @@ Fix `instanceof` with a Proxy right operand (#10364). Proxy handles now enter th
 The inherited `Function.prototype[Symbol.hasInstance]` path performs OrdinaryHasInstance directly, avoiding a second hook lookup. Runtime handles keep operands and prototype links live across user traps and moving collections. Add a runtime regression and Node parity coverage for non-callable/callable/nested proxies, custom and proxied hooks, access order, primitives, revocation, prototype traps, and exception recovery.
 
 Recognize heap-backed capturing class constructors when snapshotting Proxy callability, so they remain callable objects and participate in ordinary instance checks.
+
+Do not synthesize an own prototype on bound functions: a proxy around a bound function must observe the missing property and reject object operands with TypeError unless the user supplies a prototype. Proxied `Symbol.hasInstance` methods retain the constructor as their explicit call receiver.

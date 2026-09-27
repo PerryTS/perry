@@ -1,5 +1,9 @@
 class A { x = 1; }
 const a: any = new A();
+function churn() {
+  // Keep allocation-capable loop polls inside traps for the GC-stress arm.
+  for (let i = 0; i < 6; i++) globalThis.__proxyInstanceofKeep = { i, values: [i] };
+}
 function check(label: string, value: any, constructor: any) {
   try { console.log(label, value instanceof constructor); }
   catch (error) { console.log(label, error instanceof TypeError ? 'TypeError' : 'other'); }
@@ -45,6 +49,7 @@ check('proxy hook', a, hooked);
 const reads: string[] = [];
 const redirected = new Proxy(function () {}, {
   get(target, key) {
+    churn();
     reads.push(key === Symbol.hasInstance ? 'hasInstance' : String(key));
     if (key === Symbol.hasInstance) return undefined;
     if (key === 'prototype') return A.prototype;
@@ -65,7 +70,7 @@ const invalidPrototype = new Proxy(function () {}, {
 check('invalid prototype', a, invalidPrototype);
 check('primitive invalid prototype', 7, invalidPrototype);
 
-const left = new Proxy({}, { getPrototypeOf() { console.log('left prototype'); return A.prototype; } });
+const left = new Proxy({}, { getPrototypeOf() { churn(); console.log('left prototype'); return A.prototype; } });
 check('left trap', left, wrapped);
 const revoked = Proxy.revocable(A, {});
 revoked.revoke();

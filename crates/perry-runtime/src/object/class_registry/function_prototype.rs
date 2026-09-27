@@ -7,6 +7,7 @@ pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
     if !is_callable_function_value(func_value)
         || is_arrow_function_value(func_value)
         || is_plain_async_function_value(func_value)
+        || is_bound_function_value(func_value)
         || super::super::native_module::builtin_closure_is_non_constructable_value(func_value)
     {
         return false;
@@ -27,6 +28,7 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     if !is_callable_function_value(func_value)
         || is_arrow_function_value(func_value)
         || is_plain_async_function_value(func_value)
+        || is_bound_function_value(func_value)
     {
         return None;
     }
@@ -58,6 +60,16 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     }
     let proto = ensure_function_prototype_object(func_value, cid);
     (!proto.is_null()).then(|| crate::value::js_nanbox_pointer(proto as i64))
+}
+
+// Bound functions may be constructible, but never synthesize an own
+// `prototype`. In particular, wrapping one in a Proxy must not invent the
+// prototype that OrdinaryHasInstance then observes (#10364).
+fn is_bound_function_value(func_value: f64) -> bool {
+    let value = crate::value::JSValue::from_bits(func_value.to_bits());
+    value.is_pointer()
+        && crate::closure::get_valid_func_ptr(value.as_pointer::<crate::closure::ClosureHeader>())
+            == crate::closure::BOUND_FUNCTION_FUNC_PTR
 }
 
 fn is_plain_async_function_value(func_value: f64) -> bool {

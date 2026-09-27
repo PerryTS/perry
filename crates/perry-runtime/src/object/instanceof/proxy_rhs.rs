@@ -24,11 +24,16 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
         let previous_this =
             scope.root_nanbox_f64(js_implicit_this_set(constructor.get_nanbox_f64()));
         let called = crate::exception::catch_js_throw(|| unsafe {
-            crate::closure::js_native_call_value(
-                method.get_nanbox_f64(),
-                [value.get_nanbox_f64()].as_ptr(),
-                1,
-            )
+            let args = [value.get_nanbox_f64()];
+            if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) != 0 {
+                crate::proxy::call_proxy_value_with_this(
+                    method.get_nanbox_f64(),
+                    constructor.get_nanbox_f64(),
+                    &args,
+                )
+            } else {
+                crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1)
+            }
         });
         js_implicit_this_set(previous_this.get_nanbox_f64());
         match called {
@@ -133,5 +138,24 @@ mod tests {
         })
         .is_err());
         assert!(!ordinary_has_instance(callable.get_nanbox_f64(), 1.0));
+
+        let bound = scope.root_nanbox_f64(unsafe {
+            crate::closure::js_function_bind(constructor.get_nanbox_f64(), std::ptr::null(), 0)
+        });
+        assert!(!crate::object::function_would_have_own_prototype(
+            bound.get_nanbox_f64()
+        ));
+        assert!(
+            crate::object::ordinary_function_prototype_value_for_read(bound.get_nanbox_f64())
+                .is_none()
+        );
+        let wrapped_bound = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            bound.get_nanbox_f64(),
+            handler.get_nanbox_f64(),
+        ));
+        assert!(crate::exception::catch_js_throw(|| {
+            js_instanceof_dynamic(instance.get_nanbox_f64(), wrapped_bound.get_nanbox_f64())
+        })
+        .is_err());
     }
 }
