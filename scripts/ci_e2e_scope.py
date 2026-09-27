@@ -120,6 +120,7 @@ _CODEGEN_SUITES = [
     "class_field_store_pointer_test",
     "class_keys_gc_root",
     "constructor_recursion",
+    "crypto_hash_chain_lowering",
     "destructure_call_location",
     "error_subclass_field_init",
     "export_function_alias_identity",
