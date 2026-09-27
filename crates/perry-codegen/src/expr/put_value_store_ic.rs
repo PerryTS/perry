@@ -247,7 +247,11 @@ pub(crate) fn emit_static_store_ic(
             ctx,
             "pset.outline",
             "js_put_value_set_packed_fast",
-            &[(DOUBLE, obj_box), (DOUBLE, value_double), (PTR, &cache_slot_ref)],
+            &[
+                (DOUBLE, obj_box),
+                (DOUBLE, value_double),
+                (PTR, &cache_slot_ref),
+            ],
             "js_put_value_set_packed_miss",
             &[
                 (DOUBLE, obj_box),

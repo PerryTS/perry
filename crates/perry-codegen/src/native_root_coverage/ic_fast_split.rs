@@ -22,10 +22,22 @@ use super::*;
 use perry_hir::{Class, ClassField};
 
 const FAST_SLOW: [(&str, &str); 4] = [
-    ("js_put_value_set_packed_fast", "js_put_value_set_packed_miss"),
-    ("js_object_get_field_ic_fast", "js_object_get_field_ic_fast_miss"),
-    ("js_class_field_get_ic_fast", "js_class_field_get_ic_fast_miss"),
-    ("js_class_field_set_ic_fast", "js_class_field_set_ic_fast_miss"),
+    (
+        "js_put_value_set_packed_fast",
+        "js_put_value_set_packed_miss",
+    ),
+    (
+        "js_object_get_field_ic_fast",
+        "js_object_get_field_ic_fast_miss",
+    ),
+    (
+        "js_class_field_get_ic_fast",
+        "js_class_field_get_ic_fast_miss",
+    ),
+    (
+        "js_class_field_set_ic_fast",
+        "js_class_field_set_ic_fast_miss",
+    ),
 ];
 
 fn point_class() -> Class {
@@ -253,7 +265,10 @@ fn inline_splits_call_their_helper_only_from_the_cold_block() {
                     );
                 }
             }
-            assert_eq!(calls, 1, "[{target}] `{helper}` must be called exactly once");
+            assert_eq!(
+                calls, 1,
+                "[{target}] `{helper}` must be called exactly once"
+            );
             let points = statepoints_of(&ir, target, &probe);
             assert!(!points.at(helper).is_empty());
         }

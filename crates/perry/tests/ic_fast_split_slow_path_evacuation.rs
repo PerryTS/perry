@@ -71,7 +71,10 @@ fn compile(dir: &Path) -> (PathBuf, String) {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    (output, String::from_utf8_lossy(&compile.stderr).into_owned())
+    (
+        output,
+        String::from_utf8_lossy(&compile.stderr).into_owned(),
+    )
 }
 
 fn kept_ir(stderr: &str) -> String {
