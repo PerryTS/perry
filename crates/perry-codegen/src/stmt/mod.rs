@@ -41,6 +41,8 @@ mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
 #[cfg(test)]
+mod packed_range_global_cache_rooting_tests;
+#[cfg(test)]
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;

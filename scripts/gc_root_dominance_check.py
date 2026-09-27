@@ -1818,6 +1818,51 @@ def between_blocks(f, a_blk, b_blk):
     return (fwd & bwd) - {a_blk, b_blk}
 
 
+def loop_carried_blocks(f, a_blk, b_blk, barrier_blks=()):
+    """Blocks on a cycle b_blk -> ... -> b_blk that enters neither a_blk nor
+    any of `barrier_blks` (blocks that re-store the slot), or None when there
+    is no such cycle.
+
+    Only the unrooted-alloca mode uses this (#11590). A memory slot stored in
+    `a_blk` and loaded in a loop body `b_blk` keeps its value across the
+    back-edge, so a collector on that cycle is inside the window of every
+    load after the first. For an SSA register `between_blocks`'s refusal to
+    expand past `b_blk` is right; for a slot it misses exactly this shape.
+    """
+    if a_blk == b_blk:
+        return None
+    stop = {a_blk} | set(barrier_blks)
+    if b_blk in stop:
+        return None
+    fwd = set()
+    q = deque(s for s in f.succs[b_blk] if s in f.insns and s not in stop)
+    while q:
+        x = q.popleft()
+        if x in fwd:
+            continue
+        fwd.add(x)
+        if x == b_blk:
+            continue
+        for s in f.succs[x]:
+            if s in f.insns and s not in stop:
+                q.append(s)
+    if b_blk not in fwd:
+        return None
+    bwd = set()
+    q = deque(p for p in f.preds[b_blk] if p in f.insns and p not in stop)
+    while q:
+        x = q.popleft()
+        if x in bwd:
+            continue
+        bwd.add(x)
+        if x == b_blk:
+            continue
+        for p in f.preds[x]:
+            if p in f.insns and p not in stop:
+                q.append(p)
+    return (fwd & bwd) - {b_blk}
+
+
 # ---------------------------------------------------------- slot activity (must)
 
 def must_active_slots(f):
@@ -3289,7 +3334,12 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
             if lm and lm.group(1) in allocas:
                 loads[lm.group(1)].append(ins)
 
-    def window_hits(A, B):
+    store_blocks = defaultdict(set)   # alloca -> blocks that (re)store it
+    for reg_, sts in stores.items():
+        for st_ in sts:
+            store_blocks[reg_].add(st_.block)
+
+    def window_hits(A, B, reg):
         hits = []
         if A.block == B.block:
             return [c for c in f.insns[A.block]
@@ -3300,6 +3350,19 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
                  if is_collecting(c.callee) and c.idx < B.idx]
         for m_blk in between_blocks(f, A.block, B.block):
             hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
+        # #11590: a slot stored ONCE before a loop and loaded in its body is
+        # the same value on every iteration, so a collection anywhere on the
+        # back-edge cycle sits between the store and every load after the
+        # first. `between_blocks` stops at the load's block (right for an SSA
+        # value re-defined per iteration), which hid the packed-range loop's
+        # module-global cache: its only moving collector is the slow clone's
+        # back-edge `js_gc_loop_safepoint`, AFTER the load.
+        cyc = loop_carried_blocks(f, A.block, B.block, store_blocks[reg])
+        if cyc is not None:
+            hits += [c for c in f.insns[B.block]
+                     if is_collecting(c.callee) and c.idx > B.idx]
+            for m_blk in cyc:
+                hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
         return hits
 
     out = []
@@ -3339,7 +3402,7 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
                     continue
                 if st.block == ld.block and st.idx >= ld.idx:
                     continue
-                hits = window_hits(st, ld)
+                hits = window_hits(st, ld, reg)
                 if not hits:
                     continue
                 v = UnrootedAlloca(module, f.name, alloca_ins, st, ld, hits,
@@ -3377,6 +3440,44 @@ entry.0:
   ret double %this
 }
 """
+
+# #11590: the packed-range loop's module-global cache, reduced. The slot is
+# stored ONCE before the loop and loaded in the body; the only MOVING collector
+# is the back-edge poll, which runs AFTER the load. A store->load window that
+# stops at the load's block sees nothing; the second iteration's load reads
+# whatever the first iteration's poll left behind. `@loop_rooted` differs only
+# by the bind, the #11590 fix.
+_SELFTEST_LOOP_CARRIED = """\
+@perry_global_selftest__0 = global double 0.0
+
+define void @perry_fn_selftest__loop_unrooted() {
+entry.0:
+  %slot = alloca double
+  %g = load double, ptr @perry_global_selftest__0
+  store double %g, ptr %slot
+  br label %cond.1
+cond.1:
+  %i = phi i32 [ 0, %entry.0 ], [ %n, %poll.3 ]
+  %c = icmp slt i32 %i, 80
+  br i1 %c, label %body.2, label %exit.4
+body.2:
+  %d = load double, ptr %slot
+  %r = call double @js_dyn_index_set_strict(double %d, double 0.0, double 1.0, i32 0)
+  %n = add i32 %i, 1
+  br label %poll.3
+poll.3:
+  call void @js_gc_loop_safepoint()
+  br label %cond.1
+exit.4:
+  ret void
+}
+"""
+
+_SELFTEST_LOOP_ROOTED = _SELFTEST_LOOP_CARRIED.replace(
+    "loop_unrooted", "loop_rooted").replace(
+    "  store double %g, ptr %slot\n",
+    "  store double %g, ptr %slot\n"
+    "  call void @js_shadow_slot_bind(i32 0, ptr %slot)\n")
 
 _SELFTEST_ROOTED = """\
 define double @perry_fn_selftest__rooted(double %a) {
@@ -5522,6 +5623,28 @@ def self_test():
         if n_allocas != 1:
             print(f"self-test FAIL: rooted control -> {n_allocas} gc-capable "
                   "allocas, expected 1", file=sys.stderr)
+            ok = False
+
+        # #11590: the loop-carried window, both directions, under the gated
+        # `--moving-only` filter (the poll is the only mover).
+        lc_bad = os.path.join(td, "loop_carried_unrooted.ll")
+        lc_ok = os.path.join(td, "loop_carried_rooted.ll")
+        for p, text in ((lc_bad, _SELFTEST_LOOP_CARRIED),
+                        (lc_ok, _SELFTEST_LOOP_ROOTED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+        found, _ = _scan_unrooted([lc_bad], moving_only=True)
+        if len(found) != 1:
+            print(f"self-test FAIL: loop-carried unrooted-alloca fixture "
+                  f"(#11590) -> {len(found)} --moving-only violations, "
+                  "expected 1. A slot stored before a loop and loaded in its "
+                  "body is stale after the back-edge poll.", file=sys.stderr)
+            ok = False
+        found, _ = _scan_unrooted([lc_ok], moving_only=True)
+        if found:
+            print(f"self-test FAIL: loop-carried rooted control (#11590) -> "
+                  f"{len(found)} violations, expected 0; it differs from the "
+                  "planted fixture only by the bind.", file=sys.stderr)
             ok = False
 
         # And it must not fire on the bind-anchored fixtures, nor the reverse:
