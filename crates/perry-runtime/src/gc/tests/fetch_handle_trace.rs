@@ -154,7 +154,10 @@ fn only_pool_band_words_reach_the_pool_provider() {
     POOL_ARM.with(|arm| arm.set(true));
     perry_ffi_gc_register_pool_handle_trace(pool_phase, pool_observe);
     begin_full_trace();
-    assert!(handle_trace_active(), "an armed pool provider activates observation");
+    assert!(
+        handle_trace_active(),
+        "an armed pool provider activates observation"
+    );
     POOL_CALLS.with(|calls| calls.set(0));
     let heap = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     for bits in [
@@ -167,13 +170,23 @@ fn only_pool_band_words_reach_the_pool_provider() {
     ] {
         observe_handle(bits, &valid);
     }
-    assert_eq!(POOL_CALLS.with(Cell::get), 0, "non-pool words reached the provider");
-    assert!(observe_handle(ptr_bits(7), &valid), "a boxed parked id is claimed");
+    assert_eq!(
+        POOL_CALLS.with(Cell::get),
+        0,
+        "non-pool words reached the provider"
+    );
+    assert!(
+        observe_handle(ptr_bits(7), &valid),
+        "a boxed parked id is claimed"
+    );
     assert!(observe_handle(7, &valid), "a raw parked id is claimed");
     assert!(!observe_handle(ptr_bits(8), &valid));
     assert_eq!(POOL_CALLS.with(Cell::get), 3);
     abort_full_trace();
-    assert!(POOL_PHASES.with(Cell::get) & 0b101 == 0b101, "begin and abort were reported");
+    assert!(
+        POOL_PHASES.with(Cell::get) & 0b101 == 0b101,
+        "begin and abort were reported"
+    );
     perry_ffi_gc_register_pool_handle_trace(pool_phase_unregistered, pool_observe);
 }
 
@@ -190,7 +203,11 @@ fn a_pool_provider_with_nothing_parked_costs_no_observation() {
     begin_full_trace();
     POOL_CALLS.with(|calls| calls.set(0));
     observe_handle(ptr_bits(7), &valid);
-    assert_eq!(POOL_CALLS.with(Cell::get), 0, "an unarmed provider must not be called");
+    assert_eq!(
+        POOL_CALLS.with(Cell::get),
+        0,
+        "an unarmed provider must not be called"
+    );
     POOL_PHASES.with(|seen| seen.set(0));
     abort_full_trace();
     assert_eq!(

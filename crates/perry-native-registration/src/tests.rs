@@ -514,7 +514,10 @@ fn freelist_reuses_the_oldest_freed_id_first() {
         .map(|_| live(&registry, NativeRegistrationKind::Payload).numeric_id())
         .collect();
     let freed: Vec<_> = ids.iter().map(|identity| identity.numeric_id()).collect();
-    assert_eq!(reissued, freed, "ids must come back in the order they were freed");
+    assert_eq!(
+        reissued, freed,
+        "ids must come back in the order they were freed"
+    );
 }
 
 #[test]
@@ -530,7 +533,11 @@ fn a_most_recently_freed_id_waits_behind_the_whole_free_population() {
     let stale = ids.last().unwrap().numeric_id();
     for n in 0..62 {
         let identity = live(&registry, NativeRegistrationKind::Payload);
-        assert_ne!(identity.numeric_id(), stale, "reissued after only {n} registrations");
+        assert_ne!(
+            identity.numeric_id(),
+            stale,
+            "reissued after only {n} registrations"
+        );
         retire(&registry, identity, NativeQuarantine::NextDrain);
         registry.drain(Instant::now());
     }
@@ -549,14 +556,18 @@ fn proven_unreachable_retirement_skips_the_tick_quarantine() {
     let again = live(&registry, NativeRegistrationKind::Payload);
     assert_eq!(again.numeric_id(), identity.numeric_id());
     assert!(again.serial() > identity.serial());
-    assert!(registry.acquire(identity, NativeLeaseKind::Operation).is_none());
+    assert!(registry
+        .acquire(identity, NativeLeaseKind::Operation)
+        .is_none());
 }
 
 #[test]
 fn proven_unreachable_retirement_still_waits_for_a_held_lease() {
     let registry = NativeRegistrationRegistry::new(1, 3, 8);
     let identity = live(&registry, NativeRegistrationKind::Payload);
-    let lease = registry.acquire(identity, NativeLeaseKind::Wrapper).unwrap();
+    let lease = registry
+        .acquire(identity, NativeLeaseKind::Wrapper)
+        .unwrap();
     assert!(registry.begin_retirement_of(identity));
     assert!(registry.finish_retirement_reusable(identity));
     let other = live(&registry, NativeRegistrationKind::Payload);
@@ -583,7 +594,11 @@ fn available_ids_counts_fresh_and_free_but_not_quarantined() {
     let b = live(&registry, NativeRegistrationKind::Payload);
     assert_eq!(registry.available_ids(), 8);
     retire(&registry, a, NativeQuarantine::NextDrain);
-    assert_eq!(registry.available_ids(), 8, "quarantined ids are not available");
+    assert_eq!(
+        registry.available_ids(),
+        8,
+        "quarantined ids are not available"
+    );
     registry.drain(Instant::now());
     assert_eq!(registry.available_ids(), 9);
     assert!(registry.begin_retirement_of(b));

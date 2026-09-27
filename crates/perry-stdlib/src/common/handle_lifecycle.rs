@@ -49,7 +49,11 @@ extern "C" {
 }
 
 /// Parked-id count below which parking alone never requests a full trace.
-pub(super) const MIN_TRIGGER: usize = 4096;
+/// A requested full trace costs tens of millions of instructions even on a
+/// small heap, so the floor is set high: 32k parked ids is an eighth of the
+/// band, and a digest payload is a few hundred bytes. Collections the heap
+/// runs on its own schedule decide parked ids too, at no extra cost.
+pub(super) const MIN_TRIGGER: usize = 32 * 1024;
 /// Shared-band ids still obtainable below which registration keeps asking
 /// for traces (checked every [`BAND_CHECK_STRIDE`] registrations).
 pub(super) const BAND_RESERVE: usize = 32 * 1024;

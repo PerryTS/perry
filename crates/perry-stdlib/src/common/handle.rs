@@ -21,7 +21,8 @@ pub type Handle = i64;
 pub const INVALID_HANDLE: Handle = 0;
 
 /// Global handle registry using DashMap for concurrent access
-pub(super) static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
+pub(super) static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> =
+    Lazy::new(DashMap::new);
 
 // Band boundary owned by `perry_runtime::value::addr_class`.
 #[cfg(test)]

@@ -39,8 +39,14 @@ fn an_unreachable_reclaimable_payload_is_dropped_and_its_id_recycled() {
         let id = register_reclaimable_handle(11_u64);
         assert_eq!(parked_handle_count(), 1);
         collect();
-        assert!(FULL_TRACES.with(|n| n.get()) >= traces + 2, "no full trace ran");
-        assert!(!handle_exists(id), "nothing names the id, so its payload must go");
+        assert!(
+            FULL_TRACES.with(|n| n.get()) >= traces + 2,
+            "no full trace ran"
+        );
+        assert!(
+            !handle_exists(id),
+            "nothing names the id, so its payload must go"
+        );
         assert_eq!(parked_handle_count(), 0);
         assert!(
             REGISTRATIONS.identity(id).is_none(),
@@ -73,10 +79,8 @@ fn a_reclaimable_id_held_in_a_heap_array_is_kept() {
         let scope = RuntimeHandleScope::new();
         let id = register_reclaimable_handle(5_u32);
         let array = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(1));
-        let ptr = perry_runtime::js_array_push_f64(
-            array.get_raw_mut_ptr(),
-            f64::from_bits(boxed(id)),
-        );
+        let ptr =
+            perry_runtime::js_array_push_f64(array.get_raw_mut_ptr(), f64::from_bits(boxed(id)));
         array.set_raw_mut_ptr(ptr);
         collect();
         assert!(handle_exists(id), "an array element names the id");
@@ -98,7 +102,10 @@ fn a_dropped_id_still_held_by_js_is_never_reissued() {
         assert!(drop_handle(stale));
         for n in 0..20_000_u64 {
             let fresh = register_reclaimable_handle(n);
-            assert_ne!(fresh, stale, "a held stale id was reissued after {n} registrations");
+            assert_ne!(
+                fresh, stale,
+                "a held stale id was reissued after {n} registrations"
+            );
             if n % 2_000 == 0 {
                 collect();
             }
@@ -126,7 +133,10 @@ fn a_stream_used_payload_is_retained_strongly() {
         let id = register_reclaimable_handle(3_u8);
         assert!(retain_strongly(id));
         collect();
-        assert!(handle_exists(id), "a strongly retained payload is not GC-owned");
+        assert!(
+            handle_exists(id),
+            "a strongly retained payload is not GC-owned"
+        );
         assert!(drop_handle(id));
     });
 }
