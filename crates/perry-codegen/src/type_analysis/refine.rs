@@ -792,17 +792,12 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             // Buffer; refining to Uint8Array lets `buf.toString('hex')` and
             // `buf[i]` take the buffer dispatch instead of mis-reading the
             // raw bytes as a Latin-1 string (#1353).
-            if is_crypto_digest_chain(callee) {
-                let no_encoding = match args.first() {
-                    None => true,
-                    Some(Expr::Undefined) => true,
-                    _ => false,
-                };
-                return Some(if no_encoding {
-                    HirType::Named("Uint8Array".into())
-                } else {
-                    HirType::String
-                });
+            match crypto_digest_call_result(callee, args) {
+                Some(CryptoDigestResult::Buffer) => {
+                    return Some(HirType::Named("Uint8Array".into()));
+                }
+                Some(CryptoDigestResult::String) => return Some(HirType::String),
+                None => {}
             }
             // String prototype methods that return strings — when called
             // on a known-string receiver, the result is also a string.
@@ -843,6 +838,49 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
 /// shape, regardless of whether the encoding arg is present.
 pub(crate) fn is_crypto_digest_chain(callee: &Expr) -> bool {
     crypto_digest_chain_has_string_encoding(callee).is_some()
+}
+
+/// What a digest call statically returns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CryptoDigestResult {
+    String,
+    Buffer,
+}
+
+/// Result type of a `digest(...)` call on a hash/HMAC the compiler can see
+/// being created: the inline `createHash(..).update(..).digest(enc)` chain,
+/// or the handle-free `crypto.__perryHashChainDigest(state, enc)` that
+/// `perry_transform::crypto_hash_chain` emits (#11516).
+///
+/// Mirrors node's digest encoding parse: a missing / `undefined` encoding,
+/// `'buffer'`, or any literal that is not a string encoding returns a
+/// `Buffer`; a literal string encoding returns a string. A non-literal
+/// encoding (a variable, an options object) is not classified.
+pub(crate) fn crypto_digest_call_result(
+    callee: &Expr,
+    args: &[Expr],
+) -> Option<CryptoDigestResult> {
+    let enc = if is_crypto_digest_chain(callee) {
+        args.first()
+    } else if matches!(
+        callee,
+        Expr::PropertyGet { object, property, .. }
+            if property == perry_hir::crypto_chain::CHAIN_DIGEST
+                && matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
+    ) {
+        args.get(1)
+    } else {
+        return None;
+    };
+    match enc {
+        None | Some(Expr::Undefined) => Some(CryptoDigestResult::Buffer),
+        Some(Expr::String(name)) => Some(match name.to_ascii_lowercase().as_str() {
+            "hex" | "base64" | "base64url" | "latin1" | "binary" | "utf8" | "utf-8" | "ucs2"
+            | "ucs-2" | "utf16le" | "utf-16le" | "ascii" => CryptoDigestResult::String,
+            _ => CryptoDigestResult::Buffer,
+        }),
+        _ => None,
+    }
 }
 
 #[allow(dead_code)]

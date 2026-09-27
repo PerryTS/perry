@@ -10,6 +10,7 @@ mod aggregate_scalar;
 pub mod async_to_generator;
 pub mod closure;
 mod closure_local_inline;
+mod crypto_hash_chain;
 pub mod deforest;
 mod field_push_local_bind;
 pub mod finally_inline;
@@ -60,4 +61,8 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     // Let the shape-specific passes consume their bindings first, then remove
     // plain copies before codegen attaches string-sharing and root barriers.
     local_copies::run(module);
+    // #11516: after the copy cleanup (an alias it folds is one less escape)
+    // and before the async/generator transforms (which box locals and split
+    // expressions at `await`).
+    crypto_hash_chain::run(module);
 }

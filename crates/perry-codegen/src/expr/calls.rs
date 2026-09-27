@@ -28,7 +28,9 @@ mod crypto_misc;
 mod fs;
 mod helpers;
 
-pub(crate) use crypto_hash::{arm_crypto_create_hash, arm_crypto_hash_chain};
+pub(crate) use crypto_hash::{
+    arm_crypto_chain_call, arm_crypto_create_hash, arm_crypto_hash_chain,
+};
 pub(crate) use crypto_kdf::{
     arm_crypto_argon2, arm_crypto_argon2_sync, arm_crypto_hkdf_async_alg, arm_crypto_hkdf_sync,
     arm_crypto_hkdf_sync_alg, arm_crypto_pbkdf2_async, arm_crypto_pbkdf2_sync, arm_crypto_scrypt,
@@ -127,6 +129,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_readable_stream_from_iterable",
                 &[(DOUBLE, &arg_box)],
             ))
+        }
+
+        // #11516: handle-free hash/HMAC chains. `perry_transform::crypto_hash_chain`
+        // rewrote a provably non-escaping `createHash`/`createHmac` into these
+        // internal `crypto.__perryHash*` calls; the state lives in a frame slot.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property, .. }
+                    if perry_hir::crypto_chain::is_chain_method(property)
+                        && matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto")
+            ) =>
+        {
+            arm_crypto_chain_call(ctx, callee.as_ref(), args)
         }
 
         // Phase H crypto: collapse `crypto.createHash(alg).update(data).digest(enc)`
