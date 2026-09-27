@@ -47,10 +47,10 @@ fn computed_native_requires_survive_relocation_and_authenticate_payloads() {
         }
         compile_addon(&source, &native);
         let wrapper = if variant == "platform-package" {
-            "const name = '@parcel/watcher-test-platform'; module.exports = require(name);"
+            "const name = '@parcel/watcher-test-platform'; const first = require(name); if (require(require.resolve(name)) !== first) throw new Error('platform resolve identity'); module.exports = first;"
                 .to_string()
         } else {
-            format!("{}\nconst path = require('path'); const filename = path.join(__dirname, 'build', 'Release', 'addon.node'); module.exports = require(filename);",
+            format!("{}\nconst path = require('path'); const filename = path.join(__dirname, 'build', 'Release', 'addon.node'); const first = require(filename); if (require(require.resolve(filename)) !== first) throw new Error('computed resolve identity'); module.exports = first;",
                 if variant == "static-edge" { "if (process.env.PERRY_TEST_STATIC_EDGE) require('./build/Release/addon.node');" } else { "" })
         };
         std::fs::write(package.join("index.js"), wrapper).unwrap();

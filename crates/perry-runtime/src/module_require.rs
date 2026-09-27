@@ -1374,6 +1374,20 @@ pub(crate) fn test_remove_path_module_root(key: &str) {
 pub extern "C" fn js_require_resolve_node_modules(from_dir: f64, specifier: f64) -> f64 {
     let from = value_to_string(from_dir, "from");
     let spec = value_to_string(specifier, "specifier");
+    #[cfg(feature = "node-api-host")]
+    {
+        let request = if spec.starts_with("./") || spec.starts_with("../") {
+            std::path::Path::new(&from)
+                .join(&spec)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            spec.clone()
+        };
+        if let Ok(payload) = crate::node_api_host::resolve_addon_request(&request) {
+            return string_value(&payload.to_string_lossy());
+        }
+    }
     if spec == "." || spec == ".." || spec.starts_with("./") || spec.starts_with("../") {
         // Resolve from this CJS module, not the process cwd or the shared
         // createRequire instance. Reuse extension/directory lookup and realpath

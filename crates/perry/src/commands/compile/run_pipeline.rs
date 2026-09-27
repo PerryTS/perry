@@ -920,8 +920,6 @@ pub fn run_with_parse_cache(
         parse_cache.as_deref_mut(),
     )?;
 
-    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
-
     // Bundle extensions if --bundle-extensions specified
     let bundled_extensions: Vec<(PathBuf, String)> =
         if let Some(ext_dir) = args.bundle_extensions.clone() {
@@ -950,6 +948,8 @@ pub fn run_with_parse_cache(
         parse_cache.as_deref_mut(),
         format,
     )?;
+
+    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
 
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
     // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the

@@ -64,6 +64,9 @@ pub(in crate::commands::compile) fn collect_declared_addons(
         }
     }
     for root in roots {
+        if has_perry_native_library(&root) {
+            continue;
+        }
         let mut candidates = Vec::new();
         addon_files(&root, &root, &mut candidates)?;
         candidates.sort();
@@ -129,7 +132,20 @@ fn matches_target(path: &Path, triple: &str) -> Result<bool> {
     } else {
         object::BinaryFormat::Elf
     };
-    let name = path.to_string_lossy();
+    // Platform/libc tags belong to the package, not arbitrary directories
+    // above it (for example a glibc project checked out under /tmp/musl-tests).
+    let root = nearest_package_root(path);
+    let relative = root
+        .as_ref()
+        .and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path);
+    let package_name = root
+        .as_ref()
+        .filter(|root| path_is_inside_node_modules(root))
+        .and_then(|root| root.file_name())
+        .unwrap_or_default()
+        .to_string_lossy();
+    let name = format!("{package_name}/{}", relative.to_string_lossy());
     // ELF architecture alone cannot distinguish prebuilt glibc/musl variants.
     let wrong_libc = triple.contains("-linux-")
         && if triple.ends_with("musl") {
