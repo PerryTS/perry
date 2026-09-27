@@ -345,15 +345,15 @@ pub(crate) fn old_free_take_exact(
     Some(taken)
 }
 
-/// Unlink every listed hole whose header `drop(header, total_size)` selects,
+/// Unlink every listed hole whose header `unlink(header, total_size)` selects,
 /// returning the bytes removed.
-fn old_free_unlink_where(mut drop: impl FnMut(usize, usize) -> bool) -> usize {
+fn old_free_unlink_where(mut unlink: impl FnMut(usize, usize) -> bool) -> usize {
     let mut removed_bytes = 0usize;
     OLD_FREE_MAP.with(|m| {
         m.borrow_mut().for_each_chain(|total_size, head| {
             // SAFETY: every hole on the chain is listed.
             let removed =
-                unsafe { old_free_retain_chain(head, |header| !drop(header, total_size)) };
+                unsafe { old_free_retain_chain(head, |header| !unlink(header, total_size)) };
             removed_bytes = removed_bytes.saturating_add(removed.saturating_mul(total_size));
         });
     });
