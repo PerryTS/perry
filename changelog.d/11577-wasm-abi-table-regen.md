@@ -1,0 +1,1 @@
+- **wasm32**: `crates/perry-codegen/src/wasm32/runtime_abi.tsv` regenerated against current main. It had gone stale after several runtime extern signatures changed, so `runtime_abi_check.py --check-wasm-abi` and the `wasi-check` job were red on every PR.
