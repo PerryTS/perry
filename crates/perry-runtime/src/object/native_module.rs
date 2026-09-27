@@ -1341,10 +1341,13 @@ pub extern "C" fn js_class_method_bind(
             // resolves statics-first for constructor refs. PROTOTYPE refs
             // (`C.prototype.m`) keep the canonical path — the instance method
             // is exactly what they name.
+            let receiver_class_ref = class_ref_id(instance);
             let receiver_is_constructor_ref =
-                class_ref_id(instance).is_some() && class_prototype_ref_id(instance).is_none();
+                receiver_class_ref.is_some() && class_prototype_ref_id(instance).is_none();
             if !receiver_is_constructor_ref && bound_native_method_length(name).is_none() {
-                if let Some(class_id) = class_id_from_method_receiver(instance) {
+                if let Some(class_id) =
+                    class_id_from_method_receiver_known(instance, receiver_class_ref)
+                {
                     let private_owner = super::take_private_method_owner_hint(name);
                     if let Some(owner) = private_owner
                         .or_else(|| super::class_registry::method_owner_class_id(class_id, name))
@@ -1703,7 +1706,14 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
 /// non-object allocation (an array, above all) must resolve to `None` rather
 /// than to whatever its bytes happen to hold at the `class_id` offset.
 pub(super) fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
-    if let Some(cid) = class_ref_id(instance) {
+    class_id_from_method_receiver_known(instance, class_ref_id(instance))
+}
+
+/// [`class_id_from_method_receiver`] for a caller that already asked
+/// `class_ref_id(instance)`.
+#[inline]
+fn class_id_from_method_receiver_known(instance: f64, class_ref: Option<u32>) -> Option<u32> {
+    if let Some(cid) = class_ref {
         return Some(cid);
     }
     let jsv = JSValue::from_bits(instance.to_bits());

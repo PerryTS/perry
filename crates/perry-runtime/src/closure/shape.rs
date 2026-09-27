@@ -368,7 +368,9 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
         _ => return keyed_shape_lacks_key(id, key),
     };
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
-    let cached = VERDICT_CACHE.with(|c| c.get()[slot]);
+    // Index in place: `Cell::get` would copy the whole 64-entry array.
+    // SAFETY: this agent's own cell; no reference to it outlives the read.
+    let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
     let mask = if cached.0 == id {
         cached.1
     } else {
@@ -388,11 +390,8 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
             } else {
                 0
             };
-        VERDICT_CACHE.with(|c| {
-            let mut all = c.get();
-            all[slot] = (id, mask);
-            c.set(all);
-        });
+        // SAFETY: as above; a single-entry store in place.
+        VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
         mask
     };
     mask & bit != 0
