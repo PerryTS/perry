@@ -118,6 +118,7 @@ js_array_keys	ptr	ptr
 js_array_keys_iter_obj	i64	ptr
 js_array_last_index_of_jsvalue	i64	ptr,f64,f64,i32s
 js_array_length	i32u	ptr
+js_array_length_leaf	i64	ptr
 js_array_like_to_array	ptr	f64
 js_array_live_head	i64	i64
 js_array_map	ptr	ptr,ptr

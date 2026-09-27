@@ -31,6 +31,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // `lower_expr` and the foundational types (`FnCtx`, `FlatConstInfo`)
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
+pub(crate) mod array_length;
 mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;

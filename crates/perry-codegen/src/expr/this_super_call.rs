@@ -281,7 +281,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .and_then(|class| class.extends_name.as_deref())
                 .is_some_and(|parent| parent == "Array" && !ctx.classes.contains_key("Array"));
             if array_parent {
-                let len_i32 = ctx.block().call(I32, "js_array_length", &[(I64, &arr)]);
+                let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &arr);
                 let len = ctx.block().zext(I32, &len_i32, I64);
                 let elems_addr = ctx.block().array_elements_addr(&arr);
                 let elems_ptr = ctx.block().inttoptr(I64, &elems_addr);

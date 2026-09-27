@@ -320,9 +320,8 @@
 
             ctx.current_block = merge_idx;
         }
-        let blk = ctx.block();
-        let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-        return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
+        let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
+        return Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "push_single" || method == "push") {
@@ -394,15 +393,14 @@
                 let blk = ctx.block();
                 blk.call_void("js_array_push_guard", &[(I64, &orig_handle)]);
                 let value_double = blk.sitofp(I32, &value, DOUBLE);
-                let generic_handle = blk.call(
+                blk.call(
                     I64,
                     "js_array_push_f64",
                     &[(I64, &orig_handle), (DOUBLE, &value_double)],
-                );
-                let generic_length = blk.call(I32, "js_array_length", &[(I64, &generic_handle)]);
-                blk.store(I32, &generic_length, &length_slot);
-                generic_handle
+                )
             };
+            let generic_length = crate::expr::array_length::emit_array_length_i32(ctx, &generic_handle);
+            ctx.block().store(I32, &generic_length, &length_slot);
             let generic_end = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = merge_idx;
@@ -477,13 +475,12 @@
 
             ctx.current_block = merge_idx;
         }
-        let blk = ctx.block();
         let len_i32 = if let Some(length_slot) = fused_length_slot {
-            blk.load(I32, &length_slot)
+            ctx.block().load(I32, &length_slot)
         } else {
-            blk.call(I32, "js_array_length", &[(I64, &new_handle)])
+            crate::expr::array_length::emit_array_length_i32(ctx, &new_handle)
         };
-        return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
+        return Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "pop_back" || method == "pop") {
