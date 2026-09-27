@@ -19,15 +19,21 @@
 //! new object. The runtime offers every traced `[1, 0x40000)` word to
 //! [`observe`] through `perry_ffi_gc_register_pool_handle_trace`.
 //!
-//! **Young ids.** Ids parked since the previous trace began are kept by the
+//! **Young ids.** An id parked since the previous trace began is kept by the
 //! next one (a native frame may hold a fresh id unpublished across an
 //! allocation), and ids parked while a trace runs are never decided by it. So
-//! an id always survives at least one full trace after it was parked.
+//! an id always survives at least one full trace after it was parked. Each
+//! parked id carries the trace epoch it was parked in; no side sets.
 //!
-//! **Pacing.** Ids carry no GC payload, so parking alone never reaches the
-//! heap's own triggers. A full trace is requested when this mutator's parked
-//! count reaches `trigger_at` (reset to twice the survivors, never below
-//! [`MIN_TRIGGER`]) and whenever the shared band runs low.
+//! **Pacing.** The collector's own full traces decide parked ids for free. A
+//! trace is *requested* only when both hold: the parked count reached
+//! `trigger_at` (twice the survivors, never below [`MIN_TRIGGER`]), and the
+//! mutator has run at least [`AMORTIZE`] times as long as the last requested
+//! trace took since it ended. The second condition caps what reclamation can
+//! add to a handle-churning program at about 1/[`AMORTIZE`] of its run time,
+//! however small its heap, while keeping the parked set (and its payloads'
+//! memory) bounded by the handle rate times that interval. A shared band that
+//! is running low overrides the time budget.
 //!
 //! **Threads.** Parking is per mutator: each thread's trace decides only the
 //! ids that thread parked. A thread that exits hands its parked ids to the
@@ -37,7 +43,9 @@ use perry_ffi::NativeRegistrationIdentity;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 type Mark = extern "C" fn(u64, *mut c_void);
 extern "C" {
@@ -49,35 +57,67 @@ extern "C" {
 }
 
 /// Parked-id count below which parking alone never requests a full trace.
-/// A requested full trace costs tens of millions of instructions even on a
-/// small heap, so the floor is set high: 32k parked ids is an eighth of the
-/// band, and a digest payload is a few hundred bytes. Collections the heap
-/// runs on its own schedule decide parked ids too, at no extra cost.
-pub(super) const MIN_TRIGGER: usize = 32 * 1024;
+pub(super) const MIN_TRIGGER: usize = 4096;
+/// A requested trace waits until the mutator has run this many times as long
+/// as the previous requested trace took (see the module doc).
+pub(super) const AMORTIZE: u32 = 64;
 /// Shared-band ids still obtainable below which registration keeps asking
 /// for traces (checked every [`BAND_CHECK_STRIDE`] registrations).
 pub(super) const BAND_RESERVE: usize = 32 * 1024;
 const BAND_CHECK_STRIDE: u32 = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Parked {
+enum Kind {
     /// Payload still registered; dropped when proven unreachable.
-    Reclaimable(NativeRegistrationIdentity),
+    Reclaimable,
     /// Payload already removed; the id sits in `Retiring` until proven.
-    Retired(NativeRegistrationIdentity),
+    Retired,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Parked {
+    kind: Kind,
+    identity: NativeRegistrationIdentity,
+    /// Trace epoch the id was parked in.
+    epoch: u64,
+}
+
+/// Ids are small distinct integers: a multiplicative hash is enough, and
+/// SipHash on every park showed up in the churn profile.
+#[derive(Default)]
+struct IdHasher(u64);
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(*b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+    fn write_i64(&mut self, n: i64) {
+        self.0 = (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+type IdBuild = BuildHasherDefault<IdHasher>;
+
 struct Epoch {
-    born: HashSet<Handle>,
-    young: HashSet<Handle>,
-    live: Option<HashSet<Handle>>,
+    /// Incremented when a trace begins; parked ids record it.
+    current: u64,
+    live: Option<HashSet<Handle, IdBuild>>,
     trigger_at: usize,
     hooked: bool,
     registrations: u32,
+    /// When the in-flight requested trace began, until the mutator next parks.
+    requested_started: Option<Instant>,
+    requested_pending: bool,
+    /// Wall time of the previous requested trace, including its sweep.
+    last_cost: Duration,
+    last_end: Option<Instant>,
 }
 
 #[derive(Default)]
-struct ParkedIds(HashMap<Handle, Parked>);
+struct ParkedIds(HashMap<Handle, Parked, IdBuild>);
 
 // A dying mutator's heap is gone, but a value may have crossed to another
 // heap, so its parked ids are adopted and decided by a live mutator instead of
@@ -98,43 +138,72 @@ static ORPHANS: Mutex<Vec<(Handle, Parked)>> = Mutex::new(Vec::new());
 thread_local! {
     static PARKED: RefCell<ParkedIds> = RefCell::new(ParkedIds::default());
     static EPOCH: RefCell<Epoch> = RefCell::new(Epoch {
-        born: HashSet::new(),
-        young: HashSet::new(),
+        current: 0,
         live: None,
         trigger_at: MIN_TRIGGER,
         hooked: false,
         registrations: 0,
+        requested_started: None,
+        requested_pending: false,
+        last_cost: Duration::ZERO,
+        last_end: None,
     });
     #[cfg(test)]
     pub(super) static FULL_TRACES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn park(id: Handle, parked: Parked) {
-    let hooked = EPOCH
-        .try_with(|epoch| std::mem::replace(&mut epoch.borrow_mut().hooked, true))
-        .unwrap_or(true);
+fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity) {
+    let Ok((hooked, epoch)) = EPOCH.try_with(|epoch| {
+        let mut epoch = epoch.borrow_mut();
+        let hooked = std::mem::replace(&mut epoch.hooked, true);
+        // First mutator activity after a requested trace: charge its whole
+        // cost, sweep included, to the pacing budget.
+        if let Some(started) = epoch.requested_started.take() {
+            let now = Instant::now();
+            epoch.last_cost = now - started;
+            epoch.last_end = Some(now);
+        }
+        (hooked, epoch.current)
+    }) else {
+        // Thread teardown: nothing can trace this thread any more.
+        orphan(
+            id,
+            Parked {
+                kind,
+                identity,
+                epoch: 0,
+            },
+        );
+        return;
+    };
     if !hooked {
         unsafe { perry_ffi_gc_register_pool_handle_trace(phase, observe) };
     }
+    let parked = Parked {
+        kind,
+        identity,
+        epoch,
+    };
     let Ok(count) = PARKED.try_with(|map| {
         let mut map = map.borrow_mut();
         map.0.insert(id, parked);
         map.0.len()
     }) else {
-        // Thread teardown: nothing can trace this thread any more.
-        if let Ok(mut orphans) = ORPHANS.lock() {
-            orphans.push((id, parked));
-        }
+        orphan(id, parked);
         return;
     };
     let request = EPOCH
         .try_with(|epoch| {
             let mut epoch = epoch.borrow_mut();
-            epoch.born.insert(id);
-            if count < epoch.trigger_at {
+            if count < epoch.trigger_at || epoch.requested_pending {
                 return false;
             }
-            epoch.trigger_at = count + MIN_TRIGGER;
+            if let Some(end) = epoch.last_end {
+                if end.elapsed() < epoch.last_cost * AMORTIZE {
+                    return false;
+                }
+            }
+            epoch.requested_pending = true;
             true
         })
         .unwrap_or(false);
@@ -143,16 +212,22 @@ fn park(id: Handle, parked: Parked) {
     }
 }
 
+fn orphan(id: Handle, parked: Parked) {
+    if let Ok(mut orphans) = ORPHANS.lock() {
+        orphans.push((id, parked));
+    }
+}
+
 /// A payload whose only owners are JS values: drop it and recycle its id once
 /// a full trace proves nothing names it.
 pub(super) fn park_reclaimable(identity: NativeRegistrationIdentity) {
-    park(identity.numeric_id(), Parked::Reclaimable(identity));
+    park(identity.numeric_id(), Kind::Reclaimable, identity);
 }
 
 /// A removed payload's id, still `Retiring` in the pool: reusable once a full
 /// trace proves no JS value still holds the number.
 pub(super) fn park_retired(identity: NativeRegistrationIdentity) {
-    park(identity.numeric_id(), Parked::Retired(identity));
+    park(identity.numeric_id(), Kind::Retired, identity);
 }
 
 /// Stop treating `id` as reclaimable: native state now refers to it (a
@@ -163,7 +238,7 @@ pub fn retain_strongly(id: Handle) -> bool {
         .try_with(|map| {
             let mut map = map.borrow_mut();
             match map.0.get(&id) {
-                Some(Parked::Reclaimable(_)) => map.0.remove(&id).is_some(),
+                Some(parked) if parked.kind == Kind::Reclaimable => map.0.remove(&id).is_some(),
                 _ => false,
             }
         })
@@ -202,21 +277,27 @@ extern "C" fn phase(phase: u32) -> bool {
                 .lock()
                 .map(|mut orphans| std::mem::take(&mut *orphans))
                 .unwrap_or_default();
+            let _ = EPOCH.try_with(|epoch| {
+                let mut epoch = epoch.borrow_mut();
+                epoch.current += 1;
+                if std::mem::take(&mut epoch.requested_pending) {
+                    epoch.requested_started = Some(Instant::now());
+                }
+            });
+            let current = EPOCH.try_with(|epoch| epoch.borrow().current).unwrap_or(0);
             let parked = PARKED
                 .try_with(|map| {
                     let mut map = map.borrow_mut();
-                    for (id, parked) in &orphans {
-                        map.0.insert(*id, *parked);
+                    for (id, mut parked) in orphans {
+                        // Adopted ids are decided no earlier than the next trace.
+                        parked.epoch = current;
+                        map.0.insert(id, parked);
                     }
                     !map.0.is_empty()
                 })
                 .unwrap_or(false);
             let _ = EPOCH.try_with(|epoch| {
-                let mut epoch = epoch.borrow_mut();
-                epoch.young = std::mem::take(&mut epoch.born);
-                // Adopted ids are decided no earlier than the next trace.
-                epoch.born.extend(orphans.iter().map(|(id, _)| *id));
-                epoch.live = parked.then(HashSet::new);
+                epoch.borrow_mut().live = parked.then(HashSet::default);
             });
             parked
         }
@@ -225,11 +306,12 @@ extern "C" fn phase(phase: u32) -> bool {
             true
         }
         _ => {
+            // Aborted: nothing was proven dead. Parked epochs are untouched,
+            // so the next trace still keeps anything this one would have.
             let _ = EPOCH.try_with(|epoch| {
                 let mut epoch = epoch.borrow_mut();
                 epoch.live = None;
-                let young = std::mem::take(&mut epoch.young);
-                epoch.born.extend(young);
+                epoch.current = epoch.current.saturating_sub(1);
             });
             true
         }
@@ -239,23 +321,24 @@ extern "C" fn phase(phase: u32) -> bool {
 fn finish_full_trace() {
     #[cfg(test)]
     FULL_TRACES.with(|count| count.set(count.get() + 1));
-    let (live, young, born) = EPOCH.with(|epoch| {
+    let (live, current) = EPOCH.with(|epoch| {
         let mut epoch = epoch.borrow_mut();
-        let live = epoch.live.take().unwrap_or_default();
-        let young = std::mem::take(&mut epoch.young);
-        (live, young, epoch.born.clone())
+        (epoch.live.take().unwrap_or_default(), epoch.current)
     });
-    let (dead, survivors) = PARKED.with(|map| {
+    // Parked in the previous epoch or later: born since the previous trace
+    // began, or during this one.
+    let young_from = current.saturating_sub(1);
+    let mut dead = Vec::new();
+    let survivors = PARKED.with(|map| {
         let mut map = map.borrow_mut();
-        let keep = |id: &Handle| live.contains(id) || young.contains(id) || born.contains(id);
-        let dead: Vec<Parked> = map
-            .0
-            .iter()
-            .filter(|(id, _)| !keep(id))
-            .map(|(_, parked)| *parked)
-            .collect();
-        map.0.retain(|id, _| keep(id));
-        (dead, map.0.len())
+        map.0.retain(|id, parked| {
+            let keep = parked.epoch >= young_from || live.contains(id);
+            if !keep {
+                dead.push(*parked);
+            }
+            keep
+        });
+        map.0.len()
     });
     EPOCH.with(|epoch| {
         epoch.borrow_mut().trigger_at = MIN_TRIGGER.max(survivors.saturating_mul(2));
@@ -268,8 +351,9 @@ fn finish_full_trace() {
 /// registry lock.
 fn release(dead: &[Parked]) {
     for parked in dead {
-        match *parked {
-            Parked::Reclaimable(identity) => {
+        let identity = parked.identity;
+        match parked.kind {
+            Kind::Reclaimable => {
                 // A concurrent `drop_handle` may have retired it already; that
                 // path parked the id itself and owns it now.
                 if !REGISTRATIONS.begin_retirement_of(identity) {
@@ -279,7 +363,7 @@ fn release(dead: &[Parked]) {
                 assert!(REGISTRATIONS.finish_retirement_reusable(identity));
                 drop(payload);
             }
-            Parked::Retired(identity) => {
+            Kind::Retired => {
                 REGISTRATIONS.finish_retirement_reusable(identity);
             }
         }

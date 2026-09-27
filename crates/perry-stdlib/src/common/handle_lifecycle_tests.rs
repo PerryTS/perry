@@ -5,6 +5,10 @@ use super::super::handle::{
 use super::*;
 use perry_runtime::gc::RuntimeHandleScope;
 
+fn is_parked(id: Handle) -> bool {
+    PARKED.with(|map| map.borrow().0.contains_key(&id))
+}
+
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 fn boxed(id: Handle) -> u64 {
@@ -37,7 +41,7 @@ fn an_unreachable_reclaimable_payload_is_dropped_and_its_id_recycled() {
     on_mutator(|| {
         let traces = FULL_TRACES.with(|n| n.get());
         let id = register_reclaimable_handle(11_u64);
-        assert_eq!(parked_handle_count(), 1);
+        assert!(is_parked(id));
         collect();
         assert!(
             FULL_TRACES.with(|n| n.get()) >= traces + 2,
@@ -47,7 +51,8 @@ fn an_unreachable_reclaimable_payload_is_dropped_and_its_id_recycled() {
             !handle_exists(id),
             "nothing names the id, so its payload must go"
         );
-        assert_eq!(parked_handle_count(), 0);
+        // Orphans adopted from earlier test threads may still be parked here.
+        assert!(!is_parked(id));
         assert!(
             REGISTRATIONS.identity(id).is_none(),
             "the old registration must be gone"
