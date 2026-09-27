@@ -217,7 +217,9 @@ crate::perry_thread_local! {
 /// alloc or tenured old-gen, never moved), and every registry mutation
 /// (`register`/`unregister`) overwrites/clears the matching slot below — so a
 /// freed-then-reused address can never read back a stale kind or a stale
-/// "not a typed array".
+/// "not a typed array". A thread exit frees its blocks without unregistering,
+/// so `Arena::drop` clears those blocks' slots through
+/// [`invalidate_kind_caches_in_ranges`] (#11463).
 pub const TA_KIND_CACHE_SLOTS: usize = 64;
 pub const TA_CACHE_NEGATIVE: u64 = 0xFF;
 // #5525 follow-up: exported under a stable link name so the codegen can emit a
@@ -340,6 +342,45 @@ fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
         }
     } else {
         None
+    }
+}
+
+/// #11463: forget every kind-cache entry naming an address inside `ranges`.
+///
+/// The two caches above are process-global, but `TYPED_ARRAY_REGISTRY` is
+/// per-thread. `unregister_typed_array` keeps them in step for a typed array
+/// that dies while its thread lives. An exiting thread, though, drops its
+/// registry and hands its arena blocks back to the allocator without
+/// unregistering anything. The positive entries for those blocks survived, so
+/// once another thread's arena reused the memory, whatever it allocated at a
+/// dead typed array's address read back as a typed array. A Promise there
+/// failed `js_value_is_promise`, because `is_offheap_sidetable_alloc` answered
+/// first. `Arena::drop` calls this with the ranges it is about to free, next to
+/// the closure side-table release (#11319).
+///
+/// Only atomics are touched, so this is safe from a TLS destructor. An entry
+/// that changes under the compare-exchange was just written by a live
+/// registration, and is left alone.
+pub(crate) fn invalidate_kind_caches_in_ranges(ranges: &[(usize, usize)]) {
+    if ranges.is_empty() {
+        return;
+    }
+    let in_ranges = |addr: usize| {
+        ranges
+            .iter()
+            .any(|&(start, end)| start <= addr && addr < end)
+    };
+    for slot in &PERRY_TA_KIND_CACHE {
+        let entry = slot.load(Ordering::Relaxed);
+        if entry != 0 && in_ranges((entry >> 8) as usize) {
+            let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+    for slot in &INLINE_OWNING_U32_CACHE {
+        let entry = slot.load(Ordering::Relaxed);
+        if entry != 0 && in_ranges(entry as usize) {
+            let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
+        }
     }
 }
 

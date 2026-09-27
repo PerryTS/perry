@@ -537,6 +537,10 @@ impl Drop for Arena {
                 .map(|block| (block.data as usize, block.data as usize + block.size))
                 .collect();
             crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
+            // #11463: the typed-array kind caches are process-global too. A
+            // positive entry for a typed array in these blocks would outlive
+            // them and misclassify whatever another thread allocates there.
+            crate::typedarray::invalidate_kind_caches_in_ranges(&ranges);
         }
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ

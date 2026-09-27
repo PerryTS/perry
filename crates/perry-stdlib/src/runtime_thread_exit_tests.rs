@@ -61,3 +61,52 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         "a dead thread's static-prototype entry outlived its heap"
     );
 }
+
+/// Does the process-global typed-array kind cache hold a positive entry for
+/// `addr`? `(addr << 8) | kind`, with `0xFF` as the "not a typed array" tag.
+fn kind_cache_names_typed_array(addr: usize) -> bool {
+    perry_runtime::typedarray::PERRY_TA_KIND_CACHE
+        .iter()
+        .any(|slot| {
+            let entry = slot.load(std::sync::atomic::Ordering::Relaxed);
+            entry != 0
+                && (entry >> 8) as usize == addr
+                && entry & 0xFF != perry_runtime::typedarray::TA_CACHE_NEGATIVE
+        })
+}
+
+/// #11463: an exiting thread forgets its typed arrays' entries in the
+/// process-global kind cache.
+///
+/// The registry behind the cache is thread-local, so it died with the thread,
+/// while the cache kept answering "typed array" for the freed block's
+/// addresses. The next thread whose arena reused that memory had its objects
+/// misread: `streams::pipe::tests::pipe_keeps_locks_until_async_abort_settles`
+/// allocated a Promise at such an address, `js_value_is_promise` said no, and
+/// the pipe settled early. That test failed about 1 run in 20 in the full
+/// suite.
+#[test]
+fn thread_exit_forgets_the_threads_typed_array_kind_cache_entries() {
+    let (addr, cached_while_alive) = std::thread::spawn(|| {
+        use perry_runtime::typedarray as ta;
+        let addr = ta::typed_array_alloc(ta::KIND_UINT8, 4) as usize;
+        // The cache is direct-mapped and shared, so a concurrent test can
+        // evict the slot. A lookup re-populates it from this thread's registry.
+        let cached = (0..100).any(|_| {
+            ta::lookup_typed_array_kind(addr) == Some(ta::KIND_UINT8)
+                && kind_cache_names_typed_array(addr)
+        });
+        (addr, cached)
+    })
+    .join()
+    .unwrap();
+
+    assert!(
+        cached_while_alive,
+        "the kind cache must name the typed array while its thread lives, or the absence below proves nothing"
+    );
+    assert!(
+        !kind_cache_names_typed_array(addr),
+        "a dead thread's typed array {addr:#x} is still in the process-global kind cache"
+    );
+}
