@@ -103,11 +103,11 @@ fn layout_invalidation_catches_a_request_deferred_in_its_locked_region() {
 fn the_same_plant_under_an_ordinary_lock_collects_on_release() {
     let _nursery = CopyingNurseryTestGuard::new(1);
     let plant = PlantGuard::plant();
-    static ORDINARY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let ordinary = std::sync::Mutex::new(());
     let before = gc_collection_count();
 
     {
-        let _guard = lock_gc_root_registry(&ORDINARY);
+        let _guard = lock_gc_root_registry(&ordinary);
         plant_collection_request();
     }
 
@@ -132,10 +132,10 @@ fn clean_and_inherited_requests_are_not_violations() {
     hooks::record_guard_pass(11_523);
     assert!(!deferred_gc_request_pending());
 
-    static OUTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let outer = std::sync::Mutex::new(());
     let before = gc_collection_count();
     {
-        let _outer = lock_gc_root_registry(&OUTER);
+        let _outer = lock_gc_root_registry(&outer);
         assert_eq!(gc_collect_minor(), 0);
         hooks::record_guard_pass(11_523);
         assert!(
