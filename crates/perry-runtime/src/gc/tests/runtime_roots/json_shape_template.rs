@@ -86,6 +86,25 @@ fn assert_initial_prototype_lookup_survives(empty: bool) {
     });
     let output_scope = RuntimeHandleScope::new();
     let output = output_scope.root_nanbox_u64(output as u64);
+    if empty {
+        // #10696: the one collection point this case ever reached was the root
+        // `toJSON` key the general fallback allocated — a heap `""` that was
+        // only ever read back as bytes. That allocation is gone, so the empty
+        // root's fallback reaches no collection point at all: with one armed
+        // for the very next arena allocation, it must not fire.
+        assert_eq!(
+            gc_collection_count(),
+            before,
+            "the empty root's fallback must stay allocation-free"
+        );
+        assert_eq!(
+            input.with_mut_ptr(|input: *mut crate::ObjectHeader| input as usize),
+            before_address
+        );
+        // ...and that verdict is not vacuous: the armed collection is live,
+        // and the next arena allocation takes it.
+        let _ = crate::string::js_string_from_bytes(b"armed".as_ptr(), 5);
+    }
     drain_scheduled_minor_gc(before, "initial JSON prototype lookup");
     assert_ne!(
         input.with_mut_ptr(|input: *mut crate::ObjectHeader| input as usize),

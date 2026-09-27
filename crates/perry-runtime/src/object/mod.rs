@@ -1664,14 +1664,26 @@ pub struct ObjectHeader {
 /// that need the keys rather than the complete descriptor.
 #[inline]
 pub(crate) unsafe fn object_keys(obj: *const ObjectHeader) -> ObjectKeys {
+    object_keys_and_live_slot_count(obj).0
+}
+
+/// [`object_keys`] and [`object_live_slot_count`] together, from ONE shape
+/// table probe. A walk that needs both — `JSON.stringify` visits every object
+/// this way — otherwise pays the probe twice (#10696).
+#[inline]
+pub(crate) unsafe fn object_keys_and_live_slot_count(
+    obj: *const ObjectHeader,
+) -> (ObjectKeys, u32) {
     let Some(descriptor) = shapes::object_shape_descriptor(obj) else {
-        return ObjectKeys::NONE;
+        return (ObjectKeys::NONE, 0);
     };
+    let live_slots = descriptor.live_inline_slot_count;
     if descriptor.keys != 0 {
-        return ObjectKeys::new(
+        let keys = ObjectKeys::new(
             descriptor.keys as usize as *mut ArrayHeader,
             descriptor.logical_key_count,
         );
+        return (keys, live_slots);
     }
     // The shape publishes no keys. Either the receiver genuinely has none, or
     // it is in DICTIONARY MODE and carries its own ordered list (#10868 step
@@ -1683,7 +1695,7 @@ pub(crate) unsafe fn object_keys(obj: *const ObjectHeader) -> ObjectKeys {
     // line — the nonzero `keys` word returns above — so the branch costs
     // nothing on the path that matters. A dictionary list is the receiver's
     // own, so its header length is its count.
-    ObjectKeys::owned(dictionary::keys_array(obj))
+    (ObjectKeys::owned(dictionary::keys_array(obj)), live_slots)
 }
 
 /// Return the two shape facts needed together by callback-free serializers.
