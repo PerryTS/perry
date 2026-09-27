@@ -12,6 +12,7 @@ members = [
     "crates/perry-transform",
     "crates/perry-codegen",
     "crates/perry-dispatch",
+    "crates/perry-abi",
     "crates/perry-runtime",
     "crates/perry-ffi",
     "crates/perry-db-turnloop",
@@ -515,6 +516,7 @@ perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
+perry-abi = { path = "crates/perry-abi" }
 # #1112: `perry-ffi` is published for external native wrappers. Its optional
 # `runtime-link` edge supplies runtime symbols to in-tree adapter tests.
 # The dependency-free registration core sits below both crates so future

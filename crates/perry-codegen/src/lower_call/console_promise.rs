@@ -730,18 +730,59 @@ pub fn try_lower_promise_static_call(
     Ok(None)
 }
 
-/// Emit the universal by-id method dispatcher for an already-evaluated and
-/// rooted receiver plus already-evaluated arguments.
-///
-/// Kept separate from the eligibility tower below so a tag-guarded String
-/// fast path can use the identical non-string arm without re-evaluating its
-/// receiver (#7673).
+/// [`emit_native_method_str_dispatch_with`] with the One Path method site:
+/// the universal dispatch point for a user method call.
 pub(crate) fn emit_native_method_str_dispatch(
     ctx: &mut FnCtx<'_>,
     property: &str,
     call_byte_offset: u32,
     recv_box: &str,
     lowered_args: &[String],
+) -> String {
+    emit_native_method_str_dispatch_with(
+        ctx,
+        property,
+        call_byte_offset,
+        recv_box,
+        lowered_args,
+        true,
+    )
+}
+
+/// The dispatcher alone, for the non-builtin arm of a guarded BUILTIN call
+/// (kind guard, own-override guard, folded-builtin override): a user method of
+/// a builtin's name is the rare case there, and the site's `this` save would
+/// cost those arms a temporary root they otherwise do not pay.
+pub(crate) fn emit_native_method_str_dispatch_plain(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+) -> String {
+    emit_native_method_str_dispatch_with(
+        ctx,
+        property,
+        call_byte_offset,
+        recv_box,
+        lowered_args,
+        false,
+    )
+}
+
+/// Emit the universal by-id method dispatcher for an already-evaluated and
+/// rooted receiver plus already-evaluated arguments.
+///
+/// Kept separate from the eligibility tower below so a tag-guarded String
+/// fast path can use the identical non-string arm without re-evaluating its
+/// receiver (#7673).
+fn emit_native_method_str_dispatch_with(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    call_byte_offset: u32,
+    recv_box: &str,
+    lowered_args: &[String],
+    site: bool,
 ) -> String {
     // Pass a tagged pointer to the immutable StringPool dispatch descriptor.
     // A GC-backed string handle belongs to the main thread's arena and cannot
@@ -772,6 +813,17 @@ pub(crate) fn emit_native_method_str_dispatch(
     // Arguments are already lowered, so a nested call can no longer shadow
     // this call's source location.
     crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+    if site && crate::expr::method_site::method_site_enabled(ctx, property, lowered_args.len()) {
+        // The One Path: shape compare, slot (or memoized inherited closure),
+        // direct call. Its miss performs the dispatch below.
+        return crate::expr::method_site::emit_method_site(
+            ctx,
+            recv_box,
+            lowered_args,
+            &site_id,
+            &method_id,
+        );
+    }
     ctx.block().call(
         DOUBLE,
         "js_typed_feedback_native_call_method_by_id",

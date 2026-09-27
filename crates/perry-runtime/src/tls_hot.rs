@@ -203,6 +203,10 @@ pub(crate) struct HotTls {
     /// `gc::roots::RUNTIME_HANDLE_STACK`. Appended after the generic slots so
     /// none of the offsets consumed by generated code move (#9183).
     pub(crate) runtime_handle_stack: Cell<*mut u8>,
+    /// `agent_ptrs::PERRY_AGENT_PTRS` — this thread's per-agent pointer block.
+    /// Appended for the same reason; generated code on Apple aarch64 reads it
+    /// at [`HOT_TLS_AGENT_PTRS_OFFSET`] (`perry-codegen/src/expr/agent_ptr.rs`).
+    pub(crate) agent_ptrs: Cell<*mut u8>,
 }
 
 /// Byte offsets generated code hard-codes into its inline hot-cache access
@@ -222,6 +226,10 @@ pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 4;
 pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 64;
 const _: () = assert!(std::mem::offset_of!(HotTls, inline_state) == HOT_TLS_INLINE_STATE_OFFSET);
 const _: () = assert!(std::mem::offset_of!(HotTls, implicit_this) == HOT_TLS_IMPLICIT_THIS_OFFSET);
+/// `HotTls::agent_ptrs` (`perry-abi`), read by generated code on Apple aarch64.
+pub use crate::codegen_abi::HOT_TLS_AGENT_PTRS_OFFSET;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::offset_of!(HotTls, agent_ptrs) == HOT_TLS_AGENT_PTRS_OFFSET);
 const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data) == 0);
 
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
@@ -276,6 +284,7 @@ impl HotTls {
         bool_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
         runtime_handle_stack: Cell::new(std::ptr::null_mut()),
+        agent_ptrs: Cell::new(std::ptr::null_mut()),
     };
 }
 
@@ -324,6 +333,7 @@ fn fill(slots: *mut HotTls) {
         (*slots)
             .runtime_handle_stack
             .set(crate::gc::runtime_handle_stack_hot_addr());
+        (*slots).agent_ptrs.set(crate::agent_ptrs::hot_addr());
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache
@@ -1228,6 +1238,7 @@ mod tests {
             ("learned_inline_fields", hot.learned_inline_fields),
             ("temp_roots", hot.temp_roots),
             ("runtime_handle_stack", hot.runtime_handle_stack.get()),
+            ("agent_ptrs", hot.agent_ptrs.get()),
         ] {
             assert!(!ptr.is_null(), "{name} slot was left null by fill()");
         }

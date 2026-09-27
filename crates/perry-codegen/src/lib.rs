@@ -49,6 +49,8 @@ pub mod native_emit;
 #[cfg(all(test, feature = "llvm-inprocess"))]
 mod native_root_coverage;
 pub(crate) mod native_value;
+/// The runtime layout facts generated code bakes in (`perry-abi`).
+pub(crate) use perry_abi as runtime_abi;
 pub(crate) mod nm_install;
 pub use nm_install::native_provider_install_symbols;
 pub mod opt_report;

@@ -1,0 +1,12 @@
+[package]
+name = "perry-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runtime layout facts Perry's generated code bakes in"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"

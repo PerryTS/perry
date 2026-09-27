@@ -447,6 +447,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // afresh for every module — including the `false` case, to clear any prior
     // module's decision on this thread.
     set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
+    // Initial-exec TLS only in an image that is never `dlopen`ed.
+    crate::expr::agent_ptr::set_output_is_executable(opts.output_type == "executable");
     // #8595: report the module-entry outlining analysis when asked. Pure
     // diagnostic — no transform yet (see codegen/entry_outline.rs).
     entry_outline::report_entry_outlining(hir);

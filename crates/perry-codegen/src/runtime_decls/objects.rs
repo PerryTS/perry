@@ -588,6 +588,20 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // value, or `TAG_HOLE` for a decline. A pure state read (see
     // `gc_call_effects.rs`).
     module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
+    // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
+    // executables through the initial-exec TLS model; its slot-1 accessor,
+    // and the method-call site's miss entry (`expr/method_site.rs`).
+    module.add_external_tls_global(
+        crate::expr::agent_ptr::AGENT_PTRS_SYMBOL,
+        &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
+        "initialexec",
+    );
+    module.declare_function("perry_implicit_this_cell", PTR, &[]);
+    module.declare_function(
+        "js_method_site_miss",
+        DOUBLE,
+        &[PTR, I64, DOUBLE, I64, PTR, I64],
+    );
     module.declare_function(
         "js_put_value_set_dyn_ic",
         DOUBLE,

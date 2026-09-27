@@ -4838,6 +4838,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-abi"
+version = "0.5.1654"
+
+[[package]]
 name = "perry-api-manifest"
 version = "0.5.1654"
 dependencies = [
@@ -4885,6 +4889,7 @@ dependencies = [
  "llvm-sys",
  "log",
  "memchr",
+ "perry-abi",
  "perry-api-manifest",
  "perry-codegen",
  "perry-dispatch",
@@ -5327,6 +5332,7 @@ dependencies = [
  "node-semver",
  "notify",
  "perex",
+ "perry-abi",
  "perry-base64",
  "perry-diagnostics",
  "perry-dispatch",

@@ -371,6 +371,14 @@ impl LlModule {
             .push(format!("@{} = global {} {}", name, ty, init));
     }
 
+    /// An external thread-local global with an explicit TLS model
+    /// (`initialexec`, ...): a runtime `#[thread_local]` generated code names.
+    pub fn add_external_tls_global(&mut self, name: &str, ty: &str, model: &str) {
+        self.globals.push(format!(
+            "@{name} = external thread_local({model}) global {ty}"
+        ));
+    }
+
     pub fn add_external_global(&mut self, name: &str, ty: LlvmType) {
         self.globals
             .push(format!("@{} = external global {}", name, ty));

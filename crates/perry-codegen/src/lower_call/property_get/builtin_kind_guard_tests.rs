@@ -13,6 +13,14 @@ use crate::compile_module;
 use crate::temp_root_coverage::{entry_opts, module_with_init};
 
 const DISPATCH: &str = "call double @js_typed_feedback_native_call_method_by_id(";
+/// The One Path method site's miss: universal dispatch behind the site
+/// (`expr/method_site.rs`), which a plain (non-builtin-named) call now takes.
+const SITE_MISS: &str = "call double @js_method_site_miss(";
+
+/// Does `ir` reach universal method dispatch, directly or behind a site?
+fn dispatches(ir: &str) -> bool {
+    ir.contains(DISPATCH) || ir.contains(SITE_MISS)
+}
 const GET_TIME: &str = "call double @js_date_get_time(";
 
 /// The `main` body for `init`, with `make()` importable as an `any`-returning
@@ -83,7 +91,7 @@ fn unproven_date_getter_checks_the_receiver_kind() {
         "a Date is recognized by its time value differing from the receiver bits:\n{ir}"
     );
     assert!(
-        ir.contains(DISPATCH),
+        dispatches(&ir),
         "a non-Date receiver must reach its own getTime through method dispatch:\n{ir}"
     );
     assert_eq!(
@@ -108,10 +116,7 @@ fn unproven_date_getter_reuses_the_time_value_from_the_check() {
         "the getter must read the time value the check produced, not re-classify \
          the receiver:\n{ir}"
     );
-    assert!(
-        ir.contains(DISPATCH),
-        "missing the method-dispatch arm:\n{ir}"
-    );
+    assert!(dispatches(&ir), "missing the method-dispatch arm:\n{ir}");
 }
 
 #[test]
@@ -128,10 +133,7 @@ fn unproven_date_setter_forwards_every_argument_on_both_arms() {
         ir.contains(GET_TIME) && ir.contains("call double @js_date_apply_setter("),
         "a Date receiver must keep the setter behind a runtime Date check:\n{ir}"
     );
-    assert!(
-        ir.contains(DISPATCH),
-        "missing the method-dispatch arm:\n{ir}"
-    );
+    assert!(dispatches(&ir), "missing the method-dispatch arm:\n{ir}");
 }
 
 #[test]
@@ -144,7 +146,7 @@ fn unproven_to_locale_string_formats_primitives_dates_and_symbols_directly() {
         ir.contains("call double @js_value_to_locale_string(")
             && ir.contains(GET_TIME)
             && ir.contains("call i32 @js_is_symbol(")
-            && ir.contains(DISPATCH),
+            && dispatches(&ir),
         "primitives, Dates and Symbols format directly; heap objects dispatch:\n{ir}"
     );
 }
@@ -156,7 +158,7 @@ fn unproven_number_method_uses_an_inline_tag_check() {
         vec![method_call(any_value(), "toFixed", vec![Expr::Number(2.0)])],
     );
     assert!(
-        ir.contains("call i64 @js_number_to_fixed(") && ir.contains(DISPATCH),
+        ir.contains("call i64 @js_number_to_fixed(") && dispatches(&ir),
         "toFixed on an unproven receiver needs both the Number and dispatch arms:\n{ir}"
     );
     assert!(
@@ -174,7 +176,7 @@ fn unproven_to_sorted_checks_for_a_plain_array_header() {
     assert!(
         ir.contains("call i64 @js_validate_array_comparator(")
             && ir.contains("call i64 @js_array_to_sorted_with_comparator(")
-            && ir.contains(DISPATCH),
+            && dispatches(&ir),
         "toSorted on an unproven receiver needs both the Array and dispatch arms:\n{ir}"
     );
     assert!(
@@ -223,7 +225,7 @@ fn unproven_reduce_right_with_three_arguments_is_plain_dispatch() {
         )],
     );
     assert!(
-        ir.contains(DISPATCH) && !ir.contains("call double @js_array_reduce_right("),
+        dispatches(&ir) && !ir.contains("call double @js_array_reduce_right("),
         "an out-of-arity reduceRight must stay a method call:\n{ir}"
     );
 }
@@ -255,7 +257,7 @@ fn proven_receivers_keep_the_direct_builtin_call() {
         "a proven Date calls the getter once, with no kind check:\n{ir}"
     );
     // #10943 CHANGED THIS CLAIM, deliberately. What stood here was
-    // `!ir.contains(DISPATCH)` — "a proven receiver must not pay for method
+    // `!dispatches(&ir)` — "a proven receiver must not pay for method
     // dispatch" — and that premise is the bug: proving the receiver's KIND
     // proves nothing about an own property, so `d.getTime = () => "own"` ran
     // `Date.prototype.getTime` and returned a real timestamp. The dispatcher
@@ -294,7 +296,7 @@ fn zero_argument_search_methods_compile_on_any_receiver_and_on_a_string() {
     assert!(
         ir.contains("call i32 @js_string_ends_with(")
             && ir.contains("call i32 @js_string_starts_with(")
-            && ir.contains(DISPATCH),
+            && dispatches(&ir),
         "an omitted searchString is `undefined`, not a compile error:\n{ir}"
     );
 }

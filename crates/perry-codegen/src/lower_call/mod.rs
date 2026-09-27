@@ -48,7 +48,7 @@ mod console_promise;
 /// inherited user method. It is the other side of every own-override
 /// diamond, including the one `expr/folded_builtin_override.rs` emits for
 /// the builtin calls HIR folded before this module could see them.
-pub(crate) use console_promise::emit_native_method_str_dispatch;
+pub(crate) use console_promise::emit_native_method_str_dispatch_plain;
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]

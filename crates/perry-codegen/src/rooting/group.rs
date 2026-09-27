@@ -450,6 +450,57 @@ pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> Implici
     }
 }
 
+/// The implicit-`this` cell's address when this target reads it without a
+/// call (ELF executables, `expr::agent_ptr`), for a save/restore pair that
+/// wants to find the cell once: the address is per-thread and stable, so a
+/// restore after the call may reuse it.
+pub(crate) fn implicit_this_cell_ptr(ctx: &mut FnCtx<'_>) -> Option<String> {
+    if crate::expr::agent_ptr::agent_ptr_access(ctx)
+        != crate::expr::agent_ptr::AgentPtrAccess::InitialExec
+    {
+        return None;
+    }
+    Some(crate::expr::agent_ptr::emit_agent_ptr(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_IMPLICIT_THIS,
+        "perry_implicit_this_cell",
+    ))
+}
+
+/// [`implicit_this_save`] through a cell address from
+/// [`implicit_this_cell_ptr`].
+pub(crate) fn implicit_this_save_at(
+    ctx: &mut FnCtx<'_>,
+    cell: &str,
+    new_this: &str,
+) -> ImplicitThisSave {
+    let prev = {
+        let blk = ctx.block();
+        let prev_bits = blk.load(I64, cell);
+        let value_bits = blk.bitcast_double_to_i64(new_this);
+        // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
+        blk.store(I64, &value_bits, cell);
+        blk.bitcast_i64_to_double(&prev_bits)
+    };
+    let idx = temp_root::temp_root_push_double(ctx, &prev);
+    ImplicitThisSave {
+        slot: RootedSlot {
+            idx,
+            repr: Repr::Boxed,
+        },
+    }
+}
+
+/// [`implicit_this_restore`] through the same cell address.
+pub(crate) fn implicit_this_restore_at(ctx: &mut FnCtx<'_>, cell: &str, save: ImplicitThisSave) {
+    let prev = read_slot(ctx, &save.slot);
+    save.slot.release(ctx);
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(&prev);
+    // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
+    blk.store(I64, &bits, cell);
+}
+
 /// Restore the saved implicit `this`, re-read from its root.
 ///
 /// Reading the slot rather than the register is the fix, not a precaution: the
@@ -473,6 +524,17 @@ pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave)
 /// dynamically-dispatched call was two runtime calls whose whole body was
 /// that lookup plus a `replace`.
 fn implicit_this_swap(ctx: &mut FnCtx<'_>, value: &str, stem: &str) -> String {
+    // ELF executables: the cell's address is a per-agent pointer read
+    // thread-pointer-relative (`expr::agent_ptr`), so the swap is a load and a
+    // store with no call.
+    if let Some(cell) = implicit_this_cell_ptr(ctx) {
+        let blk = ctx.block();
+        let prev_bits = blk.load(I64, &cell);
+        let value_bits = blk.bitcast_double_to_i64(value);
+        // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
+        blk.store(I64, &value_bits, &cell);
+        return blk.bitcast_i64_to_double(&prev_bits);
+    }
     if !crate::expr::hot_tls::inline_hot_tls_enabled(ctx) {
         return ctx
             .block()

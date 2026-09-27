@@ -674,9 +674,10 @@ mod ledger;
 // import. They stay `pub(crate)` in `group.rs`, where the functions that
 // produce them live.
 pub(crate) use group::{
-    implicit_this_restore, implicit_this_save, new_target_restore, new_target_save,
-    new_target_save_for_super, open_rooted_group, with_rooted_accumulator, with_rooted_group,
-    AccArray, EmittedValue, RootedAcc, RootedGroup,
+    implicit_this_cell_ptr, implicit_this_restore, implicit_this_restore_at, implicit_this_save,
+    implicit_this_save_at, new_target_restore, new_target_save, new_target_save_for_super,
+    open_rooted_group, with_rooted_accumulator, with_rooted_group, AccArray, EmittedValue,
+    RootedAcc, RootedGroup,
 };
 
 // ---------------------------------------------------------------------------

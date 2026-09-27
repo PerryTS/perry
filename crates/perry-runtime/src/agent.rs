@@ -83,6 +83,7 @@ thread_local! {
 /// Returns the new id so the caller can hand it to [`retire_agent`] at exit.
 pub fn enter_worker_agent() -> AgentId {
     let id = NEXT_AGENT.fetch_add(1, Ordering::Relaxed);
+    crate::object::method_site::note_worker_agent();
     CURRENT_AGENT.with(|slot| slot.set(Some(id)));
     id
 }

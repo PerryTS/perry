@@ -332,7 +332,7 @@ fn guarded_call(
     ctx.block().br(&merge_label);
 
     ctx.current_block = generic_idx;
-    let generic_value = super::super::console_promise::emit_native_method_str_dispatch(
+    let generic_value = super::super::console_promise::emit_native_method_str_dispatch_plain(
         ctx,
         property,
         call_byte_offset,

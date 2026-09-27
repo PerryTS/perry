@@ -361,7 +361,7 @@ fn emit_dispatcher(
     operands.extend(args.iter().copied());
     rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
         let (recv, arg_vals) = values.split_first().expect("the receiver is operand 0");
-        Ok(crate::lower_call::emit_native_method_str_dispatch(
+        Ok(crate::lower_call::emit_native_method_str_dispatch_plain(
             ctx, method, 0, recv, arg_vals,
         ))
     })

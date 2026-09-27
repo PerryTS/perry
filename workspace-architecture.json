@@ -24,9 +24,10 @@
     ]
   },
   "baseline": {
-    "workspace_members": 69,
+    "workspace_members": 70,
     "default_dependency_closure": [
       "perry",
+      "perry-abi",
       "perry-api-manifest",
       "perry-base64",
       "perry-cli-support",
@@ -53,6 +54,7 @@
     ],
     "perry_dependency_closure": [
       "perry",
+      "perry-abi",
       "perry-api-manifest",
       "perry-base64",
       "perry-cli-support",
@@ -78,7 +80,7 @@
     ],
     "decision_counts": {
       "externalize": 11,
-      "keep": 53,
+      "keep": 54,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -87,6 +89,10 @@
   "crates": {
     "perry": {
       "category": "product",
+      "decision": "keep"
+    },
+    "perry-abi": {
+      "category": "compiler-core",
       "decision": "keep"
     },
     "perry-api-manifest": {

@@ -235,7 +235,7 @@ fn emit_dispatcher(
     rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
         let (recv, arg_vals) = values.split_first().expect("the receiver is operand 0");
         Ok(
-            super::super::console_promise::emit_native_method_str_dispatch(
+            super::super::console_promise::emit_native_method_str_dispatch_plain(
                 ctx,
                 property,
                 call_byte_offset,
