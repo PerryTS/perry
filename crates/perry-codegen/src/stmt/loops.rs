@@ -3016,6 +3016,72 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
 /// Emit one range-guard call per accessed array (window endpoints merged
 /// from the counter part `[start + min_offset, bound + max_offset)` and the
 /// static part `[lo, hi]`), AND-reduced into a single i1.
+/// #10514: heal a growth-forwarded receiver binding before the packed-range
+/// loop guard judges it. The guard rejects a forwarding stub (the clone reads
+/// `length` and the elements base straight off the binding), so an Array that
+/// was grown by `a[i] = v` or `push` through ANOTHER reference — a parameter,
+/// a field it was read from, a module global — sent every later loop over it
+/// to the per-access slow clone for the rest of the program (~6x the
+/// instructions per read). The repair is the element-shape preheader's
+/// (#7480): follow the chain once with `js_array_refresh_local_head` and write
+/// the live head back to the loop's own slot. It is gated inline on the
+/// binding actually holding a forwarded `GC_TYPE_ARRAY`, so a live head pays
+/// one header load and no call. Boxed bindings are skipped: their slot holds
+/// the box, not the value (#11335). The guard re-loads the binding after this.
+fn emit_packed_range_receiver_forwarding_repair(ctx: &mut FnCtx<'_>, array_id: u32) {
+    if ctx.boxed_vars.contains(&array_id) {
+        return;
+    }
+    let Some(slot) = ctx.locals.get(&array_id).cloned() else {
+        return;
+    };
+    let Ok(arr0) = lower_expr(ctx, &perry_hir::Expr::LocalGet(array_id)) else {
+        return;
+    };
+    let header_idx = ctx.new_block("packed_f64_range.fwd.header");
+    let repair_idx = ctx.new_block("packed_f64_range.fwd.repair");
+    let done_idx = ctx.new_block("packed_f64_range.fwd.done");
+    let header_label = ctx.block_label(header_idx);
+    let repair_label = ctx.block_label(repair_idx);
+    let done_label = ctx.block_label(done_idx);
+    let handle = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&arr0);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        let tag = blk.lshr(I64, &bits, "48");
+        let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_TOP16_I64);
+        let above_band = blk.icmp_ugt(I64, &handle, "1048575");
+        let below_limit = blk.icmp_ult(I64, &handle, "140737488355328");
+        let ok = blk.and(I1, &is_pointer, &above_band);
+        let ok = blk.and(I1, &ok, &below_limit);
+        blk.cond_br(&ok, &header_label, &done_label);
+        handle
+    };
+    ctx.current_block = header_idx;
+    {
+        let blk = ctx.block();
+        let type_addr = blk.sub(I64, &handle, "8");
+        let type_ptr = blk.inttoptr(I64, &type_addr);
+        let gc_type = blk.load(I8, &type_ptr);
+        let is_array = blk.icmp_eq(I8, &gc_type, "1");
+        let flags_addr = blk.sub(I64, &handle, "7");
+        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+        let flags = blk.load(I8, &flags_ptr);
+        let forwarded_bits = blk.and(I8, &flags, "128");
+        let forwarded = blk.icmp_ne(I8, &forwarded_bits, "0");
+        let stale = blk.and(I1, &is_array, &forwarded);
+        blk.cond_br(&stale, &repair_label, &done_label);
+    }
+    ctx.current_block = repair_idx;
+    {
+        let blk = ctx.block();
+        let fresh = blk.call(DOUBLE, "js_array_refresh_local_head", &[(DOUBLE, &arr0)]);
+        blk.store(DOUBLE, &fresh, &slot);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+}
+
 fn emit_packed_f64_range_guards(
     ctx: &mut FnCtx<'_>,
     matched: &PackedF64RangeLoop,
@@ -3026,6 +3092,7 @@ fn emit_packed_f64_range_guards(
     let mut all_guards_ok: Option<String> = None;
     let mut affine_window_proven: std::collections::BTreeSet<u32> = Default::default();
     for access in &matched.arrays {
+        emit_packed_range_receiver_forwarding_repair(ctx, access.array_id);
         let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
         let feedback_site_id = emit_typed_feedback_register_site(
             ctx,

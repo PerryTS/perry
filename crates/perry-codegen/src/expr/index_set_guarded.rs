@@ -44,8 +44,8 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::write_barrier::{
-    emit_jsvalue_slot_store_deferred_layout_note_on_block, emit_layout_note_slot_aware_on_block,
-    emit_layout_pointer_bearing_check,
+    emit_jsvalue_slot_store_deferred_layout_note_without_addref_on_block,
+    emit_layout_note_slot_aware_on_block, emit_layout_pointer_bearing_check,
 };
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,
@@ -103,6 +103,42 @@ pub(super) fn emit_guarded_inbounds_array_store(
     value_is_numeric: bool,
     fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
 ) -> Result<()> {
+    emit_guarded_inbounds_array_store_keyed(
+        ctx,
+        arr_box,
+        StoreIndex::I32(idx_i32),
+        val_double,
+        block_prefix,
+        layout_note_needed,
+        write_barrier_needed,
+        value_is_numeric,
+        fallback,
+    )
+}
+
+/// The key of a guarded store: an already-materialized `i32`, or a DOUBLE key
+/// whose canonical element index ([`emit_canonical_element_index_i32`]) is
+/// computed only once the receiver has branded as an Array, so a declining
+/// receiver (the untyped route's typed arrays and Buffers) never pays for it.
+#[derive(Clone, Copy)]
+pub(super) enum StoreIndex<'a> {
+    I32(&'a str),
+    CanonicalOfDouble(&'a str),
+}
+
+/// [`emit_guarded_inbounds_array_store`] with a [`StoreIndex`] key.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn emit_guarded_inbounds_array_store_keyed(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    index: StoreIndex<'_>,
+    val_double: &str,
+    block_prefix: &str,
+    layout_note_needed: bool,
+    write_barrier_needed: bool,
+    value_is_numeric: bool,
+    fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
+) -> Result<()> {
     // An operand may have emitted a throw + unreachable. LlBlock drops
     // instructions after a terminator; opening the store diamond would then
     // reference those dropped values from fresh blocks (#11450). Match the
@@ -139,17 +175,30 @@ pub(super) fn emit_guarded_inbounds_array_store(
     }
 
     ctx.current_block = deref_idx;
+    let follow_idx = ctx.new_block(&format!("{}.deref.follow", block_prefix));
+    let follow_label = ctx.block_label(follow_idx);
     let live_deref_idx = ctx.new_block(&format!("{}.deref.live", block_prefix));
     let live_deref_label = ctx.block_label(live_deref_idx);
-    let live_handle = {
+    // A receiver that is not an Array leaves on its brand byte alone, before
+    // the forwarding, integrity, prototype and bounds work below that it would
+    // only fail. On the untyped `obj[i] = v` route (#10513) that is every
+    // typed-array and Buffer store, which declines onto the typed-array tier.
+    {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-
         let gc_type_addr = blk.sub(I64, &arr_handle, "8");
         let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
         let gc_type = blk.load(I8, &gc_type_ptr);
         let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+        blk.cond_br(&is_array, &follow_label, &slow_label);
+    }
+
+    ctx.current_block = follow_idx;
+    let live_handle = {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
 
         let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
         let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
@@ -170,8 +219,8 @@ pub(super) fn emit_guarded_inbounds_array_store(
         // Longer or corrupt chains still take the slow arm.
         let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
         let forwarding_target = blk.load(I64, &original_arr_ptr);
-        let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
-        let live_handle = blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
+        // `deref` branded the head as an Array.
+        let live_handle = blk.select(I1, &is_forwarded, I64, &forwarding_target, &arr_handle);
 
         let live_top = blk.lshr(I64, &live_handle, "48");
         let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
@@ -186,6 +235,13 @@ pub(super) fn emit_guarded_inbounds_array_store(
     };
 
     ctx.current_block = live_deref_idx;
+    let idx_i32 = match index {
+        StoreIndex::I32(idx) => idx.to_string(),
+        StoreIndex::CanonicalOfDouble(idx_double) => {
+            emit_canonical_element_index_i32(ctx, idx_double)
+        }
+    };
+    let idx_i32 = idx_i32.as_str();
     let reserved = {
         let blk = ctx.block();
         let arr_handle = live_handle.clone();
@@ -292,12 +348,21 @@ pub(super) fn emit_guarded_inbounds_array_store(
             // Decide that inline with the exact runtime predicate and call the
             // note only when it has work: the ECS `ents[id] = arch` store is a
             // pointer over a pointer into a proof-free array on every iteration.
-            let (value_bits, old_bits) = emit_jsvalue_slot_store_deferred_layout_note_on_block(
-                blk,
-                &element_ptr,
-                val_double,
-            );
-            let new_is_pointer = emit_layout_pointer_bearing_check(blk, &value_bits);
+            let (value_bits, old_bits) =
+                emit_jsvalue_slot_store_deferred_layout_note_without_addref_on_block(
+                    blk,
+                    &element_ptr,
+                    val_double,
+                );
+            // `write_barrier_needed == false` is the caller's proof that the
+            // value carries non-pointer bits by construction
+            // (`array_store_needs_write_barrier`), so its classification is a
+            // constant and only the RETIRED value's needs testing.
+            let new_is_pointer = if write_barrier_needed {
+                emit_layout_pointer_bearing_check(blk, &value_bits)
+            } else {
+                "false".to_string()
+            };
             let old_is_pointer = emit_layout_pointer_bearing_check(blk, &old_bits);
             let classification_changed = blk.icmp_ne(I1, &new_is_pointer, &old_is_pointer);
             let shape_bits = blk.and(I16, &reserved, "2048"); // GC_ARRAY_ELEMENT_SHAPE
@@ -312,6 +377,13 @@ pub(super) fn emit_guarded_inbounds_array_store(
             )
         }
     };
+    if layout_note.is_some() && write_barrier_needed {
+        // The string demote the deferred store leaves to its caller, with the
+        // helper's own `STRING_TAG` test hoisted inline. A value with
+        // non-pointer bits by construction (no barrier needed) cannot be a
+        // heap string, so it needs neither the test nor the call.
+        super::helpers::emit_string_addref_if_heap_string(ctx, val_double);
+    }
     if let Some((old_bits, note_needed)) = layout_note {
         let note_idx = ctx.new_block(&format!("{}.laynote", block_prefix));
         let note_done_idx = ctx.new_block(&format!("{}.laynote.done", block_prefix));

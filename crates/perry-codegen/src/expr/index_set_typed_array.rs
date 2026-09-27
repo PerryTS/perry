@@ -73,25 +73,81 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     // non-forwarded (or once-forwarded, healed inline) `GC_TYPE_ARRAY`, no
     // frozen/sealed/non-extensible/descriptor bits, the default prototype
     // chain, and a canonical index strictly below `length`. Every other
-    // receiver and key — a typed array, a Buffer, a string or Symbol key,
-    // an append, a hole-creating sparse write — declines onto the unchanged
-    // typed-array tier and its `js_dyn_index_set_strict` exit.
-    let idx_i32 = super::index_set_guarded::emit_canonical_element_index_i32(ctx, idx_d);
-    super::index_set_guarded::emit_guarded_inbounds_array_store(
+    // receiver and key — a Buffer, a string or Symbol key, an append, a
+    // hole-creating sparse write — declines onto `js_dyn_index_set_strict`.
+    //
+    // The typed-array tier keeps its place in front: a receiver that hits the
+    // #5525 kind cache (the only way that tier's fast arm is reachable) goes
+    // there on one load and compare, so typed-array stores pay nothing for the
+    // Array arm, and an Array pays only that compare for the typed-array one.
+    let ta_idx = ctx.new_block("dynarr.ta");
+    let array_idx = ctx.new_block("dynarr.array");
+    let done_idx = ctx.new_block("dynarr.done");
+    let ta_label = ctx.block_label(ta_idx);
+    let array_label = ctx.block_label(array_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(obj_box);
+        let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+        let slot = blk.lshr(I64, &raw, "3");
+        let slot = blk.and(I64, &slot, "63");
+        let entry_ptr = blk.gep(
+            "[64 x i64]",
+            "@PERRY_TA_KIND_CACHE",
+            &[(I64, "0"), (I64, &slot)],
+        );
+        let entry_val = blk.load(I64, &entry_ptr);
+        let entry_addr = blk.lshr(I64, &entry_val, "8");
+        // A cache entry names a heap address, so a non-pointer box whose low
+        // 48 bits collide with one still fails the full guard in `dynarr.ta`.
+        let cached_typed_array = blk.icmp_eq(I64, &entry_addr, &raw);
+        blk.cond_br(&cached_typed_array, &ta_label, &array_label);
+    }
+    ctx.current_block = ta_idx;
+    let _ = emit_inline_ta_set_then_runtime(ctx, obj_box, idx_d, val_double, strict);
+    ctx.block().br(&done_label);
+
+    ctx.current_block = array_idx;
+    super::index_set_guarded::emit_guarded_inbounds_array_store_keyed(
         ctx,
         obj_box,
-        &idx_i32,
+        super::index_set_guarded::StoreIndex::CanonicalOfDouble(idx_d),
         val_double,
         "dynarr.set",
         facts.layout_note_needed,
         facts.write_barrier_needed,
         facts.value_is_numeric,
         |ctx| {
-            let _ = emit_inline_ta_set_then_runtime(ctx, obj_box, idx_d, val_double, strict);
+            emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
             Ok(())
         },
     )?;
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
     Ok(val_double.to_string())
+}
+
+/// The complete dynamic `[[Set]]`, preserving the source function's
+/// assignment strictness.
+fn emit_dyn_index_set_runtime(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    strict: bool,
+) {
+    let strict = if strict { "1" } else { "0" };
+    ctx.block().call(
+        DOUBLE,
+        "js_dyn_index_set_strict",
+        &[
+            (DOUBLE, obj_box),
+            (DOUBLE, idx_d),
+            (DOUBLE, val_double),
+            (I32, strict),
+        ],
+    );
 }
 
 /// What the caller knows statically about an untyped `obj[i] = v` store's
@@ -347,17 +403,7 @@ fn emit_inline_ta_set_then_runtime(
 
     // ---- slow: preserve the source function's assignment strictness ----
     ctx.current_block = slow_idx;
-    let strict = if strict { "1" } else { "0" };
-    ctx.block().call(
-        DOUBLE,
-        "js_dyn_index_set_strict",
-        &[
-            (DOUBLE, obj_box),
-            (DOUBLE, idx_d),
-            (DOUBLE, val_double),
-            (I32, strict),
-        ],
-    );
+    emit_dyn_index_set_runtime(ctx, obj_box, idx_d, val_double, strict);
     ctx.block().br(&merge_label);
 
     // ---- merge: assignment yields the stored value on every path ----

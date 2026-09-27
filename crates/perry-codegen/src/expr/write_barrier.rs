@@ -658,11 +658,13 @@ pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
 
 /// The scalar-aware slot store with its layout note DEFERRED to the caller:
 /// loads the slot's previous value, writes the new one through the shared
-/// (audited) store, runs the string-addref demote, and returns
-/// `(value_bits, old_bits)` so the caller can decide inline whether the
-/// runtime note would act at all before calling it. The caller owns both the
-/// note and the barrier; nothing else about the store changes.
-pub(crate) fn emit_jsvalue_slot_store_deferred_layout_note_on_block(
+/// (audited) store, and returns `(value_bits, old_bits)` so the caller can
+/// decide inline whether the runtime note would act at all before calling it.
+/// The caller owns the note, the barrier AND the string-addref demote, which it
+/// must emit (the guarded array store uses
+/// `helpers::emit_string_addref_if_heap_string`, which tests `STRING_TAG`
+/// inline so a Number never reaches the call).
+pub(crate) fn emit_jsvalue_slot_store_deferred_layout_note_without_addref_on_block(
     blk: &mut LlBlock,
     slot_ptr: &str,
     value_double: &str,
@@ -675,7 +677,7 @@ pub(crate) fn emit_jsvalue_slot_store_deferred_layout_note_on_block(
         value_double,
         "",
         "",
-        true,
+        false,
         false,
         "",
         "",
