@@ -35,35 +35,6 @@ pub(crate) fn lower_opt_chain_expr(
     // Convert to: obj == null ? undefined : obj.prop
     match &*opt_chain.base {
         ast::OptChainBase::Member(member) => {
-            // Issue #449: `new.target?.<prop>` folds to a literal at
-            // lowering time — same shape as the direct
-            // `new.target.<prop>` fold in `expr_member::lower_member`,
-            // applied here BEFORE `lower_expr(&member.obj)` would
-            // otherwise route MetaProp(NewTarget) through the
-            // broken Object-literal synthesis path. Inside a
-            // constructor `new.target` is non-null/non-undefined,
-            // so the optional chain just resolves the property;
-            // outside a constructor it's undefined and the chain
-            // short-circuits.
-            if let ast::Expr::MetaProp(mp) = member.obj.as_ref() {
-                if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
-                    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                        let prop_name = prop_ident.sym.as_ref();
-                        // #2768: `new.target?.<prop>` reads off the
-                        // runtime new.target (a leaf class ref inside a
-                        // constructor, `undefined` outside). Inside a
-                        // ctor it's non-null so `?.` resolves the
-                        // property; outside it yields undefined. The old
-                        // fold hardcoded the enclosing class name (wrong
-                        // leaf) and undefined for `.prototype`.
-                        return Ok(Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::NewTarget),
-                            property: prop_name.to_string(),
-                        });
-                    }
-                }
-            }
             // #6719: `Symbol?.iterator` (and `Symbol?.["iterator"]` /
             // `Symbol?.[name]`) must resolve the well-known symbol, exactly like
             // the non-optional `Symbol.iterator` / `Symbol["iterator"]` (#6676)

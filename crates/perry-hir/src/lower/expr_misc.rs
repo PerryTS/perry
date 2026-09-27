@@ -424,6 +424,12 @@ pub(super) fn lower_meta_prop(
             // class ref). `ctx.in_constructor_class` is no longer consulted
             // here.
             //
+            // Member reads (`new.target.x`, `new.target?.x`, `new.target[k]`)
+            // must reach this arm through the generic member and optional-chain
+            // lowerings rather than a spelling-specific fold: that is what keeps
+            // the `?.` nullish guard (new.target is `undefined` in a plain call)
+            // and the field-initializer rule below (#449).
+            //
             // ES2025 §15.7.10: class field initializers are invoked with
             // [[Call]] (not [[Construct]]), so [[NewTarget]] is `undefined`
             // throughout the initializer, including inside arrow functions

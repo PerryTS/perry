@@ -280,39 +280,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 });
             }
         }
-        // Issue #449: `new.target.<prop>` folds directly to a literal at
-        // lowering time. The bare `MetaProp(NewTarget)` lowering in
-        // `expr_misc::lower_meta_prop` returns an Object literal whose
-        // string field reads back as the raw u64 handle bits (rendering
-        // as `2e-323` / `NaN`) when constructed inside a class
-        // constructor — same module-globals NaN-boxing bug class as
-        // #444's `import.meta` Object. Folding the most common access
-        // patterns here sidesteps it entirely. Inside a constructor,
-        // `.name` is the class name string; outside, the whole
-        // expression evaluates to `undefined.<prop>` which would throw
-        // — but `new.target` outside a constructor is `undefined`, so
-        // we lower the access to `Undefined` and let downstream
-        // optional-chain rewrites (`new.target?.name`) handle the
-        // null-guard correctly.
-        if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                let prop_name = prop_ident.sym.as_ref();
-                // #2768: read the property off the RUNTIME `new.target`, which
-                // codegen resolves to the active constructor's leaf class ref
-                // (`INT32_TAG | class_id`). `.name` / `.prototype` /
-                // `=== SomeClass` then all reflect the actual constructed
-                // class. The old fold returned the *enclosing* class name
-                // string (wrong leaf for `super()`-inlined bodies) and made
-                // `new.target.prototype` undefined. Outside a constructor
-                // `new.target` is `undefined`, so the runtime read yields
-                // `undefined.<prop>` semantics via the same PropertyGet.
-                return Ok(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::NewTarget),
-                    property: prop_name.to_string(),
-                });
-            }
-        }
     }
 
     // #6560: the `Bun` global shim pack — member position only, and only when
