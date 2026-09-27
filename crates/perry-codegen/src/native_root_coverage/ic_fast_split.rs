@@ -76,7 +76,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
     }
 }
 
-/// `probe(o: any, p: Point, f: any)`: a fresh object stays live across a
+/// `probe(o: any, p: Point, f: any, q: Point)`: a fresh object stays live across a
 /// generic read, a class-field read, a class-field write, a template coercion
 /// and a dynamic call. 4,000 empty padding functions push the module past the
 /// full-outline threshold, which is where the IC splits apply.
@@ -109,6 +109,7 @@ fn split_module() -> Module {
             param(100, "o", Type::Any),
             param(101, "p", Type::Named("Point".to_string())),
             param(102, "f", Type::Any),
+            param(103, "q", Type::Named("Point".to_string())),
         ],
         return_type: Type::Any,
         body: vec![
@@ -116,7 +117,7 @@ fn split_module() -> Module {
             let_stmt(21, "a", field_get(100, "foo")),
             let_stmt(22, "b", field_get(101, "x")),
             Stmt::Expr(Expr::PropertySet {
-                object: Box::new(Expr::LocalGet(101)),
+                object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),
                 value: Box::new(Expr::LocalGet(21)),
             }),
