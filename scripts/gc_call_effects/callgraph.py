@@ -376,6 +376,14 @@ def _is_switch_dispatch(insns: list[Insn], i: int, arch: str) -> bool:
     return saw_add and saw_adr
 
 
+def _tlvp_symbol(ins: Insn) -> str | None:
+    """The thread-local whose Mach-O TLV descriptor this `ldr` loads."""
+    for rtype, target in ins.relocs:
+        if "TLVP_LOAD_PAGEOFF" in rtype:
+            return target
+    return None
+
+
 def _got_symbol(ins: Insn) -> str | None:
     for rtype, target in ins.relocs:
         if "GOTPCREL" in rtype or "GOT_LOAD" in rtype or "GOTPAGE" in rtype or "LD64_GOT" in rtype \
@@ -541,7 +549,8 @@ def _slot_pinned(cfg: "_Cfg", i: int, slot: str, arch: str, depth: int) -> str |
     return sym
 
 
-def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0) -> str | None:
+def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0,
+                symbol_of=None) -> str | None:
     """If every definition of `reg` reaching the indirect branch at insns[i]
     is a load of the same GOT/IAT entry, return that symbol (the branch is a
     direct call the compiler routed through a register); else None.
@@ -563,8 +572,8 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0) -> str
         for k in range(upto - 1, st - 1, -1):
             ins = insns[k]
             if reg in writes(ins):
-                g = _got_symbol(ins)
-                if g is None and depth < 6:
+                g = (symbol_of or _got_symbol)(ins)
+                if g is None and depth < 6 and symbol_of is None:
                     src = _copy_source(ins, arch)
                     if src is not None and src != reg:
                         g = _got_pinned(cfg, k, src, arch, depth + 1)
@@ -649,6 +658,22 @@ def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
     return None
 
 
+def _tlv_thunk_call(cfg: "_Cfg", insns: list[Insn], i: int, reg: str) -> bool:
+    """Mach-O thread-local access: `ldr xD,[TLVP]; ...; ldr xR,[xD]; blr xR`
+    calls the TLV descriptor's getter (dyld's `_tlv_get_addr`), which never
+    enters Perry code. Proven by reaching definitions: the nearest definition
+    of xR is a zero-offset load through xD, and every definition of xD
+    reaching that load is a TLVP load."""
+    for k in range(i - 1, max(-1, i - 8), -1):
+        w = insns[k]
+        if reg in _a64_writes(w):
+            m = re.match(rf"^{reg}, \[(x\d+)\]$", w.ops) if w.mn == "ldr" else None
+            if not m or cfg.block_of[k] != cfg.block_of[i]:
+                return False
+            return _got_pinned(cfg, k, m.group(1), "arm64", symbol_of=_tlvp_symbol) is not None
+    return False
+
+
 def _is_branch(ins: Insn, arch: str) -> bool:
     if arch == "x86":
         return ins.mn.startswith(("call", "j"))
@@ -671,10 +696,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
             cfg_box.append(_Cfg(insns, arch, switch_at))
         return cfg_box[0]
 
-    last_tlvp = -99
     for i, ins in enumerate(insns):
-        if any("TLVP" in r for r, _ in ins.relocs):
-            last_tlvp = i
         if arch == "x86":
             is_call, is_jmp = ins.mn.startswith("call"), ins.mn.startswith("j")
             if not (is_call or is_jmp):
@@ -718,9 +740,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
             if g is not None:
                 node.calls.add(_norm(g, fmt))
                 continue
-            if (ins.mn.startswith("bl") and i - last_tlvp <= 6
-                    and any(w.mn == "ldr" and re.match(rf"^{reg}, \[x\d+\]$", w.ops)
-                            for w in insns[max(0, i - 4):i])):
+            if ins.mn.startswith("bl") and _tlv_thunk_call(cfg(), insns, i, reg):
                 # Mach-O thread-local access: `ldr x0,[TLVP]; ldr x8,[x0]; blr x8`
                 # calls dyld's TLV getter, which never enters Perry code.
                 node.calls.add("__tlv_get_addr")
