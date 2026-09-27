@@ -328,7 +328,7 @@ while loading `bson`.
 **Two-N caveats.** Node/Bun instruction counts include their JIT and GC threads; Perry's include its GC. The method
 assumes cost is linear between n1 and n2 (true for every workload here once warmed).
 
-**Not done in Phase 1:** deep profiling (Phase 3 — the attribution column is a flat top-5 only); a comparison
+**Not done in Phase 1:** deep profiling — the attribution column here is a flat top-5 only; Phase 3's call-chain attribution (`profile --callgraph`) is in `PROFILE.md` and `profile/`; a comparison
 against the removed native bindings (owner decision: they were buggy); tursodb / iroh; a CI/nightly job (the harness
 is deliberately not wired into any required gate).
 
