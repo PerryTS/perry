@@ -915,6 +915,8 @@ def instr_spread(ins):
 def short_sym(name: str) -> str:
     """Trim a demangled Rust/LLVM symbol to something that fits a table cell."""
     n = re.sub(r"::h[0-9a-f]{16}$", "", name)
+    # `<perex::executor::Vm>::run` -> `Vm::run`; `<T as Trait>::f` -> `T::f`
+    n = re.sub(r"^<(?:[\w:]*::)?(\w+)(?: as [^>]+)?>", r"\1", n)
     n = re.sub(r"<[^<>]*>", "", n)
     n = n.replace("perry_runtime::", "").replace("perry_stdlib::", "")
     return "`" + (n if len(n) <= 48 else n[:45] + "...").replace("|", "/") + "`"
@@ -1003,9 +1005,11 @@ def cmd_report(args) -> None:
     for label, d in (("Instructions", instr), ("Wall-clock / cold start / RSS", wall)):
         if d:
             tcv = d.get("toolchain", {})
+            started = d.get("resumed_from") or d.get("started")
             L.append(f"- {label}: host `{d.get('host')}` ({d.get('platform')}, {d.get('ncpu')} CPUs), "
-                     f"node {tcv.get('node_version')}, bun {tcv.get('bun_version')}, run {d.get('started')} → "
-                     f"{d.get('finished')}, load-flag threshold {d.get('load_threshold')}.")
+                     f"node {tcv.get('node_version')}, bun {tcv.get('bun_version')}, run {started} → "
+                     f"{d.get('finished')}{' (resumed once)' if d.get('resumed_from') else ''}, "
+                     f"load-flag threshold {d.get('load_threshold')}.")
     L.append("")
     L.append("Per-iteration cost uses the **two-N method**: every workload is run at two iteration counts n1 < n2 "
              "(same warm-up) and per-iteration = (X(n2) − X(n1)) / (n2 − n1), which cancels process startup, "
@@ -1095,6 +1099,12 @@ def cmd_report(args) -> None:
                  "them far less than wall time — the evidence is the spread of the 3 samples per N, reported "
                  f"per arm in the JSON (`instr_spread` = (max−min)/median over both N). Worst spread among flagged "
                  f"arms: {worst * 100:.1f}%. Arms with spread > 5%:\n")
+        per_arm: dict = {}
+        for wid, arm, sp, _lm in flagged:
+            per_arm[arm] = max(per_arm.get(arm, 0.0), sp or 0.0)
+        L.append("Worst spread per arm: " + ", ".join(f"{a} {v * 100:.1f}%" for a, v in sorted(per_arm.items()))
+                 + ". Bun's and Node's counts include their JIT/GC helper threads, whose work varies run to run "
+                 "even on an idle host; Perry's counts are the stable ones (worst Perry spread above).\n")
         big = [f for f in flagged if (f[2] or 0) > 0.05]
         for wid, arm, sp, lm in sorted(big, key=lambda t: -(t[2] or 0)):
             L.append(f"- `{wid}` [{arm}]: spread {sp * 100:.1f}%, load max {lm}")

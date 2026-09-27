@@ -1,0 +1,1177 @@
+{
+ "axios/get_json": {
+  "rc": 0,
+  "top": [
+   [
+    5.4,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.88,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    2.85,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    2.76,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.48,
+    "__memcmp_evex_movbe"
+   ]
+  ]
+ },
+ "axios/post_json": {
+  "rc": 0,
+  "top": [
+   [
+    5.23,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.32,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    3.14,
+    "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+   ],
+   [
+    2.89,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    2.76,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ]
+  ]
+ },
+ "big.js/arith_chain": {
+  "rc": 0,
+  "top": [
+   [
+    14.14,
+    "perry_closure_node_modules_big_js_big_mjs__22"
+   ],
+   [
+    11.18,
+    "js_dyn_index_set_strict"
+   ],
+   [
+    8.98,
+    "trunc"
+   ],
+   [
+    5.98,
+    "perry_closure_node_modules_big_js_big_mjs__8"
+   ],
+   [
+    5.15,
+    "perry_runtime::object::prototype_chain::object_static_prototype"
+   ]
+  ]
+ },
+ "bignumber.js/arith_chain": {
+  "rc": 0,
+  "top": [
+   [
+    8.57,
+    "compiler_builtins::math::libm_math::fmod::fmod"
+   ],
+   [
+    5.23,
+    "perry_closure_node_modules_bignumber_js_dist_bignumber_mjs__62"
+   ],
+   [
+    4.83,
+    "js_array_get_f64"
+   ],
+   [
+    3.63,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    3.05,
+    "js_native_call_method"
+   ]
+  ]
+ },
+ "commander/parse_argv": {
+  "rc": 0,
+  "top": [
+   [
+    3.55,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.31,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.16,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    2.12,
+    "perry_runtime::gc::layout_tables::layout_forget_object"
+   ],
+   [
+    1.86,
+    "perry_runtime::object::shapes::shape_slot_lookup_verdict"
+   ]
+  ]
+ },
+ "control/bare_loop": {
+  "rc": 0,
+  "top": [
+   [
+    92.27,
+    "main"
+   ],
+   [
+    7.12,
+    "mi_bbitmap_try_clearNC"
+   ],
+   [
+    0.6,
+    "_dl_relocate_object"
+   ],
+   [
+    0.02,
+    "update_active.constprop.0"
+   ],
+   [
+    0.0,
+    "_dl_start"
+   ]
+  ]
+ },
+ "control/prop_read": {
+  "rc": 0,
+  "top": [
+   [
+    51.01,
+    "perry_fn_control_prop_read_ts__op"
+   ],
+   [
+    47.51,
+    "perry_fn_control_prop_read_ts____perry_xmod_inline_5_mulFnv$spec_b"
+   ],
+   [
+    1.44,
+    "check_match"
+   ],
+   [
+    0.04,
+    "handle_amd"
+   ],
+   [
+    0.0,
+    "_dl_start"
+   ]
+  ]
+ },
+ "cron/next_dates": {
+  "rc": 0,
+  "top": [
+   [
+    9.15,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    8.41,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    5.14,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    3.78,
+    "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id"
+   ],
+   [
+    3.1,
+    "core::str::converts::from_utf8"
+   ]
+  ]
+ },
+ "date-fns/diff_interval": {
+  "rc": 0,
+  "top": [
+   [
+    4.57,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    4.31,
+    "perry_runtime::gc::trigger_watermark::retire_trigger_watermark"
+   ],
+   [
+    3.56,
+    "perry_runtime::symbol::get::own_symbol_slot"
+   ],
+   [
+    3.54,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    3.27,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ]
+  ]
+ },
+ "date-fns/format_add": {
+  "rc": 0,
+  "top": [
+   [
+    6.53,
+    "<perex::executor::Vm>::trial::<true>"
+   ],
+   [
+    4.47,
+    "<perex::executor::Vm>::run"
+   ],
+   [
+    4.22,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    2.59,
+    "perry_runtime::regex::perex_api::execute_output::<perry_runtime::regex::perex_runtime::poll>"
+   ],
+   [
+    2.38,
+    "__memmove_avx512_unaligned_erms"
+   ]
+  ]
+ },
+ "dayjs/diff_startof": {
+  "rc": 0,
+  "top": [
+   [
+    5.95,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.7,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    2.64,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    2.41,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.13,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ]
+  ]
+ },
+ "dayjs/parse_format": {
+  "rc": 0,
+  "top": [
+   [
+    4.18,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.06,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.05,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    1.83,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    1.81,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ]
+  ]
+ },
+ "decimal.js/arith_chain": {
+  "rc": 0,
+  "top": [
+   [
+    4.4,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    3.02,
+    "js_native_call_method"
+   ],
+   [
+    2.92,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.91,
+    "perry_closure_node_modules_decimal_js_decimal_mjs__131"
+   ],
+   [
+    2.5,
+    "compiler_builtins::math::libm_math::fmod::fmod"
+   ]
+  ]
+ },
+ "decimal.js/parse_sum": {
+  "rc": 0,
+  "top": [
+   [
+    5.9,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    4.06,
+    "perry_runtime::closure::dynamic_props::closure_get_dynamic_prop"
+   ],
+   [
+    3.9,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.37,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    1.98,
+    "js_native_call_method"
+   ]
+  ]
+ },
+ "dotenv/parse": {
+  "rc": 0,
+  "top": [
+   [
+    8.67,
+    "<perex::executor::Vm>::trial::<true>"
+   ],
+   [
+    7.7,
+    "<perex::executor::Vm>::run"
+   ],
+   [
+    4.03,
+    "__memmove_avx512_unaligned_erms"
+   ],
+   [
+    3.5,
+    "<perex::executor::Vm>::class_step"
+   ],
+   [
+    3.34,
+    "perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+   ]
+  ]
+ },
+ "exponential-backoff/retry": {
+  "rc": 0,
+  "top": [
+   [
+    4.26,
+    "js_async_step_chain"
+   ],
+   [
+    4.18,
+    "perry_runtime::value::addr_class::try_read_tracked_gc_header"
+   ],
+   [
+    4.17,
+    "perry_runtime::closure::registry::resolve_strategy_slow"
+   ],
+   [
+    4.14,
+    "perry_runtime::box::release_async_box_activation"
+   ],
+   [
+    3.95,
+    "perry_runtime::gc::layout::layout_note_slot"
+   ]
+  ]
+ },
+ "fastify/inject": {
+  "rc": 1,
+  "top": [
+   [
+    6.39,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    6.31,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    5.88,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    3.7,
+    "perry_runtime::box::is_registered_box_ptr"
+   ],
+   [
+    2.88,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ]
+  ]
+ },
+ "fastify/listen_fetch": {
+  "rc": 0,
+  "top": [
+   [
+    3.04,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.39,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    1.72,
+    "js_native_call_method"
+   ],
+   [
+    1.66,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    1.58,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ]
+  ]
+ },
+ "ioredis/pipeline": {
+  "rc": 0,
+  "top": [
+   [
+    5.0,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    4.75,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.92,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.79,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    2.35,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ]
+  ]
+ },
+ "ioredis/set_get": {
+  "rc": 0,
+  "top": [
+   [
+    3.43,
+    "perry_runtime::box::is_registered_box_ptr"
+   ],
+   [
+    3.35,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.86,
+    "perry_runtime::object::inherited_read_cache::inherited_read_cache_lookup"
+   ],
+   [
+    2.49,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    2.27,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ]
+  ]
+ },
+ "jsonwebtoken/decode": {
+  "rc": 0,
+  "top": [
+   [
+    21.11,
+    "<perex::executor::Vm>::run"
+   ],
+   [
+    6.32,
+    "<perex::executor::Vm>::atom_scan"
+   ],
+   [
+    3.45,
+    "<perex::executor::Vm>::read"
+   ],
+   [
+    2.97,
+    "<perex::executor::Vm>::atom_holds"
+   ],
+   [
+    2.92,
+    "<perex::executor::Vm>::atom_result"
+   ]
+  ]
+ },
+ "jsonwebtoken/hs256": {
+  "rc": 0,
+  "top": [
+   [
+    6.35,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    1.8,
+    "perry_runtime::closure::registry::resolve_strategy_slow"
+   ],
+   [
+    1.76,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    1.73,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    1.69,
+    "<perex::executor::Vm>::run"
+   ]
+  ]
+ },
+ "jsonwebtoken/rs256": {
+  "rc": 1,
+  "top": [
+   [
+    6.22,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    5.88,
+    "perry_runtime::object::object_ops::keys_array::ensure_key_in_keys_array_inner"
+   ],
+   [
+    5.75,
+    "<perry_runtime::object::canonical_keys::CanonicalTable>::alloc_node"
+   ],
+   [
+    5.28,
+    "perry_runtime::object::key_attrs::alloc_key_list"
+   ],
+   [
+    4.04,
+    "core::ptr::drop_glue::<core::cell::RefCell<std::collections::hash::map::HashMap<usize, alloc::vec::Vec<alloc::string::String>, perry_runtime::fast_hash::FastKeyHasher>>>"
+   ]
+  ]
+ },
+ "lru-cache/churn": {
+  "rc": 0,
+  "top": [
+   [
+    7.93,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    5.32,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    5.13,
+    "perry_runtime::map::compact_map_entries"
+   ],
+   [
+    3.62,
+    "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand"
+   ],
+   [
+    3.47,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ]
+  ]
+ },
+ "lru-cache/ttl_mixed": {
+  "rc": 0,
+  "top": [
+   [
+    7.12,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    4.43,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    4.35,
+    "perry_runtime::object::field_get_set::ic_miss::private_member_get_by_name"
+   ],
+   [
+    4.22,
+    "perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand"
+   ],
+   [
+    2.45,
+    "perry_runtime::object::field_get_set::ic_miss::private_value_request"
+   ]
+  ]
+ },
+ "moment/diff_duration": {
+  "rc": 0,
+  "top": [
+   [
+    5.09,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.84,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    3.59,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    3.5,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.9,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ]
+  ]
+ },
+ "moment/parse_format": {
+  "rc": 0,
+  "top": [
+   [
+    5.2,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.48,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    2.17,
+    "perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+   ],
+   [
+    2.12,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    1.77,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ]
+  ]
+ },
+ "mongodb/batch_query": {
+  "rc": 0,
+  "top": [
+   [
+    5.29,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.15,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    1.74,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    1.58,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    1.48,
+    "perry_runtime::object::inherited_read_cache::inherited_read_cache_lookup"
+   ]
+  ]
+ },
+ "mongodb/insert_find": {
+  "rc": 0,
+  "top": [
+   [
+    6.21,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.7,
+    "perry_runtime::box::is_registered_box_ptr"
+   ],
+   [
+    2.0,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    1.78,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    1.64,
+    "perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors"
+   ]
+  ]
+ },
+ "mysql2/insert_batch": {
+  "rc": 0,
+  "top": [
+   [
+    5.05,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.34,
+    "perry_runtime::object::class_meta_registry::get_parent_class_id"
+   ],
+   [
+    2.0,
+    "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+   ],
+   [
+    1.88,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    1.67,
+    "core::str::converts::from_utf8"
+   ]
+  ]
+ },
+ "mysql2/select": {
+  "rc": 0,
+  "top": [
+   [
+    5.64,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    1.96,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    1.84,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    1.82,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    1.61,
+    "js_array_get_f64"
+   ]
+  ]
+ },
+ "nanoid/generate": {
+  "rc": 0,
+  "top": [
+   [
+    16.36,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    13.46,
+    "perry_runtime::buffer::header::buffer_data"
+   ],
+   [
+    6.87,
+    "<perex::input::Cursor>::next_unit"
+   ],
+   [
+    5.93,
+    "perry_closure_node_modules_nanoid_index_js__7"
+   ],
+   [
+    5.59,
+    "<perex::executor::Vm>::atom_result"
+   ]
+  ]
+ },
+ "node-cron/match": {
+  "rc": 0,
+  "top": [
+   [
+    4.03,
+    "perry_runtime::exception::try_push_with_kind::{closure#0}"
+   ],
+   [
+    3.98,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    3.51,
+    "perry_runtime::closure::dynamic_props::closure_get_dynamic_prop"
+   ],
+   [
+    3.5,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.61,
+    "<perex::compiler::Parser>::sequence"
+   ]
+  ]
+ },
+ "node-cron/validate_parse": {
+  "rc": 0,
+  "top": [
+   [
+    4.53,
+    "perry_runtime::regex::perex_api::execute_output::<perry_runtime::regex::perex_runtime::poll>"
+   ],
+   [
+    4.29,
+    "perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+   ],
+   [
+    3.52,
+    "__memmove_avx512_unaligned_erms"
+   ],
+   [
+    3.27,
+    "<perex::executor::Search<perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject>, perex::executor::Scratch>>::run_with"
+   ],
+   [
+    2.88,
+    "<perex::executor::Vm>::run"
+   ]
+  ]
+ },
+ "pg/insert_batch": {
+  "rc": -11,
+  "top": [
+   [
+    7.21,
+    "js_register_closure_arity"
+   ],
+   [
+    7.06,
+    "perry_runtime::object::shapes::shape_descriptor_ensure_with_holes"
+   ],
+   [
+    6.77,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    4.99,
+    "perry_runtime::object::class_registry::class_meta::class_name_for_id"
+   ],
+   [
+    4.07,
+    "perry_runtime::object::prototype_chain::object_static_prototype"
+   ]
+  ]
+ },
+ "pg/select": {
+  "rc": -11,
+  "top": [
+   [
+    9.22,
+    "<hashbrown::map::HashMap<(usize, alloc::string::String), perry_runtime::object::descriptor_state::PropertyAttrs, perry_runtime::fast_hash::FastKeyHasher>>::insert"
+   ],
+   [
+    7.21,
+    "<hashbrown::map::HashMap<u32, perry_runtime::object::class_registry::state::ClassVTable, perry_runtime::fast_hash::PtrHasher>>::get::<u32>"
+   ],
+   [
+    6.46,
+    "<hashbrown::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>::insert"
+   ],
+   [
+    5.94,
+    "<perry_runtime::gc::roots::runtime_handles::RuntimeHandle>::with_mut_ptr::<perry_runtime::string::StringHeader, *mut perry_runtime::string::StringHeader, perry_runtime::regex::perex_strings::copy_units<perry_runtime::regex::perex_runtime::poll, perry_runtime::regex::perex_strings::copy_span_near<perry_runtime::regex::perex_runtime::poll>::{closure#1}>::{closure#5}>"
+   ],
+   [
+    5.68,
+    "mi_page_free_list_extend"
+   ]
+  ]
+ },
+ "qs/parse_nested": {
+  "rc": 0,
+  "top": [
+   [
+    4.42,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.2,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ],
+   [
+    2.88,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.53,
+    "js_native_call_method"
+   ],
+   [
+    2.51,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ]
+  ]
+ },
+ "qs/stringify_nested": {
+  "rc": 0,
+  "top": [
+   [
+    4.09,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.27,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    2.89,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    2.55,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.18,
+    "js_closure_set_box_capture_ptr"
+   ]
+  ]
+ },
+ "rate-limiter-flexible/consume": {
+  "rc": 0,
+  "top": [
+   [
+    5.83,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    3.65,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.32,
+    "perry_runtime::object::class_meta_registry::get_parent_class_id"
+   ],
+   [
+    3.18,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    3.14,
+    "perry_runtime::gc::layout_tables::count_new_young_layout_record"
+   ]
+  ]
+ },
+ "rate-limiter-flexible/get_penalty": {
+  "rc": 0,
+  "top": [
+   [
+    6.85,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.48,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    2.77,
+    "js_native_call_method"
+   ],
+   [
+    2.73,
+    "perry_runtime::box::is_registered_box_ptr"
+   ],
+   [
+    2.69,
+    "js_closure_get_capture_bits"
+   ]
+  ]
+ },
+ "redis/pipeline": {
+  "rc": 0,
+  "top": [
+   [
+    6.96,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    2.64,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ],
+   [
+    2.54,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    2.08,
+    "perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id"
+   ],
+   [
+    1.96,
+    "__memcmp_evex_movbe"
+   ]
+  ]
+ },
+ "redis/set_get": {
+  "rc": 0,
+  "top": [
+   [
+    4.65,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    1.62,
+    "__memcmp_evex_movbe"
+   ],
+   [
+    1.59,
+    "perry_runtime::object::class_registry::parent_static::class_object_own_field_bytes"
+   ],
+   [
+    1.51,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    1.45,
+    "perry_runtime::object::descriptor_state::get_accessor_descriptor"
+   ]
+  ]
+ },
+ "uuid/v4": {
+  "rc": 0,
+  "top": [
+   [
+    11.62,
+    "<perex::executor::Vm>::begin_class"
+   ],
+   [
+    7.98,
+    "<perex::executor::Vm>::trial::<true>"
+   ],
+   [
+    7.17,
+    "<perex::executor::Vm>::run"
+   ],
+   [
+    5.91,
+    "<perex::executor::Vm>::atom_result"
+   ],
+   [
+    5.48,
+    "<perex::executor::Vm>::atom_scan"
+   ]
+  ]
+ },
+ "uuid/v5_parse": {
+  "rc": 0,
+  "top": [
+   [
+    6.17,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    4.88,
+    "perry_runtime::buffer::header::is_registered_buffer_slow"
+   ],
+   [
+    4.1,
+    "<perex::executor::Vm>::begin_class"
+   ],
+   [
+    3.69,
+    "perry_runtime::buffer::header::mark_as_uint8array"
+   ],
+   [
+    3.07,
+    "js_dyn_index_get"
+   ]
+  ]
+ },
+ "uuid/v7": {
+  "rc": 0,
+  "top": [
+   [
+    6.75,
+    "<perex::executor::Vm>::begin_class"
+   ],
+   [
+    5.75,
+    "<perex::executor::Vm>::atom_result"
+   ],
+   [
+    5.34,
+    "perry_runtime::buffer::header::is_uint8array_buffer_slow"
+   ],
+   [
+    4.7,
+    "perry_runtime::arena::allocators::arena_alloc"
+   ],
+   [
+    4.6,
+    "<perex::executor::Vm>::trial::<true>"
+   ]
+  ]
+ },
+ "validator/batch": {
+  "rc": 0,
+  "top": [
+   [
+    5.39,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.31,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    2.45,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    2.21,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    2.0,
+    "perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_inherited_cache"
+   ]
+  ]
+ },
+ "validator/sanitize": {
+  "rc": 0,
+  "top": [
+   [
+    4.63,
+    "perry_runtime::object::shapes::shape_descriptor_by_id"
+   ],
+   [
+    3.74,
+    "perry_runtime::object::native_get::try_data_get_bytes"
+   ],
+   [
+    3.54,
+    "perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+   ],
+   [
+    2.83,
+    "core::str::converts::from_utf8"
+   ],
+   [
+    2.34,
+    "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+   ]
+  ]
+ }
+}
