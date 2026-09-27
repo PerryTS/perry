@@ -3015,6 +3015,7 @@ js_put_value_set	f64	f64,f64,f64,f64,i32s
 js_put_value_set_dyn_ic	f64	ptr,f64,f64,f64,i32s
 js_put_value_set_dyn_ic_miss	f64	ptr,f64,f64,f64,i32s
 js_put_value_set_ic_miss	f64	f64,ptr,f64,i32s,ptr,i32s
+js_put_value_set_packed_fast	f64	f64,f64,ptr
 js_put_value_set_packed_miss	f64	f64,ptr,f64,i32s,ptr,ptr
 js_querystring_escape	f64	f64
 js_querystring_native_dispatch	f64	ptr,usize,ptr,usize

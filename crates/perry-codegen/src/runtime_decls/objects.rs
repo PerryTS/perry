@@ -633,6 +633,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, DOUBLE, I32, PTR, PTR],
     );
+    // S2: the GC-leaf existing-key way store of a full-outline store site.
+    module.declare_function(
+        "js_put_value_set_packed_fast",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR],
+    );
     // #9708: takes the site's cache SLOT plus the way index to prime.
     module.declare_function(
         "js_put_value_set_ic_miss",

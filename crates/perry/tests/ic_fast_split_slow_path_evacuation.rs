@@ -8,7 +8,7 @@
 //!
 //! The fixture is `test-files/test_gap_ic_fast_split_slow_path.ts` (also a gap
 //! test, against node). Here it is compiled with `PERRY_FULL_OUTLINE_IC=1`,
-//! where the three IC splits apply, and run under a seeded evacuating schedule
+//! where the four IC splits apply, and run under a seeded evacuating schedule
 //! with the from-space quarantine and the evacuation verifier on. The run must
 //! print node's output AND report copying minors that moved objects — a green
 //! run with zero moves would say nothing.
@@ -27,6 +27,7 @@ const SOURCE: &str = include_str!("../../../test-files/test_gap_ic_fast_split_sl
 
 /// node 26.5.1 (`.node-version`) on `SOURCE`.
 const NODE_ORACLE: &str = "keep-g:123:1\nkeep-g:123:1\nkeep-g:123:2\nkeep-g:123:3\nkeep-g:123:1\n\
+keep-w23 30\nkeep-w23 31\nkeep-w23 32\nkeep-w23 33\nkeep-w23 34\n\
 keep-cg7:10\nkeep-cg7:10\nkeep-cg7:20\nkeep-cg7:10\n\
 keep-cs45 11\nkeep-cs45 21\nkeep-cs45 12\n\
 keep-t6:s\nkeep-t6:42\nkeep-t6:T\nkeep-t6:s2\n\
@@ -122,6 +123,8 @@ fn slow_arms_that_run_allocating_user_code_keep_the_callers_values_relocated() {
     for symbol in [
         "@js_object_get_field_ic_fast(",
         "@js_object_get_field_ic_fast_miss(",
+        "@js_put_value_set_packed_fast(",
+        "@js_put_value_set_packed_miss(",
         "@js_class_field_get_ic_fast(",
         "@js_class_field_get_ic_fast_miss(",
         "@js_class_field_set_ic_fast(",

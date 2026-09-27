@@ -137,6 +137,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_object_get_field_ic_fast"
         | "js_class_field_get_ic_fast"
         | "js_class_field_set_ic_fast"
+        //   `js_put_value_set_packed_fast` (`proxy/put_value/packed_set.rs`):
+        //   `pic_slot_peek`, the receiver test, a ShapeId compare over the
+        //   site's ways, `packed_hit_receiver_ok` (header reads) and
+        //   `store_object_field_slot` (the same `runtime_store_jsvalue_slot`
+        //   as above). A spill way (`dyn_ic_try_store`) and the key-add memo
+        //   (which can allocate) are declined, not served.
+        | "js_put_value_set_packed_fast"
         | "js_transition_ic_spill_append"
         | "js_write_barrier_slot"
         | "js_write_barrier_slot_validated_parent"

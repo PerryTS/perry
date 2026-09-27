@@ -352,7 +352,8 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         // inside a `try`, so the leaf marking never depends on the invoke arm.
         | "js_object_get_field_ic_fast"
         | "js_class_field_get_ic_fast"
-        | "js_class_field_set_ic_fast" => " #4",
+        | "js_class_field_set_ic_fast"
+        | "js_put_value_set_packed_fast" => " #4",
         _ => "",
     }
 }

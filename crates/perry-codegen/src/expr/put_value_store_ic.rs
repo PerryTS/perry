@@ -241,8 +241,13 @@ pub(crate) fn emit_static_store_ic(
     if crate::codegen::full_outline_ic_enabled() || straight_line_site_outlined(ctx) {
         super::store_census::bump(ctx, super::store_census::PIC_MISS);
         let key_handle = emit_key_handle(ctx, &key_handle_global);
-        return ctx.block().call(
-            DOUBLE,
+        // S2: an existing-key store from an inline way is a GC-leaf call;
+        // everything else takes the collecting miss entry on a cold arm.
+        return super::ic_fast_split::emit_hole_declining_split(
+            ctx,
+            "pset.outline",
+            "js_put_value_set_packed_fast",
+            &[(DOUBLE, obj_box), (DOUBLE, value_double), (PTR, &cache_slot_ref)],
             "js_put_value_set_packed_miss",
             &[
                 (DOUBLE, obj_box),

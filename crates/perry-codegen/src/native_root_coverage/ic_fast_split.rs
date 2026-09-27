@@ -21,7 +21,8 @@
 use super::*;
 use perry_hir::{Class, ClassField};
 
-const FAST_SLOW: [(&str, &str); 3] = [
+const FAST_SLOW: [(&str, &str); 4] = [
+    ("js_put_value_set_packed_fast", "js_put_value_set_packed_miss"),
     ("js_object_get_field_ic_fast", "js_object_get_field_ic_fast_miss"),
     ("js_class_field_get_ic_fast", "js_class_field_get_ic_fast_miss"),
     ("js_class_field_set_ic_fast", "js_class_field_set_ic_fast_miss"),
@@ -116,6 +117,11 @@ fn split_module() -> Module {
             let_stmt(20, "keep", heap_value()),
             let_stmt(21, "a", field_get(100, "foo")),
             let_stmt(22, "b", field_get(101, "x")),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(100)),
+                property: "bar".to_string(),
+                value: Box::new(Expr::LocalGet(22)),
+            }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),

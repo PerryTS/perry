@@ -256,6 +256,33 @@ pub extern "C" fn js_put_value_set_packed_miss(
     result
 }
 
+/// S2 of the deferred-collection RFC: the GC-leaf hit of a full-outline
+/// static-key store. Serves an existing key from an INLINE way — the
+/// receiver test, a ShapeId compare, `packed_hit_receiver_ok` (header reads)
+/// and `store_object_field_slot` (`runtime_store_jsvalue_slot`: addref,
+/// layout note, slot barrier) — and answers `TAG_HOLE` for everything else:
+/// an unprimed site, a spill way (`dyn_ic_try_store` is not audited leaf), a
+/// key add (the add memo can allocate), a refused receiver. The emitted code
+/// then calls [`js_put_value_set_packed_miss`] with its usual operands,
+/// which re-asks the same ways (a declined way declines again) and runs the
+/// full `[[Set]]`. Nothing here allocates, throws or runs user code.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_packed_fast(
+    target: f64,
+    value: f64,
+    cache_slot: *mut PackedSetWaysSlot,
+) -> f64 {
+    unsafe {
+        let cache = crate::object::pic_slot_peek(cache_slot);
+        if cache.is_null() {
+            return f64::from_bits(crate::value::TAG_HOLE);
+        }
+        let ways = &*(cache as *const [AtomicU64; PACKED_SET_WAYS]);
+        packed_ways_store_impl(ways, 0, target, value, false)
+            .unwrap_or(f64::from_bits(crate::value::TAG_HOLE))
+    }
+}
+
 /// Serve `target` from the runtime-compared ways (and any spill way), with
 /// the same per-object tests and barriers as the emitted hit.
 ///
@@ -266,6 +293,19 @@ unsafe fn packed_ways_store(
     first_way: usize,
     target: f64,
     value: f64,
+) -> Option<f64> {
+    packed_ways_store_impl(ways, first_way, target, value, true)
+}
+
+/// `packed_ways_store`, optionally declining a spill way instead of serving it
+/// through `dyn_ic_try_store` (the S2 leaf entry below serves inline ways only).
+#[inline(always)]
+unsafe fn packed_ways_store_impl(
+    ways: &[AtomicU64; PACKED_SET_WAYS],
+    first_way: usize,
+    target: f64,
+    value: f64,
+    serve_spill: bool,
 ) -> Option<f64> {
     let bits = target.to_bits();
     // The emitted receiver test: POINTER tag and a payload above the handle
@@ -293,6 +333,9 @@ unsafe fn packed_ways_store(
             return Some(value);
         }
         if stamp ^ SPILL_FLIP == sid {
+            if !serve_spill {
+                return None;
+            }
             let token = crate::object::shapes::PIC_ID_TOKEN_BIT | sid as u64;
             return dyn_ic_try_store(target, token, index | IC_SLOT_OVERFLOW_BIT, value);
         }

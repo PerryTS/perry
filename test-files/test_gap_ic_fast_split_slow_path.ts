@@ -31,6 +31,12 @@ function readGeneric(o: any): string {
   return keep.tag + ":" + keep.arr.join("") + ":" + v.val;
 }
 
+function writeGeneric(o: any, v: any): string {
+  const keep = { tag: "keep-w", arr: [2, 3] };
+  o.bar = v;
+  return keep.tag + keep.arr.join("");
+}
+
 function readField(p: Point): string {
   const keep = { tag: "keep-cg", n: 7 };
   const v = p.x;
@@ -76,6 +82,29 @@ const proxy = new Proxy({} as any, {
   },
 });
 for (const o of [data, data, getter, proxy, data]) console.log(readGeneric(o));
+
+// Generic write: an existing key (primed, then the fast way store), a setter
+// and a Proxy `set` trap on the slow arm.
+const wdata: any = { bar: 0 };
+let wstored: any = null;
+const setter = {
+  set bar(v: any) {
+    churn(N);
+    wstored = v;
+  },
+};
+const wproxy = new Proxy({} as any, {
+  set(_t: any, _k: any, v: any) {
+    churn(N);
+    wstored = v;
+    return true;
+  },
+});
+console.log(writeGeneric(wdata, { val: 30 }), wdata.bar.val);
+console.log(writeGeneric(wdata, { val: 31 }), wdata.bar.val);
+console.log(writeGeneric(setter, { val: 32 }), wstored.val);
+console.log(writeGeneric(wproxy, { val: 33 }), wstored.val);
+console.log(writeGeneric(wdata, { val: 34 }), wdata.bar.val);
 
 // Class field: a plain instance (the guard passes) and one whose `x` is an
 // own accessor (the guard fails; the by-name fallback runs the accessor).
