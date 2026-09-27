@@ -1592,10 +1592,12 @@ pub extern "C" fn js_path_win32_parse(
         packed.len() as u32,
     ));
     for (index, field) in fields.iter().enumerate() {
+        // Allocate the string first: it can collect, and the object handle is
+        // re-read after it rather than held as a raw pointer across it.
         let value = JSValue::string_ptr(string_to_js(field));
-        js_object_set_field(obj.get_raw_mut_ptr(), index as u32, value);
+        obj.with_mut_ptr(|o| js_object_set_field(o, index as u32, value));
     }
-    obj.get_raw_mut_ptr()
+    obj.with_mut_ptr(|o| o)
 }
 
 /// `path.win32.format({ dir, root, base, name, ext })` — like the POSIX
