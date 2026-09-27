@@ -110,30 +110,34 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // the declined-guard edge of every generic property read.
         | "js_inherited_read_cache_hit_f64"
         // S2 of the deferred-collection RFC (`expr/ic_fast_split.rs`): the
-        // GC-leaf hits of the three full-outline inline caches. Each answers
-        // a decline (TAG_HOLE, or a status) for every case it cannot serve,
-        // and the emitted code takes the collecting `_fast_miss` call instead.
+        // GC-leaf hits of the four full-outline inline caches. Each answers a
+        // decline (TAG_HOLE, or a status) for every case it cannot serve, and
+        // the emitted code takes the collecting `_fast_miss` call instead.
         // Audited 2026-09-27 against the runtime bodies, the checked items
         // being: no Perry-heap allocation, no `GcRootRegistryGuard`, no
         // throw, no call into generated code, no poll, no indirect call.
         //   `js_object_get_field_ic_fast` (`object/field_get_set/ic_miss/
-        //   outline_split.rs`): tag compare, `pic_outlined_mru_hit` (a
-        //   OnceLock<bool> env read, `pic_slot_peek` — never the allocating
-        //   `pic_slot_resolve` —, a ShapeId compare, one slot load), then on
-        //   a hit the two `CannotCollect` feedback calls listed above.
+        //   outline_split.rs`): a static read, a tag compare,
+        //   `pic_outlined_mru_hit` (a OnceLock<bool> env read,
+        //   `pic_slot_peek` — never the allocating `pic_slot_resolve` —, a
+        //   ShapeId compare, one slot load).
         //   `js_class_field_{get,set}_ic_fast` (`typed_feedback/guards.rs`):
-        //   the `CannotCollect` guard above, then one slot load, or one slot
-        //   store through `runtime_store_jsvalue_slot` (addref, layout note,
-        //   slot barrier — the bodies of `js_string_addref`,
-        //   `js_gc_note_slot_layout`, `js_write_barrier_slot`). The two
-        //   `js_object_set_field` edges that are NOT leaf — its diagnostics'
-        //   formatting (an indirect call; the census seeds it there) and a
-        //   live-bound widening that mints a descriptor — are declined BEFORE
-        //   they can run and replayed on the cold arm.
+        //   two static reads, `class_field_{,set_}fast_contract` (header,
+        //   shape-descriptor and layout side-table reads), then one slot
+        //   load, or one store through `runtime_store_jsvalue_slot` (addref,
+        //   layout note, slot barrier — the bodies of `js_string_addref`,
+        //   `js_gc_note_slot_layout`, `js_write_barrier_slot`).
+        // Deliberately NOT reached, because the census call graph shows each
+        // reaching the collector or an indirect call on today's runtime: the
+        // typed-feedback observe/record calls (the registry lock is a
+        // `GcRootRegistryGuard` whose drop can flush a deferred collection,
+        // #11523) and the descriptor walk (`get_accessor_descriptor`). The
+        // fast entries decline outright while feedback or descriptors are in
+        // use. Nor `js_object_set_field`'s diagnostics (formatting is an
+        // indirect call) or a live-bound widening (mints a descriptor).
         // The S1 generated table and its call-graph checker must pick these
-        // three up and are the authority over this comment; until S1 lands
-        // the census checker (`callgraph.py`) was run over the built
-        // archives and reported all three L2 leaf (see the S2 PR).
+        // up and are the authority over this comment (see the S2 PR for the
+        // checker run over the built archives).
         | "js_object_get_field_ic_fast"
         | "js_class_field_get_ic_fast"
         | "js_class_field_set_ic_fast"

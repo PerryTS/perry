@@ -28,11 +28,14 @@
 //!   `pic_slot_peek` (one acquire load, never `pic_slot_resolve`, which is the
 //!   allocating variant), `object_shape_stamp` (one header load), two cache
 //!   word compares and one slot load;
-//! * on a hit only, `js_typed_feedback_observe_property_get` and
-//!   `js_typed_feedback_record_guard_pass`, both already `CannotCollect` in
-//!   `gc_call_effects.rs` and L2-leaf in the census call graph (a `Mutex`
-//!   lock and a Rust `Vec` push when feedback is on, an early return when it
-//!   is off).
+//! * `typed_feedback_active` (one static read).
+//!
+//! It makes NO typed-feedback call. With feedback on, the ladder's observe and
+//! guard-pass record take the feedback registry lock, a `GcRootRegistryGuard`
+//! whose drop can flush a deferred collection request (#11523) — the census
+//! call graph reaches the collector exactly there. So under feedback the fast
+//! entry declines every read and the continuation records it; with feedback
+//! off those two calls are early returns, and skipping them changes nothing.
 //!
 //! No Perry allocation, no `GcRootRegistryGuard`, no throw, no call into
 //! generated code, no poll. Everything it cannot serve — a non-POINTER
@@ -43,11 +46,11 @@
 //! # Why the pair is behaviourally identical to the one call
 //!
 //! `TAG_HOLE` is unambiguous: #10826 makes every delete a ShapeId transition,
-//! so a stamp hit never reads a hole. The fast entry observes feedback only on
-//! a hit, after the (side-effect-free) MRU probe; the miss continuation is the
-//! unchanged ladder with only the MRU probe skipped, so the observe runs there
-//! exactly once instead. A receiver the fast entry declined for its tag never
-//! reached the MRU probe in the old ladder either.
+//! so a stamp hit never reads a hole. A hit is served only with feedback off,
+//! where the ladder's two feedback calls are no-ops; the miss continuation is
+//! the unchanged ladder with only the MRU probe skipped when the fast entry
+//! already asked it (feedback off). A receiver the fast entry declined for its
+//! tag never reached the MRU probe in the old ladder either.
 
 use super::ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 use crate::object::{ObjectHeader, PicCacheSlot};
@@ -65,6 +68,17 @@ pub extern "C" fn js_object_get_field_ic_fast(
     site_id: u64,
     cache_slot: *mut PicCacheSlot,
 ) -> f64 {
+    let _ = (key, site_id);
+    if crate::typed_feedback::typed_feedback_active() {
+        return f64::from_bits(crate::value::TAG_HOLE);
+    }
+    mru_hit_or_hole(obj_bits, cache_slot)
+}
+
+/// The fast entry's hit, without the feedback gate (unit tests run with
+/// feedback forced on).
+#[inline(always)]
+fn mru_hit_or_hole(obj_bits: i64, cache_slot: *mut PicCacheSlot) -> f64 {
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let bits = obj_bits as u64;
     // POINTER tag only, exactly as the full ladder admits the MRU probe
@@ -74,13 +88,7 @@ pub extern "C" fn js_object_get_field_ic_fast(
     }
     let obj_handle = (bits & POINTER_MASK) as usize as *const ObjectHeader;
     match unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
-        Some(value) => {
-            // The same two feedback calls, in the same order, that the full
-            // ladder makes on this hit.
-            crate::typed_feedback::js_typed_feedback_observe_property_get(site_id, obj_handle, key);
-            crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
-            value
-        }
+        Some(value) => value,
         None => f64::from_bits(crate::value::TAG_HOLE),
     }
 }
@@ -95,7 +103,10 @@ pub extern "C" fn js_object_get_field_ic_fast_miss(
     site_id: u64,
     cache_slot: *mut PicCacheSlot,
 ) -> f64 {
-    get_field_ic_dispatch(obj_bits, key, site_id, cache_slot, false)
+    // Under feedback the fast entry asked nothing, so the probe runs here
+    // (and records its observe and guard pass, as the single helper did).
+    let probe_mru = crate::typed_feedback::typed_feedback_active();
+    get_field_ic_dispatch(obj_bits, key, site_id, cache_slot, probe_mru)
 }
 
 #[cfg(test)]
@@ -128,19 +139,22 @@ mod tests {
 
         obj.with_mut_ptr(|o| {
             k.with_const_ptr(|kp| {
-                // Unprimed site: the fast entry declines, the continuation
-                // answers and primes.
-                let first = js_object_get_field_ic_fast(boxed(o), kp, 0, slot_ptr);
-                assert_eq!(first.to_bits(), crate::value::TAG_HOLE);
+                // Unit tests run with typed feedback forced ON, where the
+                // fast entry must decline every read (its hit would skip the
+                // observe the ladder records) and the continuation answers.
+                assert!(crate::typed_feedback::typed_feedback_active());
+                let declined = js_object_get_field_ic_fast(boxed(o), kp, 0, slot_ptr);
+                assert_eq!(declined.to_bits(), crate::value::TAG_HOLE);
                 assert_eq!(
                     js_object_get_field_ic_fast_miss(boxed(o), kp, 0, slot_ptr),
                     7.0
                 );
-                // Primed: the fast entry now serves the hit itself.
-                let hit = js_object_get_field_ic_fast(boxed(o), kp, 0, slot_ptr);
+                // The hit itself (the feedback-off path): primed by the
+                // continuation above, served from the MRU word.
                 assert_eq!(
-                    hit, 7.0,
-                    "a primed monomorphic read must be served by the leaf entry"
+                    mru_hit_or_hole(boxed(o), slot_ptr),
+                    7.0,
+                    "a primed monomorphic read must be served by the leaf hit"
                 );
                 assert_eq!(
                     super::super::js_object_get_field_ic(boxed(o), kp, 0, slot_ptr),
@@ -154,7 +168,7 @@ mod tests {
                     1.5f64.to_bits() as i64,
                 ] {
                     assert_eq!(
-                        js_object_get_field_ic_fast(recv, kp, 0, slot_ptr).to_bits(),
+                        mru_hit_or_hole(recv, slot_ptr).to_bits(),
                         crate::value::TAG_HOLE
                     );
                 }

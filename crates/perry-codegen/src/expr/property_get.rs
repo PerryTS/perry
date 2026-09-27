@@ -1705,21 +1705,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             };
                             // S2: guard + load is a GC-leaf call; the by-name
                             // fallback is the cold collecting arm.
+                            let ic_args = [
+                                (I64, site_id.as_str()),
+                                (DOUBLE, recv_box.as_str()),
+                                (I32, expected_class_id_str.as_str()),
+                                (I32, expected_shape_id.as_str()),
+                                (I64, key_raw.as_str()),
+                                (I32, field_idx_str.as_str()),
+                                (I32, requires_raw_f64_str),
+                            ];
                             let val = crate::expr::ic_fast_split::emit_hole_declining_split(
                                 ctx,
                                 "class_field_get",
                                 "js_class_field_get_ic_fast",
-                                &[
-                                    (I64, &site_id),
-                                    (DOUBLE, &recv_box),
-                                    (I32, &expected_class_id_str),
-                                    (I32, &expected_shape_id),
-                                    (I64, &key_raw),
-                                    (I32, &field_idx_str),
-                                    (I32, requires_raw_f64_str),
-                                ],
+                                &ic_args,
                                 "js_class_field_get_ic_fast_miss",
-                                &[(I64, &site_id), (DOUBLE, &recv_box), (I64, &key_raw)],
+                                &ic_args,
                             );
                             return Ok(val);
                         }

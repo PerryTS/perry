@@ -870,51 +870,63 @@ fn class_field_get_after_guard_fail(
 // `js_class_field_get_ic` / `js_class_field_set_ic` can run a getter or setter
 // (the by-name fallback), so each full-outline site is a statepoint that
 // spills and reloads every live GC value on every access. The `_fast` entries
-// below run the SAME guard call the full helpers run, exactly once, and do
-// the guard-PASS slot access; everything else answers a decline and the
+// below serve the guard-PASS slot access; everything else is declined and the
 // emitted cold arm calls the `_fast_miss` continuation, which does exactly
-// what the full helper does after its guard.
+// what the full helper does from that point, so the guard's effects happen
+// exactly once.
 //
-// Why each `_fast` is a Perry-GC leaf on today's runtime (the S1 call-graph
-// checker is the authority; this is the reading it must agree with):
-//   * `js_typed_feedback_class_field_{get,set}_guard` are already
-//     `CannotCollect` in `gc_call_effects.rs` and L2-leaf in the census call
-//     graph: header/descriptor/registry reads, and with feedback on a `Mutex`
-//     plus a Rust `Vec` push (Rust heap, which cannot arm a Perry trigger);
-//   * the get hit is one slot load;
-//   * the set hit is a raw-f64 `ptr::write`, or `runtime_store_jsvalue_slot`
-//     (typed-slot canonicalization — a side-table read and a pure number
-//     conversion —, `js_string_addref`, `layout_note_slot`, and the slot write
-//     barrier; the last three are the `CannotCollect` `js_string_addref`,
-//     `js_gc_note_slot_layout` and `js_write_barrier_slot` bodies).
-// Excluded on purpose, because each can collect or re-enter:
-//   * `js_object_set_field`'s two diagnostics (`record_warn_null_ptr` and the
-//     out-of-bounds `eprintln!`), whose formatting is an indirect call — the
-//     census call graph seeds `js_object_set_field` on exactly that edge. A
-//     null-POINTER value is declined BEFORE the guard (status 2) and replayed
-//     through the full helper;
-//   * `set_object_live_slot_count`, which mints a shape descriptor and can
-//     collect. A guard pass whose index would widen the live bound is status
-//     3 and stores through `js_object_set_field` on the cold arm. The guard's
-//     `expected_field_index < live_inline_slot_count` makes this unreachable
-//     today; it is declined rather than assumed.
+// They serve ONLY while typed feedback is off and no property descriptor is in
+// use (`descriptors_in_use`). That is precisely when the class-field guards
+// take `class_field_fast_contract` / `class_field_set_fast_contract`, which
+// neither observe nor walk descriptors. The other arm is not a Perry-GC leaf
+// on today's runtime, per the census call graph: the observe takes the
+// feedback registry lock, a `GcRootRegistryGuard` whose drop can flush a
+// deferred collection request (#11523), and the descriptor walk
+// (`get_accessor_descriptor` / `get_property_attrs`) contains an indirect call.
+// Under either condition the fast entry declines without evaluating anything
+// and the continuation runs the whole helper.
+//
+// What the fast entries do reach (the S1 checker is the authority; this is
+// what it must agree with): two static reads, the fast contract (GC-header and
+// shape-descriptor reads, the typed-layout side table, and a verify-mode
+// `abort`), then one slot load, a raw-f64 `ptr::write`, or
+// `runtime_store_jsvalue_slot` (typed-slot canonicalization, `js_string_addref`,
+// `layout_note_slot`, the slot write barrier). Excluded as well, because each
+// can collect or re-enter: `js_object_set_field`'s two diagnostics (formatting
+// is an indirect call; the census seeds `js_object_set_field` there) — a
+// null-POINTER value is declined before anything runs — and
+// `set_object_live_slot_count`, which mints a shape descriptor: a store that
+// would widen the live bound is declined after the guard (status 3) and stored
+// through `js_object_set_field` on the cold arm. The contract's
+// `expected_field_index < live_inline_slot_count` makes that unreachable today;
+// it is declined rather than assumed.
 // ---------------------------------------------------------------------------
 
 /// Status of [`js_class_field_set_ic_fast`]: the store is done.
 pub const CLASS_FIELD_SET_FAST_DONE: i32 = 1;
 /// The guard ran and FAILED: continue with the by-name fallback.
 pub const CLASS_FIELD_SET_FAST_GUARD_FAILED: i32 = 0;
-/// Nothing ran (null-POINTER value): replay the whole full-outline helper.
+/// Nothing ran (feedback or descriptors in use, or a null-POINTER value):
+/// replay the whole full-outline helper.
 pub const CLASS_FIELD_SET_FAST_NOT_ATTEMPTED: i32 = 2;
 /// The guard PASSED but the store would widen the live bound: store through
 /// `js_object_set_field`.
 pub const CLASS_FIELD_SET_FAST_STORE_SLOW: i32 = 3;
 
-/// GC-leaf hit of the full-outline class-field GET. Runs the guard once; on a
-/// pass answers the slot, otherwise `TAG_HOLE` (the caller then calls
-/// [`js_class_field_get_ic_fast_miss`]). A hole never sits in a slot a guard
-/// passes on (#10826: delete transitions the ShapeId); if one did, the miss
-/// continuation's by-name read would answer it correctly.
+/// Whether the class-field guards run their side-effect-free, descriptor-free
+/// contract — the only case the `_fast` entries serve. Both inputs are
+/// set-only latches, so a decline observed by the fast entry is still a
+/// decline when the continuation re-reads them.
+#[inline(always)]
+fn class_field_fast_entries_serve() -> bool {
+    !typed_feedback_enabled() && !crate::object::descriptors_in_use()
+}
+
+/// GC-leaf hit of the full-outline class-field GET: the guard-PASS slot load,
+/// or `TAG_HOLE` (the caller then calls [`js_class_field_get_ic_fast_miss`]).
+/// A hole never sits in a slot the contract passes on (#10826: delete
+/// transitions the ShapeId); if one did, the continuation's by-name read would
+/// answer it correctly.
 #[no_mangle]
 pub extern "C" fn js_class_field_get_ic_fast(
     site_id: u64,
@@ -925,16 +937,16 @@ pub extern "C" fn js_class_field_get_ic_fast(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> f64 {
-    let guard_ok = js_typed_feedback_class_field_get_guard(
-        site_id,
-        receiver,
-        expected_class_id,
-        expected_shape_id,
-        key,
-        expected_field_index,
-        require_raw_f64,
-    );
-    if guard_ok == 0 {
+    let _ = (site_id, key);
+    if !class_field_fast_entries_serve()
+        || !class_field_fast_contract(
+            receiver,
+            expected_class_id,
+            expected_shape_id,
+            expected_field_index,
+            require_raw_f64 != 0,
+        )
+    {
         return f64::from_bits(crate::value::TAG_HOLE);
     }
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
@@ -945,16 +957,31 @@ pub extern "C" fn js_class_field_get_ic_fast(
     }
 }
 
-/// Collecting continuation of [`js_class_field_get_ic_fast`]: exactly the
-/// guard-FAIL arm of `js_class_field_get_ic` (fallback record, nullish
-/// TypeError, by-name read). The guard is not re-run — it already ran, and
-/// with feedback on it records an observation.
+/// Collecting continuation of [`js_class_field_get_ic_fast`]. When the fast
+/// entry served nothing because feedback or descriptors are in use, this is
+/// the whole `js_class_field_get_ic`; otherwise its (side-effect-free) guard
+/// already failed and this is exactly that helper's guard-FAIL arm.
 #[no_mangle]
 pub extern "C" fn js_class_field_get_ic_fast_miss(
     site_id: u64,
     receiver: f64,
+    expected_class_id: u32,
+    expected_shape_id: u32,
     key: *const crate::StringHeader,
+    expected_field_index: u32,
+    require_raw_f64: i32,
 ) -> f64 {
+    if !class_field_fast_entries_serve() {
+        return js_class_field_get_ic(
+            site_id,
+            receiver,
+            expected_class_id,
+            expected_shape_id,
+            key,
+            expected_field_index,
+            require_raw_f64,
+        );
+    }
     class_field_get_after_guard_fail(site_id, receiver, key)
 }
 
@@ -972,21 +999,21 @@ pub extern "C" fn js_class_field_set_ic_fast(
     value: f64,
     require_raw_f64: i32,
 ) -> i32 {
+    let _ = (site_id, key);
     let vbits = value.to_bits();
-    if (vbits >> 48) == 0x7FFD && (vbits & crate::value::POINTER_MASK) == 0 {
+    if !class_field_fast_entries_serve()
+        || ((vbits >> 48) == 0x7FFD && (vbits & crate::value::POINTER_MASK) == 0)
+    {
         return CLASS_FIELD_SET_FAST_NOT_ATTEMPTED;
     }
-    let guard_ok = js_typed_feedback_class_field_set_guard(
-        site_id,
+    if !class_field_set_fast_contract(
         receiver,
         expected_class_id,
         expected_shape_id,
-        key,
         expected_field_index,
-        value,
-        require_raw_f64,
-    );
-    if guard_ok == 0 {
+        require_raw_f64 != 0,
+        vbits,
+    ) {
         return CLASS_FIELD_SET_FAST_GUARD_FAILED;
     }
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
@@ -1018,7 +1045,7 @@ pub extern "C" fn js_class_field_set_ic_fast(
 
 /// Collecting continuation of [`js_class_field_set_ic_fast`], dispatched on
 /// its status so that every path is what `js_class_field_set_ic` would have
-/// done, with the guard run exactly once overall.
+/// done, with the guard evaluated once overall.
 #[no_mangle]
 pub extern "C" fn js_class_field_set_ic_fast_miss(
     status: i32,

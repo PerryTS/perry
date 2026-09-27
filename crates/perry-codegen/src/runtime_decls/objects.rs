@@ -237,8 +237,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     // S2 (deferred-collection RFC): the two full-outline class-field ICs as a
     // GC-leaf hit (`_fast`, same operands as the full helper) plus a
-    // collecting miss continuation (`_fast_miss`). The SET miss takes the
-    // fast entry's status first.
+    // collecting miss continuation (`_fast_miss`, the same operands; the SET
+    // miss takes the fast entry's status first).
     module.declare_function(
         "js_class_field_get_ic_fast",
         DOUBLE,
@@ -247,7 +247,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_class_field_get_ic_fast_miss",
         DOUBLE,
-        &[I64, DOUBLE, I64],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32],
     );
     module.declare_function(
         "js_class_field_set_ic_fast",
