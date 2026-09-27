@@ -7,6 +7,12 @@ report("arrow", () => 1);
 report("bound", ordinary.bind(null));
 report("async", async function () {});
 report("generator", function* () { yield 1; });
+report("async-generator", async function* () { yield 1; });
+for (const fn of [function* () {}, async function* () {}]) {
+  const proto = Object.getPrototypeOf(fn);
+  console.log("generator-parents", Object.getPrototypeOf(proto) === Function.prototype,
+    Object.getPrototypeOf(proto.constructor) === Function);
+}
 let gets = 0;
 const fp: any = Function.prototype;
 fp.absent10366 = undefined;
