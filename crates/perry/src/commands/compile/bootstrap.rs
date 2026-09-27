@@ -410,14 +410,14 @@ fn module_provides_export(
     false
 }
 
-/// Validate default imports from package entries that Perry compiles natively.
+/// Validate static named imports and native-package default imports.
 ///
 /// Perry lowers JS-module default imports to a `__default` wrapper symbol. If a
 /// package entry is ESM-shaped and exposes only named exports, that wrapper has
 /// no producer and the user sees a native linker error. Match Node's static ESM
 /// behavior for the package-import case by rejecting the import while the module
 /// graph still has source/package context.
-pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> Result<()> {
+pub(super) fn enforce_static_import_exports(ctx: &mut CompilationContext) -> Result<()> {
     let import_edges: Vec<(PathBuf, String, String, String)> = ctx
         .native_modules
         .iter()
@@ -474,14 +474,14 @@ pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> R
         }
     }
 
-    Ok(())
+    named_exports::enforce(ctx)
 }
 
 #[cfg(test)]
 mod js_runtime_gate_tests {
     use std::path::PathBuf;
 
-    use super::{enforce_js_runtime_gate, enforce_package_default_exports, CompilationContext};
+    use super::{enforce_js_runtime_gate, enforce_static_import_exports, CompilationContext};
 
     fn empty_module(name: &str) -> perry_hir::Module {
         perry_hir::Module::new(name)
@@ -569,7 +569,7 @@ mod js_runtime_gate_tests {
         ctx.native_modules.insert(importer_path, importer);
         ctx.native_modules.insert(package_path, package);
 
-        let message = enforce_package_default_exports(&mut ctx)
+        let message = enforce_static_import_exports(&mut ctx)
             .expect_err("missing package default export must fail before codegen")
             .to_string();
 
@@ -976,7 +976,7 @@ pub(super) fn run_post_collect_preflight(
     format: OutputFormat,
 ) -> Result<()> {
     enforce_js_runtime_gate(ctx)?;
-    enforce_package_default_exports(ctx)?;
+    enforce_static_import_exports(ctx)?;
     recompute_common_project_root(ctx);
 
     let total_modules = ctx.native_modules.len() + ctx.js_modules.len();
@@ -1378,3 +1378,8 @@ pub(super) fn dump_hir_for_debug(ctx: &CompilationContext, focus: Option<&str>) 
         println!("===========\n");
     }
 }
+
+#[cfg(test)]
+mod named_exports_tests;
+
+mod named_exports;
