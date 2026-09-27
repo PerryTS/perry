@@ -24,21 +24,21 @@ extern "C" fn length_setter(this: f64, value: f64) -> f64 {
 #[test]
 fn borrowed_class_mutators_read_and_write_length_once() {
     let _lock = crate::gc::global_side_table_test_lock();
-    const CLASS_ID: u32 = 0x1111_2CA1;
+    const MUTATOR_TEST_CLASS_ID: u32 = 0x1111_2CA1;
     LENGTH.set(0.0);
     GETS.set(0);
     SETS.set(0);
     unsafe {
-        crate::object::js_register_class_id(CLASS_ID);
-        crate::object::js_register_class_name(CLASS_ID, b"BorrowedBag".as_ptr(), 11);
+        crate::object::js_register_class_id(MUTATOR_TEST_CLASS_ID);
+        crate::object::js_register_class_name(MUTATOR_TEST_CLASS_ID, b"BorrowedBag".as_ptr(), 11);
         crate::object::js_register_class_getter(
-            CLASS_ID as i64,
+            MUTATOR_TEST_CLASS_ID as i64,
             b"length".as_ptr(),
             6,
             length_getter as *const () as i64,
         );
         crate::object::js_register_class_setter(
-            CLASS_ID as i64,
+            MUTATOR_TEST_CLASS_ID as i64,
             b"length".as_ptr(),
             6,
             length_setter as *const () as i64,
@@ -47,7 +47,7 @@ fn borrowed_class_mutators_read_and_write_length_once() {
     let scope = crate::gc::RuntimeHandleScope::new();
     // Match compiled classes: materialize their evaluated prototype before
     // attaching it to the instance, so the registered accessors are observable.
-    let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CLASS_ID, 0));
+    let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(MUTATOR_TEST_CLASS_ID, 0));
     let proto = unsafe {
         class.with_mut_ptr::<crate::object::ObjectHeader, _>(|p| {
             crate::object::js_object_mark_class(p as i64);
@@ -55,7 +55,7 @@ fn borrowed_class_mutators_read_and_write_length_once() {
         })
     };
     let proto = scope.root_nanbox_f64(f64::from_bits(proto.bits()));
-    let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CLASS_ID, 0));
+    let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(MUTATOR_TEST_CLASS_ID, 0));
     instance.with_mut_ptr::<crate::object::ObjectHeader, _>(|p| {
         crate::object::prototype_chain::object_link_class_evaluation_prototype(
             p as usize,
