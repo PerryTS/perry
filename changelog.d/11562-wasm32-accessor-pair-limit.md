@@ -1,0 +1,1 @@
+- **perry-runtime**: `accessor_pair.rs`'s `RAW_ADDRESS_LIMIT` (`1 << 48`) is a `u64` instead of a `usize`, so perry-runtime builds for `wasm32-wasip2` again (the constant overflowed a 32-bit `usize`, E0080). No change on 64-bit hosts.
