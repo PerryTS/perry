@@ -43,6 +43,7 @@ pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
 pub(crate) mod expr_function;
+pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;
 mod expr_member;
 pub(crate) use expr_member::{

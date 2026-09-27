@@ -73,69 +73,15 @@ pub(crate) fn register_native_from_new_and_calls(
                         if let Some((module_name, _)) = ctx.lookup_native_module(obj_name) {
                             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                                 let method_name = method_ident.sym.as_ref();
-                                // Map factory functions to their class names
-                                let class_name = match (module_name, method_name) {
-                                    ("async_hooks", "createHook") => Some("AsyncHook"),
-                                    ("dns" | "dns/promises", "Resolver") => Some("Resolver"),
-                                    ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
-                                    ("mysql2" | "mysql2/promise", "createConnection") => {
-                                        Some("Connection")
-                                    }
-                                    ("pg", "connect") => Some("Client"),
-                                    ("http" | "https", "request" | "get") => Some("ClientRequest"),
-                                    // #2153 — `const server = http.createServer(...)`
-                                    // inside a function body (the CJS wrapper closure
-                                    // counts: a raw `.js` user file is wrapped in
-                                    // `(function(){ ... })()` before lowering). The
-                                    // module-level + named-import paths
-                                    // (`createServer(...)` after
-                                    // `import { createServer } from 'node:http'`) were
-                                    // already registering correctly; the member-call
-                                    // form `http.createServer(...)` slipped through
-                                    // this arm's match because the row didn't exist.
-                                    // Without the tag, `server.listen(...)` /
-                                    // `server.on(...)` / `server.close()` falls
-                                    // through to `js_typed_feedback_native_call_method`
-                                    // → generic `js_native_call_method`, which has no
-                                    // HttpServer arm → returns NaN.
-                                    ("http", "createServer") => Some("HttpServer"),
-                                    ("https", "createServer") => Some("HttpsServer"),
-                                    ("tls", "createServer" | "Server") => Some("Server"),
-                                    ("http2", "createSecureServer") => Some("Http2SecureServer"),
-                                    // readline.createInterface() returns a singleton
-                                    // handle whose .question/.on/.close methods
-                                    // dispatch via the ("readline", true, METHOD)
-                                    // entries in lower_call.rs's native_module dispatch
-                                    // table. Without registering the result as a
-                                    // "Interface" native instance, those calls fall
-                                    // through to dynamic dispatch and never reach
-                                    // js_readline_question / js_readline_on / etc.
-                                    ("readline", "createInterface") => Some("Interface"),
-                                    // perry/tui state(initial) returns a handle whose
-                                    // .get()/.set() methods dispatch via the
-                                    // ("perry/tui", true, "get"/"set", class_filter:
-                                    // Some("State")) entries in lower_call.rs's
-                                    // NativeModSig table. Without this registration,
-                                    // those calls fall through to dynamic dispatch and
-                                    // never reach the runtime FFI. (#358 Phase 2.)
-                                    ("perry/tui", "state") => Some("State"),
-                                    // perry/tui ink-shape hooks (#679 Phase 1): the
-                                    // useApp/useStdout/useRef factories each return
-                                    // a singleton handle. .exit()/.write()/.get()
-                                    // etc. dispatch through the class_filter rows
-                                    // in lower_call.rs.
-                                    ("perry/tui", "useApp") => Some("TuiApp"),
-                                    ("perry/tui", "useStdout") => Some("TuiStdout"),
-                                    ("perry/tui", "useRef") => Some("RefBox"),
-                                    ("perry/tui", "useFocusManager") => Some("FocusManager"),
-                                    _ => None,
-                                };
-                                if let Some(class_name) = class_name {
-                                    let class_module = if class_name == "ClientRequest" {
-                                        "http"
-                                    } else {
-                                        module_name
-                                    };
+                                // Map factory functions to their class names. One
+                                // table shared with the chained-receiver form
+                                // (`createHook(...).enable()`, #11568).
+                                if let Some((class_module, class_name)) =
+                                    crate::lower::native_factory::native_factory_result_class(
+                                        module_name,
+                                        method_name,
+                                    )
+                                {
                                     ctx.register_native_instance(
                                         name.to_string(),
                                         class_module.to_string(),

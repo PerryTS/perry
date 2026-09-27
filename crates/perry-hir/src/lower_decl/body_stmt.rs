@@ -2350,6 +2350,18 @@ pub fn find_native_return_in_stmts(
         match stmt {
             ast::Stmt::Return(ret_stmt) => {
                 if let Some(ref arg) = ret_stmt.arg {
+                    // `return createHook(...).enable()` (#11568): the same
+                    // native instance a bound `return h` would carry.
+                    if let Some((module, class)) =
+                        crate::lower::native_factory::native_class_of_expr(ctx, arg)
+                    {
+                        ctx.push_func_return_native_instance((
+                            func_name.to_string(),
+                            module.to_string(),
+                            class.to_string(),
+                        ));
+                        return;
+                    }
                     if let ast::Expr::Ident(ident) = arg.as_ref() {
                         let var = ident.sym.as_ref();
                         for i in ni_start..ctx.native_instances.len() {

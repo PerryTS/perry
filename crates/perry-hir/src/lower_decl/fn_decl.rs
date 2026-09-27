@@ -356,11 +356,13 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // After body lowering, check if any return statement returns a native instance.
     // This handles patterns like: function initDb() { const d = new Database(...); return d; }
     // where the return type annotation is `any` but the actual value is a native handle.
+    // Also `return createHook(...).enable()` — a factory result with no local
+    // binding (#11568) — so the scan runs even when the body registered no
+    // native instance of its own (the `return <ident>` arm then has nothing to
+    // match and is a no-op).
     let ni_start = scope_mark.1;
-    if ctx.native_instances.len() > ni_start {
-        if let Some(ref block) = fn_decl.function.body {
-            find_native_return_in_stmts(&block.stmts, ctx, &name, ni_start);
-        }
+    if let Some(ref block) = fn_decl.function.body {
+        find_native_return_in_stmts(&block.stmts, ctx, &name, ni_start);
     }
 
     // Body-based return-type inference: when the function has no explicit

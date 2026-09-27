@@ -337,7 +337,7 @@ pub(super) fn try_static_method_and_instance(
         if let ast::Expr::Call(inner_call) = member.obj.as_ref() {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 if let Some((module_name, class_name)) =
-                    native_class_from_factory_call(ctx, inner_call)
+                    crate::lower::native_factory::factory_call_class(ctx, inner_call)
                 {
                     let method_name = method_ident.sym.to_string();
                     let object_expr = lower_expr(ctx, &member.obj)?;
@@ -560,7 +560,7 @@ fn may_lower_to_native_method_call(ctx: &LoweringContext, expr: &ast::Expr) -> b
             may_lower_to_native_method_call(ctx, &ts_const.expr)
         }
         ast::Expr::Call(call) => {
-            if native_class_from_factory_call(ctx, call).is_some() {
+            if crate::lower::native_factory::factory_call_class(ctx, call).is_some() {
                 return true;
             }
 
@@ -587,61 +587,4 @@ fn may_lower_to_native_method_call(ctx: &LoweringContext, expr: &ast::Expr) -> b
 
 fn ident_may_start_native_method_call(ctx: &LoweringContext, name: &str) -> bool {
     ctx.lookup_native_instance(name).is_some() || ctx.lookup_native_module(name).is_some()
-}
-
-/// Resolve the native `(module, class)` produced by an inline factory call
-/// like `createServer(...)` / `http.createServer(...)` /
-/// `http2.createSecureServer(...)`, so a method chained directly on the result
-/// (`createServer(...).listen(...)`) can dispatch against the right
-/// NativeModSig `class_filter`. Mirrors the variable-binding factory maps in
-/// `module_decl.rs` / `destructuring/var_decl.rs` / `lower/stmt.rs`. Returns
-/// `None` for any other call so non-factory chains fall through unchanged.
-/// Issue #2041.
-fn native_class_from_factory_call(
-    ctx: &LoweringContext,
-    call: &ast::CallExpr,
-) -> Option<(&'static str, &'static str)> {
-    let callee_expr = match &call.callee {
-        ast::Callee::Expr(e) => e.as_ref(),
-        _ => return None,
-    };
-    // Resolve to `(module, method)`, handling both the named-import form
-    // (`createServer(...)`) and the namespace form (`http.createServer(...)`).
-    let (module, method): (String, String) = match callee_expr {
-        ast::Expr::Member(member) => {
-            let obj_ident = match member.obj.as_ref() {
-                ast::Expr::Ident(i) => i,
-                _ => return None,
-            };
-            let (module, _) = ctx.lookup_native_module(obj_ident.sym.as_ref())?;
-            let method = match &member.prop {
-                ast::MemberProp::Ident(i) => i.sym.to_string(),
-                _ => return None,
-            };
-            (module.to_string(), method)
-        }
-        ast::Expr::Ident(ident) => {
-            let (module, method_opt) = ctx.lookup_native_module(ident.sym.as_ref())?;
-            (module.to_string(), method_opt?.to_string())
-        }
-        _ => return None,
-    };
-    match (module.as_str(), method.as_str()) {
-        ("http", "createServer") => Some(("http", "HttpServer")),
-        ("https", "createServer") => Some(("https", "HttpsServer")),
-        ("http2", "createSecureServer") => Some(("http2", "Http2SecureServer")),
-        ("tls", "createServer") | ("tls", "Server") => Some(("tls", "Server")),
-        // Issue #2208: `http.request(...).on(...)` / `https.get(...).on(...)`
-        // chains — the inline factory call returns a `ClientRequest` whose
-        // instance methods (`on`/`end`/`write`/`setHeader`/`setTimeout`) are
-        // registered under module `"http"` for both schemes (see
-        // `lower_call/native_table/http.rs`). Without these arms the chained
-        // `.on(...)` fell through to the generic typed-feedback dispatch,
-        // which has no `ClientRequest` arm and returned NaN; each subsequent
-        // chain step then dereffed NaN as a number ("(number).on is not a
-        // function"). Mirrors the createServer entry above.
-        ("http", "request") | ("http", "get") => Some(("http", "ClientRequest")),
-        ("https", "request") | ("https", "get") => Some(("http", "ClientRequest")),
-        _ => None,
-    }
 }
