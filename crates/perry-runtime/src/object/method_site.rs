@@ -58,10 +58,11 @@
 //!   address or a name alone;
 //! * the kind lives in the top bits of [`MethodEntry::slot`]: `0` own inline,
 //!   bit 63 inherited ([`METHOD_SITE_INHERITED`]), bit 62 own spill
-//!   ([`METHOD_SITE_SPILL`]); bit 61 is RESERVED for the own function-bag
-//!   kind (function-object receivers, once functions carry a shaped property
-//!   record) and bit 60 for the accessor kind. A new kind extends the emitted
-//!   `msite.other` dispatch and [`publish`], nothing else;
+//!   ([`METHOD_SITE_SPILL`]), bit 61 own function-bag
+//!   ([`METHOD_SITE_FUNCTION_BAG`]: a function-object receiver whose method is
+//!   an inline slot of its own-property object); bit 60 is RESERVED for the
+//!   accessor kind. A new kind extends the emitted `msite.other` dispatch and
+//!   [`publish`], nothing else;
 //! * an entry that holds a heap reference stores it in [`MethodEntry::closure`]
 //!   and is registered by [`publish`], so [`scan_method_site_roots_mut`] marks
 //!   and rewrites it;
@@ -94,6 +95,11 @@ pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
 /// The `slot` bit that marks an own entry whose key lives in the receiver's
 /// spill buffer (`ObjectMeta::spill`) at the index in the low bits.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
+/// The `slot` bit that marks an own entry of a FUNCTION receiver: the key is
+/// inline slot (low bits) of the function's own-property object
+/// (`ClosureHeader::props`, `closure/props.rs`). A keyed Function ShapeId is
+/// canonical per that object's key list, so the receiver word pins the slot.
+pub const METHOD_SITE_FUNCTION_BAG: u64 = crate::codegen_abi::METHOD_SITE_FUNCTION_BAG;
 /// The index bits of an entry's `slot` word.
 pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MASK;
 
@@ -143,6 +149,10 @@ const _: () = {
     assert!(
         std::mem::offset_of!(crate::closure::ClosureHeader, func_ptr)
             == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET
+    );
+    assert!(
+        std::mem::offset_of!(crate::closure::ClosureHeader, props)
+            == crate::codegen_abi::CLOSURE_PROPS_OFFSET
     );
     assert!(std::mem::offset_of!(MethodEntry, word) == crate::codegen_abi::METHOD_SITE_WORD_OFFSET);
     assert!(std::mem::offset_of!(MethodEntry, slot) == crate::codegen_abi::METHOD_SITE_SLOT_OFFSET);
@@ -223,6 +233,12 @@ per_test_global! {
     static PRIMES_OWN: AtomicU64 = AtomicU64::new(0);
     static PRIMES_INHERITED: AtomicU64 = AtomicU64::new(0);
     static MISSES: AtomicU64 = AtomicU64::new(0);
+    static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
+}
+
+/// Function-bag entries primed ([`METHOD_SITE_FUNCTION_BAG`]).
+pub fn method_site_function_primes() -> u64 {
+    PRIMES_FUNCTION.load(Ordering::Relaxed)
 }
 
 /// Test/diagnostic counters: (own primes, inherited primes, misses).
@@ -234,7 +250,8 @@ pub fn method_site_stats() -> (u64, u64, u64) {
     )
 }
 
-/// `js_method_site_stats(which)`: 0 own primes, 1 inherited primes, 2 misses.
+/// `js_method_site_stats(which)`: 0 own primes, 1 inherited primes, 2 misses,
+/// 3 function-bag primes.
 /// Exposed so gap tests can prove a path ran.
 #[no_mangle]
 pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
@@ -242,6 +259,7 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
     (match which {
         0 => a,
         1 => b,
+        3 => method_site_function_primes(),
         _ => c,
     }) as f64
 }
@@ -263,7 +281,8 @@ fn stats_report_enabled() -> bool {
                     }
                 }
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} misses={c} marked_value_write_bumps={}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} marked_value_write_bumps={}{refused}",
+                    method_site_function_primes(),
                     crate::object::proto_validity::marked_value_write_bumps()
                 );
             }
@@ -335,9 +354,8 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     result_h.get_nanbox_f64()
 }
 
-/// A cheap first cut of [`ordinary_receiver`]: a heap pointer whose GcHeader
-/// says ordinary object. Function-object receivers are not memoized here
-/// (their own properties live in a side table, not a shaped record).
+/// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: a heap
+/// pointer whose GcHeader says ordinary object or function object.
 #[inline]
 fn prime_candidate(recv: f64) -> bool {
     let bits = recv.to_bits();
@@ -346,8 +364,9 @@ fn prime_candidate(recv: f64) -> bool {
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     crate::value::addr_class::is_above_handle_band(addr)
-        && unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        && unsafe { crate::value::addr_class::try_read_gc_header(addr) }.is_some_and(|h| {
+            h.obj_type == crate::gc::GC_TYPE_OBJECT || h.obj_type == crate::gc::GC_TYPE_CLOSURE
+        })
 }
 
 unsafe fn site_of(slot: *mut MethodSiteSlot) -> *mut MethodSite {
@@ -450,6 +469,11 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         return;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_above_handle_band(addr) && crate::closure::is_closure_ptr(addr)
+    {
+        prime_function(slot, addr, name, argc);
+        return;
+    }
     let Some(obj) = ordinary_receiver(addr) else {
         let dict = crate::value::addr_class::try_read_gc_header(addr)
             .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
@@ -521,6 +545,69 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         return;
     }
     prime_inherited(slot, obj, word, name, argc);
+}
+
+/// Prime a function-bag entry: `recv` is a function object on a KEYED
+/// Function shape (its own non-intrinsic properties are exactly the key list
+/// of its own-property object, `closure/props.rs`; no accessor, no delete, no
+/// recorded prototype — any of those makes it FunctionDictionary, which is
+/// refused), and `name` is an inline data slot of that object holding a plain
+/// closure. The receiver word (`capture_count | ShapeId`) pins the slot; the
+/// emitted hit re-loads the object and the value on every call and compares
+/// the value's kind and code pointer, exactly as for an ordinary own entry.
+unsafe fn prime_function(slot: *mut MethodSiteSlot, addr: usize, name: &[u8], argc: usize) {
+    if !address_is_prime_stable(addr) {
+        refuse(1);
+        return;
+    }
+    let closure = addr as *const crate::closure::ClosureHeader;
+    let id = (*closure).shape_id;
+    if id == crate::closure::shape::function_dictionary_shape()
+        || super::shapes::shape_object_kind_by_id(id)
+            != Some(super::shapes::ShapeObjectKind::Function)
+    {
+        refuse(2);
+        return;
+    }
+    let Some(shape) = super::shapes::shape_descriptor_by_id(id) else {
+        refuse(1);
+        return;
+    };
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    let bag = crate::closure::props::bag_of(addr);
+    if keys.is_null() || bag.is_null() {
+        // A base Function shape: no own non-intrinsic key to serve.
+        refuse(1);
+        return;
+    }
+    let Some(s) = super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
+    else {
+        refuse(1);
+        return;
+    };
+    if s >= shape.live_inline_slot_count {
+        refuse(3);
+        return;
+    }
+    let value = field_bits(bag as usize, s);
+    let Some(func) = direct_callable(value, argc) else {
+        refuse(5);
+        return;
+    };
+    if !is_user_method(value, name) {
+        refuse(13);
+        return;
+    }
+    let entry = MethodEntry {
+        word: std::ptr::read(addr as *const u64),
+        slot: s as u64 | METHOD_SITE_FUNCTION_BAG,
+        func: func as u64,
+        closure: 0,
+        gen: 0,
+    };
+    if publish(slot, entry) {
+        PRIMES_FUNCTION.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// The receiver, if it is an ordinary object a site may learn.

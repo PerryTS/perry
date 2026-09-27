@@ -15,6 +15,8 @@
 //!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
 //!                       h = site.closure ; f = site.func
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
+//!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
+//!         own-property object; same checks as own)
 //!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.func      else NEXT WAY
 //!         h = handle(v) ; f = site.func
 //!   CALL: this = recv ; r = f(h, args...) ; restore this
@@ -88,6 +90,7 @@ pub(crate) fn emit_method_site(
     // live function object: type `GC_TYPE_CLOSURE` and not a forwarded stub
     // (`closure::is_closure_ptr`'s kind term; there is no payload magic).
     let func_offset = crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as i64;
+    let props_offset = crate::runtime_abi::CLOSURE_PROPS_OFFSET as i64;
     let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
     let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
     let closure_kind = crate::runtime_abi::GC_TYPE_CLOSURE.to_string();
@@ -188,12 +191,18 @@ pub(crate) fn emit_method_site(
     };
     let other_idx = ctx.new_block("msite.other");
     let other2_idx = ctx.new_block("msite.other2");
+    let other3_idx = ctx.new_block("msite.other3");
+    let bag_idx = ctx.new_block("msite.fn_bag");
+    let bag2_idx = ctx.new_block("msite.fn_bag_load");
     let spill_idx = ctx.new_block("msite.spill");
     let spill2_idx = ctx.new_block("msite.spill_buf");
     let spill3_idx = ctx.new_block("msite.spill_check");
     let spill4_idx = ctx.new_block("msite.spill_load");
     let other_l = ctx.block_label(other_idx);
     let other2_l = ctx.block_label(other2_idx);
+    let other3_l = ctx.block_label(other3_idx);
+    let bag_l = ctx.block_label(bag_idx);
+    let bag2_l = ctx.block_label(bag2_idx);
     let spill_l = ctx.block_label(spill_idx);
     let spill2_l = ctx.block_label(spill2_idx);
     let spill3_l = ctx.block_label(spill3_idx);
@@ -207,8 +216,8 @@ pub(crate) fn emit_method_site(
         blk.cond_br(&tagged, &other_l, &own_l);
         s
     };
-    // other: inherited (bit 63) or own spill (bit 62); any other kind bit is
-    // not one this site knows, and misses.
+    // other: inherited (bit 63), own spill (bit 62) or function bag (bit 61);
+    // any other kind bit is not one this site knows, and misses.
     ctx.current_block = other_idx;
     {
         let blk = ctx.block();
@@ -221,8 +230,38 @@ pub(crate) fn emit_method_site(
         let spill_bit = blk.lshr(I64, &slot, "62");
         let is_spill = blk.icmp_ne(I64, &spill_bit, "0");
         let index = blk.and(I64, &slot, &index_mask);
-        blk.cond_br(&is_spill, &spill_l, &miss_l);
+        blk.cond_br(&is_spill, &spill_l, &other3_l);
         index
+    };
+    ctx.current_block = other3_idx;
+    {
+        let blk = ctx.block();
+        let bag_bit = blk.lshr(I64, &slot, "61");
+        let is_bag = blk.icmp_ne(I64, &bag_bit, "0");
+        blk.cond_br(&is_bag, &bag_l, &miss_l);
+    }
+    // function bag: the receiver's own-property object, then its inline slot.
+    // The keyed Function ShapeId the word matched is canonical per that
+    // object's key list, so the object exists; the null test is a guard.
+    ctx.current_block = bag_idx;
+    let bag = {
+        let blk = ctx.block();
+        let pp = emit_field_ptr(blk, &biased, props_offset);
+        let bag = blk.load(I64, &pp);
+        let has = blk.icmp_ne(I64, &bag, "0");
+        blk.cond_br(&has, &bag2_l, &miss_l);
+        bag
+    };
+    ctx.current_block = bag2_idx;
+    let (bag_v, bag_end) = {
+        let blk = ctx.block();
+        let bptr = blk.inttoptr(I64, &bag);
+        let base = blk.gep(crate::types::I8, &bptr, &[(I64, &header.to_string())]);
+        let vp = blk.gep(I64, &base, &[(I64, &index)]);
+        let v = blk.load(I64, &vp);
+        let end = blk.label.clone();
+        blk.br(&value_l);
+        (v, end)
     };
     // own inline: load the slot.
     ctx.current_block = own_idx;
@@ -279,7 +318,14 @@ pub(crate) fn emit_method_site(
     ctx.current_block = value_idx;
     let own_ub = {
         let blk = ctx.block();
-        let v = blk.phi(I64, &[(&inline_v, &inline_end), (&spill_v, &spill_end)]);
+        let v = blk.phi(
+            I64,
+            &[
+                (&inline_v, &inline_end),
+                (&spill_v, &spill_end),
+                (&bag_v, &bag_end),
+            ],
+        );
         let u = blk.sub(I64, &v, &(RECEIVER_BIAS as i64).to_string());
         let heap = blk.icmp_ult(I64, &u, &(RECEIVER_SPAN as i64).to_string());
         blk.cond_br(&heap, &own_fn_l, &miss_l);

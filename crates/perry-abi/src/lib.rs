@@ -65,8 +65,11 @@ pub const fn method_site_padded_argc(argc: usize) -> usize {
 }
 /// The entry `slot` bit for an own key in the receiver's spill buffer.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
-/// The index bits of an entry's `slot` word (bits 61 and 60 are reserved for
-/// the function-bag and accessor entry kinds).
+/// The entry `slot` bit for an own key of a function-object receiver: an
+/// inline slot of the object at `ClosureHeader::props`.
+pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
+/// The index bits of an entry's `slot` word (bit 60 is reserved for the
+/// accessor entry kind).
 pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 60) - 1;
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;

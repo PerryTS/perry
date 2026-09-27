@@ -17,6 +17,17 @@ fn perry_bin() -> PathBuf {
 
 /// Compile and run `source`; return (stdout, own primes, inherited primes, misses).
 fn run(source: &str) -> (String, u64, u64, u64) {
+    let (stdout, count) = run_counted(source);
+    (
+        stdout,
+        count("primes_own"),
+        count("primes_inherited"),
+        count("misses"),
+    )
+}
+
+/// Compile and run `source`; return stdout and a reader of the site counters.
+fn run_counted(source: &str) -> (String, impl Fn(&str) -> u64) {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
@@ -47,7 +58,7 @@ fn run(source: &str) -> (String, u64, u64, u64) {
         "binary failed ({:?})\nstderr:\n{stderr}",
         run.status
     );
-    let count = |name: &str| -> u64 {
+    let count = move |name: &str| -> u64 {
         stderr
             .split_whitespace()
             .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
@@ -55,9 +66,7 @@ fn run(source: &str) -> (String, u64, u64, u64) {
     };
     (
         String::from_utf8_lossy(&run.stdout).trim().to_owned(),
-        count("primes_own"),
-        count("primes_inherited"),
-        count("misses"),
+        count,
     )
 }
 
@@ -350,18 +359,18 @@ console.log(s);
     );
 }
 
-/// `F.m()`: a function object's own properties live in a side table, not a shaped record, so
-/// the site never memoizes one and every call takes the dispatcher behind the miss — with the
-/// method reassigned, a key added and deleted mid-loop, results stay node's. (Serving these
-/// from the site waits for functions to carry a shaped property record.)
+/// `F.m()`: a function object's own methods live in its own-property object, an inline slot
+/// the keyed Function ShapeId pins, so the site serves them from a function-bag entry (bit 61)
+/// — with the method reassigned (same shape, new body: the code-pointer compare misses), a key
+/// added (new keyed shape) and deleted (FunctionDictionary: never memoized) mid-loop, results
+/// stay node's. Sabotage: serve the bag entry without the code-pointer compare, or read the
+/// receiver's inline slot instead of the bag's -> the output changes.
 #[test]
-fn function_object_receivers_keep_the_dispatcher() {
-    let (stdout, own, inherited, misses) = run(
+fn function_object_receivers_are_served_from_their_property_object() {
+    let (stdout, count) = run_counted(
         r#"// ONE site over function-object receivers (`F.m()`), with the method
 // reassigned, a key added (new keyed shape), a key deleted (dictionary), and a
-// namespace-style function carrying several methods. (Calling a DELETED
-// method on a function object returns {} instead of throwing on base too —
-// reported separately; not exercised here.)
+// namespace-style function carrying several methods.
 const N = process.argv.length > 99 ? 1 : 6000;
 function F() { return 0; }
 (F as any).k = 5;
@@ -389,9 +398,21 @@ console.log(s, out.join(","));
         stdout,
         r#"29838000 50,6,2050,3008,4050,6008,-3000,9008,-4000,12008,5001,15008"#
     );
+    let (own, inherited, function, misses) = (
+        count("primes_own"),
+        count("primes_inherited"),
+        count("primes_function"),
+        count("misses"),
+    );
     assert!(
-        own == 0 && inherited == 0 && misses >= 6000,
-        "a function-object receiver must not be memoized (own={own} inherited={inherited} misses={misses})"
+        own == 0 && inherited == 0 && function >= 2,
+        "function receivers prime function-bag entries only (own={own} inherited={inherited} function={function})"
+    );
+    // F leaves its keyed shape at i=4000 (a delete: FunctionDictionary), so
+    // its last 1000 calls miss by design; everything else is served inline.
+    assert!(
+        misses < 2000,
+        "the hot calls must be served inline (function={function} misses={misses})"
     );
 }
 
