@@ -18,6 +18,7 @@ static BUN_PLATFORM: AtomicBool = AtomicBool::new(false);
 #[no_mangle]
 pub extern "C" fn js_set_bun_platform() {
     BUN_PLATFORM.store(true, Ordering::Relaxed);
+    super::self_global::install_once();
 }
 
 /// 1 when the program was compiled with `--platform bun`, else 0.

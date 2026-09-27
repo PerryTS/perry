@@ -310,7 +310,12 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             // Platform globals (Bun in Bun mode) are supplied at module
             // initialization. Keep the same lookup so replacement on
             // globalThis remains observable; only the warning is suppressed.
-            if ctx.unresolved_ident_as_global && !ctx.platform_globals.contains(&name) {
+            // `self` likewise exists only in Bun/worker realms, so absence must
+            // throw on reads while `typeof self` keeps its optional lookup.
+            if ctx.unresolved_ident_as_global
+                && !ctx.platform_globals.contains(&name)
+                && name != "self"
+            {
                 eprintln!(
                     "  Warning: unknown identifier '{}' in {} — assuming global; resolved by name on globalThis (incl. Object.prototype-inherited members) at runtime",
                     name,
