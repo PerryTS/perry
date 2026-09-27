@@ -96,6 +96,13 @@ static GC_REGISTERED: Once = Once::new();
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
+        // The pump below walks the server handles every tick (keepalive
+        // probe + drain). Index them so that walk costs O(servers), not
+        // O(every live handle): each keep-alive connection holds a
+        // `req.socket` handle, which made the per-tick walk O(connections).
+        perry_ffi::index_handle_type::<HttpServer>();
+        perry_ffi::index_handle_type::<HttpsServer>();
+        perry_ffi::index_handle_type::<Http2SecureServer>();
         gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
         // Register the extension's pump and keepalive contributor with runtime;
         // stdlib intentionally does not name either HTTP symbol (#9696).
