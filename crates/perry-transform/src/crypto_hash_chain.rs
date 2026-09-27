@@ -55,11 +55,18 @@ pub fn run(module: &mut Module) {
         return;
     }
     let counts = count_module_occurrences(module);
-    let mut rw = Rewriter { counts: &counts };
+    let mut rw = Rewriter {
+        counts: &counts,
+        require_const: true,
+    };
+    // Module scope: a top-level binding can be exported or become a script
+    // global, both of which name it without a LocalId, so only nested blocks
+    // are considered, and only `const` there (a nested `var` would still be a
+    // script global). Closure bodies reset this.
     for stmt in &mut module.init {
         rw.stmt(stmt);
     }
-    rw.stmts(&mut module.init);
+    rw.require_const = false;
     for f in &mut module.functions {
         rw.function(f);
     }
@@ -760,6 +767,8 @@ fn rewrite_chain(expr: Expr, root: &mut dyn FnMut(Expr) -> Expr) -> Expr {
 
 struct Rewriter<'a> {
     counts: &'a Counts,
+    /// Only `const` block-locals qualify (nested blocks of module init).
+    require_const: bool,
 }
 
 impl Rewriter<'_> {
@@ -870,7 +879,9 @@ impl Rewriter<'_> {
             return;
         }
         if let Expr::Closure { body, .. } = expr {
+            let outer = std::mem::replace(&mut self.require_const, false);
             self.block(body);
+            self.require_const = outer;
         }
         walk_expr_children_mut(expr, &mut |c| self.expr(c));
     }
@@ -881,11 +892,15 @@ impl Rewriter<'_> {
             let Stmt::Let {
                 id,
                 init: Some(init),
+                mutable,
                 ..
             } = &stmts[i]
             else {
                 continue;
             };
+            if *mutable && self.require_const {
+                continue;
+            }
             let id = *id;
             if create_call_kind(peel_updates(init)).is_none() || contains_suspension(init) {
                 continue;
