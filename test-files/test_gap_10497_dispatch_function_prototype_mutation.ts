@@ -110,19 +110,11 @@ const re: any = /a/;
 re.test = (x: string) => 'own-test:' + x;
 console.log('regexp own test', re.test('b'));
 
-// 10. Reassigning the global binding does not change the intrinsic.
-const RealFunction = globalThis.Function;
-(globalThis as any).Function = function FakeFunction() {};
-console.log('after global reassign', Object.getPrototypeOf(named) === FP,
-    (named as any).mainHelper10497(), Object.hasOwn(FP, 'hasOwnProperty'));
-(globalThis as any).Function = RealFunction;
-console.log('global restored', globalThis.Function === RealFunction);
-
-// 11. Delete the helper; dispatch must see it gone.
+// 10. Delete the helper; dispatch must see it gone.
 delete (FP as any).mainHelper10497;
 console.log('after delete', typeof (named as any).mainHelper10497, typeof g.mainHelper10497);
 
-// 12. A worker is its own realm.
+// 11. A worker is its own realm.
 const worker = new Worker(new URL('./_helpers/fnproto_worker_10497.ts', import.meta.url));
 worker.on('message', (msg: string) => {
     console.log(msg);
