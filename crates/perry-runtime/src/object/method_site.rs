@@ -214,11 +214,11 @@ const REFUSALS: [&str; 19] = [
     "site_megamorphic",
 ];
 per_test_global! {
-    static REFUSED: [AtomicU64; 19] = [const { AtomicU64::new(0) }; 19];
+    static SITE_REFUSED: [AtomicU64; 19] = [const { AtomicU64::new(0) }; 19];
 }
 #[inline]
 fn refuse(reason: usize) {
-    REFUSED[reason].fetch_add(1, Ordering::Relaxed);
+    SITE_REFUSED[reason].fetch_add(1, Ordering::Relaxed);
 }
 
 per_test_global! {
@@ -258,7 +258,7 @@ fn stats_report_enabled() -> bool {
             extern "C" fn report() {
                 let (a, b, c) = method_site_stats();
                 let mut refused = String::new();
-                for (i, n) in REFUSED.iter().enumerate() {
+                for (i, n) in SITE_REFUSED.iter().enumerate() {
                     let n = n.load(Ordering::Relaxed);
                     if n != 0 {
                         refused.push_str(&format!(" refused.{}={n}", REFUSALS[i]));

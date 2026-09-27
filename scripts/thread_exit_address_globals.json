@@ -4089,6 +4089,22 @@
    ],
    "verdict": "no_heap_address",
    "why": "Registry of thread-exit range-hook function pointers (#11471); code addresses only, never a heap address."
+  },
+  {
+   "file": "crates/perry-runtime/src/agent_ptrs.rs",
+   "names": [
+    "PERRY_AGENT_PTRS"
+   ],
+   "verdict": "per_thread",
+   "why": "`#[thread_local]` static (not `thread_local!`, because generated code names the TLS symbol itself): every thread has its own AgentPtrs block, so no address outlives the thread that published it; const-initialised to null with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/method_site.rs",
+   "names": [
+    "SITE_REFUSED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic refusal counters indexed by a reason code: the only writes are `SITE_REFUSED[reason].fetch_add(1, ..)` and the only reads are loads in the counter dump; never stores an address."
   }
  ]
 }
