@@ -316,7 +316,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // FinalizationRegistry callbacks are only enqueued by a collection.
         | "js_object_alloc_class_inline_keys"
         | "js_object_alloc_class_inline_keys_stamped"
-        | "js_array_push_f64"
+        // `js_array_push_f64` is deliberately ABSENT for the same reason as
+        // `js_array_length` (found while testing #11522): its #5135 Proxy arm
+        // runs `get("length")` and two `set` traps (`proxy_array_length`,
+        // `proxy_set_str_key`), and its array-like-object arm calls
+        // `array_object_method(recv, "push", …)`. The u31 entry below stays:
+        // it answers null for exactly those receivers and the emitted code
+        // takes the full push behind that test.
         | "js_array_push_u31_with_length"
         | "js_array_slice_values"
         // Second audit round (2026-08-01): ctor-return semantics check
@@ -1000,7 +1006,6 @@ mod tests {
     fn audited_alloc_helpers_are_contract_only_non_safepoints() {
         for name in [
             "js_closure_alloc_singleton",
-            "js_array_push_f64",
             "js_array_push_u31_with_length",
             "js_ctor_return_override",
             "js_array_indexOf_jsvalue",
@@ -1016,6 +1021,9 @@ mod tests {
         // Both length helpers can reach js_object_get_field_by_name_f64 for
         // plain objects; js_array_get_f64 has hole/accessor paths.
         for name in [
+            // #11522: Proxy traps and `array_object_method` behind both.
+            "js_array_length",
+            "js_array_push_f64",
             "js_value_length_f64",
             "js_value_length_property_f64",
             "js_value_length_property_ic_f64",
