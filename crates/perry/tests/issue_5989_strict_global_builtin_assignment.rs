@@ -95,13 +95,14 @@ try {
   console.log("install FAILED:", (err as Error)?.message ?? String(err));
 }
 const d = new Date(0);
+console.log("after new Date(0):", ioCalls);
 console.log("iso:", d.toISOString());
 console.log("now is number:", typeof Date.now() === "number");
+console.log("after Date.now():", ioCalls);
 console.log("instanceof:", d instanceof Date);
-// Interception fires through the VALUE path (a captured `Date.now`
-// binding routes through the installed wrapper). Syntactic `Date.now()`
-// sites still compile to the builtin intrinsic and bypass the override —
-// a known, separately-tracked gap.
+// Interception fires through both paths, as in Node: the syntactic
+// `Date.now()` above and a captured `Date.now` binding here each route
+// through the installed wrapper.
 const capturedNow = Date.now;
 capturedNow();
 console.log("io calls:", ioCalls);
@@ -110,8 +111,17 @@ console.log("io calls:", ioCalls);
     assert!(ok, "run must exit cleanly");
     assert_eq!(
         stdout,
-        "install ok\niso: 1970-01-01T00:00:00.000Z\nnow is number: true\ninstanceof: true\nio calls: 1\n",
-        "the wrapper must install and intercept a value-path Date.now"
+        // Byte-identical to `node --experimental-strip-types` (26.5.1).
+        concat!(
+            "install ok\n",
+            "after new Date(0): 0\n",
+            "iso: 1970-01-01T00:00:00.000Z\n",
+            "now is number: true\n",
+            "after Date.now(): 1\n",
+            "instanceof: true\n",
+            "io calls: 2\n",
+        ),
+        "the wrapper must install and intercept both the syntactic and the value-path Date.now"
     );
 }
 
