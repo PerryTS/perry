@@ -31,9 +31,8 @@
 //! mutator has run at least [`AMORTIZE`] times as long as the last requested
 //! trace took since it ended. The second condition caps what reclamation can
 //! add to a handle-churning program at about 1/[`AMORTIZE`] of its run time,
-//! however small its heap, while keeping the parked set (and its payloads'
-//! memory) bounded by the handle rate times that interval. A shared band that
-//! is running low overrides the time budget.
+//! however small its heap. Two things override that budget so memory stays
+//! bounded: [`MAX_PARKED`] parked ids, and a shared band running low.
 //!
 //! **Threads.** Parking is per mutator: each thread's trace decides only the
 //! ids that thread parked. A thread that exits hands its parked ids to the
@@ -60,7 +59,10 @@ extern "C" {
 pub(super) const MIN_TRIGGER: usize = 4096;
 /// A requested trace waits until the mutator has run this many times as long
 /// as the previous requested trace took (see the module doc).
-pub(super) const AMORTIZE: u32 = 64;
+pub(super) const AMORTIZE: u32 = 32;
+/// Parked ids at which a trace is requested regardless of the time budget, so
+/// parked payloads (a digest is ~600 bytes) stay a bounded share of RSS.
+pub(super) const MAX_PARKED: usize = 64 * 1024;
 /// Shared-band ids still obtainable below which registration keeps asking
 /// for traces (checked every [`BAND_CHECK_STRIDE`] registrations).
 pub(super) const BAND_RESERVE: usize = 32 * 1024;
@@ -198,9 +200,11 @@ fn park(id: Handle, kind: Kind, identity: NativeRegistrationIdentity) {
             if count < epoch.trigger_at || epoch.requested_pending {
                 return false;
             }
-            if let Some(end) = epoch.last_end {
-                if end.elapsed() < epoch.last_cost * AMORTIZE {
-                    return false;
+            if count < MAX_PARKED {
+                if let Some(end) = epoch.last_end {
+                    if end.elapsed() < epoch.last_cost * AMORTIZE {
+                        return false;
+                    }
                 }
             }
             epoch.requested_pending = true;
