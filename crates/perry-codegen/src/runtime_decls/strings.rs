@@ -1508,7 +1508,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // is non-empty. Codegen emits one call per registered class id at
     // program init, mirroring `js_register_class_id`.
     module.declare_function("js_register_class_name", VOID, &[I32, PTR, I32]);
-    // #9413: the class-source sibling of `js_register_function_source`.
+    // #9413: the class-source sibling of `js_register_function_source`, in the
+    // same two spellings (#11501): `_static` borrows the image's rodata and is
+    // what an executable emits; the copying one is for `dylib` / `staticlib`,
+    // whose rodata `dlclose` can unmap (see `emit_string_pool`).
+    module.declare_function("js_register_class_source_static", VOID, &[I32, PTR, I32]);
     module.declare_function("js_register_class_source", VOID, &[I32, PTR, I32]);
     module.declare_function("js_register_class_length", VOID, &[I32, I32]);
     // Anon-shape class registration so `.constructor` reads on object

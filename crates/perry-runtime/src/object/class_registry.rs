@@ -136,8 +136,9 @@ pub use class_meta::{
     class_source_for_id, declared_class_outranks_anon_shape, is_anon_shape_class_id,
     js_compression_stream_new, js_decompression_stream_new, js_register_anon_shape_class_id,
     js_register_class_id, js_register_class_length, js_register_class_name,
-    js_register_class_source, js_text_decoder_stream_new, js_text_encoder_stream_new,
-    js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS, CLASS_NAMES,
+    js_register_class_source, js_register_class_source_static, js_text_decoder_stream_new,
+    js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
+    CLASS_NAMES,
 };
 pub(crate) use class_meta::{
     identify_global_builtin_constructor, report_dispatch_miss,
