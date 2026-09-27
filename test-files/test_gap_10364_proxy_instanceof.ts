@@ -2,7 +2,9 @@ class A { x = 1; }
 const a: any = new A();
 function churn() {
   // Keep allocation-capable loop polls inside traps for the GC-stress arm.
-  for (let i = 0; i < 6; i++) globalThis.__proxyInstanceofKeep = { i, values: [i] };
+  // A runtime bound prevents the optimizer from unrolling away every poll.
+  const count = Number(process.argv[2] || '6');
+  for (let i = 0; i < count; i++) globalThis.__proxyInstanceofKeep = { i, values: [i] };
 }
 function check(label: string, value: any, constructor: any) {
   try { console.log(label, value instanceof constructor); }
@@ -24,7 +26,13 @@ check('captured matching', captured, wrappedCaptured);
 check('captured sibling', captured, new Proxy(D, {}));
 check('array', [], new Proxy(Array, {}));
 check('arrow', a, new Proxy(() => {}, {}));
-check('bound', a, new Proxy(A.bind(null), {}));
+const bound = A.bind(null);
+const wrappedBound = new Proxy(bound, {});
+console.log('bound own prototype', Object.hasOwn(bound, 'prototype'), typeof bound.prototype);
+check('bound', a, wrappedBound);
+console.log('bound construct', new bound() instanceof A);
+bound.prototype = A.prototype;
+check('bound explicit prototype', a, wrappedBound);
 
 let custom: any;
 custom = new Proxy({}, {
