@@ -40,7 +40,7 @@ fn point_class() -> Class {
         fields: vec![ClassField {
             name: "x".to_string(),
             key_expr: None,
-            ty: Type::Any,
+            ty: Type::Number,
             init: None,
             is_private: false,
             is_readonly: false,
@@ -119,7 +119,7 @@ fn split_module() -> Module {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(103)),
                 property: "x".to_string(),
-                value: Box::new(Expr::LocalGet(21)),
+                value: Box::new(Expr::Number(7.0)),
             }),
             let_stmt(
                 23,
