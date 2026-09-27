@@ -369,22 +369,50 @@ pub(crate) fn set_field_by_name_object_tail(
                     // the write: no data property is created.
                     let this_f64: f64 =
                         f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    match super::class_registry::class_chain_setter_apply(
-                        class_id, name, this_f64, value,
-                    ) {
-                        Some(true) => return,
-                        // This entry point is the strict one (issue #615:
-                        // strict is the TS default; sloppy writes reach
-                        // `js_put_value_set` with `strict = 0`, whose
-                        // OrdinarySet walk refuses the same write silently).
-                        Some(false) => {
-                            let class_name = super::class_registry::class_name_for_id(class_id)
-                                .unwrap_or_else(|| "Object".to_string());
-                            crate::collection_iter::throw_type_error(&format!(
-                                "Cannot set property {name} of #<{class_name}> which has only a getter"
-                            ));
+                    let throw_getter_only = || {
+                        let class_name = super::class_registry::class_name_for_id(class_id)
+                            .unwrap_or_else(|| "Object".to_string());
+                        crate::collection_iter::throw_type_error(&format!(
+                            "Cannot set property {name} of #<{class_name}> which has only a getter"
+                        ));
+                    };
+                    // #11499: the receiver carrying a `class_id` may be the
+                    // CLASS OBJECT itself, not an instance of that class. The
+                    // vtable accessors below live on `C.prototype`, which is
+                    // NOT on the constructor's own prototype chain
+                    // (`VR8 -> XX -> Error -> Function.prototype`), so a
+                    // static write must resolve against the STATIC accessor
+                    // chain. cc 2.1.112 hits this with
+                    // `class XX extends Error { get errorCode(){…} }` plus
+                    // `VR8.errorCode = "invalid_request"`: the instance getter
+                    // was found for a static write and refused it.
+                    if crate::object::is_class_object_ptr(obj.cast()) {
+                        if super::class_registry::static_accessor_in_chain(class_id, name) {
+                            // A real `static set name(v)` (own or inherited
+                            // through `extends`) must still fire.
+                            if super::class_registry::class_static_accessor_setter_apply(
+                                class_id, name, this_f64, value,
+                            ) {
+                                return;
+                            }
+                            // Static accessor with no setter: same strict-mode
+                            // refusal the instance side gives.
+                            throw_getter_only();
                         }
-                        None => {}
+                        // No static accessor of this name: fall through to the
+                        // ordinary own-property store below.
+                    } else {
+                        match super::class_registry::class_chain_setter_apply(
+                            class_id, name, this_f64, value,
+                        ) {
+                            Some(true) => return,
+                            // This entry point is the strict one (issue #615:
+                            // strict is the TS default; sloppy writes reach
+                            // `js_put_value_set` with `strict = 0`, whose
+                            // OrdinarySet walk refuses the same write silently).
+                            Some(false) => throw_getter_only(),
+                            None => {}
+                        }
                     }
                 }
             }

@@ -231,6 +231,7 @@ pub(crate) use parent_static::{
     class_own_symbol_method, class_private_instance_getter_value,
     class_private_instance_setter_apply, class_static_accessor_getter_value,
     class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
+    static_accessor_in_chain,
     dynamic_value_class_id, get_parent_class_id, lookup_class_symbol_method_in_chain,
     lookup_static_method_in_chain, register_class, register_class_dynamic_static_accessor,
 };
