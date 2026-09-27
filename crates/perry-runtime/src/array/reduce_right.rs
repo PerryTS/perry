@@ -22,6 +22,10 @@ pub extern "C" fn js_array_reduce_right(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
+    // #11419: the callback runs with `this` undefined, not the receiver of
+    // whatever method dispatch encloses this call.
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
     // #8137: a Buffer-backed `Uint8Array` receiver reads as an `ArrayHeader`
     // below — correct `length`, GARBAGE elements. `reduceRight` is the widest
     // case in the family: it is wrong even for a STATICALLY typed

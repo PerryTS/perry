@@ -61,11 +61,12 @@
 //! aliasing problem; multi-threaded wrappers should use
 //! [`with_handle`] which scopes the borrow under a closure.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::{
@@ -86,6 +87,111 @@ pub const INVALID_HANDLE: Handle = 0;
 
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
 const FFI_HANDLE_ID_START: Handle = 1;
+
+// ---------------------------------------------------------------------------
+// Per-type id index for rarely-instanced, frequently-enumerated types.
+//
+// `iter_handles_of` / `iter_handle_ids_of` used to walk EVERY entry of
+// `HANDLES` and downcast each one. perry-ext-http's per-tick pump does that
+// four times a tick (keepalive probe + one walk per server kind) just to find
+// the one or two server handles, so its cost grew with every other live handle
+// in the process — and since `req.socket` became a per-connection handle, a
+// server holding N keep-alive connections paid O(N) per tick: -9% req/s at
+// c=256 on the bench mini. A type declared through `index_handle_type::<T>()`
+// keeps its live ids in a side list maintained by register/remove, and the
+// three iterators visit only those ids.
+//
+// Cost for everything else: `register_handle` / removal compare the payload's
+// `TypeId` against at most `MAX_INDEXED_TYPES` declared ids (none when nothing
+// was declared). Only declare types with few live instances — the side list is
+// a `Vec` updated by linear search on removal.
+// ---------------------------------------------------------------------------
+
+const MAX_INDEXED_TYPES: usize = 8;
+static INDEXED_LEN: AtomicUsize = AtomicUsize::new(0);
+static INDEXED_TYPES: [OnceLock<TypeId>; MAX_INDEXED_TYPES] =
+    [const { OnceLock::new() }; MAX_INDEXED_TYPES];
+static INDEXED_IDS: [Mutex<Vec<Handle>>; MAX_INDEXED_TYPES] =
+    [const { Mutex::new(Vec::new()) }; MAX_INDEXED_TYPES];
+static INDEX_DECLARE: Mutex<()> = Mutex::new(());
+
+#[inline]
+fn indexed_slot(type_id: TypeId) -> Option<usize> {
+    let len = INDEXED_LEN.load(Ordering::Acquire);
+    (0..len).find(|&slot| INDEXED_TYPES[slot].get() == Some(&type_id))
+}
+
+fn lock_index(slot: usize) -> std::sync::MutexGuard<'static, Vec<Handle>> {
+    INDEXED_IDS[slot]
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The live ids of an indexed type, snapshotted so callers may register or
+/// drop handles while visiting them. `None` when `T` is not indexed.
+fn indexed_ids_of<T: 'static>() -> Option<Vec<Handle>> {
+    let slot = indexed_slot(TypeId::of::<T>())?;
+    Some(lock_index(slot).clone())
+}
+
+/// Keep a side list of the live handle ids whose payload is a `T`, so
+/// [`iter_handles_of`], [`iter_handles_of_mut`] and [`iter_handle_ids_of`] for
+/// `T` visit only those instead of walking the whole registry.
+///
+/// Idempotent, and correct at any time: handles of `T` registered before the
+/// call are backfilled. Meant for types with few live instances that are
+/// enumerated often (servers polled every event-loop tick). Declaring more
+/// than `MAX_INDEXED_TYPES` types leaves the extras unindexed (they keep the
+/// full walk), which is slower but never wrong.
+pub fn index_handle_type<T: 'static + Send + Sync>() {
+    let type_id = TypeId::of::<T>();
+    if indexed_slot(type_id).is_some() {
+        return;
+    }
+    let _declaring = INDEX_DECLARE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if indexed_slot(type_id).is_some() {
+        return;
+    }
+    let slot = INDEXED_LEN.load(Ordering::Acquire);
+    if slot >= MAX_INDEXED_TYPES {
+        return;
+    }
+    // Hold the slot's list across publication and backfill: a concurrent
+    // register/remove of `T` that sees the new length waits here until the
+    // backfill is in, and one that raced ahead of publication is either found
+    // by the walk (its insert happened first) or already gone from the map.
+    let mut ids = lock_index(slot);
+    let _ = INDEXED_TYPES[slot].set(type_id);
+    INDEXED_LEN.store(slot + 1, Ordering::Release);
+    for entry in HANDLES.iter() {
+        if entry.value().is::<T>() {
+            ids.push(*entry.key());
+        }
+    }
+}
+
+fn index_note_registered(type_id: TypeId, handle: Handle) {
+    if let Some(slot) = indexed_slot(type_id) {
+        let mut ids = lock_index(slot);
+        // A registration racing `index_handle_type`'s backfill can already
+        // be listed.
+        if !ids.contains(&handle) {
+            ids.push(handle);
+        }
+    }
+}
+
+fn index_note_removed(payload: &(dyn Any + Send + Sync), handle: Handle) {
+    // `Any::type_id` of the payload itself, not of the box around it.
+    if let Some(slot) = indexed_slot(Any::type_id(payload)) {
+        let mut ids = lock_index(slot);
+        if let Some(position) = ids.iter().position(|&id| id == handle) {
+            ids.swap_remove(position);
+        }
+    }
+}
 const FFI_HANDLE_ID_END: Handle = 0x40000;
 
 const FREE_HANDLES_CAP: usize = 64 * 1024;
@@ -334,6 +440,8 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
         previous.is_none(),
         "pending native id must have an empty payload slot"
     );
+    // Still pending, so the id cannot be reused before the index has it.
+    index_note_registered(TypeId::of::<T>(), handle);
     assert!(REGISTRATIONS.publish(identity));
     handle
 }
@@ -452,6 +560,10 @@ fn remove_payload(
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
     // destructor runs under the registration-state mutex.
     let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
+    // Still retiring, so the id cannot be reused before the index drops it.
+    if let Some(payload) = removed.as_deref() {
+        index_note_removed(payload, handle);
+    }
     assert!(REGISTRATIONS.finish_retirement(identity, quarantine));
     removed
 }
@@ -477,6 +589,16 @@ where
     T: 'static + Send + Sync,
     F: FnMut(&T),
 {
+    if let Some(ids) = indexed_ids_of::<T>() {
+        for id in ids {
+            if let Some(entry) = HANDLES.get(&id) {
+                if let Some(v) = entry.value().downcast_ref::<T>() {
+                    f(v);
+                }
+            }
+        }
+        return;
+    }
     for entry in HANDLES.iter() {
         if let Some(v) = entry.value().downcast_ref::<T>() {
             f(v);
@@ -499,6 +621,16 @@ where
     T: 'static + Send + Sync,
     F: FnMut(&mut T),
 {
+    if let Some(ids) = indexed_ids_of::<T>() {
+        for id in ids {
+            if let Some(mut entry) = HANDLES.get_mut(&id) {
+                if let Some(v) = entry.value_mut().downcast_mut::<T>() {
+                    f(v);
+                }
+            }
+        }
+        return;
+    }
     for mut entry in HANDLES.iter_mut() {
         if let Some(v) = entry.value_mut().downcast_mut::<T>() {
             f(v);
@@ -529,6 +661,17 @@ where
     T: 'static + Send + Sync,
     F: FnMut(Handle),
 {
+    if let Some(ids) = indexed_ids_of::<T>() {
+        for id in ids {
+            let is_t = HANDLES
+                .get(&id)
+                .is_some_and(|entry| entry.value().is::<T>());
+            if is_t {
+                f(id);
+            }
+        }
+        return;
+    }
     for entry in HANDLES.iter() {
         if entry.value().downcast_ref::<T>().is_some() {
             f(*entry.key());
@@ -765,6 +908,52 @@ mod tests {
         drop_handle(a);
         drop_handle(b);
         drop_handle(other);
+    }
+
+    #[test]
+    fn indexed_type_iterates_only_its_live_ids_including_backfill() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        struct Indexed(u32);
+        // Registered before the declaration: must be backfilled.
+        let early = register_handle(Indexed(1));
+        let noise: Vec<Handle> = (0..64).map(|i| register_handle(i as u64)).collect();
+        index_handle_type::<Indexed>();
+        index_handle_type::<Indexed>(); // idempotent: no duplicate slot/ids
+        let late = register_handle(Indexed(2));
+
+        let slot = indexed_slot(TypeId::of::<Indexed>()).expect("declared type is indexed");
+        let mut listed = lock_index(slot).clone();
+        listed.sort_unstable();
+        let mut want = vec![early, late];
+        want.sort_unstable();
+        assert_eq!(listed, want, "the side list holds exactly the live ids");
+
+        iter_handles_of_mut::<Indexed, _>(|v| v.0 += 10);
+        let mut values = Vec::new();
+        iter_handles_of::<Indexed, _>(|v| values.push(v.0));
+        values.sort_unstable();
+        assert_eq!(values, vec![11, 12]);
+        let mut ids = Vec::new();
+        iter_handle_ids_of::<Indexed, _>(|id| ids.push(id));
+        ids.sort_unstable();
+        assert_eq!(ids, want);
+
+        // Removal (drop and take) leaves the side list.
+        drop_handle(early);
+        assert_eq!(take_handle::<Indexed>(late).map(|v| v.0), Some(12));
+        assert!(lock_index(slot).is_empty());
+        let mut after = 0;
+        iter_handles_of::<Indexed, _>(|_| after += 1);
+        assert_eq!(after, 0);
+
+        // Other types are neither listed nor affected.
+        assert!(indexed_slot(TypeId::of::<u64>()).is_none());
+        let mut n = 0;
+        iter_handles_of::<u64, _>(|_| n += 1);
+        assert!(n >= noise.len());
+        for h in noise {
+            drop_handle(h);
+        }
     }
 
     #[test]

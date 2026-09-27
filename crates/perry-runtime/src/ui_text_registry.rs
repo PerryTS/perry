@@ -607,6 +607,48 @@ pub extern "C" fn perry_arkts_register_text_id(widget_handle: i64, id_handle: f6
     }
 }
 
+/// Thread-exit release (#11471): drop every `state<T>` value and `ForEach`
+/// binding that holds a value in the exiting thread's freed arena blocks.
+/// Neither `js_state_set` nor `js_foreach_register` checks the calling thread,
+/// so a worker can store its own heap value here; after its arena is recycled
+/// the root scanner and `js_state_get` would see a different object.
+///
+/// Runs in the exiting thread's TLS destructor: plain poison-tolerant locks
+/// only (`lock_gc_root_registry` touches a thread-local depth counter).
+pub(crate) fn release_ui_text_registry_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if let Some(values) = STATE_VALUES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        values.retain(|_, value| !freed.holds_value(*value));
+    }
+    if let Some(bindings_by_state) = FOREACH_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        for bindings in bindings_by_state.values_mut() {
+            bindings.retain(|b| !freed.holds_value(b.render_closure));
+        }
+        bindings_by_state.retain(|_, bindings| !bindings.is_empty());
+    }
+}
+
+/// Test probe (#11471): how many `ForEach` bindings are registered for
+/// `synth_id`.
+#[doc(hidden)]
+pub fn foreach_binding_count_for_test(synth_id: &str) -> usize {
+    FOREACH_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|m| m.get(synth_id))
+        .map_or(0, Vec::len)
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_ui_text_registry_roots() {
     *crate::gc::lock_gc_root_registry(&STATE_VALUES) = None;

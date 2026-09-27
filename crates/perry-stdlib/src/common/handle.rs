@@ -111,6 +111,86 @@ fn publish_payload<T: 'static + Send + Sync>(
     handle
 }
 
+/// #11471: `HANDLES` is process-global, but some payload types store JS values
+/// (closure pointers, NaN-boxed values, promise pointers) of the thread that
+/// created or mutated them. When that thread exits its arena is freed and a
+/// surviving thread may reuse the addresses, while every thread's GC scanner
+/// still walks those payloads through `for_each_handle_mut_of`.
+///
+/// The registry is type-erased, so it cannot see inside a payload itself. A
+/// payload type that holds GC values registers a releaser here (from a `Once`
+/// on its own insert path, before its first GC value is stored); at thread exit
+/// [`release_handle_payloads_in_freed_ranges`] hands every payload of that type
+/// to it. The releaser neutralizes the slots that name freed memory and returns
+/// `true` if the whole payload should instead be dropped (retired exactly like
+/// `drop_handle`). A releaser runs inside the exiting thread's TLS destructor
+/// with a `HANDLES` shard write-locked: it must not touch thread-locals,
+/// allocate on the GC heap, call JS, or call back into this registry.
+type ErasedPayloadReleaser = std::sync::Arc<
+    dyn Fn(&mut (dyn Any + Send + Sync), &perry_runtime::arena::thread_exit::FreedRanges) -> bool
+        + Send
+        + Sync,
+>;
+
+static PAYLOAD_RELEASERS: std::sync::Mutex<Vec<(std::any::TypeId, ErasedPayloadReleaser)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Register `release` for every `HANDLES` payload of type `T` (see
+/// [`ErasedPayloadReleaser`]). Idempotent per type: the first registration wins.
+pub fn register_handle_payload_releaser<T: 'static + Send + Sync>(
+    release: fn(&mut T, &perry_runtime::arena::thread_exit::FreedRanges) -> bool,
+) {
+    static REGISTER_HOOK: std::sync::Once = std::sync::Once::new();
+    REGISTER_HOOK.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_handle_payloads_in_freed_ranges,
+        )
+    });
+    let type_id = std::any::TypeId::of::<T>();
+    let mut releasers = PAYLOAD_RELEASERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if releasers.iter().any(|(existing, _)| *existing == type_id) {
+        return;
+    }
+    releasers.push((
+        type_id,
+        std::sync::Arc::new(move |payload, freed| {
+            payload
+                .downcast_mut::<T>()
+                .is_some_and(|payload| release(payload, freed))
+        }),
+    ));
+}
+
+/// Thread-exit hook (#11471): run each registered payload releaser over the
+/// payloads of its type, then retire the payloads a releaser asked to drop.
+/// Payload types with no releaser hold no GC value and are left alone.
+fn release_handle_payloads_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let releasers: Vec<(std::any::TypeId, ErasedPayloadReleaser)> = PAYLOAD_RELEASERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if releasers.is_empty() {
+        return;
+    }
+    let mut to_drop = Vec::new();
+    for mut entry in HANDLES.iter_mut() {
+        let handle = *entry.key();
+        let payload: &mut (dyn Any + Send + Sync) = entry.value_mut().as_mut();
+        let type_id = (*payload).type_id();
+        if let Some((_, release)) = releasers.iter().find(|(id, _)| *id == type_id) {
+            if release(payload, freed) {
+                to_drop.push(handle);
+            }
+        }
+    }
+    // Retired outside the iteration: `remove_payload` write-locks the shard.
+    for handle in to_drop {
+        drop(remove_payload(handle));
+    }
+}
+
 /// Get a reference to a registered object and execute a closure with it.
 /// This is the safe way to access handle data without lifetime issues.
 pub fn with_handle<T: 'static + Send + Sync, R, F: FnOnce(&T) -> R>(

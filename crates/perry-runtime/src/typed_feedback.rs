@@ -2989,6 +2989,63 @@ fn invalidate_representation_change_when(obj_addr: usize, feedback_on: bool) {
     }
 }
 
+/// #11471: forget every observation whose object or shape address lies in an
+/// exiting thread's arena.
+///
+/// Sites are process-global and record raw `object_addr`/`shape_addr` from
+/// whichever thread executes them; [`scan_typed_feedback_roots_mut`] roots
+/// the shape addresses and the invalidation paths compare both by equality.
+/// Left behind, later collections would mark/rewrite memory another arena
+/// may have reused, and an unrelated object allocated there would read as
+/// this site's observed receiver. Only the observation goes: the site, its
+/// metadata, its counters and a `megamorphic` verdict (a statement about the
+/// past, not an address) stay.
+///
+/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`):
+/// the plain registry lock, poison-tolerant — NOT `registry()`, whose
+/// GC-root-lock depth is a thread-local.
+pub(crate) fn release_typed_feedback_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut reg = REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for site in reg.sites.values_mut() {
+        site.observations
+            .retain(|obs| !freed.contains(obs.object_addr) && !freed.contains(obs.shape_addr));
+    }
+}
+
+/// Test probe (#11471): record an array observation of `addr` at `site_id`,
+/// as an instrumented array site does (bypassing the env-var gate, which a
+/// test process cannot flip after first read).
+#[doc(hidden)]
+pub fn observe_array_address_for_test(site_id: u64, addr: usize) {
+    observe(
+        site_id,
+        TypedFeedbackSiteKind::ArrayElement,
+        Observation {
+            source: ObservationSource::Array,
+            object_addr: addr,
+            shape_addr: 0,
+            key_hash: 0,
+            class_id: 0,
+            heap_type: 0,
+            aux: 0,
+            value_tag: 0,
+        },
+    );
+}
+
+/// Test probe (#11471): how many observations site `site_id` holds.
+#[doc(hidden)]
+pub fn site_observation_count_for_test(site_id: u64) -> usize {
+    registry()
+        .sites
+        .get(&site_id)
+        .map_or(0, |site| site.observations.len())
+}
+
 pub fn scan_typed_feedback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut reg = registry();
     for site in reg.sites.values_mut() {

@@ -1,3 +1,4 @@
+use super::ec_sign::{parse_ec_public_key_pem, parse_ec_signing_key_pem};
 pub(super) use crate::common::handle::{get_handle_mut, register_handle, Handle};
 pub(super) use aes::{Aes128, Aes192, Aes256};
 pub(super) use aes_09::{
@@ -17,7 +18,7 @@ pub(super) use ecb::cipher::{
 pub(super) use hkdf::Hkdf;
 pub(super) use md5::{Digest as Md5Digest, Md5};
 pub(super) use p256::ecdh::diffie_hellman as p256_diffie_hellman;
-pub(super) use p256::ecdsa::{Signature as P256EcdsaSignature, SigningKey as P256EcdsaSigningKey};
+pub(super) use p256::ecdsa::SigningKey as P256EcdsaSigningKey;
 pub(super) use p256::elliptic_curve::sec1::ToEncodedPoint;
 pub(super) use p256::pkcs8::{
     EncodePrivateKey as P256EncodePrivateKey, EncodePublicKey as P256EncodePublicKey,
@@ -30,15 +31,13 @@ pub(super) use perry_runtime::{
 };
 pub(super) use rand::{Rng, RngExt};
 pub(super) use rand_core_06::RngCore;
-pub(super) use rsa::pkcs1v15::{
-    Pkcs1v15Sign, Signature as RsaPkcs1v15Signature, SigningKey, VerifyingKey,
-};
+pub(super) use rsa::pkcs1v15::{Pkcs1v15Sign, Signature as RsaPkcs1v15Signature};
 pub(super) use rsa::pss::{
     Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
     VerifyingKey as RsaPssVerifyingKey,
 };
 pub(super) use rsa::sha2::{Sha256 as RsaSha256, Sha384 as RsaSha384, Sha512 as RsaSha512};
-pub(super) use rsa::signature::{RandomizedSigner, SignatureEncoding, Signer, Verifier};
+pub(super) use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
 pub(super) use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 pub(super) use rsa::Oaep;
 pub(super) use rsa::{BigUint as RsaBigUint, RsaPrivateKey, RsaPublicKey};
@@ -93,10 +92,57 @@ pub(super) unsafe fn alloc_buffer_from_slice(
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum RsaDigestKind {
+pub(crate) enum RsaDigestKind {
+    Sha1,
+    Sha224,
     Sha256,
     Sha384,
     Sha512,
+}
+
+/// DER `DigestInfo` prefix for SHA-1 in an RSASSA-PKCS1-v1_5 signature. The
+/// `sha1` 0.10 build the RSA helpers use has no `AssociatedOid`, so
+/// `Pkcs1v15Sign::new::<Sha1>()` is unavailable; spell the prefix out.
+const SHA1_DIGEST_INFO_PREFIX: [u8; 15] = [
+    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+];
+
+impl RsaDigestKind {
+    /// The message digest Node's `createSign(alg)` / `crypto.sign(alg, …)`
+    /// signs over.
+    pub(crate) fn digest(self, data: &[u8]) -> Vec<u8> {
+        use rsa::sha2::Digest as _;
+        match self {
+            RsaDigestKind::Sha1 => rsa_sha1::Sha1::digest(data).to_vec(),
+            RsaDigestKind::Sha224 => rsa::sha2::Sha224::digest(data).to_vec(),
+            RsaDigestKind::Sha256 => RsaSha256::digest(data).to_vec(),
+            RsaDigestKind::Sha384 => RsaSha384::digest(data).to_vec(),
+            RsaDigestKind::Sha512 => RsaSha512::digest(data).to_vec(),
+        }
+    }
+
+    fn output_len(self) -> usize {
+        match self {
+            RsaDigestKind::Sha1 => 20,
+            RsaDigestKind::Sha224 => 28,
+            RsaDigestKind::Sha256 => 32,
+            RsaDigestKind::Sha384 => 48,
+            RsaDigestKind::Sha512 => 64,
+        }
+    }
+
+    fn pkcs1v15_scheme(self) -> Pkcs1v15Sign {
+        match self {
+            RsaDigestKind::Sha1 => Pkcs1v15Sign {
+                hash_len: Some(20),
+                prefix: SHA1_DIGEST_INFO_PREFIX.to_vec().into_boxed_slice(),
+            },
+            RsaDigestKind::Sha224 => Pkcs1v15Sign::new::<rsa::sha2::Sha224>(),
+            RsaDigestKind::Sha256 => Pkcs1v15Sign::new::<RsaSha256>(),
+            RsaDigestKind::Sha384 => Pkcs1v15Sign::new::<RsaSha384>(),
+            RsaDigestKind::Sha512 => Pkcs1v15Sign::new::<RsaSha512>(),
+        }
+    }
 }
 
 pub(super) fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind> {
@@ -104,6 +150,10 @@ pub(super) fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind
         .unwrap_or("")
         .to_ascii_lowercase();
     match alg.as_str() {
+        // Node's `getHashes()` spellings, case-insensitive (#11447 follow-up:
+        // SHA-1 and SHA-224 returned `undefined` from `createSign`).
+        "rsa-sha1" | "rsa-sha1-2" | "sha1" | "sha1withrsaencryption" => Some(RsaDigestKind::Sha1),
+        "rsa-sha224" | "sha224" | "sha224withrsaencryption" => Some(RsaDigestKind::Sha224),
         "rsa-sha256" | "sha256" | "sha256withrsaencryption" => Some(RsaDigestKind::Sha256),
         "rsa-sha384" | "sha384" | "sha384withrsaencryption" => Some(RsaDigestKind::Sha384),
         "rsa-sha512" | "sha512" | "sha512withrsaencryption" => Some(RsaDigestKind::Sha512),
@@ -389,8 +439,8 @@ pub(super) enum KeyKind {
 pub(super) fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
     if parse_rsa_private_key_pem(pem).is_some() {
         Some(1)
-    } else if parse_p256_signing_key_pem(pem).is_some() {
-        Some(2)
+    } else if let Some(key) = parse_ec_signing_key_pem(pem) {
+        Some(key.asym_type())
     } else if parse_ed25519_private_surrogate(pem).is_some() {
         Some(3)
     } else if parse_x25519_private_surrogate(pem).is_some() {
@@ -403,8 +453,8 @@ pub(super) fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
 pub(super) fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
     if parse_rsa_public_key_pem(pem).is_some() {
         Some(1)
-    } else if parse_p256_verifying_key_pem(pem).is_some() {
-        Some(2)
+    } else if let Some(key) = parse_ec_public_key_pem(pem) {
+        Some(key.asym_type())
     } else if parse_ed25519_public_surrogate(pem).is_some() {
         Some(3)
     } else if parse_x25519_public_surrogate(pem).is_some() {
@@ -738,8 +788,8 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
     }
     let ptr = (value_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
     let pem = String::from_utf8(bytes_from_ptr(ptr)).ok()?;
-    if let Some(v) = parse_p256_verifying_key_pem(&pem) {
-        return v.to_public_key_pem(Default::default()).ok();
+    if let Some(v) = parse_ec_public_key_pem(&pem) {
+        return v.to_public_key_pem();
     }
     if let Some(v) = parse_ed25519_public_surrogate(&pem) {
         return Some(ed25519_public_surrogate(&v));
@@ -768,11 +818,7 @@ pub(super) unsafe fn key_input_pss_salt_len(value_bits: u64, alg: RsaDigestKind)
             return n as usize;
         }
     }
-    match alg {
-        RsaDigestKind::Sha256 => 32,
-        RsaDigestKind::Sha384 => 48,
-        RsaDigestKind::Sha512 => 64,
-    }
+    alg.output_len()
 }
 
 pub(super) unsafe fn keygen_encoding_wants_jwk(options_bits: u64, field: &[u8]) -> bool {
@@ -809,20 +855,11 @@ pub(super) fn sign_rsa_data(
     private_key: RsaPrivateKey,
     data: &[u8],
 ) -> Vec<u8> {
-    match alg {
-        RsaDigestKind::Sha256 => SigningKey::<RsaSha256>::new(private_key)
-            .sign(data)
-            .to_bytes()
-            .to_vec(),
-        RsaDigestKind::Sha384 => SigningKey::<RsaSha384>::new(private_key)
-            .sign(data)
-            .to_bytes()
-            .to_vec(),
-        RsaDigestKind::Sha512 => SigningKey::<RsaSha512>::new(private_key)
-            .sign(data)
-            .to_bytes()
-            .to_vec(),
-    }
+    // Deterministic PKCS#1 v1.5 over the prehash: byte-identical to
+    // `SigningKey::<D>::sign`, and it covers SHA-1 without `AssociatedOid`.
+    private_key
+        .sign(alg.pkcs1v15_scheme(), &alg.digest(data))
+        .unwrap_or_default()
 }
 
 pub(super) fn sign_rsa_pss_data(
@@ -831,26 +868,22 @@ pub(super) fn sign_rsa_pss_data(
     data: &[u8],
     salt_len: usize,
 ) -> Vec<u8> {
-    let mut rng = rand_core_06::OsRng;
+    fn sign<D>(private_key: RsaPrivateKey, data: &[u8], salt_len: usize) -> Vec<u8>
+    where
+        D: rsa::sha2::Digest + rsa::sha2::digest::FixedOutputReset,
+    {
+        let mut rng = rand_core_06::OsRng;
+        RsaPssSigningKey::<D>::new_with_salt_len(private_key, salt_len)
+            .sign_with_rng(&mut rng, data)
+            .to_bytes()
+            .to_vec()
+    }
     match alg {
-        RsaDigestKind::Sha256 => {
-            RsaPssSigningKey::<RsaSha256>::new_with_salt_len(private_key, salt_len)
-                .sign_with_rng(&mut rng, data)
-                .to_bytes()
-                .to_vec()
-        }
-        RsaDigestKind::Sha384 => {
-            RsaPssSigningKey::<RsaSha384>::new_with_salt_len(private_key, salt_len)
-                .sign_with_rng(&mut rng, data)
-                .to_bytes()
-                .to_vec()
-        }
-        RsaDigestKind::Sha512 => {
-            RsaPssSigningKey::<RsaSha512>::new_with_salt_len(private_key, salt_len)
-                .sign_with_rng(&mut rng, data)
-                .to_bytes()
-                .to_vec()
-        }
+        RsaDigestKind::Sha1 => sign::<rsa_sha1::Sha1>(private_key, data, salt_len),
+        RsaDigestKind::Sha224 => sign::<rsa::sha2::Sha224>(private_key, data, salt_len),
+        RsaDigestKind::Sha256 => sign::<RsaSha256>(private_key, data, salt_len),
+        RsaDigestKind::Sha384 => sign::<RsaSha384>(private_key, data, salt_len),
+        RsaDigestKind::Sha512 => sign::<RsaSha512>(private_key, data, salt_len),
     }
 }
 
@@ -860,17 +893,13 @@ pub(super) fn verify_rsa_data(
     data: &[u8],
     signature: &RsaPkcs1v15Signature,
 ) -> bool {
-    match alg {
-        RsaDigestKind::Sha256 => VerifyingKey::<RsaSha256>::new(public_key)
-            .verify(data, signature)
-            .is_ok(),
-        RsaDigestKind::Sha384 => VerifyingKey::<RsaSha384>::new(public_key)
-            .verify(data, signature)
-            .is_ok(),
-        RsaDigestKind::Sha512 => VerifyingKey::<RsaSha512>::new(public_key)
-            .verify(data, signature)
-            .is_ok(),
-    }
+    public_key
+        .verify(
+            alg.pkcs1v15_scheme(),
+            &alg.digest(data),
+            &signature.to_bytes(),
+        )
+        .is_ok()
 }
 
 pub(super) fn verify_rsa_pss_data(
@@ -880,22 +909,25 @@ pub(super) fn verify_rsa_pss_data(
     signature: &RsaPssSignature,
     salt_len: usize,
 ) -> bool {
+    fn verify<D>(
+        public_key: RsaPublicKey,
+        data: &[u8],
+        signature: &RsaPssSignature,
+        salt_len: usize,
+    ) -> bool
+    where
+        D: rsa::sha2::Digest + rsa::sha2::digest::FixedOutputReset,
+    {
+        RsaPssVerifyingKey::<D>::new_with_salt_len(public_key, salt_len)
+            .verify(data, signature)
+            .is_ok()
+    }
     match alg {
-        RsaDigestKind::Sha256 => {
-            RsaPssVerifyingKey::<RsaSha256>::new_with_salt_len(public_key, salt_len)
-                .verify(data, signature)
-                .is_ok()
-        }
-        RsaDigestKind::Sha384 => {
-            RsaPssVerifyingKey::<RsaSha384>::new_with_salt_len(public_key, salt_len)
-                .verify(data, signature)
-                .is_ok()
-        }
-        RsaDigestKind::Sha512 => {
-            RsaPssVerifyingKey::<RsaSha512>::new_with_salt_len(public_key, salt_len)
-                .verify(data, signature)
-                .is_ok()
-        }
+        RsaDigestKind::Sha1 => verify::<rsa_sha1::Sha1>(public_key, data, signature, salt_len),
+        RsaDigestKind::Sha224 => verify::<rsa::sha2::Sha224>(public_key, data, signature, salt_len),
+        RsaDigestKind::Sha256 => verify::<RsaSha256>(public_key, data, signature, salt_len),
+        RsaDigestKind::Sha384 => verify::<RsaSha384>(public_key, data, signature, salt_len),
+        RsaDigestKind::Sha512 => verify::<RsaSha512>(public_key, data, signature, salt_len),
     }
 }
 

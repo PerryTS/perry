@@ -34,6 +34,18 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "CONSOLE_CHANNEL_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread cache of five diagnostics_channel ids (i64 keys into the thread-local DIAG_CHANNELS table, minted by NEXT_DIAG_ID) for console.log/info/debug/error/warn; integers, never a NaN-boxed value. #11471 made these per-thread."
+    },
+    {
+      "file": "crates/perry-runtime/src/value/nanbox.rs",
+      "name": "FFI_SSO_RING",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11430: a per-thread ring of NON-GC StringHeader-shaped slots that js_ffi_arg_ptr copies an SSO argument's inline bytes into for the duration of one native call. The slots are owned Box memory, never GC-allocated, and hold only a length header and the copied ASCII bytes \u2014 no pointer into the GC heap."
+    },
+    {
       "file": "crates/perry-ext-http/src/lib.rs",
       "name": "HTTP_PENDING_EVENTS",
       "verdict": "not_a_gc_pointer",
@@ -125,12 +137,6 @@
       "why": "Per-connection PROTOCOL state, keyed by the crate's own ws id. A `WsConnection` is `transport: WsTransport`, `messages: Vec<WsPayload>` and three bools. Rule S fires on `WsTransport::Turnloop(i64)`; that i64 is the HOST's connection id, not an address \u2014 it is minted by the turnloop client adoption path (`attach_turnloop_client`) and its only use is as the first argument of `replay_command(conn_id, ..)`, which looks the connection up in the host registry. It is never cast to a pointer and never dereferenced. The other variant, `Connecting(Vec<WsCommand>)`, holds `Send(WsOutgoing)` / `Close(Option<u16>, String)` / `Terminate`, and `WsOutgoing` is `Text(String)` / `Binary|Ping|Pong(Vec<u8>)` \u2014 Rust-owned bytes throughout, as is `WsPayload`. No NaN-boxed value and no heap pointer enters this map. The JS callbacks for these connections live in `WS_CLIENT_LISTENERS` (`HashMap<String, Vec<i64>>` of closure pointers), which is exactly what the registered `scan_ws_roots` visits \u2014 the split is deliberate. Newly uncovered because turnloop replaced the transport variant that held a tokio task's command channel with this bare id, which is what made rule S look at it."
     },
     {
-      "file": "crates/perry-runtime/src/agent.rs",
-      "name": "CURRENT_AGENT",
-      "verdict": "not_a_gc_pointer",
-      "why": "The calling thread's JS-agent id, an integer (Cell<Option<AgentId>>, AgentId = u64) set once at worker entry and never cleared (agent.rs:75). It names a heap; it never holds a pointer into one. It stopped being reached incidentally by a registered scanner when turnloop P3 moved the timer root walk behind timer::store::with_current, whose generic closure the call-graph walk does not follow -- the holder itself did not change."
-    },
-    {
       "file": "crates/perry-runtime/src/alloc_census.rs",
       "name": "CREDIT",
       "verdict": "not_a_gc_pointer",
@@ -206,6 +212,12 @@
       "classification": "not_a_gc_pointer",
       "verdict": "not_a_gc_pointer",
       "why": "Records only the smallest and largest address ever inserted into the sibling thread-local buffer registry, as a conservative min/max filter in front of that registry's hash lookup (#9176). The two usizes are compared (`addr >= lo && addr <= hi`) and never dereferenced, never handed out, and never used to reach an object; a value outside the range is rejected, a value inside falls through to the lookup that was already there. The range only ever widens, so it cannot go stale in the unsafe direction: a bound that no longer matches reality can only admit more addresses to the real lookup, never deny a registered one."
+    },
+    {
+      "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
+      "name": "INSTALLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Cell<bool> recording whether Bun realm bootstrap installed its replaceable self accessor. Only false/true are stored; the actual global and accessor closures live in the existing traced global object and descriptor storage."
     },
     {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
@@ -1043,13 +1055,6 @@
       "why": "Atomic count of live PTY handles that currently keep the event loop active. It stores only a scalar count; PTY JS values live in PTY_LIVE and are visited by pty_reactor_scan_roots_mut."
     },
     {
-      "file": "crates/perry-runtime/src/regex.rs",
-      "name": "REGEX_SOURCE_TABLE",
-      "verdict": "covered_elsewhere",
-      "scanner": "regex::regex_header_moved_for_gc (called from gc/types.rs on relocation), regex::regex_header_finalize_for_gc (gc/types.rs per-object finalize), regex::finalize_dead_copied_minor_from_space_regexps (gc/copying_phase.rs) and regex::collect_dead_registered_regexps_post_trace / finalize_collected_dead_regexp (gc/oldgen.rs)",
-      "why": "Address-KEYED owner set, not a root, and the successor of REGEX_POINTERS under the single engine: its map is `usize` header address -> `RegexMetadata { registered_owner: bool }`, so the VALUE holds no heap address at all (source and flags live only in the header's traced string edges, and the compiled program is a traced GC child of the header). The key is rekeyed by `regex_header_moved_for_gc` when a RegExpHeader moves and removed on death by the finalize hook, the copying-minor from-space walk and the full-cycle post-trace walk; it never keeps a header alive. Reached from those GC hooks rather than a registered scanner, so the walk misses it."
-    },
-    {
       "file": "crates/perry-runtime/src/regex/perex_dispatch.rs",
       "name": "EXEC_LOOKUPS",
       "verdict": "test_only",
@@ -1398,6 +1403,12 @@
       "name": "NEXT_DRAFT",
       "verdict": "not_a_gc_pointer",
       "why": "turnloop P6. A monotonic i64 draft-id counter for the SMTP C seam; it contains only a tally."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_PARENT_AGENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11433: the JS-agent id (AgentId = u64) of the agent that created the in-process Worker running on this thread, set once at Worker entry and used only to tag Worker-to-parent events. It names a heap; it never holds a pointer into one."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
@@ -3991,10 +4002,6 @@
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",
       "name": "ASYNC_BOX_EXECUTION_REFS"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ASYNC_STEP_GUARD"
     },
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",

@@ -372,6 +372,31 @@ fn require_base_filename(closure: *const ClosureHeader) -> String {
     value_to_string(js_closure_get_capture_f64(closure, 0), "filename")
 }
 
+// Compiled modules remain resolvable after their build tree is removed. Keep
+// host realpath/symlink behavior when a file exists, and normalize only absent
+// absolute candidates before consulting the registry (#11448).
+fn resolve_file_candidate(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_file() {
+        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    MODULE_PATH_REGISTRY
+        .with(|registry| registry.contains_registered(&normalized.to_string_lossy()))
+        .then_some(normalized)
+}
+
 fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
     if crate::embedded::is_virtual_path(&path.to_string_lossy()) {
         // Virtual files do not exist on disk. Normalize lexical components
@@ -391,16 +416,16 @@ fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
             && crate::embedded::lookup_text_module(&key).is_some())
         .then_some(normalized);
     }
-    if path.is_file() {
-        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    if let Some(found) = resolve_file_candidate(path) {
+        return Some(found);
     }
     for ext in ["js", "json", "node"] {
         let mut candidate = path.as_os_str().to_os_string();
         candidate.push(".");
         candidate.push(ext);
         let candidate = std::path::PathBuf::from(candidate);
-        if candidate.is_file() {
-            return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+        if let Some(found) = resolve_file_candidate(&candidate) {
+            return Some(found);
         }
     }
     if path.is_dir() {
@@ -413,11 +438,11 @@ fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
                 }
             }
         }
-        for ext in ["js", "json", "node", "cjs"] {
-            let candidate = path.join(format!("index.{ext}"));
-            if candidate.is_file() {
-                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
-            }
+    }
+    // A compiled directory index has no host directory after relocation.
+    for ext in ["js", "json", "node", "cjs"] {
+        if let Some(found) = resolve_file_candidate(&path.join(format!("index.{ext}"))) {
+            return Some(found);
         }
     }
     None

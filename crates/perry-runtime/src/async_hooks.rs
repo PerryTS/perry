@@ -1969,6 +1969,15 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     }
 }
 
+// #11471: thread-exit release of this module's process-global tables.
+mod thread_exit;
+pub(crate) use thread_exit::release_async_hooks_in_freed_ranges;
+#[doc(hidden)]
+pub use thread_exit::{
+    cached_singletons_for_test, clear_cached_singletons_for_test, context_snapshot_holds_for_test,
+    hook_callback_registered_for_test, resource_tracked_for_test,
+};
+
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

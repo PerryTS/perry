@@ -3150,6 +3150,7 @@ js_register_class_parent	void	i32u,i32u
 js_register_class_parent_dynamic	void	i32u,f64
 js_register_class_setter	void	i64,ptr,i64,i64
 js_register_class_source	void	i32u,ptr,i32u
+js_register_class_source_static	void	i32u,ptr,i32u
 js_register_class_static_getter	void	i64,ptr,i64,i64
 js_register_class_static_method	void	i64,ptr,i64,i64,i64,i64
 js_register_class_static_method_bind_length	void	i64,ptr,i64,i64

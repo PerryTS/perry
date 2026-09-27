@@ -317,6 +317,18 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         "createSign" | "Sign" => js_crypto_create_sign(str_ptr(0)),
         "createVerify" | "Verify" => js_crypto_create_verify(str_ptr(0)),
+        // One-shot `crypto.sign(alg, data, key[, cb])` / `crypto.verify(alg,
+        // data, key, sig[, cb])` reached through a CommonJS `require('crypto')`
+        // receiver or as a detached value. Without these arms both fell to
+        // `_ => undefined` while the static-receiver lowering worked.
+        "sign" if args_len >= 4 => js_crypto_sign_async(str_ptr(0), bytes_ptr(1), arg(2), arg(3)),
+        "sign" => {
+            pointer_value(js_crypto_sign_rsa_sha256(str_ptr(0), bytes_ptr(1), arg(2)) as *mut u8)
+        }
+        "verify" if args_len >= 5 => {
+            js_crypto_verify_async(str_ptr(0), bytes_ptr(1), arg(2), bytes_ptr(3), arg(4))
+        }
+        "verify" => js_crypto_verify_rsa_sha256(str_ptr(0), bytes_ptr(1), arg(2), bytes_ptr(3)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
         "createDiffieHellman" | "DiffieHellman" => {
             js_crypto_create_diffie_hellman(arg(0), arg(1), arg(2))

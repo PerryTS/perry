@@ -285,14 +285,15 @@ impl ServerResponse {
         out
     }
 
-    /// Auto-fill `Content-Length` if unset and we know the full body.
-    pub(crate) fn ensure_content_length(&mut self) {
+    /// Auto-fill `Content-Length` only while the header block is still open.
+    /// Return whether this call synthesized the header.
+    pub(crate) fn ensure_content_length(&mut self) -> bool {
         // A response with trailers must not declare a fixed Content-Length:
         // the body length alone doesn't bound the response (trailing headers
         // still follow), and some clients/proxies treat a present
         // Content-Length as "body complete, no trailers expected".
-        if !self.trailers.is_empty() {
-            return;
+        if self.header_committed || !self.trailers.is_empty() {
+            return false;
         }
         if !self.headers.contains_key("content-length")
             && !self.headers.contains_key("transfer-encoding")
@@ -303,7 +304,9 @@ impl ServerResponse {
                 .insert("content-length".to_string(), len.to_string());
             self.raw_header_names
                 .insert("content-length".to_string(), "Content-Length".to_string());
+            return true;
         }
+        false
     }
 }
 
@@ -1115,10 +1118,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     }
     sr.headers_sent = true;
     sr.writable_ended = true;
-    let auto_content_length = sr.trailers.is_empty()
-        && !sr.headers.contains_key("content-length")
-        && !sr.headers.contains_key("transfer-encoding");
-    sr.ensure_content_length();
+    let auto_content_length = sr.ensure_content_length();
     let body = std::mem::take(&mut sr.buffered_body);
     let headers = sr.snapshot_headers();
     let trailers = sr.snapshot_trailers();

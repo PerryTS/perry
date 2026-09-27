@@ -23,7 +23,7 @@ use std::future::Future;
 use crate::common::async_bridge::{
     blocking_thread_stack_size, ensure_gc_scanner_registered, ensure_pump_registered,
     pin_promise_for_native_resolution, queue_deferred_resolution, queue_promise_resolution,
-    InflightGuard,
+    resolution_owner, InflightGuard, ResolutionOwnerScope,
 };
 
 /// Reject `ptr` with `message`, building the string on the main thread.
@@ -50,7 +50,11 @@ fn run_detached<T, F>(
     // Held for exactly the operation's run, and released even when the job is
     // dropped unrun, so the event loop stays alive until the result is queued.
     let inflight = keep_alive.then(InflightGuard::new);
+    // The job runs on a thread with no agent; settle for the one that asked
+    // (#11433), or a Worker's promise would be queued for the primary agent.
+    let owner = resolution_owner();
     let run = move || {
+        let _owner = ResolutionOwnerScope::enter(owner);
         let result = perry_container_compose::rt::try_block_on(future)
             .unwrap_or_else(|e| Err(format!("container runtime unavailable: {e}")));
         settle(result);

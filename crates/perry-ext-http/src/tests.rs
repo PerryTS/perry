@@ -111,6 +111,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         incoming_handle: 0,
         expects_continue: false,
         continue_body_pending: false,
+        agent_false: false,
     });
 
     let mut incoming_listeners = HashMap::new();
@@ -202,6 +203,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         incoming_handle: 0,
         expects_continue: false,
         continue_body_pending: false,
+        agent_false: false,
     });
 
     unsafe {

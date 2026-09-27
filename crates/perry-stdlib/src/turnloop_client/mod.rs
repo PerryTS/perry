@@ -495,35 +495,56 @@ fn drain_pending() {
     }
 }
 
-/// Serializes the tests that must OWN this agent's loop, and hands the slot
-/// back when one is done.
+/// Serializes the tests that must OWN an agent's loop.
 ///
-/// The route is a single slot per agent, claimed for the life of the CLAIMING
-/// THREAD (`agent_loop::claim_route`). Two libtest threads racing for it stall
-/// each other for the whole retry window: the loser spins while the winner is
-/// still alive holding a claim it gives up only at thread exit, which is after
-/// the test body has returned. The lease makes that explicit — one owner at a
-/// time — and [`OwnerLease::drop`] releases the route at the END OF THE TEST
-/// rather than at thread exit, which is what lets the next holder have it.
+/// Each holder runs as its OWN agent (see [`become_the_owner_for_test`]), so
+/// holders no longer contend for a loop route; the lease is kept because they
+/// still share process-global engine state — the TLS server and socket
+/// registries, the keep-alive count, the fetch engine's counters — whose
+/// before/after deltas they assert.
 #[cfg(test)]
 static OWNER_LEASE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Proof that the holder owns this agent's loop, for as long as it is alive.
+/// Proof that the holder owns its agent's loop, for as long as it is alive.
 #[cfg(test)]
-pub(crate) struct OwnerLease(Option<std::sync::MutexGuard<'static, ()>>);
+pub(crate) struct OwnerLease {
+    agent: perry_runtime::agent::AgentId,
+    guard: Option<std::sync::MutexGuard<'static, ()>>,
+}
+
+#[cfg(test)]
+impl OwnerLease {
+    /// The agent this thread owns the loop of. A second thread that must act
+    /// FOR that agent (the P10 posting shape) joins it with
+    /// `perry_runtime::agent::enter_agent_for_test`.
+    pub(crate) fn agent(&self) -> perry_runtime::agent::AgentId {
+        self.agent
+    }
+}
 
 #[cfg(test)]
 impl Drop for OwnerLease {
     fn drop(&mut self) {
-        // Give the route back BEFORE releasing the lease. The other order lets
-        // the next holder start spinning against a claim this thread still
-        // holds and has nothing left to do with.
-        perry_runtime::event_pump::shutdown_agent_loop();
-        self.0 = None;
+        // Retire the agent BEFORE releasing the lease: that shuts its loop
+        // down (closing every handle it still owns and delivering their
+        // terminal completions) and purges anything it left queued, so the
+        // next holder starts against settled engine state.
+        perry_runtime::agent::retire_agent(self.agent);
+        self.guard = None;
     }
 }
 
-/// Drive turns until this thread is the agent's PUBLISHED loop owner.
+/// Make this thread its own agent and drive turns until it is that agent's
+/// PUBLISHED loop owner.
+///
+/// Why its own agent (#11472): an unclaimed libtest thread resolves to the
+/// PRIMARY agent, whose route is a single slot claimed for the life of the
+/// claiming thread — and ANY concurrent test that turns a loop, submits pool
+/// work or asks `turnloop_net::available()` claims it. A thread that asks
+/// while another holds it is `Declined` for the rest of its life, so retrying
+/// could never recover: the holder of this lease spun for ten seconds against
+/// a decision already made. A fresh agent has an empty route slot nobody else
+/// can name, which is the same isolation #11422 gave the crypto tests.
 ///
 /// `turnloop_net::available()` only CLAIMS the route — it answers "may I take a
 /// loop?" without paying for one, so a thread that has merely asked holds the
@@ -536,15 +557,19 @@ pub(crate) fn become_the_owner_for_test() -> OwnerLease {
     let guard = OWNER_LEASE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lease = OwnerLease {
+        agent: perry_runtime::agent::enter_worker_agent(),
+        guard: Some(guard),
+    };
     let limit = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         perry_runtime::event_pump::js_loop_turn_bounded(0);
         if tl::available() && perry_ffi::agent_post::available() {
-            return OwnerLease(Some(guard));
+            return lease;
         }
         assert!(
             std::time::Instant::now() < limit,
-            "this thread never became the primary agent's PUBLISHED loop owner, \
+            "this thread never became its own agent's PUBLISHED loop owner, \
              so the rest of this test would prove nothing"
         );
         std::thread::sleep(Duration::from_millis(5));

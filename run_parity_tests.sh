@@ -1530,8 +1530,12 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # #11174 specifically guards the no-auto HTTP pump rebuild. The compiler
     # builds the matching stdlib + HTTP wrapper together for this path; letting
     # the usual mixed-suite override win would silently test the wrong mode.
+    # #11301 is the same link seen from cc: the pump archive's bundled runtime
+    # ran the globalThis bootstrap with the Math/JSON/Reflect/Atomics member
+    # tables compiled out, so `var m = Math.max` read `undefined`.
     force_no_auto=0
-    if [[ "$test_name" == "test_gap_11174_http_runtime_defaults" ]]; then
+    if [[ "$test_name" == "test_gap_11174_http_runtime_defaults" ||
+          "$test_name" == "test_gap_11301_namespace_member_values" ]]; then
         compile_env="PERRY_NO_AUTO_OPTIMIZE=1 $compile_env"
         auto_optimize_on=0
         force_no_auto=1

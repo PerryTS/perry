@@ -42,30 +42,37 @@ fn regexp_header_is_one_56_byte_per_object_record() {
     );
 }
 
+/// #11503: identity is the header (`GC_TYPE_REGEXP` + size + magic), not an
+/// address registry. The fixture header is registered NOWHERE, so every probe
+/// answering "yes" proves no registry is consulted, and clearing the magic
+/// proves the GC kind alone is not taken as proof either.
 #[test]
-fn malloc_finalize_clears_regexp_address_owned_state() {
+fn regexp_identity_is_the_header_not_an_address_registry() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let pattern = scope.root_string_ptr(make_string("finalize"));
-    let flags = scope.root_string_ptr(make_string("g"));
-    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
-        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
-    });
+    let re = test_alloc_nursery_regexp_for_move("identity", "g");
     let addr = re as usize;
-    assert!(test_regex_pointer_entry_exists(addr));
-    crate::object::exotic_expando::test_seed_exotic_expando_entry(
-        addr,
-        "owned",
-        crate::value::TAG_TRUE,
+    assert!(is_registered_regex(addr));
+    assert!(is_valid_regex_ptr(re));
+    assert!(is_regex_pointer(re as *const u8));
+
+    unsafe { (*re).magic = 0 };
+    assert!(!is_registered_regex(addr));
+    assert!(!is_valid_regex_ptr(re));
+    assert!(!is_regex_pointer(re as *const u8));
+    unsafe { (*re).magic = REGEXP_MAGIC };
+}
+
+/// A RegExp's only address-keyed state is its expando entry. Death is handled
+/// by the dead-owner fan-out, so the type needs no finalize hook and uses the
+/// shared expando-owner move hook rather than a RegExp-specific one.
+#[test]
+fn regexp_gc_type_needs_no_bespoke_side_table_hooks() {
+    let info = crate::gc::gc_type_info(crate::gc::GC_TYPE_REGEXP).expect("RegExp GC type");
+    assert_eq!(
+        info.move_hook_kind,
+        crate::gc::GcMoveHookKind::ExoticExpandoOwner
     );
-    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
-
-    unsafe {
-        crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_REGEXP, re.cast::<u8>());
-    }
-
-    assert!(!test_regex_pointer_entry_exists(addr));
-    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+    assert_eq!(info.finalize_hook_kind, crate::gc::GcFinalizeHookKind::None);
 }
 
 // Program lifetime and compilation-churn reclamation are exercised with the

@@ -499,6 +499,14 @@ pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     blk.and(I64, &bits, POINTER_MASK_I64)
 }
 
+/// `unbox_to_i64` for an argument a native entry reads as a
+/// `*const StringHeader` (#11430): an SSO string is copied into a scratch
+/// header by `js_ffi_arg_ptr` instead of being masked into a garbage address.
+/// Every other value unboxes exactly as `unbox_to_i64` does.
+pub(crate) fn unbox_ffi_str_arg(blk: &mut LlBlock, boxed: &str) -> String {
+    blk.call(I64, "js_ffi_arg_ptr", &[(DOUBLE, boxed)])
+}
+
 /// Built-in constructor / namespace names that the runtime pre-populates
 /// on the globalThis singleton (`populate_global_this_builtins` in
 /// crates/perry-runtime/src/object.rs). Used by codegen to decide whether

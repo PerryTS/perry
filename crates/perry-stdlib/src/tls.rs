@@ -354,6 +354,7 @@ fn ensure_crypto_provider_installed() {
 }
 
 fn ensure_tls_gc_scanner_registered() {
+    ensure_tls_thread_exit_hook_registered();
     TLS_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -361,6 +362,126 @@ fn ensure_tls_gc_scanner_registered() {
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:tls", scan_tls_roots_mut);
         registered.set(true);
     });
+}
+
+/// #11471: `TLS_SERVERS`, `TLS_LISTENERS` and `TLS_ONCE_FLAGS` are
+/// process-global but hold raw closure addresses from the thread that created
+/// the server or called `.on()`/`.once()`. Registered before the first insert
+/// into any of them (`register_listener`, `js_tls_create_server` via
+/// `ensure_tls_gc_scanner_registered`).
+fn ensure_tls_thread_exit_hook_registered() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_tls_tables_in_freed_ranges,
+        )
+    });
+}
+
+/// Thread-exit hook (#11471): an exiting thread's arena is about to be freed,
+/// so drop every listener / once-flag closure address inside it, and every
+/// server record whose SNICallback / ALPNCallback lives there. Such a server
+/// was created by that thread (its turnloop listener was on that thread's
+/// loop), so the whole record goes, releasing its keep-alive count exactly as
+/// the `'close'` path does. Runs in a TLS destructor: process-global locks
+/// only, taken one at a time, poison tolerated.
+fn release_tls_tables_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    if let Some(all) = TLS_LISTENERS.get() {
+        let mut all = all
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for per_handle in all.values_mut() {
+            per_handle.retain(|_, callbacks| {
+                let before = callbacks.len();
+                callbacks.retain(|cb| !freed.holds_i64(*cb));
+                // An event whose listeners all died goes; one that was already
+                // empty is left exactly as the live paths left it.
+                before == callbacks.len() || !callbacks.is_empty()
+            });
+        }
+    }
+    if let Some(all) = TLS_ONCE_FLAGS.get() {
+        let mut all = all
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for per_handle in all.values_mut() {
+            per_handle.retain(|_, callbacks| {
+                callbacks.retain(|cb| !freed.holds_i64(*cb));
+                !callbacks.is_empty()
+            });
+        }
+        all.retain(|_, per_handle| !per_handle.is_empty());
+    }
+    if let Some(all) = TLS_SERVERS.get() {
+        let mut all = all
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        all.retain(|_, server| {
+            let dead =
+                freed.holds_i64(server.sni_callback) || freed.holds_i64(server.alpn_callback);
+            if dead {
+                liveness::step(liveness::server_keeps_alive(server), false);
+            }
+            !dead
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod thread_exit_probe {
+    //! #11471 test probes: populate / observe the TLS tables through the same
+    //! insert paths the public surface uses.
+    use super::*;
+
+    /// Insert a server record carrying `sni_callback` (as `js_tls_create_server`
+    /// does after reading `options.SNICallback`) and register `listener` on it
+    /// as a `once` listener. Returns the server id.
+    pub(crate) fn insert_server_for_test(sni_callback: i64, listener: i64) -> i64 {
+        ensure_tls_gc_scanner_registered();
+        let id = next_tls_handle_id();
+        servers().lock().unwrap().insert(
+            id,
+            TlsServerState {
+                listener_open: false,
+                bound_port: 0,
+                bound_host: String::new(),
+                listening: false,
+                active_connections: 0,
+                closing: false,
+                close_event_queued: false,
+                config: None,
+                ticket_keys: vec![0; 48],
+                allow_half_open: false,
+                pause_on_connect: false,
+                certificate: Vec::new(),
+                cert_resolver: None,
+                sni_callback,
+                alpn_callback: 0,
+                alpn_protocols: Vec::new(),
+                sni_errors: HashMap::new(),
+            },
+        );
+        listeners().lock().unwrap().insert(id, HashMap::new());
+        register_listener(id, "secureConnection".to_string(), listener, true);
+        id
+    }
+
+    pub(crate) fn server_present(id: i64) -> bool {
+        servers().lock().unwrap().contains_key(&id)
+    }
+
+    pub(crate) fn listener_present(id: i64, cb: i64) -> bool {
+        listeners_for(id, "secureConnection").contains(&cb)
+    }
+
+    pub(crate) fn once_flag_present(id: i64, cb: i64) -> bool {
+        once_flags()
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|m| m.get("secureConnection"))
+            .is_some_and(|set| set.contains(&cb))
+    }
 }
 
 fn scan_tls_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
@@ -456,6 +577,7 @@ fn register_listener(handle: i64, event: String, cb: i64, once: bool) {
     if cb == 0 {
         return;
     }
+    ensure_tls_thread_exit_hook_registered();
     listeners()
         .lock()
         .unwrap()

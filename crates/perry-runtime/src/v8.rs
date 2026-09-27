@@ -366,6 +366,55 @@ pub fn scan_v8_promise_hook_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
     }
 }
 
+/// #11471: disable every `v8.promiseHooks` record holding a callback from an
+/// exiting thread's arena. `PROMISE_HOOKS` is process-global while the hook
+/// can be installed from any thread, so a left-behind record would have every
+/// other thread's promise machinery call a freed (or reused) closure, and the
+/// root scanner visit it. The record stays in place (its stop function
+/// captures its index) and is disabled exactly as `disable_promise_hook` does,
+/// keeping `PROMISE_HOOKS_ACTIVE` consistent.
+pub(crate) fn release_promise_hooks_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut hooks = PROMISE_HOOKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for record in hooks.iter_mut() {
+        let callbacks = record.callbacks;
+        let dead = [
+            callbacks.init,
+            callbacks.before,
+            callbacks.after,
+            callbacks.settled,
+        ]
+        .iter()
+        .any(|callback| freed.contains(*callback as usize));
+        if !dead {
+            continue;
+        }
+        if record.enabled && callbacks.has_any() {
+            PROMISE_HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+        }
+        record.enabled = false;
+        record.callbacks = PromiseHookCallbacks::empty();
+    }
+}
+
+/// #11471 test probe: does any `v8.promiseHooks` record hold `callback`?
+#[doc(hidden)]
+pub fn promise_hook_callback_registered_for_test(callback: usize) -> bool {
+    PROMISE_HOOKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .any(|record| {
+            let c = record.callbacks;
+            [c.init, c.before, c.after, c.settled]
+                .iter()
+                .any(|p| *p as usize == callback)
+        })
+}
+
 #[cfg(test)]
 pub fn reset_for_tests() {
     PROMISE_HOOKS

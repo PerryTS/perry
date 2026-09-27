@@ -1,0 +1,1 @@
+#10407: Preserve the original separators in `path.win32.parse()` (and default `path.parse()` on Windows). Extract components by input offsets instead of normalizing and joining segments, including mixed or repeated separators, UNC roots, and drive-relative paths. Add a Node-oracle runtime regression and a cross-platform TypeScript parity fixture.

@@ -537,6 +537,9 @@ impl Drop for Arena {
                 .map(|block| (block.data as usize, block.data as usize + block.size))
                 .collect();
             crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
+            // #11471: every other process-global table keyed by, or holding,
+            // an address in these blocks (see `arena::thread_exit`).
+            super::thread_exit::release_freed_ranges(&ranges);
         }
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ
@@ -554,6 +557,13 @@ impl Drop for Arena {
                     );
                 }
             });
+            // #11463: a typed-array cache hit must not survive reuse of this
+            // block as another thread's nursery (e.g. a fresh Promise). This
+            // only touches atomics, so it is safe during TLS destruction.
+            crate::typedarray::invalidate_caches_in_range(
+                block.data as usize,
+                block.data as usize + block.size,
+            );
             let layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
             unsafe {
                 // #4665: in test builds keep freed blocks mapped (no munmap) so

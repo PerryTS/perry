@@ -196,6 +196,34 @@ fn with_inbox<R, F: FnOnce(&mut HashMap<i64, PlayerObservation>) -> R>(f: F) -> 
     f(map)
 }
 
+/// Thread-exit release (#11471): forget every `onStateChange` /
+/// `onTimeUpdate` callback that lies in the exiting thread's freed arena
+/// blocks. `perry_media_on_*` accept a callback from any thread, and the
+/// ArkTS state push would otherwise fire a recycled address. The player's
+/// observed state is kept: it is pushed by ArkTS per handle, not owned by the
+/// exiting thread.
+///
+/// Runs in the exiting thread's TLS destructor: a plain poison-tolerant lock
+/// (not `lock_gc_root_registry`, which touches a thread-local).
+pub(crate) fn release_media_callbacks_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if let Some(map) = MEDIA_STATE_INBOX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        for obs in map.values_mut() {
+            if obs.on_state_change.is_some_and(|c| freed.holds_value(c)) {
+                obs.on_state_change = None;
+            }
+            if obs.on_time_update.is_some_and(|c| freed.holds_value(c)) {
+                obs.on_time_update = None;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // String header decoding
 // ---------------------------------------------------------------------------

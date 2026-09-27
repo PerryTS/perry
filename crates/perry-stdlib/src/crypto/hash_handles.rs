@@ -30,6 +30,13 @@ struct CryptoDigestStream {
 }
 
 impl CryptoDigestStream {
+    fn holds_freed(&self, freed: &perry_runtime::arena::thread_exit::FreedRanges) -> bool {
+        self.listeners
+            .values()
+            .flatten()
+            .any(|cb| freed.holds_i64(*cb))
+    }
+
     fn scan_roots(&mut self, visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
         for callbacks in self.listeners.values_mut() {
             for cb in callbacks {
@@ -67,6 +74,24 @@ thread_local! {
 }
 
 fn ensure_crypto_stream_gc_scanner() {
+    // #11471: retire a Hash/Hmac whose stream listeners live in an exiting
+    // thread's arena (`HANDLES` is process-global).
+    static REGISTER_RELEASERS: std::sync::Once = std::sync::Once::new();
+    REGISTER_RELEASERS.call_once(|| {
+        use crate::common::handle::register_handle_payload_releaser as register;
+        register::<HashHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+        register::<HmacHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+    });
     CRYPTO_STREAM_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -106,7 +131,8 @@ fn js_true() -> f64 {
 }
 
 fn unbox_to_i64(value: f64) -> i64 {
-    (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+    // SSO-aware (#11430): a short string argument is materialized first.
+    arg_ptr(value)
 }
 
 fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
@@ -485,7 +511,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 {
                     output_encoding.to_ascii_lowercase()
                 } else {
-                    let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let enc_ptr = arg_ptr(args[0]);
                     let enc_bytes = bytes_from_ptr(enc_ptr);
                     std::str::from_utf8(&enc_bytes)
                         .unwrap_or("hex")
@@ -744,7 +770,7 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let buf = alloc_buffer_from_slice(&digest);
                 f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
             } else {
-                let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let enc_ptr = arg_ptr(args[0]);
                 let enc_bytes = bytes_from_ptr(enc_ptr);
                 let enc = std::str::from_utf8(&enc_bytes)
                     .unwrap_or("hex")

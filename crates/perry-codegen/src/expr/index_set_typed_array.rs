@@ -46,6 +46,13 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     val_double: &str,
     strict: bool,
 ) -> String {
+    // As with the ordinary array store, an operand can throw before this
+    // helper runs. Do not open fresh blocks using values dropped after the
+    // terminator (#11450). No assignment value is consumed on this path.
+    if ctx.block().is_terminated() {
+        return crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    }
+
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
     let pointer_mask = crate::nanbox::POINTER_MASK_I64;

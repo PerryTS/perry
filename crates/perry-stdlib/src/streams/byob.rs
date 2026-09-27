@@ -37,11 +37,41 @@ static BYOB_PENDING: std::sync::LazyLock<Mutex<HashMap<usize, VecDeque<ByobPendi
 
 /// #6602: eviction hook — drop the (drained) BYOB queue slot of an evicted id.
 pub(super) fn evict_ids(batch: &[usize]) {
-    if let Ok(mut map) = BYOB_PENDING.lock() {
-        for id in batch {
-            map.remove(id);
+    // Poison-tolerant: also runs from the #11471 thread-exit hook, where a
+    // skipped removal would leave a dead thread's promise/view rooted.
+    let mut map = BYOB_PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for id in batch {
+        map.remove(id);
+    }
+}
+
+/// #11471: the BYOB part of `release_web_streams_in_freed_ranges`
+/// (streams.rs). A parked `read(view)` whose promise or view lies in the
+/// exiting thread's freed blocks marks its stream dead; the whole queue then
+/// goes with the stream's other records via [`evict_ids`].
+pub(super) fn dead_ids_in_freed_ranges(
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+    dead: &mut std::collections::HashSet<usize>,
+) {
+    let map = BYOB_PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (&id, queue) in map.iter() {
+        if queue
+            .iter()
+            .any(|p| freed.contains(p.promise as usize) || freed.holds_bits(p.view_bits))
+        {
+            dead.insert(id);
         }
     }
+}
+
+/// #11471 test probe: is a BYOB read parked on `stream_id`?
+#[cfg(test)]
+pub(crate) fn byob_pending_for_test(stream_id: usize) -> bool {
+    has_pending(stream_id)
 }
 
 /// True while at least one `read(view)` is parked on this stream — feeds

@@ -184,6 +184,27 @@ pub(crate) fn scan_tui_input_handler_root_mut(visitor: &mut crate::gc::RuntimeRo
     visitor.visit_atomic_i64_slot(&INPUT_HANDLER, Ordering::Acquire, Ordering::Release);
 }
 
+/// Thread-exit release (#11471): clear the published `useInput` handler if it
+/// is a closure in the exiting thread's freed arena blocks. Nothing restricts
+/// `js_perry_tui_use_input` to the render thread, and `drain_input` would
+/// otherwise call through the dangling pointer once the address is reused.
+/// A compare-exchange, so a handler published concurrently by a live thread
+/// is never cleared.
+pub(crate) fn release_tui_input_handler_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let current = INPUT_HANDLER.load(Ordering::Acquire);
+    if freed.holds_i64(current) {
+        let _ = INPUT_HANDLER.compare_exchange(current, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
+/// Test probe (#11471): the currently published `useInput` handler word.
+#[doc(hidden)]
+pub fn tui_input_handler_for_test() -> i64 {
+    INPUT_HANDLER.load(Ordering::Acquire)
+}
+
 /// Register the user's `useInput` handler. Replaces any prior handler
 /// — v1 supports a single handler.
 #[no_mangle]

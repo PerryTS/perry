@@ -1862,6 +1862,39 @@ pub(crate) fn prune_dead_vm_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool)
     }
 }
 
+/// #11471: thread-exit release for `VM_SCRIPTS` / `VM_COMPILED_FUNCTION_SOURCES`.
+/// The death prune above retains other threads' owners, so an exiting thread's
+/// Script objects and compiled closures would keep their entries and a fresh
+/// cell at a reused address would report the dead one's source. Runs from a
+/// TLS destructor: process-global locks only, no thread-locals, no GC.
+pub(crate) fn release_vm_owner_entries_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    use std::sync::PoisonError;
+    if let Some(scripts) = VM_SCRIPTS.get() {
+        let mut guard = scripts.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.retain(|owner, _| !freed.contains(*owner));
+    }
+    if let Some(sources) = VM_COMPILED_FUNCTION_SOURCES.get() {
+        let mut guard = sources.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.retain(|owner, _| !freed.contains(*owner));
+    }
+}
+
+/// Test probe (#11471): `(VM_SCRIPTS has owner, VM_COMPILED_FUNCTION_SOURCES has owner)`.
+#[doc(hidden)]
+pub fn vm_owner_entries_for_test(owner: usize) -> (bool, bool) {
+    let script = VM_SCRIPTS.get().is_some_and(|m| {
+        m.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&owner)
+    });
+    (
+        script,
+        compiled_function_source_for_closure(owner).is_some(),
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_vm_script_entry(owner: usize, source: &str) {
     scripts().lock().unwrap().insert(

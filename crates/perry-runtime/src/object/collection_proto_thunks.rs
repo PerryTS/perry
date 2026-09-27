@@ -416,7 +416,13 @@ fn throw_incompatible_receiver(proto: &str, method: &str, receiver_bits: u64) ->
 #[inline]
 fn set_receiver_or_throw(method: &str) -> *mut crate::set::SetHeader {
     let bits = IMPLICIT_THIS.with(|c| c.get());
-    match crate::set::set_ptr_from_receiver_bits(bits) {
+    let set = crate::set::set_ptr_from_receiver_bits(bits).or_else(|| {
+        match super::map_set_subclass::subclass_backing_of(f64::from_bits(bits)) {
+            Some(super::map_set_subclass::CollectionBacking::Set(set)) => Some(set),
+            _ => None,
+        }
+    });
+    match set {
         Some(p) => p,
         None => throw_incompatible_receiver("Set.prototype", method, bits),
     }
@@ -425,9 +431,27 @@ fn set_receiver_or_throw(method: &str) -> *mut crate::set::SetHeader {
 #[inline]
 fn map_receiver_or_throw(method: &str) -> *mut crate::map::MapHeader {
     let bits = IMPLICIT_THIS.with(|c| c.get());
-    match crate::map::map_ptr_from_receiver_bits(bits) {
+    let map = crate::map::map_ptr_from_receiver_bits(bits).or_else(|| {
+        match super::map_set_subclass::subclass_backing_of(f64::from_bits(bits)) {
+            Some(super::map_set_subclass::CollectionBacking::Map(map)) => Some(map),
+            _ => None,
+        }
+    });
+    match map {
         Some(p) => p,
         None => throw_incompatible_receiver("Map.prototype", method, bits),
+    }
+}
+
+/// Read the original receiver after its brand has been checked. Some native
+/// callers publish a raw pointer in IMPLICIT_THIS; normalize it before rooting
+/// or exposing it to JavaScript. The backing collection is not the receiver.
+fn collection_this_value() -> f64 {
+    let bits = IMPLICIT_THIS.with(|c| c.get());
+    if bits >> 48 == 0 {
+        crate::value::js_nanbox_pointer(bits as i64)
+    } else {
+        f64::from_bits(bits)
     }
 }
 
@@ -445,8 +469,10 @@ pub(super) extern "C" fn set_proto_add_thunk(
     v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("add");
-    let r = crate::set::js_set_add(set, v);
-    f64::from_bits(crate::value::JSValue::pointer(r as *mut u8).bits())
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(collection_this_value());
+    crate::set::js_set_add(set, v);
+    receiver.get_nanbox_f64()
 }
 
 pub(super) extern "C" fn set_proto_has_thunk(
@@ -487,7 +513,7 @@ pub(super) extern "C" fn set_proto_foreach_thunk(
     this_arg: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("forEach");
-    crate::set::js_set_foreach(set, cb, this_arg);
+    crate::set::js_set_foreach_with_collection(set, cb, this_arg, collection_this_value());
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -544,8 +570,10 @@ pub(super) extern "C" fn map_proto_set_thunk(
     v: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("set");
-    let r = crate::map::js_map_set(map, k, v);
-    f64::from_bits(crate::value::JSValue::pointer(r as *mut u8).bits())
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(collection_this_value());
+    crate::map::js_map_set(map, k, v);
+    receiver.get_nanbox_f64()
 }
 
 pub(super) extern "C" fn map_proto_has_thunk(
@@ -586,7 +614,7 @@ pub(super) extern "C" fn map_proto_foreach_thunk(
     this_arg: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("forEach");
-    crate::map::js_map_foreach(map, cb, this_arg);
+    crate::map::js_map_foreach_with_collection(map, cb, this_arg, collection_this_value());
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -693,3 +721,6 @@ pub(super) extern "C" fn weakmap_proto_delete_thunk(
     );
     crate::weakref::js_weakmap_delete(r, k)
 }
+
+#[cfg(test)]
+mod subclass_tests;

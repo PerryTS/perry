@@ -45,6 +45,9 @@ pub(crate) struct InFlightRequest {
     /// Grace deadline. Past this, synthesize the default response (unless
     /// `skip_default_response`) and free the handles regardless.
     pub(crate) deadline: Instant,
+    /// The agent whose pump parked it — the server's owner (#11433). Only that
+    /// agent reaps it, fires its `'drain'` listeners, or is kept alive by it.
+    owner_agent: u64,
 }
 
 pub(crate) static IN_FLIGHT: Mutex<Vec<InFlightRequest>> = Mutex::new(Vec::new());
@@ -90,7 +93,11 @@ pub(crate) fn finalize_request_handles_deferred(
 /// server's handle "active" so the main loop doesn't exit before the
 /// pending response is flushed.
 pub(crate) fn has_in_flight_requests() -> bool {
-    IN_FLIGHT.lock().map(|g| !g.is_empty()).unwrap_or(false)
+    let agent = perry_ffi::agent_post::current_agent();
+    IN_FLIGHT
+        .lock()
+        .map(|g| g.iter().any(|e| e.owner_agent == agent))
+        .unwrap_or(false)
 }
 
 /// Finalize parked requests whose handler has now called `res.end()` (the
@@ -110,7 +117,13 @@ pub(crate) fn reap_in_flight_requests() {
             return;
         }
         let now = Instant::now();
+        let agent = perry_ffi::agent_post::current_agent();
         guard.retain(|e| {
+            if e.owner_agent != agent {
+                // Another agent's request: its handles and listeners live in
+                // that agent's heap (#11433).
+                return true;
+            }
             let ended = response_writable_ended(e.response_handle);
             if !ended {
                 // Streaming backpressure cleared — fire `'drain'` (outside
@@ -193,6 +206,7 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
             response_handle: pending.response_handle,
             skip_default_response: pending.skip_default_response,
             deadline,
+            owner_agent: perry_ffi::agent_post::current_agent(),
         });
     } else {
         // Lock poisoned — fall back to the old immediate behavior so we

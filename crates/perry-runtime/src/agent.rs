@@ -54,6 +54,7 @@
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 /// Identity of a JS heap (arena + GC) that queued cross-thread work.
 pub type AgentId = u64;
@@ -92,8 +93,13 @@ pub fn enter_worker_agent() -> AgentId {
 /// one. Models the second-thread-of-one-agent shape — Android's UI thread
 /// pumping on behalf of `perry-native` — which must be declined a loop of its
 /// own by `event_pump::agent_loop`.
-#[cfg(test)]
-pub(crate) fn enter_agent_for_test(id: AgentId) {
+///
+/// Public (and hidden) for `perry-stdlib`'s unit tests (#11472): a test that
+/// owns a loop as its own agent spawns a second thread of THAT agent to
+/// exercise the posting path. Programs never call it — a thread's agent is
+/// fixed by [`enter_worker_agent`] or by having none.
+#[doc(hidden)]
+pub fn enter_agent_for_test(id: AgentId) {
     CURRENT_AGENT.with(|slot| slot.set(Some(id)));
 }
 
@@ -110,6 +116,26 @@ pub fn current_agent() -> AgentId {
 #[inline]
 pub fn owns(owner: AgentId) -> bool {
     owner == current_agent()
+}
+
+/// Purge hooks for agent-tagged queues that live OUTSIDE this crate (#11433).
+///
+/// `perry-stdlib`'s promise-resolution queues (`common::async_bridge`) are
+/// tagged with the enqueuing agent exactly like the timer and thread-result
+/// queues below, and need the same purge when that agent dies — but they cannot
+/// be named from here. A hook registers once per process and runs inside
+/// [`retire_agent`] with the dying agent's id.
+static RETIRE_HOOKS: Mutex<Vec<fn(AgentId)>> = Mutex::new(Vec::new());
+
+/// Register `hook` to run from [`retire_agent`]. Idempotent per function.
+pub fn register_retire_hook(hook: fn(AgentId)) {
+    let mut hooks = RETIRE_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !hooks
+        .iter()
+        .any(|existing| std::ptr::fn_addr_eq(*existing, hook))
+    {
+        hooks.push(hook);
+    }
 }
 
 /// Retire a worker agent at thread exit: its arena is about to be unmapped, so
@@ -142,6 +168,14 @@ pub fn retire_agent(id: AgentId) {
     crate::event_pump::shutdown_agent_loop();
     crate::timer::purge_agent_timers(id);
     crate::thread::purge_agent_thread_results(id);
+    // Copied out so a hook may itself take locks without holding this one.
+    let hooks: Vec<fn(AgentId)> = RETIRE_HOOKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    for hook in hooks {
+        hook(id);
+    }
     // Deliberately do NOT clear `CURRENT_AGENT`. Clearing it would make
     // `current_agent()` fall back to `PRIMARY_AGENT` for the rest of this
     // thread's life — i.e. a worker that has just torn down its heap would

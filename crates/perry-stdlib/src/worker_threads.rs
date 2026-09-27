@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{LazyLock, Mutex};
 
+use perry_runtime::agent::AgentId;
 use perry_runtime::closure::ClosureHeader;
 use perry_runtime::string::{js_string_from_bytes, StringHeader};
 use perry_runtime::thread::{
@@ -103,6 +104,9 @@ thread_local! {
     static NEXT_BROADCAST_ID: RefCell<u64> = const { RefCell::new(10_000) };
     /// Non-zero while running inside an in-process Worker thread.
     static CURRENT_WORKER_ID: Cell<u64> = const { Cell::new(0) };
+    /// The agent that created the in-process Worker running on this thread:
+    /// where its `parentPort.postMessage` events are delivered.
+    static CURRENT_PARENT_AGENT: Cell<AgentId> = const { Cell::new(perry_runtime::agent::PRIMARY_AGENT) };
     /// workerData for the current in-process Worker.
     static CURRENT_WORKER_DATA: RefCell<Option<SerializedValue>> = const { RefCell::new(None) };
     /// Worker threadName for the current in-process Worker.
@@ -187,7 +191,13 @@ static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
 /// `WORKERS` lock by `WorkerRecord::set_liveness` (records are never removed,
 /// only marked dead), so the per-turn keep-alive check is an atomic load.
 static LIVE_REFED_WORKERS: AtomicU64 = AtomicU64::new(0);
-static PARENT_EVENTS: LazyLock<Mutex<VecDeque<WorkerEvent>>> =
+/// Worker → parent events, each tagged with the agent that created the Worker
+/// (#11433). Every agent's pump reaches `js_worker_threads_process_pending` —
+/// a Worker's own await loop included — so an untagged queue let a Worker drain
+/// the events addressed to its parent: its first `postMessage` was then
+/// dispatched on the Worker's own thread, against listeners that live in the
+/// parent's heap, and the parent never saw it.
+static PARENT_EVENTS: LazyLock<Mutex<VecDeque<(AgentId, WorkerEvent)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 type WorkerEntry = extern "C" fn();
@@ -313,6 +323,96 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
             }
         }
     });
+}
+
+/// #11471: `WORKERS` is process-global, but each record holds the Worker
+/// object, listener closures, terminate promise and async-resource objects of
+/// the thread that constructed the Worker (nested Workers are supported, so
+/// that need not be the main thread). Registered before the first insert.
+fn ensure_worker_thread_exit_hook_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_worker_records_in_freed_ranges,
+        )
+    });
+}
+
+/// Thread-exit hook (#11471): drop every Worker record whose JS values live in
+/// the exiting thread's arena. Such a record belongs to the dying thread (the
+/// only one that can observe that Worker), so the whole record goes: its
+/// `LIVE_REFED_WORKERS` share is released first, and dropping its command
+/// `Sender` disconnects the child's receive loop, which ends it as a parent
+/// exit should. Runs in a TLS destructor: one process-global lock, no JS.
+fn release_worker_records_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut workers = WORKERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    workers.retain(|_, worker| {
+        let dead = freed.holds_bits(worker.object_bits)
+            || worker
+                .listeners
+                .values()
+                .flatten()
+                .any(|listener| freed.holds_bits(listener.callback_bits))
+            || worker
+                .terminate_promise
+                .is_some_and(|promise| freed.contains(promise))
+            || worker
+                .async_resource_bits
+                .iter()
+                .any(|bits| freed.holds_bits(*bits));
+        if dead {
+            worker.set_liveness(false, false);
+        }
+        !dead
+    });
+}
+
+/// #11471 test probes over `WORKERS`.
+#[cfg(test)]
+pub(crate) mod thread_exit_probe {
+    use super::*;
+
+    /// Insert a live, refed record for `object_bits` exactly as
+    /// `js_worker_threads_worker_new` does (minus spawning the thread), with
+    /// `callback_bits` as a `message` listener. Returns the worker id.
+    pub(crate) fn insert_worker_for_test(object_bits: u64, callback_bits: u64) -> u64 {
+        ensure_worker_thread_exit_hook_registered();
+        let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        let (tx, _rx) = mpsc::channel::<WorkerCommand>();
+        let undefined = perry_runtime::JSValue::undefined().bits();
+        let mut listeners = HashMap::new();
+        listeners.insert(
+            "message".to_string(),
+            vec![WorkerListener {
+                callback_bits,
+                once: false,
+                web_event: false,
+            }],
+        );
+        let mut record = WorkerRecord {
+            sender: tx,
+            object_bits,
+            listeners,
+            alive: false,
+            refed: false,
+            terminate_promise: None,
+            async_resources: [perry_runtime::async_hooks::AsyncResourceIds {
+                async_id: 0,
+                trigger_async_id: 0,
+            }; 3],
+            async_resource_bits: [undefined; 3],
+        };
+        let mut workers = WORKERS.lock().unwrap();
+        record.set_liveness(true, true);
+        workers.insert(worker_id, record);
+        worker_id
+    }
+
+    pub(crate) fn worker_present(worker_id: u64) -> bool {
+        WORKERS.lock().unwrap().contains_key(&worker_id)
+    }
 }
 
 fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
@@ -918,8 +1018,8 @@ fn event_name(value: f64) -> Option<String> {
     string_value_to_string(value)
 }
 
-fn push_parent_event(event: WorkerEvent) {
-    PARENT_EVENTS.lock().unwrap().push_back(event);
+fn push_parent_event(parent: AgentId, event: WorkerEvent) {
+    PARENT_EVENTS.lock().unwrap().push_back((parent, event));
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
@@ -1291,6 +1391,8 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
     ensure_worker_gc_scanner();
+    ensure_worker_thread_exit_hook_registered();
+    worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 
     let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
@@ -1348,6 +1450,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     drop(workers);
 
     let thread_options = options_state.clone();
+    // Captured on the creating thread: this Worker's events go to THIS agent.
+    let parent_agent = perry_runtime::agent::current_agent();
     // #8546: the Worker re-runs its module bodies on its own thread, but it is
     // the SAME image as its parent (same code addresses, same class ids), so it
     // shares the parent's class tables instead of building a second copy. Its
@@ -1381,13 +1485,14 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             let worker_agent = perry_runtime::agent::enter_worker_agent();
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
+            CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
             CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
             CURRENT_THREAD_NAME
                 .with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
             CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
             CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
             worker_surface::install_web_worker_globals();
-            push_parent_event(WorkerEvent::Online(worker_id));
+            push_parent_event(parent_agent, WorkerEvent::Online(worker_id));
 
             let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
             let mut exit_code = 0;
@@ -1470,15 +1575,15 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             let exit_code = match result {
                 Ok(()) => exit_code,
                 Err(_) => {
-                    push_parent_event(WorkerEvent::Error(worker_id));
+                    push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
                     1
                 }
             };
-            push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
+            push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, exit_code));
         });
     if spawned.is_err() {
-        push_parent_event(WorkerEvent::Error(worker_id));
-        push_parent_event(WorkerEvent::Exit(worker_id, 1));
+        push_parent_event(parent_agent, WorkerEvent::Error(worker_id));
+        push_parent_event(parent_agent, WorkerEvent::Exit(worker_id, 1));
     }
 
     object_value(worker_obj)
@@ -1583,7 +1688,8 @@ pub extern "C" fn js_worker_threads_post_message(data: f64) -> f64 {
     let worker_id = CURRENT_WORKER_ID.with(|id| id.get());
     if worker_id != 0 {
         let message = unsafe { serialize_nanbox_for_thread(data.to_bits()) };
-        push_parent_event(WorkerEvent::Message(worker_id, message));
+        let parent = CURRENT_PARENT_AGENT.with(Cell::get);
+        push_parent_event(parent, WorkerEvent::Message(worker_id, message));
         return js_undefined();
     }
     let str_ptr = unsafe { js_json_stringify(data, 0) };

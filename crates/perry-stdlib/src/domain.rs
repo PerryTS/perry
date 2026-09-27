@@ -108,6 +108,13 @@ thread_local! {
 }
 
 fn ensure_gc_scanner_registered() {
+    // #11471: retire a domain whose values live in an exiting thread's arena.
+    static REGISTER_RELEASER: std::sync::Once = std::sync::Once::new();
+    REGISTER_RELEASER.call_once(|| {
+        crate::common::handle::register_handle_payload_releaser::<DomainHandle>(
+            release_domain_in_freed_ranges,
+        )
+    });
     DOMAIN_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -125,6 +132,19 @@ fn ensure_wrapper_closures_registered() {
         perry_runtime::closure::js_register_closure_rest(domain_bound_wrapper as *const u8, 0);
         perry_runtime::closure::js_register_closure_rest(domain_intercept_wrapper as *const u8, 0);
     });
+}
+
+/// `HANDLES` payload releaser (#11471): see `register_handle_payload_releaser`.
+fn release_domain_in_freed_ranges(
+    domain: &mut DomainHandle,
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) -> bool {
+    domain
+        .listeners
+        .values()
+        .flatten()
+        .any(|v| freed.holds_value(*v))
+        || domain.members.iter().any(|v| freed.holds_value(*v))
 }
 
 fn scan_domain_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {

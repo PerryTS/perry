@@ -358,3 +358,77 @@ console.log(builtinComputed());
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(stdout, "ALPHA BETA\nconst:ALPHA\nplugin-foo\nos:function\n");
 }
+
+#[test]
+fn deep_commonjs_require_preserves_export_values_identity_and_timing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/deep-cjs");
+    std::fs::create_dir_all(package.join("lib/plain")).unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+        "type":"module", "perry": {
+            "compilePackages":["deep-cjs"],
+            "allow":{"compilePackages":["deep-cjs"]}
+        }
+    }"#,
+    )
+    .unwrap();
+    for (file, source) in [
+        (
+            "package.json",
+            r#"{"name":"deep-cjs","version":"1.0.0","main":"index.js"}"#,
+        ),
+        ("index.js", "module.exports = require('./lib/plain');"),
+        (
+            "lib/plain/index.js",
+            r#"
+console.log('class loaded');
+class Plain { constructor(value) { this.value = value; } get() { return this.value; } }
+module.exports = Plain;
+"#,
+        ),
+        (
+            "lib/factory.js",
+            "module.exports = function(value) { return 'factory:' + value; };",
+        ),
+        (
+            "lib/object.js",
+            "module.exports = { default: 'inner', named: 42 };",
+        ),
+        ("lib/number.js", "module.exports = 17;"),
+        (
+            "lib/unused.js",
+            "throw new Error('unused module ran'); module.exports = {};",
+        ),
+        (
+            "lib/esm.mjs",
+            "export default 'esm-default'; export const named = 'esm-named';",
+        ),
+    ] {
+        std::fs::write(package.join(file), source).unwrap();
+    }
+    let entry = root.join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import { createRequire as makeRequire } from 'node:module';
+const req = makeRequire(import.meta.url);
+console.log('entry');
+if (false) req('deep-cjs/lib/unused');
+const Plain: any = req('deep-cjs/lib/plain');
+console.log(typeof Plain, new Plain('deep').get());
+console.log('identity', Plain === req('deep-cjs/lib/plain'), Plain === req('deep-cjs'));
+console.log(req('deep-cjs/lib/factory')('ok'));
+const object = req('deep-cjs/lib/object');
+console.log('object', object.default, object.named);
+console.log('number', req('deep-cjs/lib/number'));
+const esm = req('deep-cjs/lib/esm.mjs');
+console.log('esm', esm.default, esm.named);
+"#,
+    )
+    .unwrap();
+    assert_eq!(compile_and_run(root, &entry),
+        "entry\nclass loaded\nfunction deep\nidentity true true\nfactory:ok\nobject inner 42\nnumber 17\nesm esm-default esm-named\n");
+}

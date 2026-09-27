@@ -15,6 +15,34 @@ use std::sync::Mutex;
 static STREAM_EXPANDO: std::sync::LazyLock<Mutex<HashMap<usize, Vec<(String, u64)>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// #11471: register [`release_stream_expandos_in_freed_ranges`] before the
+/// first expando insert.
+fn ensure_expando_thread_exit_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_stream_expandos_in_freed_ranges,
+        )
+    });
+}
+
+/// #11471: drop every expando value that lies in an exiting thread's freed
+/// blocks. The stream id is process-global but the value lives in the setting
+/// thread's heap; left behind it would be returned by `stream_expando_get` and
+/// traced by every surviving thread's `scan_expando_roots`. Only the offending
+/// properties go (the stream itself may belong to another thread; if it was
+/// the dead thread's, `release_web_streams_in_freed_ranges` clears the rest).
+/// Runs in a TLS destructor: one poison-tolerant lock, no JS heap access.
+fn release_stream_expandos_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut map = STREAM_EXPANDO
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.retain(|_, entries| {
+        entries.retain(|(_, bits)| !freed.holds_bits(*bits));
+        !entries.is_empty()
+    });
+}
+
 /// #5437: store an expando property on a live stream handle. Returns 1 when
 /// stored. Any live stream-band handle kind accepts expandos (streams,
 /// readers, writers) — matching JS objects accepting arbitrary properties.
@@ -31,6 +59,7 @@ pub(crate) unsafe extern "C" fn stream_expando_set_hook(
     let Ok(key) = std::str::from_utf8(bytes) else {
         return 0;
     };
+    ensure_expando_thread_exit_hook();
     if let Ok(mut map) = STREAM_EXPANDO.lock() {
         let entry = map.entry(id).or_default();
         if let Some(slot) = entry.iter_mut().find(|(k, _)| k == key) {

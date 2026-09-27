@@ -848,6 +848,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // same function object as `Array.prototype.toString`. Alias it now that
     // both the Array constructor and the TypedArray intrinsic are set up.
     alias_typed_array_proto_to_string(singleton());
+    // #10497: memoize the intrinsic prototype identities while every
+    // `globalThis.<Builtin>` still names its intrinsic — before any user code
+    // can reassign the writable `globalThis.Function`.
+    crate::array::prime_prototype_addr_cache();
     // The bootstrap's own cost, and the evidence that the `ImmortalLayoutScope`
     // above actually did its job. `slot_masks`/`typed` are the live entry
     // counts of the two per-object layout side tables: they must still read

@@ -42,6 +42,22 @@ fn client_config(trust_test_ca: bool) -> Arc<rustls::ClientConfig> {
     )
 }
 
+/// Own a loop (as this test's own agent) AND the process-global TLS event
+/// queue. Any concurrent stdlib pump — `common::async_bridge`'s tests drive
+/// `js_stdlib_process_pending` — drains that queue too, and an event it takes
+/// is one this test never sees (#11472). The lease is taken first, the queue
+/// lock second, everywhere.
+pub(super) fn own_the_loop_and_the_tls_event_queue() -> (
+    crate::turnloop_client::OwnerLease,
+    std::sync::MutexGuard<'static, ()>,
+) {
+    let lease = crate::turnloop_client::become_the_owner_for_test();
+    (
+        lease,
+        crate::common::async_bridge::pending_queue_test_lock(),
+    )
+}
+
 /// A short, comparable description of each queued event, taken before
 /// `js_tls_process_pending` consumes them.
 fn snapshot_events() -> Vec<String> {
@@ -134,7 +150,7 @@ fn close_server(server: i64) {
 
 #[test]
 fn handshake_data_both_ways_and_close_notify_end_then_close() {
-    let _owner = crate::turnloop_client::become_the_owner_for_test();
+    let _owner = own_the_loop_and_the_tls_event_queue();
     let (server, port) = listening_server();
 
     let client = std::thread::spawn(move || {
@@ -191,7 +207,7 @@ fn handshake_data_both_ways_and_close_notify_end_then_close() {
 
 #[test]
 fn a_rejected_certificate_is_a_tls_client_error_not_a_connection() {
-    let _owner = crate::turnloop_client::become_the_owner_for_test();
+    let _owner = own_the_loop_and_the_tls_event_queue();
     let (server, port) = listening_server();
     let client = std::thread::spawn(move || {
         let tcp = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -225,7 +241,7 @@ fn a_rejected_certificate_is_a_tls_client_error_not_a_connection() {
 
 #[test]
 fn tcp_eof_mid_handshake_reports_tls_handshake_eof() {
-    let _owner = crate::turnloop_client::become_the_owner_for_test();
+    let _owner = own_the_loop_and_the_tls_event_queue();
     let (server, port) = listening_server();
     drop(std::net::TcpStream::connect(("127.0.0.1", port)).unwrap());
     let mut seen = Vec::new();

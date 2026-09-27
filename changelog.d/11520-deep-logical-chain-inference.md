@@ -1,0 +1,3 @@
+### Fixed
+
+- HIR return-type inference no longer loses the type of long `&&` / `||` chains (#11510). The recursive logical rule spent one `INFER_TYPE_RECURSION_CAP` level per join, so a minified predicate with more than ~48 operands (e.g. a 212-comparison codepoint-range test) was typed `Any` instead of `Boolean`. `infer_logical_chain_type` (`crates/perry-hir/src/lower_types.rs`) now flattens the joins (through parens) onto a worklist under a 512-node budget, and past that budget falls back to the old pairwise rule, so no expression is typed less precisely than before and the #5258 work bound holds. Re-lands the inference half of `ae8e15aa2` from closed #9921, without the typed-clone machinery.

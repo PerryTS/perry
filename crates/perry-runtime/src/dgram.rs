@@ -273,6 +273,66 @@ pub(crate) static DGRAM_REGISTRY: LazyLock<Mutex<DgramRegistry>> = LazyLock::new
     })
 });
 
+/// #11471: forget every deterministic-mode binding whose socket object lives
+/// in a thread's arena that is being freed.
+///
+/// `bound` maps an address to the NaN-boxed socket JS object that bound it,
+/// and `lookup_bound_socket` hands that object to `'message'` delivery. A
+/// binding left behind by an exited thread would deliver onto whatever object
+/// another thread's arena later put at that address — and would also keep the
+/// port "in use" for `allocate_port`. Runs in the exiting thread's TLS
+/// destructor: this table's lock only, no thread-locals, no allocation.
+pub(crate) fn release_dgram_bindings_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut registry = DGRAM_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registry.bound.is_empty() {
+        return;
+    }
+    registry
+        .bound
+        .retain(|_, socket| !freed.holds_value(*socket));
+}
+
+/// Test probe (#11471): create a socket object and bind it through the
+/// deterministic-mode registry, as `bind()` does under
+/// `PERRY_DETERMINISTIC_NET=1`. Returns the bound port.
+#[doc(hidden)]
+pub fn deterministic_bind_for_test(address: &str) -> u16 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket_object("udp4"));
+    net::bind_socket(socket.get_nanbox_f64(), 0, address.to_string())
+}
+
+/// Test probe (#11471): the socket bits bound at exactly `(address, port)`
+/// in the deterministic-mode registry, without touching the socket object.
+#[doc(hidden)]
+pub fn deterministic_binding_for_test(address: &str, port: u16) -> Option<u64> {
+    let registry = DGRAM_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registry
+        .bound
+        .get(&SocketKey {
+            address: address.to_string(),
+            port,
+        })
+        .map(|socket| socket.to_bits())
+}
+
+/// Test probe (#11471): create a socket object and bind a real OS socket on
+/// `address`, registering it with [`crate::dgram_reactor`]. Returns the
+/// reactor id, or `None` if the bind failed.
+#[doc(hidden)]
+pub fn real_bind_for_test(address: &str) -> Option<u64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket_object("udp4"));
+    net::real_bind(socket.get_nanbox_f64(), 0, address).ok()?;
+    net::reactor_id(socket.get_nanbox_f64())
+}
+
 pub(crate) fn key(name: &str) -> *mut crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }

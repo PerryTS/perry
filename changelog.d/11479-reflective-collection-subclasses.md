@@ -1,0 +1,1 @@
+Map and Set subclasses created inside closures now work through reflective prototype methods. Brand checks recognize each instance's own collection backing, while `set`/`add` return the subclass receiver and `forEach` callbacks receive it. Inherited backing fields do not confer a collection brand. Adds native parity and runtime regression tests.

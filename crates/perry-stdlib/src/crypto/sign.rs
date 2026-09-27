@@ -82,14 +82,11 @@ pub unsafe extern "C" fn js_crypto_sign_rsa_sha256(
         Some(alg) => alg,
         None => return alloc_buffer_from_slice(&[]),
     };
-    if let Some(signing_key) = parse_p256_signing_key_pem(&pem) {
-        let signature: P256EcdsaSignature = signing_key.sign(&data);
-        if key_input_uses_ieee_p1363(key_bits) {
-            let raw = signature.to_bytes();
-            return alloc_buffer_from_slice(raw.as_slice());
-        }
-        let der = signature.to_der();
-        return alloc_buffer_from_slice(der.as_bytes());
+    if let Some(signing_key) = parse_ec_signing_key_pem(&pem) {
+        let signature = signing_key
+            .sign(alg, &data, key_input_uses_ieee_p1363(key_bits))
+            .unwrap_or_default();
+        return alloc_buffer_from_slice(&signature);
     }
     let private_key = match parse_rsa_private_key_pem(&pem) {
         Some(key) => key,
@@ -107,8 +104,9 @@ pub unsafe extern "C" fn js_crypto_sign_rsa_sha256(
 
 /// `crypto.sign(algorithm, data, key, callback)` callback form.
 ///
-/// Perry executes the work synchronously but preserves Node's observable
-/// callback shape `(err, signature)` and returns `undefined`.
+/// Perry signs synchronously but, like Node's `SIGNREQUEST` job, delivers
+/// `(err, signature)` on a later turn and returns `undefined` — code after the
+/// call runs before the callback.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_sign_async(
     alg_ptr: i64,
@@ -122,7 +120,8 @@ pub unsafe extern "C" fn js_crypto_sign_async(
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    let null = f64::from_bits(JSValue::null().bits());
+    schedule_node_style_callback2(callback_bits, null, value, "SIGNREQUEST");
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -154,17 +153,9 @@ pub unsafe extern "C" fn js_crypto_verify_rsa_sha256(
         Some(alg) => alg,
         None => return js_bool(false),
     };
-    if let Some(verifying_key) = parse_p256_verifying_key_pem(&pem) {
-        let signature = if key_input_uses_ieee_p1363(key_bits) {
-            P256EcdsaSignature::from_slice(&sig_bytes)
-        } else {
-            P256EcdsaSignature::from_der(&sig_bytes)
-        };
-        let signature = match signature {
-            Ok(sig) => sig,
-            Err(_) => return js_bool(false),
-        };
-        return js_bool(verifying_key.verify(&data, &signature).is_ok());
+    if let Some(public_key) = parse_ec_public_key_pem(&pem) {
+        let p1363 = key_input_uses_ieee_p1363(key_bits);
+        return js_bool(public_key.verify(alg, &data, &sig_bytes, p1363));
     }
     let public_key = match parse_rsa_public_key_pem(&pem) {
         Some(key) => key,
@@ -189,7 +180,8 @@ pub unsafe extern "C" fn js_crypto_verify_rsa_sha256(
     js_bool(ok)
 }
 
-/// `crypto.verify(algorithm, data, key, signature, callback)` callback form.
+/// `crypto.verify(algorithm, data, key, signature, callback)` callback form,
+/// delivered on a later turn like `crypto.sign`'s.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_verify_async(
     alg_ptr: i64,
@@ -199,7 +191,8 @@ pub unsafe extern "C" fn js_crypto_verify_async(
     callback_bits: f64,
 ) -> f64 {
     let ok = js_crypto_verify_rsa_sha256(alg_ptr, data_ptr, key_val, sig_ptr);
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), ok);
+    let null = f64::from_bits(JSValue::null().bits());
+    schedule_node_style_callback2(callback_bits, null, ok, "VERIFYREQUEST");
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -317,9 +310,8 @@ pub unsafe extern "C" fn js_crypto_create_public_key(
         Ok(pem) => pem,
         Err(_) => return std::ptr::null_mut(),
     };
-    if let Some(verifying_key) = parse_p256_verifying_key_pem(&pem) {
-        use p256::pkcs8::EncodePublicKey;
-        if let Ok(public_pem) = verifying_key.to_public_key_pem(Default::default()) {
+    if let Some(public_key) = parse_ec_public_key_pem(&pem) {
+        if let Some(public_pem) = public_key.to_public_key_pem() {
             return js_string_from_bytes(public_pem.as_ptr(), public_pem.len() as u32);
         }
     }
@@ -471,43 +463,65 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync_ec_p256(
 ) -> *mut ObjectHeader {
     use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
-    let private_key = match generate_p256_secret_key() {
-        Some(key) => key,
-        None => return js_object_alloc(0, 0),
-    };
-    let public_key = private_key.public_key();
-    let private_pem = private_key
-        .to_pkcs8_pem(Default::default())
-        .map(|pem| pem.to_string())
-        .unwrap_or_default();
-    let public_pem = public_key
-        .to_public_key_pem(Default::default())
-        .unwrap_or_default();
+    // `namedCurve: 'secp384r1' | 'secp521r1'` used to be ignored and produced
+    // a P-256 pair. JWK encodings of those curves are still P-256-only.
     let options = options_bits.to_bits();
-    let public_as_jwk = keygen_encoding_wants_jwk(options, b"publicKeyEncoding");
-    let private_as_jwk = keygen_encoding_wants_jwk(options, b"privateKeyEncoding");
+    let wants_jwk = keygen_encoding_wants_jwk(options, b"publicKeyEncoding")
+        || keygen_encoding_wants_jwk(options, b"privateKeyEncoding");
+    let curve = object_field_string(options, b"namedCurve").and_then(|c| ec_curve_asym_type(&c));
+    let wide_curve = match curve {
+        Some(t @ (ASYM_EC_P384 | ASYM_EC_P521)) if !wants_jwk => Some(t),
+        _ => None,
+    };
+    let (asym_type, p256_key, private_pem, public_pem) = if let Some(asym_type) = wide_curve {
+        let Some((private_pem, public_pem)) = generate_ec_pem_pair(asym_type) else {
+            return js_object_alloc(0, 0);
+        };
+        (asym_type, None, private_pem, public_pem)
+    } else {
+        let private_key = match generate_p256_secret_key() {
+            Some(key) => key,
+            None => return js_object_alloc(0, 0),
+        };
+        let private_pem = private_key
+            .to_pkcs8_pem(Default::default())
+            .map(|pem| pem.to_string())
+            .unwrap_or_default();
+        let public_pem = private_key
+            .public_key()
+            .to_public_key_pem(Default::default())
+            .unwrap_or_default();
+        (ASYM_EC_P256, Some(private_key), private_pem, public_pem)
+    };
+    let jwk_key = |field: &[u8]| {
+        p256_key
+            .as_ref()
+            .filter(|_| keygen_encoding_wants_jwk(options, field))
+    };
+    let public_as_jwk = jwk_key(b"publicKeyEncoding");
+    let private_as_jwk = jwk_key(b"privateKeyEncoding");
 
     let obj = js_object_alloc(0, 2);
 
-    if public_as_jwk {
-        if let Some(public_jwk) = ec_p256_public_jwk_object(&public_key) {
+    if let Some(private_key) = public_as_jwk {
+        if let Some(public_jwk) = ec_p256_public_jwk_object(&private_key.public_key()) {
             set_object_value_field(obj, b"publicKey", nanbox_pointer(public_jwk));
         }
     } else {
         let name = js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let val = js_string_from_bytes(public_pem.as_ptr(), public_pem.len() as u32);
-        mark_keyobject_string(val, KeyKind::Public, 2);
+        mark_keyobject_string(val, KeyKind::Public, asym_type);
         js_object_set_field_by_name(obj, name, nanbox_str(val));
     }
 
-    if private_as_jwk {
-        if let Some(private_jwk) = ec_p256_private_jwk_object(&private_key) {
+    if let Some(private_key) = private_as_jwk {
+        if let Some(private_jwk) = ec_p256_private_jwk_object(private_key) {
             set_object_value_field(obj, b"privateKey", nanbox_pointer(private_jwk));
         }
     } else {
         let name = js_string_from_bytes(b"privateKey".as_ptr(), 10);
         let val = js_string_from_bytes(private_pem.as_ptr(), private_pem.len() as u32);
-        mark_keyobject_string(val, KeyKind::Private, 2);
+        mark_keyobject_string(val, KeyKind::Private, asym_type);
         js_object_set_field_by_name(obj, name, nanbox_str(val));
     }
 

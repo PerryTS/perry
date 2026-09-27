@@ -340,13 +340,15 @@ unsafe fn call_primitive_closure_value(
     }
     // OrdinaryCallBindThis: a strict callee observes the raw primitive
     // receiver (`Number.prototype.f = function(){"use strict"; return
-    // typeof this}` must see `"number"` for `(5).f()`); only a sloppy
-    // callee gets the ToObject wrapper — boxed ONCE up front so writes
-    // through `this` land on the wrapper the body later observes.
+    // typeof this}` must see `"number"` for `(5).f()`), and so does a
+    // BUILT-IN (§10.3.1: its [[Call]] takes `thisArg` unchanged and coerces
+    // itself — every primitive prototype thunk accepts the raw primitive
+    // before it looks for a wrapper payload). Only a sloppy USER callee gets
+    // the ToObject wrapper — boxed ONCE up front so writes through `this`
+    // land on the wrapper the body later observes. For a string receiver
+    // that wrapper costs an own index property per UTF-16 code unit (#11509).
     let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
-    let strict_callee =
-        !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
-    let this_receiver = if strict_callee {
+    let this_receiver = if crate::closure::body_receives_primitive_this(func_ptr) {
         receiver_h.get_nanbox_f64()
     } else {
         crate::object::js_object_coerce(receiver_h.get_nanbox_f64())
@@ -1313,7 +1315,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         std::borrow::Cow::Borrowed("")
     } else {
         let bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-        String::from_utf8_lossy(bytes)
+        // #10502: validate with `str::from_utf8` (ASCII word-at-a-time fast
+        // path) and fall back to the lossy decoder only for invalid bytes.
+        // `from_utf8_lossy` answers the same `Cow` but walks `Utf8Chunks`
+        // chunk by chunk even for a valid name: ~1.5% of a prototype-method
+        // dispatch profile, on every call.
+        match std::str::from_utf8(bytes) {
+            Ok(name) => std::borrow::Cow::Borrowed(name),
+            Err(_) => String::from_utf8_lossy(bytes),
+        }
     };
     let method_name: &str = &method_name_cow;
     let root_scope = crate::gc::RuntimeHandleScope::new();
@@ -1979,7 +1989,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // user method and falls through to the native arms — dispatching it by
     // name again is how an earlier attempt recursed until the stack ran out.
     if let Some(result) =
-        crate::object::own_override::call_own_user_method(object(), method_name, &refreshed_args())
+        crate::object::own_override::call_own_user_method(object, method_name, refreshed_args)
     {
         return result;
     }

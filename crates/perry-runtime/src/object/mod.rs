@@ -506,6 +506,26 @@ per_test_global! {
     static GLOBAL_THIS_READY: AtomicBool = AtomicBool::new(false);
 }
 
+/// #11471: `GLOBAL_THIS_PTR` is a process-global root slot that every thread
+/// overwrites with its own `globalThis` on first use (readers go through the
+/// per-thread `THREAD_GLOBAL_THIS`, so the slot only feeds the root scanner).
+/// When the last writer exits, clear the slot if it still names that thread's
+/// object, so no collection keeps marking (or rewriting) a freed address.
+pub(crate) fn release_global_this_ptr_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let cached = GLOBAL_THIS_PTR.load(Ordering::Acquire);
+    if cached != 0 && freed.holds_i64(cached) {
+        let _ = GLOBAL_THIS_PTR.compare_exchange(cached, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
+/// #11471 test probe: the raw `GLOBAL_THIS_PTR` root slot (0 when unset).
+#[doc(hidden)]
+pub fn global_this_root_slot_for_test() -> i64 {
+    GLOBAL_THIS_PTR.load(Ordering::Acquire)
+}
+
 // Overflow field storage for objects that exceed their pre-allocated inline slot count.
 // Keyed by (obj_ptr as usize) -> Vec<JSValue bits> indexed by absolute field_index
 // (inline slots 0..alloc_limit remain `TAG_UNDEFINED` placeholders in the Vec;

@@ -197,6 +197,54 @@ pub extern "C" fn js_frame_pump_default() -> i32 {
     js_frame_tick(crate::timer::js_timer_now())
 }
 
+/// Thread-exit release (#11471): drop every pending `onFrame` callback whose
+/// closure lives in the exiting thread's freed arena blocks (nothing forces
+/// `js_on_frame_callback` onto the UI thread, and `js_frame_tick` would call
+/// through the dangling pointer), and every `LAST_FIRE_BY_CLOSURE` entry keyed
+/// by such an address (a closure later allocated there would inherit the dead
+/// one's last-fire time and get a wrong `deltaMs`).
+///
+/// Runs in the exiting thread's TLS destructor: plain poison-tolerant locks,
+/// no thread-locals. Dropping a `FrameCallback` drops its
+/// `AsyncContextSnapshot`, a plain `Vec` with no `Drop` side effects.
+pub(crate) fn release_frame_callbacks_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    FRAME_CALLBACKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|cb| !freed.holds_i64(cb.callback));
+    if let Some(map) = LAST_FIRE_BY_CLOSURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        map.retain(|closure, _| !freed.holds_i64(*closure));
+    }
+}
+
+/// Test probe (#11471): is the frame callback registered as `id` still
+/// pending?
+#[doc(hidden)]
+pub fn frame_callback_pending_for_test(id: i64) -> bool {
+    FRAME_CALLBACKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|cb| cb.id == id && !cb.cleared)
+}
+
+/// Test probe (#11471): does `LAST_FIRE_BY_CLOSURE` hold an entry for the
+/// closure address `closure`?
+#[doc(hidden)]
+pub fn frame_last_fire_recorded_for_test(closure: i64) -> bool {
+    LAST_FIRE_BY_CLOSURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&closure))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

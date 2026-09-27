@@ -1,0 +1,3 @@
+# The repo-root .gitignore ignores any path named `fastify` (a compiled
+# test binary); re-include this harness's fastify workload directory.
+!fastify/

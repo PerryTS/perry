@@ -275,9 +275,9 @@ pub(crate) fn registry_is_empty() -> bool {
 /// `GcMoveHookKind::LazyArrayTape`. The registry is keyed by the owner's
 /// address, which was the reason `GC_TYPE_LAZY_ARRAY` had to be immovable and
 /// old-gen: a moved header silently orphaned its tape, and the tape then
-/// outlived every path that could free it. RegExp solved the same problem the
-/// same way (`GcMoveHookKind::RegExpSideTables`), so this is that precedent
-/// rather than a new mechanism.
+/// outlived every path that could free it. The exotic-expando owners solve the
+/// same problem the same way (`GcMoveHookKind::ExoticExpandoOwner`), so this is
+/// that precedent rather than a new mechanism.
 pub(crate) fn owner_moved(old_addr: usize, new_addr: usize) {
     if registry_is_empty() || old_addr == new_addr {
         return;
@@ -299,7 +299,7 @@ pub(crate) fn owner_moved(old_addr: usize, new_addr: usize) {
 /// The copying minor's flip runs no per-object finalize hooks, so without this
 /// a lazy header that dies young leaks its tape — which is the other half of
 /// what kept the type pinned in the old generation. Twin of the sweep-entry
-/// [`collect_owners`] pass, mirroring Map/Set/Error/RegExp.
+/// [`collect_owners`] pass, mirroring Map/Set/Error.
 ///
 /// Cost: O(registry), i.e. proportional to live-plus-recently-allocated lazy
 /// arrays, not to program history.

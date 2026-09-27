@@ -61,3 +61,11 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         "a dead thread's static-prototype entry outlived its heap"
     );
 }
+
+// #11471: one file per audited group of process-global tables.
+mod listeners_tests;
+mod reactors_tests;
+mod stdlib_misc_tests;
+mod streams_tests;
+mod symbols_tests;
+mod ui_tests;

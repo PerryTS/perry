@@ -486,3 +486,26 @@ mod platform_default_tests {
         );
     }
 }
+
+#[test]
+fn win32_parse_preserves_input_components() {
+    use super::*;
+    // All five fields were captured from the repository's pinned Node oracle.
+    let cases: Vec<(String, [String; 5])> = serde_json::from_str(include_str!(
+        "../../../../test-files/fixtures/path_win32_parse.json"
+    ))
+    .unwrap();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    for (input, expected) in cases {
+        let obj = js_path_win32_parse(string_to_js(&input));
+        for (index, value) in expected.iter().enumerate() {
+            let field = crate::object::js_object_get_field(obj, index as u32);
+            let ptr = crate::value::js_jsvalue_to_string(f64::from_bits(field.bits()));
+            assert_eq!(
+                unsafe { string_from_header(ptr) }.as_ref(),
+                Some(value),
+                "input {input:?}, field {index}"
+            );
+        }
+    }
+}

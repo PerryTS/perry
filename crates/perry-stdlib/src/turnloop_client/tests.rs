@@ -808,16 +808,17 @@ fn p10_sink_done(_ctx: usize, _outcome: super::Outcome) {
 /// subject here is the crossing, not the response.
 #[test]
 fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
-    let _lease = super::become_the_owner_for_test();
+    let lease = super::become_the_owner_for_test();
+    let owner_agent = lease.agent();
     let owner = thread_fingerprint();
     let before_dispatched = perry_ffi::agent_post::dispatched();
     let before_submitted = super::submitted_total();
     let before_calls = P10_SINK_CALLS.load(AtomicOrdering::SeqCst);
 
     let poster_ran_its_own = std::thread::spawn(move || {
-        // A second thread acting FOR the same agent: it has no agent of its
-        // own, so `current_agent()` resolves to the primary agent — the one
-        // whose loop the thread above owns.
+        // A second thread acting FOR the same agent: it joins the agent whose
+        // loop the thread above owns, without minting one of its own.
+        perry_runtime::agent::enter_agent_for_test(owner_agent);
         assert!(
             !super::tl::available(),
             "this thread must NOT own the loop, or the post under test never \

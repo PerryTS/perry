@@ -32,7 +32,10 @@ mod inherited_accessor_tests;
 mod iterator;
 mod properties;
 
+pub(crate) use accessors::release_symbol_accessors_in_freed_ranges;
 pub(crate) use accessors::set_symbol_accessor_property;
+#[doc(hidden)]
+pub use accessors::symbol_accessor_held_for_test;
 
 // Symbol constructor + value FFI (no_mangle entry points re-exported so existing
 // `crate::symbol::js_symbol_*` call paths keep resolving).
@@ -899,6 +902,120 @@ pub(crate) fn prune_dead_symbol_pointers(is_dead_symbol: &dyn Fn(usize) -> bool)
         let live: HashSet<u64> = live_ids.into_iter().collect();
         FRESH_SYMBOL_DESCRIPTIONS.with(|m| m.borrow_mut().retain(|id, _| live.contains(id)));
     }
+}
+
+/// #11471: thread-exit release for this file's process-global symbol tables.
+///
+/// `prune_dead_symbol_pointers` / `prune_dead_symbol_property_owners` only
+/// attribute the COLLECTING thread's heap, so an exiting thread's fresh
+/// symbols, symbol-keyed props (owner, key or value in its arena) and
+/// class-static symbol members it stored would otherwise outlive its blocks:
+/// once another thread reuses an address, `js_is_symbol` reports an unrelated
+/// cell as a Symbol, a new object inherits the dead one's symbol props, and
+/// the root scanners trace dangling value bits.
+///
+/// Runs from `Arena::drop` (a TLS destructor): plain `lock()`s only —
+/// `lock_gc_root_registry` touches a thread-local depth counter and may flush
+/// a deferred GC — no allocation on the GC heap, no JS.
+pub(crate) fn release_symbol_tables_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    use std::sync::PoisonError;
+    let mut changed = false;
+    {
+        let mut guard = SYMBOL_POINTERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(set) = guard.as_mut() {
+            let before = set.len();
+            set.retain(|&ptr| !freed.contains(ptr));
+            changed |= set.len() != before;
+        }
+    }
+    {
+        let mut guard = SYMBOL_PROPERTIES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(map) = guard.as_mut() {
+            map.retain(|&owner, entries| {
+                if freed.contains(owner) {
+                    changed = true;
+                    return false;
+                }
+                let before = entries.len();
+                entries.retain(|&(sym, bits)| !freed.contains(sym) && !freed.holds_bits(bits));
+                changed |= entries.len() != before;
+                !entries.is_empty()
+            });
+        }
+    }
+    {
+        let mut guard = SYMBOL_PROPERTY_ATTRS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(map) = guard.as_mut() {
+            let before = map.len();
+            map.retain(|&(owner, sym), _| !freed.contains(owner) && !freed.contains(sym));
+            changed |= map.len() != before;
+        }
+    }
+    // Class ids are process-global, but a member a dying thread stored holds
+    // its symbol and/or value. The symbol is deliberately NOT dereferenced: a
+    // `gc_malloc`'d symbol may already have been freed by the thread's
+    // `MallocState` destructor. `CLASS_STATIC_SYMBOL_ORDER` therefore keeps
+    // the removed member's symbol id; ids are monotonic and never reissued,
+    // so a stale id can only cost a few bytes, never a wrong position.
+    {
+        let mut guard = CLASS_STATIC_SYMBOLS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(map) = guard.as_mut() {
+            let before = map.len();
+            map.retain(|&(_, sym), bits| !freed.contains(sym) && !freed.holds_bits(*bits));
+            changed |= map.len() != before;
+        }
+    }
+    if changed {
+        symbol_property_ic_epoch_bump();
+    }
+}
+
+/// Test probe (#11471): is `ptr` in the process-global symbol set?
+#[doc(hidden)]
+pub fn symbol_pointer_registered_for_test(ptr: usize) -> bool {
+    SYMBOL_POINTERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|set| set.contains(&ptr))
+}
+
+/// Test probe (#11471): does `owner` have a `SYMBOL_PROPERTIES` record, and a
+/// `SYMBOL_PROPERTY_ATTRS` entry for `sym`?
+#[doc(hidden)]
+pub fn symbol_property_tables_hold_for_test(owner: usize, sym: usize) -> (bool, bool) {
+    let props = SYMBOL_PROPERTIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&owner));
+    let attrs = SYMBOL_PROPERTY_ATTRS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&(owner, sym)));
+    (props, attrs)
+}
+
+/// Test probe (#11471): does class `class_id` hold a static member under the
+/// symbol at `sym`?
+#[doc(hidden)]
+pub fn class_static_symbol_held_for_test(class_id: u32, sym: usize) -> bool {
+    CLASS_STATIC_SYMBOLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&(class_id, sym)))
 }
 
 // Monotonic id counter for fresh symbols. Not thread-safe per-thread but

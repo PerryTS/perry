@@ -1,0 +1,595 @@
+{
+  "_comment": [
+    "Registry lifetime verdicts (#11511), enforced by scripts/registry_lifetime_check.py.",
+    "One entry per map-like static with NO production removal path. An unlisted such registry FAILS,",
+    "and so does an entry that matches nothing: a fix (a removal path, or deleting the table) deletes its entry.",
+    "`open_leak` entries are real unbounded tables, named so the debt is visible; each is a follow-up to fix."
+  ],
+  "registries": [
+    {
+      "file": "crates/perry-ext-http/src/client_request_surface.rs",
+      "name": "CLIENT_REQUEST_SURFACE",
+      "verdict": "open_leak",
+      "why": "Keyed by ClientRequest handle, one entry per outgoing request via with_state_mut's entry().or_default(); destroy() only flips `destroyed`, nothing removes the key"
+    },
+    {
+      "file": "crates/perry-ext-http/src/client_turnloop/tls.rs",
+      "name": "CONFIGS",
+      "fn": "configs",
+      "verdict": "process_lifetime",
+      "why": "Keyed by a hash of the TLS option identity (verifier/CA/client cert): one rustls config per distinct option set, not per request"
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/turnloop_h2/mod.rs",
+      "name": "PENDING",
+      "fn": "pending",
+      "verdict": "open_leak",
+      "why": "Keyed by runtime server handle; take_pending only pop_fronts the VecDeque, so an empty queue entry stays for every server ever created"
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
+      "name": "PENDING",
+      "fn": "pending",
+      "verdict": "open_leak",
+      "why": "Keyed by runtime server handle; take_pending pops the deque but never removes the key, leaving one entry per created server after close"
+    },
+    {
+      "file": "crates/perry-ext-net/src/classes.rs",
+      "name": "MAP",
+      "fn": "block_lists",
+      "verdict": "open_leak",
+      "why": "Keyed by per-instance id from js_net_block_list_new: one entry per new BlockList(), and no production path removes it"
+    },
+    {
+      "file": "crates/perry-ext-net/src/classes.rs",
+      "name": "MAP",
+      "fn": "socket_addresses",
+      "verdict": "open_leak",
+      "why": "Keyed by per-instance handle: one SocketAddressState per new SocketAddress, production only inserts/reads"
+    },
+    {
+      "file": "crates/perry-ext-streams/src/lib.rs",
+      "name": "TRANSFORM_PAIRS",
+      "verdict": "open_leak",
+      "why": "writable_id -> transform_id, inserted per TransformStream creation; production only reads it, never removes"
+    },
+    {
+      "file": "crates/perry-ext-streams/src/lib.rs",
+      "name": "TRANSFORM_STREAMS",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_TS_ID, one entry per new TransformStream; removed only in test code, so its callbacks stay rooted forever"
+    },
+    {
+      "file": "crates/perry-ext-streams/src/lib.rs",
+      "name": "WRITABLE_STREAMS",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_WS_ID per WritableStream (and a transform's writable side); the only .remove() is in the #[cfg(test)] module"
+    },
+    {
+      "file": "crates/perry-ext-streams/src/lib.rs",
+      "name": "WRITERS",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_WRITER_ID per getWriter(); releaseLock only sets locked=false and the only remove is in #[cfg(test)]"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_context.rs",
+      "name": "HANDLE_GENERATIONS",
+      "verdict": "open_leak",
+      "why": "Keyed by AsyncLocalStorage handle; bumped on disable() while active and never dropped by remove_store, so it grows per such ALS instance"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_HOOK_HANDLES",
+      "verdict": "open_leak",
+      "why": "Set of AsyncHook handles, one per createHook(); disable() does not remove and nothing else does"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLES",
+      "verdict": "open_leak",
+      "why": "Set of Box::into_raw AsyncResource handles, one per new AsyncResource; documented as monotonic and never shrunk"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "ASYMMETRIC_KEY_REGISTRY",
+      "verdict": "open_leak",
+      "why": "Keyed by the address of a PEM-string KeyObject per createPublic/PrivateKey; finalize_collected_dead_buffer clears the other crypto tables but not this one"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+      "name": "OVERRIDES",
+      "fn": "function_name_overrides",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by closure func_ptr (a code address, not a closure instance): at most one entry per compiled function"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+      "name": "OVERRIDES",
+      "fn": "function_source_overrides",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by func_ptr code address via js_register_function_source; last write wins, one slot per compiled function"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+      "name": "REGISTRY",
+      "fn": "function_name_registry",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by compiled function code pointer, written by codegen module init via js_register_function_name_static once per function"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+      "name": "REGISTRY",
+      "fn": "function_source_registry",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by compiled func_ptr, populated from module init by js_register_function_source_static once per function body"
+    },
+    {
+      "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
+      "name": "MATERIALIZED",
+      "fn": "materialize_virtual_library",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by $perryfs virtual path of a library embedded in the binary: one temp file per embedded library"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/alloc.rs",
+      "name": "SINGLETON_CLOSURES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by func_ptr of non-capturing closures: one cached closure per compiled function"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_BODY_REGISTRY",
+      "verdict": "bounded_by_program",
+      "why": "One ClosureBodyRecord per closure body keyed by func_ptr, filled at module init from codegen registrations"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/bridge.rs",
+      "name": "MEMBER_KEY_CACHE",
+      "verdict": "process_lifetime",
+      "why": "Property-name -> key cache written only under the PERRY_DYN_FAST_SCOPE toggle (default off); grows per distinct name, uncapped when on"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/env.rs",
+      "name": "ENV_KEY_CACHE",
+      "verdict": "bounded_by_cap",
+      "why": "Identifier name -> longlived key string, capped at ENV_KEY_CACHE_MAX=4096; past the cap it falls back to uncached GC keys"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "SOURCE_FN_CACHE",
+      "verdict": "bounded_by_cap",
+      "why": "new Function source -> InterpFn id, capped at SOURCE_FN_CACHE_MAX=4096 entries / 32MB; later distinct sources are not memoized"
+    },
+    {
+      "file": "crates/perry-runtime/src/error.rs",
+      "name": "INTERNED_ERROR_CODES",
+      "verdict": "process_lifetime",
+      "why": "Interns Node ERR_* code strings to leaked &'static str for the .code getter: one entry per distinct code, not per error"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/filehandle.rs",
+      "name": "WRITER_REGISTRY",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_WRITER_ID per FileHandle writer; close/end only set state.closed=true and the entry (with its rooted handle) stays"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "PRIMITIVE_DISPATCH",
+      "verdict": "diagnostic_only",
+      "why": "Primitive-method fallback histogram, written only when gc_diag_enabled() (PERRY_GC_DIAG) and printed at exit"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout.rs",
+      "name": "SHAPE_LAYOUTS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by ShapeId, one entry per distinct shape shared by all its objects; never removed by design (O(shapes), not O(objects))"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+      "name": "LAYOUT_SLOT_MASKS",
+      "verdict": "removed_elsewhere",
+      "site": "crates/perry-runtime/src/gc/layout_tables.rs::slot_masks_remove",
+      "why": "Per-object masks are removed through the hot-TLS raw pointer (hot_layout_slot_masks), which the name walk cannot follow; also pruned per GC"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+      "name": "TYPED_LAYOUTS",
+      "verdict": "removed_elsewhere",
+      "site": "crates/perry-runtime/src/gc/layout_tables.rs::typed_layouts_remove",
+      "why": "Per-object descriptors are removed through the hot-TLS raw pointer (hot_typed_layouts), which the name walk cannot follow; also pruned per GC"
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require.rs",
+      "name": "CANONICAL_MODULE_DIRS",
+      "verdict": "bounded_by_program",
+      "why": "Memo of canonicalized directories holding module paths; bounded by the directories the program resolves"
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require.rs",
+      "name": "CANONICAL_MODULE_PATHS",
+      "verdict": "bounded_by_program",
+      "why": "Realpath memo keyed by module path from registration/require resolution; bounded by the program's module files"
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require/path_registry.rs",
+      "name": "PATH_MODULE_INIT_ADDRS",
+      "verdict": "bounded_by_program",
+      "why": "Canonical module path -> compiled initializer address, set at perry_module_init once per compiled module"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_repl.rs",
+      "name": "RECOVERABLE_ERRORS",
+      "verdict": "open_leak",
+      "why": "HashSet of ErrorHeader addresses, one per new repl.Recoverable; never removed, so it grows and keeps stale addresses"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOBS",
+      "verdict": "open_leak",
+      "why": "One entry per file-backed Blob under a fresh NEXT_FILE_BLOB_ID; nothing removes it, even after the blob dies"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOB_STREAMS",
+      "verdict": "open_leak",
+      "why": "One entry per blob stream under a fresh id; next/return/cancel only set consumed=true"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_TRACES",
+      "verdict": "open_leak",
+      "why": "A fresh next_diag_id() entry per tracingChannel() call (even for the same name), holding a rooted object; never removed"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
+      "name": "DIAG_BOUNDED_CHANNELS",
+      "verdict": "open_leak",
+      "why": "A fresh next_diag_id() entry per bounded-channel creation, holding a rooted object; never removed"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
+      "name": "DIAG_STORE_SCOPES",
+      "verdict": "open_leak",
+      "why": "A new scope id per withStoreScope call; dispose only sets disposed=true and never removes the entry"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+      "name": "DEFAULT_OBJECT_SINGLETONS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by the &'static builtin submodule key: one cached default object per builtin submodule"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+      "name": "EXPORT_SINGLETONS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by (&'static submodule key, &'static export name) of builtin node submodules: a fixed set of builtin exports"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+      "name": "NAMESPACE_SINGLETONS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by the &'static builtin submodule key: one namespace object per builtin submodule on first use"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "TRACE_STATES",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_TRACE_ID, one TraceState per trace_events.createTracing() call; enable/disable only toggle state, nothing removes it"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/attr_census.rs",
+      "name": "KINDS",
+      "verdict": "diagnostic_only",
+      "why": "Attribute census counters, compiled only with the attr-census feature and armed by PERRY_ATTR_DIAG"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_constructors.rs",
+      "name": "CLASS_CAPTURE_VALUES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by codegen class_id from js_class_register_capture_values at the declaration site; re-runs overwrite"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_env.rs",
+      "name": "CLASS_ENVS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by compiled class id, registered from codegen module-init FFI: one entry per capturing class"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_meta_registry.rs",
+      "name": "CLASS_GENERIC_ORIGIN",
+      "verdict": "bounded_by_program",
+      "why": "Monomorphized specialization class_id -> generic class_id, emitted by codegen"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_meta_registry.rs",
+      "name": "CLASS_HAS_INSTANCE_REGISTRY",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> lifted __perry_wk_hasinstance_<class> fn ptr, registered at module init once per class"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_meta_registry.rs",
+      "name": "CLASS_REGISTRY",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> parent edges from class declarations; synthetic ids (util.inherits) are per distinct constructor, not per instance"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_meta_registry.rs",
+      "name": "CLASS_TO_STRING_TAG_REGISTRY",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> lifted __perry_wk_tostringtag_<class> getter, registered at module init once per class"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_meta_registry.rs",
+      "name": "FETCH_PARENT_KIND",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> 1/2 only for classes extending the global Request/Response, registered once per class"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/class_meta.rs",
+      "name": "CLASS_LENGTHS",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> constructor length, written only by codegen registration; last write wins"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/class_meta.rs",
+      "name": "CLASS_NAMES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by codegen class_id via js_register_class_name (plus a few builtin ids): one entry per declared class"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/class_meta.rs",
+      "name": "REGISTRY",
+      "fn": "class_source_registry",
+      "verdict": "bounded_by_program",
+      "why": "class_id -> source text from codegen js_register_class_source: one entry per class declaration site"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DECLARED_STATIC_GLOBAL_SLOTS",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, declared static field name) -> LLVM global address, registered by codegen"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DYNAMIC_PARENT_VALUE",
+      "verdict": "bounded_by_program",
+      "why": "Child class_id -> parent ctor bits stored at class-definition time; overwritten on re-evaluation"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_METHOD_BIND_LENGTHS",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, method name) -> spec .length, written only at codegen method registration"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_OBJECT_VALUES",
+      "verdict": "bounded_by_program",
+      "why": "Template class_id -> latest per-evaluation class object bits; last-wins, one slot per declaration site"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_PARENT_CLOSURES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by the child's declared class_id from js_register_class_parent_dynamic; last-wins per declaration"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_PROTOTYPE_OBJECTS",
+      "verdict": "open_leak",
+      "why": "Also keyed by synthetic class ids minted per closure value (new F() / F.prototype=), so per-evaluation closures grow it forever"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_STATIC_METHOD_BIND_LENGTHS",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, static method name) -> .length, written only at codegen static-method registration"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
+      "verdict": "open_leak",
+      "why": "Key includes the runtime SymbolHeader.id: a re-evaluated class expression with computed [Symbol()] members adds entries each time"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/static_accessor_attrs.rs",
+      "name": "STATIC_ACCESSOR_ATTRS",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, declared static accessor name) -> attrs, set only on existing declared accessors"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/verdict_classes.rs",
+      "name": "VERDICT_CLASSES",
+      "verdict": "open_leak",
+      "why": "Receiver class ids from packed_add store verdicts, including synthetic ids minted per closure; never pruned (small u32s)"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/descriptor_state.rs",
+      "name": "DECLARED_FIELD_NAME_HASHES",
+      "verdict": "bounded_by_program",
+      "why": "FNV hashes of declared instance-field names harvested at class registration; bounded by source field names"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/descriptor_state.rs",
+      "name": "PROTO_DESCRIPTOR_KEY_HASHES",
+      "verdict": "bounded_by_program",
+      "why": "Hashes of keys defineProperty'd onto prototype-level targets: per distinct key name, not per operation"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
+      "name": "PRIVATE_NAME_INTERNER",
+      "verdict": "bounded_by_program",
+      "why": "Interns #private name spellings, which are compile-time literals per access site: one per distinct name"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_PROTOTYPE_METHOD_VALUES",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, method name) -> bound method closure cache, filled only for vtable-registered methods"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_STATIC_DEFINED_ATTRS",
+      "verdict": "bounded_by_program",
+      "why": "(class_id, static key) -> attrs from Object.defineProperty(C,k): per distinct key, not per op"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "NATIVE_CALLABLE_EXPORTS",
+      "verdict": "bounded_by_program",
+      "why": "\"module\\0export\" -> bound native closure, gated by is_native_module_callable_export: a fixed builtin set"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "NATIVE_ESM_EXPORT_VALUES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by module\\0property of builtin exports the program imports; syncBuiltinESMExports refreshes existing keys only"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "NATIVE_MODULE_ACCESSOR_EXPORTS",
+      "verdict": "bounded_by_constant",
+      "why": "Keys are fs\\0get|set\\0{ReadStream,WriteStream,...,promises} from nm_get_own_descriptor: about 11 fixed entries"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "NATIVE_MODULE_NAMESPACES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by builtin module name (plus a few fixed entries): one cached namespace object per builtin"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "NATIVE_NAMESPACE_PROP_OVERRIDES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by module\\0prop for user writes to builtin namespace members; repeat writes replace, so per distinct name"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module/class_method_values.rs",
+      "name": "CLASS_METHOD_NAME_INTERNER",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by (class_id, declared method name); leaked name bytes must stay stable and re-evaluation adds no keys"
+    },
+    {
+      "file": "crates/perry-runtime/src/process/node_module/source_map.rs",
+      "name": "SOURCE_MAP_CACHE",
+      "verdict": "process_lifetime",
+      "why": "module.findSourceMap cache keyed by canonical filename: once per distinct file with an inline map, not per call"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "SITE_TEST_HEADERS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by compiler-emitted regex call-site keys: one cached header per source site"
+    },
+    {
+      "file": "crates/perry-runtime/src/shared_sab.rs",
+      "name": "SHARED_SAB_REGISTRY",
+      "verdict": "open_leak",
+      "why": "One address per SharedArrayBuffer backing; mirrors the deliberately never-freed backings (#4913), so it grows per SAB created"
+    },
+    {
+      "file": "crates/perry-runtime/src/static_plugins.rs",
+      "name": "STATIC_PLUGINS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by the source path of each bundled extension, registered once from entry-module init"
+    },
+    {
+      "file": "crates/perry-runtime/src/stub_diag.rs",
+      "name": "SEEN",
+      "fn": "seen",
+      "verdict": "bounded_by_constant",
+      "why": "HashSet of &'static FFI stub symbol names for first-call warnings: the fixed set of stubs in the runtime"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "CLASS_STATIC_SYMBOL_ORDER",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by class_id (one per declaration site) -> symbol ids of its static [sym] members"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "REGISTERED_SYMBOL_DESCRIPTIONS",
+      "verdict": "process_lifetime",
+      "why": "Keyed by each leaked Symbol.for / well-known symbol; tracks the registries above per distinct key"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "SYMBOL_REGISTRY",
+      "verdict": "process_lifetime",
+      "why": "Symbol.for(key) registry: by spec it returns the same symbol forever; grows per distinct key string"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "WELL_KNOWN_SYMBOLS",
+      "verdict": "bounded_by_constant",
+      "why": "Keyed by well-known symbol short names (iterator, toPrimitive, ...): about 15 fixed spec names"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "CLAIM_LOCK",
+      "verdict": "bounded_by_cap",
+      "why": "Keyed by thread-local declaration name across provider images; inserts stop at HOT_SLOT_CAPACITY (SLOT_OVERFLOW)"
+    },
+    {
+      "file": "crates/perry-runtime/src/ui_text_registry.rs",
+      "name": "NAVSTACK_REGISTRY",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by compiler-synthesized NavStack state id, registered per declared route during UI init"
+    },
+    {
+      "file": "crates/perry-runtime/src/webassembly.rs",
+      "name": "WASM_IMPORT_OBJECTS",
+      "verdict": "open_leak",
+      "why": "Keyed by a monotonic token per WebAssembly instantiation; each keeps its imports object rooted and none is removed"
+    },
+    {
+      "file": "crates/perry-stdlib/src/container/types.rs",
+      "name": "CONTAINER_HANDLES",
+      "verdict": "open_leak",
+      "why": "Keyed by NEXT_HANDLE_ID, one entry per register_container_handle call; nothing reads or removes it"
+    },
+    {
+      "file": "crates/perry-stdlib/src/container/types.rs",
+      "name": "CONTAINER_INFO_LIST_REGISTRY",
+      "verdict": "open_leak",
+      "why": "A fresh handle id per list/ps result; no take/remove exists, so every query leaks its Vec<ContainerInfo>"
+    },
+    {
+      "file": "crates/perry-stdlib/src/container/types.rs",
+      "name": "CONTAINER_INFO_REGISTRY",
+      "verdict": "open_leak",
+      "why": "A fresh NEXT_HANDLE_ID per inspect result via register_container_info; nothing removes entries"
+    },
+    {
+      "file": "crates/perry-stdlib/src/container/types.rs",
+      "name": "CONTAINER_LOGS_REGISTRY",
+      "verdict": "open_leak",
+      "why": "A fresh handle id per logs call with no removal path: every logs fetch leaks its ContainerLogs"
+    },
+    {
+      "file": "crates/perry-stdlib/src/container/types.rs",
+      "name": "IMAGE_INFO_LIST_REGISTRY",
+      "verdict": "open_leak",
+      "why": "A fresh handle id per images query via register_image_info_list; nothing removes entries"
+    },
+    {
+      "file": "crates/perry-stdlib/src/tls/socket_api.rs",
+      "name": "NAMES",
+      "fn": "original_servernames",
+      "verdict": "open_leak",
+      "why": "Keyed by runtime TLS server handle; take_original_servername only pop_fronts the deque, the key stays after close"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "UNCLONEABLE_OBJECTS",
+      "verdict": "open_leak",
+      "why": "Object bits per markAsUncloneable call; never removed, and moved/freed objects leave stale keys"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "UNTRANSFERABLE_OBJECTS",
+      "verdict": "open_leak",
+      "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
+    }
+  ]
+}

@@ -33,7 +33,6 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
         "globalThis"
             // Web Worker scope aliases/functions. They are installed on the
             // worker thread's global object before its compiled entry runs.
-            | "self"
             | "postMessage"
             | "addEventListener"
             | "removeEventListener"

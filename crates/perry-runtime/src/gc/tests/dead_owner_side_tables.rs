@@ -649,6 +649,8 @@ fn test_dom_exception_set_cleared_with_error_side_tables() {
 }
 
 mod meta_and_shape_records;
+#[cfg(feature = "regex-engine")]
+mod regexp_expandos;
 
 // ── FUNCTION_CLASS_IDS (#8040) ──────────────────────────────────────────────
 //

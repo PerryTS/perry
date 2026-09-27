@@ -1656,16 +1656,22 @@ fn cp_reactor_pump_inner() {
         // Release any loop entry still carrying one of this child's pipes
         // BEFORE the registry entry goes, because that is where the ids live.
         cp_release_loop_streams(item.handle);
-        if let Some(map) = cp_live_lock().as_mut() {
-            map.remove(&item.handle);
-        }
+        // #11471: the entry may already be gone — a thread exit released it
+        // (`release_cp_children_in_freed_ranges`), and that release owns the
+        // counter decrement. Decrement only for the removal made here.
+        let removed = cp_live_lock()
+            .as_mut()
+            .and_then(|map| map.remove(&item.handle))
+            .is_some();
         crate::async_hooks::destroy(item.process_ids.async_id);
         for pipe in item.pipe_ids {
             crate::async_hooks::destroy(pipe.async_id);
         }
-        CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
-        if item.refed {
-            CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if removed {
+            CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+            if item.refed {
+                CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -1684,6 +1690,137 @@ struct CpCloseItem {
     pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
     refed: bool,
     close: bool,
+}
+
+/// #11471: drop every live child registered by a thread whose arena is being
+/// freed.
+///
+/// A [`LiveChild`] holds the spawning thread's ChildProcess and stdio stream
+/// objects, its AbortSignal/listener, an exec callback and stdin write
+/// callbacks — all GC-rooted by `cp_reactor_scan_roots_mut`, and all emitted
+/// on by the process-global pump. Left behind by an exited thread, every later
+/// collection would mark/rewrite memory another arena may have reused, the
+/// pump would emit `'exit'`/`'data'` onto it, and [`CP_REFED_COUNT`] would keep
+/// the event loop alive forever. Values never cross threads, so an entry that
+/// names the dead heap anywhere is wholly the dead thread's.
+///
+/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`): no
+/// thread-locals, no JS, no async_hooks `destroy`. The child process itself is
+/// NOT killed (Node does not kill a worker's children either); its reader and
+/// waiter threads keep running and their events for this handle are skipped by
+/// the pump, which already tolerates a missing entry. Dropping the entry
+/// closes the retained stdin writer and IPC clone. A turnloop entry carrying a
+/// pipe (`loop_streams`) lives on the dead thread's loop and goes down with it
+/// rather than through `cp_release_loop_streams`, which needs that thread's
+/// loop state. The counters are decremented here, for exactly the entries
+/// removed here (Phase B only decrements for a removal it makes itself).
+pub(crate) fn release_cp_children_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    if CP_LIVE_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let removed: Vec<LiveChild> = {
+        let mut guard = cp_live_lock();
+        let Some(map) = guard.as_mut() else {
+            return;
+        };
+        let dead: Vec<u64> = map
+            .iter()
+            .filter(|(_, lc)| {
+                freed.holds_bits(lc.cp_bits)
+                    || lc.pipe_bits.iter().any(|&bits| freed.holds_bits(bits))
+                    || freed.holds_bits(lc.abort_signal_bits)
+                    || freed.holds_bits(lc.abort_listener_bits)
+                    || lc
+                        .exec
+                        .as_ref()
+                        .is_some_and(|exec| freed.holds_bits(exec.cb_bits))
+                    || lc.stdin.as_ref().is_some_and(|stdin| {
+                        stdin.callbacks.iter().any(|&bits| freed.holds_bits(bits))
+                    })
+            })
+            .map(|(handle, _)| *handle)
+            .collect();
+        dead.iter()
+            .filter_map(|handle| map.remove(handle))
+            .collect()
+    };
+    for lc in &removed {
+        CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if lc.refed {
+            CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    // Dropped after the lock is released: closing the stdin writer and IPC
+    // clone are syscalls, and nothing here needs the registry any more.
+    drop(removed);
+}
+
+/// Test probe (#11471): register a live-child entry for `cp` exactly as a
+/// spawn would, minus the OS process: no pipes, no reader/waiter threads, and
+/// already `spawned` and un-`ref`'d so no pump acts on it and no event loop
+/// is held open by it. Returns the registry handle.
+#[doc(hidden)]
+pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
+    let handle = CP_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
+    let no_ids = crate::async_hooks::AsyncResourceIds {
+        async_id: 0,
+        trigger_async_id: 0,
+    };
+    cp_live_lock().get_or_insert_with(HashMap::new).insert(
+        handle,
+        LiveChild {
+            cp_bits: cp.to_bits(),
+            process_ids: no_ids,
+            pipe_ids: [no_ids; 3],
+            pipe_bits: [0; 3],
+            pid: 0,
+            stdin: None,
+            stdout_open: false,
+            stderr_open: false,
+            stdout_eof_pending: false,
+            extra_open: Vec::new(),
+            loop_streams: Vec::new(),
+            spawned: true,
+            exited: None,
+            exit_emitted: false,
+            closed: false,
+            refed: false,
+            ipc_send: None,
+            ipc_advanced: false,
+            abort_signal_bits: 0,
+            abort_listener_bits: 0,
+            abort_kill_signal: libc_sigterm(),
+            #[cfg(windows)]
+            win_kill_signal: None,
+            #[cfg(windows)]
+            win_proc_handle: 0,
+            exec: None,
+        },
+    );
+    CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    handle
+}
+
+/// Test probe (#11471): is child `handle` still registered?
+#[doc(hidden)]
+pub fn cp_live_child_registered_for_test(handle: u64) -> bool {
+    cp_live_lock()
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&handle))
+}
+
+/// Test probes (#11471) for the reactor group's tables whose own modules are
+/// `pub(crate)` (`pty::reactor`, `os::signal`), re-exported so the
+/// thread-exit regression tests in `perry-stdlib` can reach them.
+#[doc(hidden)]
+pub mod thread_exit_test_probes {
+    #[cfg(unix)]
+    pub use crate::os::signal::process_signal_subscription_for_test;
+    pub use crate::os::signal::set_process_signal_listener_count_for_test;
+    #[cfg(any(unix, windows))]
+    pub use crate::pty::reactor::pty_live_registered_for_test;
+    #[cfg(unix)]
+    pub use crate::pty::reactor::pty_register_idle_live_for_test;
 }
 
 fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {

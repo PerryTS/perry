@@ -227,7 +227,11 @@ pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" 
     async_bridge::ensure_pump_registered();
     let ctx_addr = ctx as usize;
     let inflight = async_bridge::InflightGuard::new();
+    // `invoke` settles its promise from the pool thread, which has no agent;
+    // settle for the agent that asked (#11433).
+    let owner = async_bridge::resolution_owner();
     let run = move || {
+        let _owner = async_bridge::ResolutionOwnerScope::enter(owner);
         invoke(ctx_addr as *mut c_void);
         drop(inflight);
     };

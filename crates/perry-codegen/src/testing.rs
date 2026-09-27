@@ -79,3 +79,14 @@ pub mod root_slots;
 pub mod temp_slots;
 
 pub use crate::codegen::helpers::NativeRootsPin;
+
+/// Parse `ll_text` with LLVM and run the module verifier. Integration suites
+/// use this to assert a lowering produces well-formed IR (e.g. #11450: code
+/// after a static throw must land in a dead block, not name dropped values).
+#[cfg(feature = "llvm-inprocess")]
+pub fn verify_ir(ll_text: &str, module_name: &str) -> Result<(), String> {
+    let context = inkwell::context::Context::create();
+    let module = crate::inprocess::parse_ir_text(&context, ll_text, module_name)
+        .map_err(|e| format!("{e:#}"))?;
+    module.verify().map_err(|e| e.to_string())
+}

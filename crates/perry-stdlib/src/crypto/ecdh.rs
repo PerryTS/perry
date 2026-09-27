@@ -159,7 +159,7 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
@@ -174,15 +174,11 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
                 Some(pem) => pem,
                 None => return f64::from_bits(0x7FFC_0000_0000_0001),
             };
-            if let Some(signing_key) = parse_p256_signing_key_pem(&pem) {
+            if let Some(signing_key) = parse_ec_signing_key_pem(&pem) {
                 let data = h.data.lock().unwrap().clone();
-                let signature: P256EcdsaSignature = signing_key.sign(&data);
-                if key_input_uses_ieee_p1363(key_bits) {
-                    let raw = signature.to_bytes();
-                    return signature_output(raw.as_slice(), output_encoding);
-                }
-                let der = signature.to_der();
-                return signature_output(der.as_bytes(), output_encoding);
+                let p1363 = key_input_uses_ieee_p1363(key_bits);
+                let signature = signing_key.sign(h.alg, &data, p1363).unwrap_or_default();
+                return signature_output(&signature, output_encoding);
             }
             let private_key = match parse_rsa_private_key_pem(&pem) {
                 Some(key) => key,
@@ -477,7 +473,7 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
@@ -501,18 +497,10 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
                 Some(pem) => pem,
                 None => return js_bool(false),
             };
-            if let Some(verifying_key) = parse_p256_verifying_key_pem(&pem) {
-                let signature = if key_input_uses_ieee_p1363(key_bits) {
-                    P256EcdsaSignature::from_slice(&sig_bytes)
-                } else {
-                    P256EcdsaSignature::from_der(&sig_bytes)
-                };
-                let signature = match signature {
-                    Ok(sig) => sig,
-                    Err(_) => return js_bool(false),
-                };
+            if let Some(public_key) = parse_ec_public_key_pem(&pem) {
                 let data = h.data.lock().unwrap().clone();
-                return js_bool(verifying_key.verify(&data, &signature).is_ok());
+                let p1363 = key_input_uses_ieee_p1363(key_bits);
+                return js_bool(public_key.verify(h.alg, &data, &sig_bytes, p1363));
             }
             let public_key = match parse_rsa_public_key_pem(&pem) {
                 Some(key) => key,

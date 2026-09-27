@@ -20,6 +20,10 @@ use super::{
 #[path = "worker_new.rs"]
 mod worker_new;
 
+#[cfg(test)]
+#[path = "worker_unresolved_tests.rs"]
+mod worker_unresolved_tests;
+
 /// Build the namespace value for a resolved dynamic-import/require target prefix
 /// on the current block: a native submodule (`__node_submod__<key>`), a native
 /// builtin (`__native_mod__<name>`), or a compiled module (`<prefix>__init` +
@@ -560,6 +564,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 );
                 blk.unreachable();
+                // #11450: the throw ends control flow, but this is an
+                // EXPRESSION — its consumer (`arr.push(w)`, `o.k = w`,
+                // `m.set(k, w)`, a guarded `arr[i] = w`, ...) keeps lowering
+                // after we return. Left in the terminated block, every
+                // instruction it emits is dropped while the fresh blocks it
+                // opens survive and name those dropped registers: invalid IR.
+                // Continue in a block with no predecessors instead, so the
+                // consumer's code is well-formed and simply dead.
+                ctx.current_block = ctx.new_block("worker.unresolved.after");
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             if paths.len() != 1 {
