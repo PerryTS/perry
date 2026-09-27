@@ -180,6 +180,7 @@ fn select(closures: Vec<(u32, Expr)>, direct: impl IntoIterator<Item = u32>) -> 
         &HashSet::from([COUNT]),
         &HashMap::new(),
         &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
     )
     .into_keys()
     .collect()
@@ -277,7 +278,13 @@ fn named_tdz_reads_reach_public_and_trusted_callbacks() {
         &ir,
         "perry_closure_trusted_box_callback_ts__99$trusted_boxes",
     );
-    assert!(public.contains("@js_box_get_bits_named("), "{public}");
+    // The TDZ-seeded binding lives in a scope object: the public body reads
+    // the slot inline and raises the named error from a cold arm.
+    let public_cold = named_block_body(&public, "scope_slot.tdz");
+    assert!(
+        public_cold.contains("@js_box_get_bits_trusted_named("),
+        "{public}"
+    );
     let cold = named_block_body(&trusted, "trusted_box.tdz");
     assert!(cold.contains("@js_box_get_bits_trusted_named("), "{cold}");
     assert!(
@@ -397,12 +404,22 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
     let direct = HashSet::from([VERSIONED_FUNC]);
     let boxed = HashSet::from([COUNT]);
     let globals = HashMap::new();
-    let trusted =
-        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
-    assert!(
-        select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
-            .contains(&VERSIONED_FUNC)
+    let trusted = select_trusted_box_closures(
+        &closures,
+        &direct,
+        &boxed,
+        &globals,
+        &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
     );
+    assert!(select_versioned_loop_callbacks(
+        &closures,
+        &trusted,
+        &boxed,
+        &globals,
+        &crate::scope_env::ScopeMap::default()
+    )
+    .contains(&VERSIONED_FUNC));
 
     for (op, prefix) in [
         (UpdateOp::Increment, false),
@@ -412,11 +429,23 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
     ] {
         let update = versioned_update_callback(VERSIONED_FUNC, op, prefix);
         let closures = vec![(VERSIONED_FUNC, update)];
-        let trusted =
-            select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+        let trusted = select_trusted_box_closures(
+            &closures,
+            &direct,
+            &boxed,
+            &globals,
+            &HashSet::new(),
+            &crate::scope_env::ScopeMap::default(),
+        );
         assert!(
-            select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
-                .contains(&VERSIONED_FUNC),
+            select_versioned_loop_callbacks(
+                &closures,
+                &trusted,
+                &boxed,
+                &globals,
+                &crate::scope_env::ScopeMap::default()
+            )
+            .contains(&VERSIONED_FUNC),
             "unused-result {op:?} prefix={prefix} must be eligible"
         );
     }
@@ -440,7 +469,14 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
             rejected_body,
         );
         let closures = vec![(VERSIONED_FUNC, rejected)];
-        assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
+        assert!(select_versioned_loop_callbacks(
+            &closures,
+            &trusted,
+            &boxed,
+            &globals,
+            &crate::scope_env::ScopeMap::default()
+        )
+        .is_empty());
     }
 
     let used_first_param = callback_with(
@@ -456,9 +492,22 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
         ))],
     );
     let closures = vec![(VERSIONED_FUNC, used_first_param)];
-    let trusted =
-        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
-    assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
+    let trusted = select_trusted_box_closures(
+        &closures,
+        &direct,
+        &boxed,
+        &globals,
+        &HashSet::new(),
+        &crate::scope_env::ScopeMap::default(),
+    );
+    assert!(select_versioned_loop_callbacks(
+        &closures,
+        &trusted,
+        &boxed,
+        &globals,
+        &crate::scope_env::ScopeMap::default()
+    )
+    .is_empty());
 }
 
 #[test]

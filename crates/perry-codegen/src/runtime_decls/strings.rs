@@ -1474,6 +1474,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_to_numeric", DOUBLE, &[DOUBLE]);
     module.declare_function("js_numeric_step", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_box_capture_cell_ptr", I64, &[I64]);
+    // Scope context objects (`crate::scope_env`, runtime `box/scope.rs`).
+    module.declare_function("js_scope_alloc", I64, &[I32, I64]);
+    module.declare_function("js_scope_capture_base", I64, &[I64]);
     // Refs #486: dispatch path for `+` when neither operand has a static
     // type (string|number|bigint). Per JS spec, string concat takes
     // priority; otherwise BigInt or numeric add. Hono's

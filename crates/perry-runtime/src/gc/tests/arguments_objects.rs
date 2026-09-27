@@ -123,7 +123,7 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
 
 #[test]
 fn arguments_values_callee_and_mapping_survive_moving_gc() {
-    let _guard = CopyingNurseryTestGuard::new(1);
+    let _guard = CopyingNurseryTestGuard::new(2);
     register_scanners();
     let child = js_object_alloc(0, 1);
     js_object_set_field(child, 0, JSValue::number(42.0));
@@ -134,6 +134,7 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     let mapped = crate::r#box::js_box_alloc(8.0);
     js_arguments_object_map_index(args, 2, mapped);
     js_shadow_slot_set(0, ptr_bits(args as usize));
+    js_shadow_slot_set(1, ptr_bits(mapped as usize));
 
     gc_collect_minor();
 
@@ -157,7 +158,9 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     assert!(unsafe { crate::string::js_string_key_matches(moved_text, key("arguments payload")) });
     assert_eq!(get(moved, "2").bits(), 8.0f64.to_bits());
     js_object_set_field_by_name(moved, key("2"), 9.0);
-    assert_eq!(crate::r#box::js_box_get(mapped), 9.0);
+    let moved_mapped = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::r#box::Box;
+    assert_ne!(moved_mapped, mapped);
+    assert_eq!(crate::r#box::js_box_get(moved_mapped), 9.0);
     assert_eq!(get(moved, "length").bits(), 3.0f64.to_bits());
     assert!(!get_property_attrs(moved as usize, "length")
         .unwrap()
@@ -166,7 +169,8 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
 
 /// #11506: the mapped state is an `ObjectMeta` child edge, so a copying minor
 /// must move the alias array WITH its owner and rewrite the record's word —
-/// there is no address-keyed table left to rekey. Removing the
+/// there is no address-keyed table left to rekey. The mapped cells are
+/// movable too (#11179), so the array's elements are rewritten with them. Removing the
 /// `(*meta).arguments` visit in `gc/layout_slot_visit.rs` leaves the word
 /// naming from-space and turns the `assert_ne!` below red.
 #[test]
@@ -191,12 +195,20 @@ fn arguments_mapping_survives_a_moving_collection() {
         map_after, map_before,
         "the alias array must evacuate with its owner and the record's word be rewritten"
     );
-    assert_eq!(test_arguments_mapped_box(moved, 0), Some(first as usize));
-    assert_eq!(test_arguments_mapped_box(moved, 1), Some(second as usize));
-    // Aliasing still runs both ways through the moved object.
+    // The cells are movable arena objects reachable only through the mapping
+    // array: the minor copies them and rewrites the array's elements.
+    let first_moved = test_arguments_mapped_box(moved, 0).expect("index 0 stays mapped")
+        as *mut crate::r#box::Box;
+    let second_moved = test_arguments_mapped_box(moved, 1).expect("index 1 stays mapped")
+        as *mut crate::r#box::Box;
+    assert_ne!(first_moved, first, "the mapped cells must evacuate too");
+    assert_ne!(second_moved, second);
+    assert_eq!(crate::r#box::js_box_get(first_moved), 1.0);
+    assert_eq!(crate::r#box::js_box_get(second_moved), 2.0);
+    // Aliasing still runs both ways through the moved object and cells.
     js_object_set_field_by_name(moved, key("1"), 20.0);
-    assert_eq!(crate::r#box::js_box_get(second), 20.0);
-    crate::r#box::js_box_set(first, 10.0);
+    assert_eq!(crate::r#box::js_box_get(second_moved), 20.0);
+    crate::r#box::js_box_set(first_moved, 10.0);
     assert_eq!(get(moved, "0").bits(), 10.0f64.to_bits());
 }
 
@@ -251,4 +263,99 @@ fn only_the_state_word_identifies_an_arguments_object() {
     js_arguments_object_map_index(restricted, 0, crate::r#box::js_box_alloc(1.0));
     assert_eq!(test_arguments_mapped_box(restricted, 0), None);
     assert!(test_arguments_mapping_array(restricted).is_none());
+}
+
+#[test]
+fn unreachable_arguments_and_mapped_cell_cycle_is_reclaimed() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    register_scanners();
+    let args = mapped_arguments(&[0.0], f64::from_bits(crate::value::TAG_UNDEFINED), 1);
+    let cell = crate::r#box::js_box_alloc_bits(ptr_bits(args as usize) as i64);
+    js_arguments_object_map_index(args, 0, cell);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    gc_collect_minor();
+    let moved_args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    let moved_cell = test_arguments_mapped_box(moved_args, 0).unwrap();
+    assert_ne!(moved_cell, cell as usize);
+    assert_eq!(
+        crate::r#box::js_box_get_bits(moved_cell as *mut _) as u64,
+        ptr_bits(moved_args as usize)
+    );
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    gc_collect_inner();
+    let live = build_valid_pointer_set();
+    assert!(!live.contains(&(moved_args as usize)));
+    assert!(!live.contains(&moved_cell));
+}
+
+/// #11179 review, finding 5, carried onto the #11506 layout: an OLD arguments
+/// object's mapping array storing a YOUNG parameter cell must be remembered by
+/// the store's barrier, or the next minor neither copies the cell nor rewrites
+/// the element, which then keeps a from-space address (`arguments[i]` reads a
+/// dead cell). The element is in the mapping array's own body, so the store
+/// uses the in-body slot barrier with the ARRAY as parent.
+///
+/// The owner is old because it survived enough minors to be promoted — an
+/// `arguments` object captured by a long-lived closure.
+#[test]
+fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = super::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_scanners();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut args = mapped_arguments(&[0.5; 8], undefined, 8);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    for _ in 0..16 {
+        let map = test_arguments_mapping_array(args).expect("mapped object has a map");
+        let both_old = [args as usize, map as usize].iter().all(|addr| {
+            matches!(
+                crate::arena::classify_heap_generation(*addr),
+                crate::arena::HeapGeneration::Old
+            )
+        });
+        if both_old {
+            break;
+        }
+        gc_collect_minor();
+        args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    }
+    let map = test_arguments_mapping_array(args).expect("mapped object has a map");
+    assert!(
+        [args as usize, map as usize].iter().all(|addr| matches!(
+            crate::arena::classify_heap_generation(*addr),
+            crate::arena::HeapGeneration::Old
+        )),
+        "fixture must start with an OLD owner and mapping array, or the barrier is never exercised"
+    );
+    let cell = crate::r#box::js_box_alloc(8.0);
+    assert!(
+        !matches!(
+            crate::arena::classify_heap_generation(cell as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "fixture must start with a YOUNG cell"
+    );
+    js_arguments_object_map_index(args, 7, cell);
+    // Only the owner is rooted (slot 0, above): the cell is reachable solely
+    // through the mapping array, exactly as a parameter cell whose frame has
+    // returned.
+
+    let trace = super::support::collect_minor_trace(GcTriggerKind::Direct);
+    super::support::assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    assert_eq!(owner, args, "an old owner does not move in a minor");
+    let moved_cell = test_arguments_mapped_box(owner, 7).unwrap();
+    assert_ne!(
+        moved_cell, cell as usize,
+        "the minor must copy the young cell and rewrite the mapping element"
+    );
+    assert!(build_valid_pointer_set().contains(&moved_cell));
+    assert_eq!(get(owner, "7").bits(), 8.0f64.to_bits());
+    js_object_set_field_by_name(owner, key("7"), 9.0);
+    assert_eq!(
+        crate::r#box::js_box_get(moved_cell as *mut crate::r#box::Box),
+        9.0
+    );
+    assert_eq!(get(owner, "7").bits(), 9.0f64.to_bits());
 }

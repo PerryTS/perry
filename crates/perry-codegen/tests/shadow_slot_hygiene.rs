@@ -1073,15 +1073,33 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
         fn_ir.contains("call i64 @js_box_alloc_bits"),
         "a captured-and-mutated local must be boxed:\n{fn_ir}"
     );
-    // #8132: the box-pointer slot itself is deliberately NOT bound. The slot
-    // only ever holds a `js_box_alloc_bits` result — a `std::alloc` cell
-    // outside the GC heap that no collector phase moves or frees, whose
-    // contents the box-registry scanner traces — so binding it rooted
-    // nothing and (under RS4GC) cost a relocation of the box pointer at
-    // every statepoint it stayed live across. Slot 0 is `value`'s.
+    // #11179 reverses #8132. Capture cells are now ordinary MOVABLE arena
+    // objects (`GC_TYPE_BOX`): a copying minor relocates them and no
+    // registry traces them any more, so the box-pointer slot is the cell's
+    // only root in this frame. It must therefore be bound, and bound before
+    // the next call that can collect (`writer`'s closure allocation) — a
+    // bind after it would leave the cell unrooted exactly when it moves.
+    // Slot 0 is `value`'s.
+    let box_alloc = fn_ir
+        .find("call i64 @js_box_alloc_bits")
+        .expect("checked above");
+    let bind = fn_ir[box_alloc..]
+        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+        .map(|offset| box_alloc + offset)
+        .unwrap_or_else(|| {
+            panic!(
+                "#11179: a boxed local's cell is a movable GC object; its \
+                 box-pointer slot must be bound as a GC root:\n{fn_ir}"
+            )
+        });
+    let next_collecting_call = fn_ir[box_alloc..]
+        .find("@js_closure_alloc")
+        .map(|offset| box_alloc + offset)
+        .expect("`writer`'s closure allocation follows the box allocation");
     assert!(
-        !fn_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
-        "#8132: a boxed local's box-pointer slot must not be bound as a GC root:\n{fn_ir}"
+        bind < next_collecting_call,
+        "#11179: the cell's root must be bound before the closure allocation, \
+         which can run a copying minor:\n{fn_ir}"
     );
     // The discriminating control: `writer` (slot 1) holds a movable closure
     // and must still bind — if binds were skipped wholesale this fails.

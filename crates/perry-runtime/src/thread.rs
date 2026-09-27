@@ -257,6 +257,11 @@ pub enum SerializedValue {
     /// ordinary transferable `SerializedValue`.
     BoxedCapture(Box<SerializedValue>),
 
+    /// A capture slot holding a scope context object (`box/scope.rs`): the
+    /// deep-copied words of every slot, rebuilt as a fresh scope object on
+    /// the receiving thread. Like `BoxedCapture`, only in capture position.
+    ScopeCapture(Vec<SerializedValue>),
+
     /// A BigInt: 16 x u64 limbs in little-endian order.
     BigInt([u64; BIGINT_LIMBS]),
 
@@ -506,6 +511,14 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
 /// Same contract as [`serialize_nanbox_for_thread`]: pointer-tagged values
 /// must reference live objects in the current thread's arena/heap.
 unsafe fn serialize_capture_for_thread(slot_bits: u64) -> SerializedValue {
+    if let Some(words) = crate::r#box::scope::scope_slot_contents(slot_bits) {
+        return SerializedValue::ScopeCapture(
+            words
+                .into_iter()
+                .map(|bits| serialize_nanbox_for_thread(bits))
+                .collect(),
+        );
+    }
     match crate::r#box::box_slot_contents_bits(slot_bits) {
         Some(inner_bits) => {
             SerializedValue::BoxedCapture(Box::new(serialize_nanbox_for_thread(inner_bits)))
@@ -557,6 +570,9 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
             captures.iter().find_map(first_unsupported_transfer_type)
         }
         SerializedValue::BoxedCapture(inner) => first_unsupported_transfer_type(inner),
+        SerializedValue::ScopeCapture(slots) => {
+            slots.iter().find_map(first_unsupported_transfer_type)
+        }
         _ => None,
     }
 }
@@ -909,25 +925,48 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             captures,
         } => {
             let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let rooted = scope.root_raw_mut_ptr(closure);
             for (i, cap) in captures.iter().enumerate() {
+                // Deserializing a capture allocates (and may move the
+                // closure); the store itself does not, so re-read the rooted
+                // address in argument position.
                 let bits = deserialize_nanbox_on_current_thread(cap);
-                crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
+                rooted.with_mut_ptr(|closure| {
+                    crate::closure::js_closure_set_capture_f64(
+                        closure,
+                        i as u32,
+                        f64::from_bits(bits),
+                    )
+                });
             }
-            JSValue::pointer(closure as *const u8).bits()
+            rooted.with_mut_ptr(|closure: *mut u8| JSValue::pointer(closure).bits())
         }
 
         SerializedValue::BoxedCapture(inner) => {
-            // Re-box on THIS thread: deep-copy the held value into the local
-            // arena, then allocate a fresh box (registered in this thread's
-            // registry) holding it. The returned bits are the raw box POINTER,
-            // exactly what codegen expects a boxed-capture slot to contain, so
-            // `js_box_get`/`js_box_set` in the reconstructed closure body work
-            // (#6520). `js_box_alloc_bits` uses the system allocator (no GC
-            // trigger), so `value_bits` cannot be collected between the two
-            // steps; once stored, the box-registry GC scanner keeps it alive.
+            // Rebuild the cell in this thread's GC arena. The allocator roots
+            // the input across allocation; the closure's capture owns the result.
             let value_bits = deserialize_nanbox_on_current_thread(inner);
             let box_ptr = crate::r#box::js_box_alloc_bits(value_bits as i64);
             box_ptr as u64
+        }
+
+        SerializedValue::ScopeCapture(slots) => {
+            // Deserializing a slot allocates and may move the new object, so
+            // publish each word through the rooted address.
+            let base = crate::r#box::scope::js_scope_alloc(
+                slots.len() as i32,
+                crate::value::TAG_UNDEFINED as i64,
+            ) as usize as *mut u8;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let rooted = scope.root_raw_mut_ptr(base);
+            for (i, slot) in slots.iter().enumerate() {
+                let bits = deserialize_nanbox_on_current_thread(slot);
+                rooted.with_mut_ptr(|base: *mut u8| unsafe {
+                    crate::r#box::scope::js_scope_set(base as i64, i as i32, bits as i64)
+                });
+            }
+            rooted.with_mut_ptr(|base: *mut u8| base as u64)
         }
 
         SerializedValue::BigInt(limbs) => {

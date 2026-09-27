@@ -54,8 +54,10 @@ pub(in crate::codegen) fn compile_static_method(
     let shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m =
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
             &llvm_name,
@@ -128,7 +130,7 @@ pub(in crate::codegen) fn compile_static_method(
         }
         (this_slot, map)
     };
-    crate::codegen::arguments::release_boxed_param_slots_at_exit(
+    crate::codegen::arguments::box_rooted_parameter_slots(
         lf,
         &f.params,
         &static_boxed_vars,
@@ -272,6 +274,7 @@ pub(in crate::codegen) fn compile_static_method(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),

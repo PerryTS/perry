@@ -88,6 +88,11 @@ pub(crate) fn collect_boxed_param_ids(
     out
 }
 
+/// Ids named by this body's preallocation statements (closures excluded).
+pub(crate) fn collect_prealloc_box_ids_shallow(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
+    collect_prealloc_box_ids_in_stmts(stmts, out);
+}
+
 fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     use perry_hir::Stmt;
     for s in stmts {
@@ -216,10 +221,126 @@ fn collect_boxed_vars_scope(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
             continue;
         }
         if closure_refs.contains(id) && (closure_writes.contains(id) || outer_writes.contains(id)) {
+            // Capture by value when every write precedes every capturing
+            // closure: each closure then snapshots the binding's final value
+            // and no cell is needed (see `writes_all_precede_captures`).
+            if !closure_writes.contains(id) && writes_all_precede_captures(stmts, *id) {
+                continue;
+            }
             boxed.insert(*id);
         }
     }
     boxed
+}
+
+/// True when `id` is declared by exactly one `Stmt::Let` of these statements,
+/// directly in the body's top-level list, and every statement of that list
+/// that writes `id` (outside closures, including the declaration itself)
+/// comes strictly before every statement that creates a closure naming `id`,
+/// with no write or closure reference before the declaration.
+/// Then no write can happen after a capture — a loop around both is a loop
+/// around the declaration too, which makes a fresh binding per iteration — so
+/// snapshot capture is exact.
+fn writes_all_precede_captures(stmts: &[perry_hir::Stmt], id: u32) -> bool {
+    use perry_hir::Stmt;
+    fn find_home<'a>(stmts: &'a [Stmt], id: u32, out: &mut Vec<(&'a [Stmt], usize)>) {
+        for (i, s) in stmts.iter().enumerate() {
+            if matches!(s, Stmt::Let { id: d, .. } if *d == id) {
+                out.push((stmts, i));
+            }
+            match s {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    find_home(then_branch, id, out);
+                    if let Some(e) = else_branch {
+                        find_home(e, id, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_home(body, id, out),
+                Stmt::For { init, body, .. } => {
+                    if matches!(init.as_deref(), Some(Stmt::Let { id: d, .. }) if *d == id) {
+                        // A `for` head binding: never the snapshot case here.
+                        out.push((&[], 0));
+                        out.push((&[], 0));
+                    }
+                    find_home(body, id, out);
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    find_home(body, id, out);
+                    if let Some(c) = catch {
+                        find_home(&c.body, id, out);
+                    }
+                    if let Some(f) = finally {
+                        find_home(f, id, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        find_home(&c.body, id, out);
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    find_home(std::slice::from_ref(body.as_ref()), id, out)
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut homes = Vec::new();
+    find_home(stmts, id, &mut homes);
+    let [(list, home)] = homes.as_slice() else {
+        return false;
+    };
+    let (list, home) = (*list, *home);
+    // Every write and closure reference must sit in the home statement or a
+    // later sibling: compare the totals with what that range accounts for.
+    let count = |range: &[Stmt]| {
+        let mut writes = 0usize;
+        let mut captures = 0usize;
+        for s in range {
+            let mut w = HashSet::new();
+            collect_outer_writes_in_stmt(s, &mut w);
+            let mut r = HashSet::new();
+            let mut cw = HashSet::new();
+            collect_closure_refs_and_writes_in_stmt(s, &mut r, &mut cw);
+            writes += usize::from(w.contains(&id));
+            captures += usize::from(r.contains(&id));
+        }
+        (writes, captures)
+    };
+    let mut last_write = None;
+    let mut first_capture = None;
+    for (j, s) in list.iter().enumerate().skip(home) {
+        let (w, c) = count(std::slice::from_ref(s));
+        if w > 0 || (j == home && matches!(s, Stmt::Let { init: Some(_), .. })) {
+            last_write = Some(j);
+        }
+        if c > 0 && first_capture.is_none() {
+            first_capture = Some(j);
+        }
+    }
+    let (Some(last_write), Some(first_capture)) = (last_write, first_capture) else {
+        return false;
+    };
+    if last_write >= first_capture {
+        return false;
+    }
+    // Nothing before the home statement may write or capture the binding.
+    let (w_before, c_before) = count(&list[..home]);
+    if w_before > 0 || c_before > 0 {
+        return false;
+    }
+    // Only a declaration in the body's own top-level list qualifies: then
+    // there is no enclosing statement or sibling branch that could write or
+    // capture the binding outside the range checked above.
+    std::ptr::eq(list.as_ptr(), stmts.as_ptr())
 }
 
 /// Walk the given statements looking for `Expr::Closure` nodes, and

@@ -716,6 +716,7 @@ pub(super) fn compile_module_entry(
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
                 .compiler_private_async_i1_control_locals,
+            scope_map: &cross_module.scope_map,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
@@ -1576,6 +1577,7 @@ pub(super) fn compile_module_entry(
                 .compiler_private_async_i32_control_locals,
             compiler_private_async_i1_control_locals: &cross_module
                 .compiler_private_async_i1_control_locals,
+            scope_map: &cross_module.scope_map,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),

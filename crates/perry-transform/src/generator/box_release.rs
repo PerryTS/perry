@@ -1,60 +1,20 @@
-//! #7933: releasing an async activation's boxed body locals at its terminal
-//! state.
+//! Terminal lifecycle markers for lowered async activations.
 //!
-//! The async-to-generator transform boxes every body local of an `async`
-//! function (`Stmt::PreallocateBoxes`, one `js_box_alloc_bits` cell per local
-//! per invocation) so the synthesized state-machine closures can share them
-//! across suspends. Box cells are registered in the runtime's `BOX_REGISTRY`,
-//! and `scan_box_roots_mut` marks the JSValue inside every registered cell on
-//! every collection. So every local of every activation the program has *ever*
-//! run used to stay a live GC root for the life of the process.
-//!
-//! #7933 (PR #7939) fixed the *retention* half by clearing the releasable cells
-//! at a terminal state. It deliberately did not free them: registry
-//! monotonicity was what made perry#4898's pointer rejection and #7906's
-//! positive pointer cache sound. The cost of that choice was the other half of
-//! the bug — cell + registry bytes per completed activation, growing linearly,
-//! invisible to every GC counter because none of it is in the GC heap.
-//!
-//! #8208 makes the release real. `Stmt::ReleaseBoxes` lowers to
-//! `js_box_release` / `js_i32_box_release` / `js_bool_box_release`, which clear
-//! the cell, de-register it, evict its positive-cache slot, and park it in a
-//! per-activation release range. Queued and running `Task::AsyncStep`s retain
-//! the activation; its zero-reference transition publishes that range to a
-//! free pool, and `js_*box_alloc*` pops the pool before calling `std::alloc`.
-//! Untracked runtime releases retain the old whole-pump quarantine as a
-//! conservative fallback. Registry membership is therefore no longer
-//! monotonic — but the property perry#4898 and #7906 actually depend on
-//! survives untouched, because cell memory is never handed back to the
-//! allocator: an address minted by `js_box_alloc*` stays 8 readable bytes of
-//! box cell for the life of the thread, so "was a box" can never become "is
-//! another object".
-//!
-//! Closure-visible cells are named by the terminal release too, but the runtime
-//! keeps them live and registered while a GC closure still carries their raw
-//! address. Closure move/death hooks maintain per-cell capture counts. Once the
-//! queued/running activation steps drain, every uncaptured cell publishes and
-//! each captured cell waits independently for its final count to disappear.
-//! Thus one escaped closure does not retain the complete activation frame.
+//! Body locals are movable GC cells, traced through generated frames and
+//! state-machine closure captures. `ReleaseBoxes` retains the legacy terminal
+//! ABI that completes the activation's generation token; it no longer clears,
+//! deregisters, or recycles individual cells. Escaped closures keep their own
+//! cells alive through ordinary GC edges, and unreachable cycles are collected.
 
 use perry_hir::ir::*;
 use perry_hir::types::LocalId;
 
-/// One `Stmt::ReleaseBoxes` naming every id in the terminal release set.
-///
-/// Inside the state-machine step closure each id is a boxed capture, so this
-/// lowers to one `js_*box_release` per cell: clear, de-register, evict the
-/// positive-cache slot, park for reuse. No allocation and no collection point,
-/// so it needs no rooting — but unlike #7933's `js_box_set(cell, undefined)`
-/// the cell does NOT stay registered.
+/// Preserve the terminal activation marker for the compiler-private controls
+/// and body locals. Runtime release calls update only the lifecycle token.
 pub(crate) fn build_box_release_stmts(ids: &[LocalId]) -> Vec<Stmt> {
     if ids.is_empty() {
         return Vec::new();
     }
-    // One `Stmt::ReleaseBoxes` instead of per-id `LocalSet(id, undefined)`
-    // stores: codegen lowers it to `js_box_release*` calls that clear the
-    // cell AND de-register + park it for reuse, so a completed activation
-    // stops costing malloc-side memory, not just GC retention.
     vec![Stmt::ReleaseBoxes(ids.to_vec())]
 }
 

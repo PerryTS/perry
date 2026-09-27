@@ -2,6 +2,7 @@
 use perry_hir::{types::Type, Expr, Function, Module, Stmt};
 
 fn emit(body: Vec<Stmt>) -> String {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("tdz_paths.ts");
     module.functions.push(Function {
         id: 1,
@@ -28,7 +29,12 @@ fn emit(body: Vec<Stmt>) -> String {
 fn allocated_slots(ir: &str, seed: &str) -> Vec<String> {
     ir.lines()
         .filter_map(|line| {
-            if !line.contains(&format!("call i64 @js_box_alloc_bits(i64 {seed})")) {
+            // A preallocated binding lives in a scope object
+            // (`js_scope_alloc(len, seed)`); a lone box is `js_box_alloc_bits`.
+            if !line.contains(&format!("call i64 @js_box_alloc_bits(i64 {seed})"))
+                && !(line.contains("call i64 @js_scope_alloc(")
+                    && line.contains(&format!("i64 {seed})")))
+            {
                 return None;
             }
             let value = line.trim().split(" = ").next().unwrap();

@@ -128,10 +128,11 @@ pub(crate) fn closure_dynamic_side_tables_nonempty() -> bool {
     false
 }
 
-/// Death pruning for closure-keyed tables (box-capture owners and the
-/// wasm-host funcref table), with one of the GC's deadness predicates.
+/// Death pruning for the closure-keyed wasm-host funcref table, with one of
+/// the GC's deadness predicates.
 pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
-    super::prune_dead_closure_box_capture_owners(is_dead_closure);
+    #[cfg(not(feature = "wasm-host"))]
+    let _ = is_dead_closure;
     #[cfg(feature = "wasm-host")]
     let removed = if let Ok(mut externals) = get_wasm_funcref_externals().lock() {
         let mut removed = Vec::new();
@@ -784,7 +785,6 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
             *dst_captures.add(i) = *src_captures.add(i);
         }
         rebuild_closure_layout_and_barriers(new_closure, count);
-        super::clone_closure_box_captures(source_ptr as *const ClosureHeader, new_closure);
         // NaN-box the new closure pointer
         let new_ptr = new_closure as u64;
         f64::from_bits(0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF))
@@ -965,7 +965,6 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         // GC_STORE_AUDIT(BARRIERED): rebound this capture is included in the layout/barrier rebuild.
         *dst_captures.add(this_slot) = recv_handle.get_nanbox_f64().to_bits();
         rebuild_closure_layout_and_barriers(new_closure, count);
-        super::clone_closure_box_captures(source_ptr as *const ClosureHeader, new_closure);
         let new_ptr = new_closure as u64;
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }

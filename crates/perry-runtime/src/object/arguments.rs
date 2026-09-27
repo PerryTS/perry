@@ -25,12 +25,13 @@ use super::*;
 //   (strict code or a non-simple parameter list: CreateUnmappedArgumentsObject).
 // * `TAG_FALSE`: a sloppy `callee` with no index aliasing a parameter.
 // * `POINTER_TAG | array`: a sloppy mapped object. The `GC_TYPE_ARRAY` holds one
-//   element per mappable index: that parameter's box address as a plain
-//   Number, or `TAG_HOLE` once the index is unmapped. Boxes are `std::alloc`
-//   cells (`crate::r#box`), never arena objects, and they never move, so the
-//   elements are deliberately not pointer bit patterns and nothing traces or
-//   rewrites them. (The old table's "strong" visit of them was a validated
-//   no-op for the same reason.)
+//   element per mappable index: that parameter's mutable-capture cell as a
+//   NaN-boxed pointer, or `TAG_HOLE` once the index is unmapped. Cells are
+//   movable `GC_TYPE_BOX` arena objects (#11179), so each element is an
+//   ordinary traced child edge of the array: marking keeps the cell alive
+//   while the arguments object is, and a moving collection rewrites the
+//   element to the cell's new address. The array is private to the record and
+//   never exposed to JS, so the pointer never reaches user code.
 const ARGUMENTS_RESTRICTED: u64 = crate::value::TAG_TRUE;
 const ARGUMENTS_UNMAPPED: u64 = crate::value::TAG_FALSE;
 
@@ -88,8 +89,9 @@ impl ArgumentsState {
         matches!(self, ArgumentsState::Restricted)
     }
 
-    /// The box parameter `index` still aliases, if any. Never allocates, and
-    /// the box it names never moves, so the answer survives a collection.
+    /// The cell parameter `index` still aliases, if any. Never allocates. The
+    /// cell is movable, so the answer is valid only until the next collection
+    /// point; callers re-derive it after anything that can allocate.
     unsafe fn mapped_box(self, index: u32) -> Option<*mut crate::r#box::Box> {
         let ArgumentsState::Mapped(map) = self else {
             return None;
@@ -101,7 +103,8 @@ impl ArgumentsState {
         if bits == crate::value::TAG_HOLE {
             return None;
         }
-        Some(f64::from_bits(bits) as usize as *mut crate::r#box::Box)
+        let cell = (bits & crate::value::POINTER_MASK) as usize as *mut crate::r#box::Box;
+        (!cell.is_null()).then_some(cell)
     }
 
     /// Break index `index`'s alias. Never allocates.
@@ -574,10 +577,25 @@ pub extern "C" fn js_arguments_object_map_index(
             return;
         };
         if index < (*map).length {
-            // GC_STORE_AUDIT(POINTER_FREE): the box address as a plain Number.
-            // A box is a `std::alloc` cell, never a heap edge.
-            *(crate::array::array_elements_ptr(map) as *mut u64).add(index as usize) =
-                (box_ptr as usize as f64).to_bits();
+            // The cell is a movable heap object, so the element is a traced
+            // pointer edge. Store it through the array's resolved slot store:
+            // it records the element's layout (a pointer where the array was
+            // born all-hole, so the tracer visits the slot) and runs the
+            // in-body slot barrier with the ARRAY as parent, so an OLD mapping
+            // array storing a YOUNG cell is remembered and the next minor
+            // copies the cell and rewrites this element. The mapping array is
+            // a private plain `GC_TYPE_ARRAY` born with `length == capacity`
+            // covering `index`, so the public setter's exotic-receiver,
+            // frozen, sparse and string-addref arms cannot apply; calling the
+            // resolved store directly keeps this prologue helper a GC leaf.
+            let bits = crate::value::POINTER_TAG | (box_ptr as u64 & crate::value::POINTER_MASK);
+            let flags = crate::array::array_object_flags_resolved(map);
+            crate::array::store_array_slot_resolved(
+                map,
+                index as usize,
+                f64::from_bits(bits),
+                flags,
+            );
         }
     }
 }
@@ -757,9 +775,15 @@ pub(crate) unsafe fn arguments_object_set_field(
             crate::error::throw_immutable_write(0, &name);
         }
     }
+    let mapped = mapped_box.is_some();
     write_ordinary_own_value(obj, key, value);
-    if let Some(box_ptr) = mapped_box {
-        crate::r#box::js_box_set(box_ptr, value);
+    // The own-value write can allocate and move the cell: re-derive it.
+    if mapped {
+        let cell = super::canonical_array_index(&name)
+            .and_then(|idx| arguments_state(obj).and_then(|state| state.mapped_box(idx)));
+        if let Some(box_ptr) = cell {
+            crate::r#box::js_box_set(box_ptr, value);
+        }
     }
     true
 }

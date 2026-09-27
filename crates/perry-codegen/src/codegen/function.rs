@@ -715,8 +715,10 @@ pub(super) fn compile_function(
     let mut shadow_slot_map = if precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let m =
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        let m = crate::scope_env::compact_root_slots(
+            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            &cross_module.scope_map,
+        );
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
             &llvm_name,
@@ -865,7 +867,7 @@ pub(super) fn compile_function(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, &f.params, &boxed_vars, &locals);
+    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
@@ -1064,7 +1066,9 @@ pub(super) fn compile_function(
     // statement lowering.  `enable_shadow_frame` deliberately retains the
     // original upper-bound size, so the remaining preassigned slot indices
     // stay valid even when filtering leaves holes.
-    shadow_slot_map.retain(|id, _| !native_facts.number_by_construction_locals().contains(id));
+    shadow_slot_map.retain(|id, _| {
+        boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
+    });
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
@@ -1201,6 +1205,7 @@ pub(super) fn compile_function(
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
+        scope_map: &cross_module.scope_map,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),

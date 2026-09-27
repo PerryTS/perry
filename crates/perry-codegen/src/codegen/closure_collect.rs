@@ -88,6 +88,7 @@ pub(crate) fn select_versioned_loop_callbacks(
     trusted_box_closures: &std::collections::HashMap<u32, TrustedBoxClosure>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> std::collections::HashSet<u32> {
     closures
         .iter()
@@ -141,8 +142,17 @@ pub(crate) fn select_versioned_loop_callbacks(
                     body,
                     captures,
                     module_globals,
+                    scope_map,
                 )
                 .into_iter()
+                .flat_map(|id| {
+                    let members = scope_map.members(id);
+                    if members.is_empty() {
+                        vec![id]
+                    } else {
+                        members.to_vec()
+                    }
+                })
                 .collect();
             (capture_ids.contains(&target)
                 && value
@@ -534,6 +544,7 @@ pub(crate) fn select_trusted_box_closures(
     module_boxed_vars: &std::collections::HashSet<u32>,
     module_globals: &std::collections::HashMap<u32, String>,
     excluded_func_ids: &std::collections::HashSet<u32>,
+    scope_map: &crate::scope_env::ScopeMap,
 ) -> std::collections::HashMap<u32, TrustedBoxClosure> {
     let mut candidates: Vec<(usize, u32, TrustedBoxClosure)> = closures
         .iter()
@@ -570,6 +581,7 @@ pub(crate) fn select_trusted_box_closures(
                 body,
                 captures,
                 module_globals,
+                scope_map,
             );
             let capture_count = auto_captures.len()
                 + usize::from(*captures_new_target)

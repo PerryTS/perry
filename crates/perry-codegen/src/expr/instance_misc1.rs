@@ -188,7 +188,10 @@ fn emit_with_key(ctx: &mut FnCtx<'_>, property: &str) -> (String, String) {
 
 fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<String> {
     super::invalidate_local_write_facts(ctx, id);
-    if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
+    if ctx.boxed_vars.contains(&id) && crate::scope_env::access::slot(ctx, id).is_some() {
+        let value_bits = ctx.block().bitcast_double_to_i64(value);
+        crate::scope_env::access::write_scoped(ctx, id, &value_bits)?;
+    } else if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
         let closure_ptr = super::current_closure_ptr_value(ctx, "captured with-fallback set")?;
         let idx_str = capture_idx.to_string();
         if ctx.boxed_vars.contains(&id) {

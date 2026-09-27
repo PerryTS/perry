@@ -310,7 +310,9 @@ const MAX_RECIPE: usize = 8;
 /// re-tag, which is the entire population this pass needs; admitting `add`
 /// would be sound by the same argument but buys nothing today and widens what
 /// a reader has to check.
-const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor"];
+/// `add` derives a scope-slot address (`base + 8 * index`) from the scope
+/// object's root load (`crate::scope_env`).
+const TRANSPARENT_BIN: &[&str] = &["and", "or", "xor", "add"];
 
 /// Conversions that are pure re-interpretations of a bit pattern.
 const TRANSPARENT_CAST: &[&str] = &["bitcast", "ptrtoint", "inttoptr", "trunc", "zext", "sext"];

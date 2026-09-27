@@ -9,6 +9,7 @@ mod barrier_arming;
 mod barrier_decoded_parent;
 mod block_pool_pressure;
 mod block_skip;
+mod boxes;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
