@@ -9,6 +9,24 @@ fn computed_native_requires_survive_relocation_and_authenticate_payloads() {
     if !require_tool("llvm-dlltool") {
         return;
     }
+    // The shared Windows C fixture imports Node-API symbols from app.exe,
+    // matching the Perry executable. Run the Node oracle under that basename
+    // too so Windows binds those imports to the loaded host image.
+    #[cfg(windows)]
+    let oracle_directory = tempfile::tempdir().unwrap();
+    #[cfg(windows)]
+    let oracle_node = {
+        let mut locate = Command::new("node");
+        locate.args(["-p", "process.execPath"]);
+        let output = run(locate, "locate Node oracle");
+        let original = String::from_utf8(output.stdout).unwrap();
+        let oracle = oracle_directory.path().join("app.exe");
+        std::fs::copy(original.trim(), &oracle).unwrap();
+        oracle
+    };
+    #[cfg(not(windows))]
+    let oracle_node = PathBuf::from("node");
+
     for variant in ["computed", "static-edge", "project", "platform-package"] {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
@@ -88,7 +106,7 @@ if (process.env.PERRY_TEST_DLOPEN) {{
 }}
 "#, if variant == "project" { "" } else { "import addon from 'fixture-addon';" },
             if variant == "project" { "const addon = load('./native/addon.node');" } else { "" })).unwrap();
-        let mut node = Command::new("node");
+        let mut node = Command::new(&oracle_node);
         node.arg(&entry);
         let oracle = run(node, "Node computed addon oracle");
         assert_eq!(
@@ -119,6 +137,10 @@ if (process.env.PERRY_TEST_DLOPEN) {{
         let rogue = temp.path().join("unlisted.node");
         std::fs::copy(native.join("addon.node"), &rogue).unwrap();
         std::fs::remove_dir_all(&source).unwrap();
+        let relocated = temp.path().join("relocated");
+        std::fs::rename(&install, &relocated).unwrap();
+        let executable = relocated.join(executable.file_name().unwrap());
+        let sidecar = relocated.join(sidecar.file_name().unwrap());
         let output = run(Command::new(&executable), "relocated computed addon");
         assert_eq!(output.stdout, oracle.stdout, "{variant}");
         let mut authenticated = Command::new(&executable);

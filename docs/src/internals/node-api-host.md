@@ -381,8 +381,8 @@ instead of trying to read it as UTF-8. Computed CommonJS `require()` and
 `createRequire()` requests use the same loader as `process.dlopen()`. The
 manifest maps logical IDs, original package paths, and unambiguous declared
 project paths to sidecar payloads, so the original source tree may be removed.
-`require.resolve()` returns the deployed payload path, which also keys
-`require.cache`. Only manifest entries can load; merely finding a `.node` file
+Runtime-computed `require.resolve()` requests return the deployed payload
+path, which also keys `require.cache`. Only manifest entries can load; merely finding a `.node` file
 on the host filesystem does not authorize it.
 
 At runtime, one loader operation does the following:
