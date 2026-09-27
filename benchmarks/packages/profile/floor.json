@@ -1,0 +1,566 @@
+{
+ "f01_inline_arith": {
+  "buckets": [
+   [
+    "generated_code",
+    98.0
+   ],
+   [
+    "number_string",
+    1.8
+   ],
+   [
+    "other_runtime",
+    0.2
+   ],
+   [
+    "closure_box_args",
+    0.0
+   ]
+  ],
+  "entries": [
+   [
+    "<inline JS>",
+    98.0
+   ],
+   [
+    "js_parse_int",
+    1.8
+   ],
+   [
+    "<no JS frame>",
+    0.2
+   ]
+  ],
+  "node": 49.3571425,
+  "perry": 37.99971375,
+  "ratio": 0.7698929035448111,
+  "status": "OK"
+ },
+ "f02_direct_call": {
+  "buckets": [
+   [
+    "generated_code",
+    99.9
+   ],
+   [
+    "prop_lookup",
+    0.1
+   ],
+   [
+    "other_runtime",
+    0.0
+   ],
+   [
+    "closure_box_args",
+    0.0
+   ]
+  ],
+  "entries": [
+   [
+    "<inline JS>",
+    99.9
+   ],
+   [
+    "<no JS frame>",
+    0.1
+   ]
+  ],
+  "node": 48.0560375,
+  "perry": 85.99967875,
+  "ratio": 1.789570743322314,
+  "status": "OK"
+ },
+ "f03_closure_const": {
+  "buckets": [
+   [
+    "call_overhead",
+    51.5
+   ],
+   [
+    "generated_code",
+    23.7
+   ],
+   [
+    "numeric_conv",
+    20.0
+   ],
+   [
+    "closure_box_args",
+    4.8
+   ]
+  ],
+  "entries": [
+   [
+    "js_implicit_this_set",
+    43.1
+   ],
+   [
+    "<inline JS>",
+    23.7
+   ],
+   [
+    "fmod",
+    20.0
+   ],
+   [
+    "js_closure_call1",
+    8.3
+   ]
+  ],
+  "node": 26.54965,
+  "perry": 298.77804,
+  "ratio": 11.2535585214871,
+  "status": "OK"
+ },
+ "f04_class_method": {
+  "buckets": [
+   [
+    "generated_code",
+    98.5
+   ],
+   [
+    "prop_lookup",
+    1.4
+   ],
+   [
+    "other_runtime",
+    0.1
+   ],
+   [
+    "unknown",
+    0.0
+   ]
+  ],
+  "entries": [
+   [
+    "<inline JS>",
+    98.5
+   ],
+   [
+    "perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail",
+    1.4
+   ],
+   [
+    "<no JS frame>",
+    0.1
+   ]
+  ],
+  "node": 32.26525125,
+  "perry": 51.000185,
+  "ratio": 1.580653583164024,
+  "status": "OK"
+ },
+ "f05_objlit_method_this": {
+  "buckets": [
+   [
+    "method_dispatch",
+    41.1
+   ],
+   [
+    "prop_lookup",
+    34.4
+   ],
+   [
+    "string",
+    7.8
+   ],
+   [
+    "call_overhead",
+    5.6
+   ]
+  ],
+  "entries": [
+   [
+    "js_typed_feedback_native_call_method_by_id",
+    75.4
+   ],
+   [
+    "js_object_get_field_by_name_f64",
+    16.2
+   ],
+   [
+    "js_class_field_get_ic",
+    5.3
+   ],
+   [
+    "<inline JS>",
+    1.6
+   ]
+  ],
+  "node": 31.63654,
+  "perry": 4222.450285,
+  "ratio": 133.4675120920303,
+  "status": "OK"
+ },
+ "f06_fn_call": {
+  "buckets": [
+   [
+    "method_dispatch",
+    54.7
+   ],
+   [
+    "closure_box_args",
+    15.7
+   ],
+   [
+    "call_overhead",
+    8.8
+   ],
+   [
+    "prop_lookup",
+    4.2
+   ]
+  ],
+  "entries": [
+   [
+    "js_typed_feedback_native_call_method_by_id",
+    94.0
+   ],
+   [
+    "js_dynamic_mod",
+    2.3
+   ],
+   [
+    "js_set_call_location",
+    2.2
+   ],
+   [
+    "<inline JS>",
+    0.6
+   ]
+  ],
+  "node": 100.46477625,
+  "perry": 3702.3584275,
+  "ratio": 36.85230352065807,
+  "status": "OK"
+ },
+ "f07_private_method": {
+  "buckets": [
+   [
+    "private_fields",
+    81.5
+   ],
+   [
+    "call_overhead",
+    12.3
+   ],
+   [
+    "generated_code",
+    3.1
+   ],
+   [
+    "numeric_conv",
+    3.1
+   ]
+  ],
+  "entries": [
+   [
+    "js_private_method_call",
+    75.4
+   ],
+   [
+    "js_set_call_location",
+    11.6
+   ],
+   [
+    "js_private_method_guard",
+    3.9
+   ],
+   [
+    "<inline JS>",
+    3.1
+   ]
+  ],
+  "node": 35.9761,
+  "perry": 934.0008025,
+  "ratio": 25.961702421885636,
+  "status": "OK"
+ },
+ "f08_proto_fn_method": {
+  "buckets": [
+   [
+    "prop_lookup",
+    48.2
+   ],
+   [
+    "method_dispatch",
+    16.3
+   ],
+   [
+    "closure_box_args",
+    8.4
+   ],
+   [
+    "string",
+    6.9
+   ]
+  ],
+  "entries": [
+   [
+    "js_typed_feedback_native_call_method_by_id",
+    97.1
+   ],
+   [
+    "<inline JS>",
+    0.8
+   ],
+   [
+    "<no JS frame>",
+    0.8
+   ],
+   [
+    "js_set_call_location",
+    0.4
+   ]
+  ],
+  "node": 49.1323675,
+  "perry": 9550.98367,
+  "ratio": 194.3929054507703,
+  "status": "OK"
+ },
+ "f09_untyped_receiver_method": {
+  "buckets": [
+   [
+    "generated_code",
+    99.5
+   ],
+   [
+    "memops",
+    0.2
+   ],
+   [
+    "prop_lookup",
+    0.2
+   ],
+   [
+    "other_runtime",
+    0.0
+   ]
+  ],
+  "entries": [
+   [
+    "<inline JS>",
+    99.5
+   ],
+   [
+    "<no JS frame>",
+    0.5
+   ]
+  ],
+  "node": 39.3429725,
+  "perry": 159.99953625,
+  "ratio": 4.066788198324364,
+  "status": "OK"
+ },
+ "f10_arguments": {
+  "buckets": [
+   [
+    "closure_box_args",
+    43.8
+   ],
+   [
+    "dyn_index",
+    33.4
+   ],
+   [
+    "gc_minor",
+    11.4
+   ],
+   [
+    "generated_code",
+    9.5
+   ]
+  ],
+  "entries": [
+   [
+    "js_arguments_bundle_index_get",
+    43.8
+   ],
+   [
+    "js_array_length",
+    30.1
+   ],
+   [
+    "<no JS frame>",
+    11.5
+   ],
+   [
+    "<inline JS>",
+    9.5
+   ]
+  ],
+  "node": 231.31437375,
+  "perry": 509.166665,
+  "ratio": 2.2011890430566035,
+  "status": "OK"
+ },
+ "f11_class_getter": {
+  "buckets": [
+   [
+    "prop_lookup",
+    41.2
+   ],
+   [
+    "accessor_descriptor",
+    41.1
+   ],
+   [
+    "generated_code",
+    8.7
+   ],
+   [
+    "other_runtime",
+    7.1
+   ]
+  ],
+  "entries": [
+   [
+    "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+    52.6
+   ],
+   [
+    "js_inherited_read_cache_hit_f64",
+    29.7
+   ],
+   [
+    "<inline JS>",
+    8.7
+   ],
+   [
+    "js_dynamic_string_or_number_add",
+    7.1
+   ]
+  ],
+  "node": 29.65160875,
+  "perry": 484.00107,
+  "ratio": 16.322927841141166,
+  "status": "OK"
+ },
+ "f12_imported_obj_read_escaped": {
+  "buckets": [
+   [
+    "prop_lookup",
+    89.5
+   ],
+   [
+    "generated_code",
+    7.2
+   ],
+   [
+    "closure_box_args",
+    2.0
+   ],
+   [
+    "accessor_descriptor",
+    1.2
+   ]
+  ],
+  "entries": [
+   [
+    "js_object_get_field_by_name_f64",
+    76.6
+   ],
+   [
+    "js_class_field_get_ic",
+    16.1
+   ],
+   [
+    "<inline JS>",
+    7.2
+   ],
+   [
+    "js_process_argv",
+    0.0
+   ]
+  ],
+  "node": 49.8103325,
+  "perry": 1839.00020625,
+  "ratio": 36.92005481493222,
+  "status": "OK"
+ },
+ "f13_imported_obj_read_local": {
+  "buckets": [
+   [
+    "generated_code",
+    99.7
+   ],
+   [
+    "map_set",
+    0.1
+   ],
+   [
+    "prop_lookup",
+    0.1
+   ],
+   [
+    "gc_other",
+    0.0
+   ]
+  ],
+  "entries": [
+   [
+    "<inline JS>",
+    99.7
+   ],
+   [
+    "js_mark_entry_module_esm",
+    0.1
+   ],
+   [
+    "<no JS frame>",
+    0.1
+   ],
+   [
+    "js_gc_init",
+    0.0
+   ]
+  ],
+  "node": 65.8164375,
+  "perry": 89.999565,
+  "ratio": 1.3674329456072427,
+  "status": "OK"
+ },
+ "f14_absent_key_read": {
+  "buckets": [
+   [
+    "proto_chain_read",
+    52.4
+   ],
+   [
+    "prop_lookup",
+    38.1
+   ],
+   [
+    "promise_async",
+    2.1
+   ],
+   [
+    "closure_box_args",
+    2.0
+   ]
+  ],
+  "entries": [
+   [
+    "perry_runtime::object::field_get_set::ic_miss::get_field_ic_miss_impl",
+    96.7
+   ],
+   [
+    "js_inherited_read_cache_hit_f64",
+    1.7
+   ],
+   [
+    "<inline JS>",
+    0.6
+   ],
+   [
+    "js_dynamic_mod",
+    0.4
+   ]
+  ],
+  "node": 46.788735,
+  "perry": 8728.3196,
+  "ratio": 186.54745848546665,
+  "status": "OK"
+ }
+}

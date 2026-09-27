@@ -1030,9 +1030,13 @@ def write_markdown(doc: dict, path: Path) -> None:
             continue
         base = r["perry_per_iter"] or 1
         tb = ", ".join(f"{k} {100 * v / base:.0f}%" for k, v in bysize(r["buckets"])[:4])
-        L.append(f"| {w} | {fmt_n(r['perry_per_iter'])} | {fmt_n(r.get('node_per_iter'))} | "
+        wl_name = w + (f" (binary {r['binary_commit']}†)" if r.get("binary_commit") else "")
+        L.append(f"| {wl_name} | {fmt_n(r['perry_per_iter'])} | {fmt_n(r.get('node_per_iter'))} | "
                  f"{(r.get('ratio') or 0):.1f}× | {r.get('unwind_reached_main', 0):.0%} | "
                  f"{r.get('pkg_code_on_stack_min_pct', 0):.0f}% | {tb} |")
+    notes = sorted({r["binary_note"] for r in doc["workloads"].values() if r.get("binary_note")})
+    for n in notes:
+        L += ["", f"† {n}"]
     for w, r in sorted(doc["workloads"].items(), key=lambda kv: -(kv[1].get("excess_per_iter") or 0)):
         if r.get("status") != "OK":
             continue

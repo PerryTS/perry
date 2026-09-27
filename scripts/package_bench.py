@@ -34,6 +34,12 @@ in benchmarks/packages/manifest.json. Each prints only deterministic text
   profile   (Linux) perf-record each Perry binary at n1, keep the top-5
             symbols; feeds the report's first-pass attribution column.
             Use binaries compiled with PERRY_KEEP_SYMBOLS=1.
+            `profile --callgraph` (scripts/package_bench_attr.py): two-N
+            DWARF call-chain attribution -- self/inclusive functions, the
+            runtime entry generated code called, the JS site (file:line with
+            --debug-symbols, source maps for minified packages) and
+            root-cause buckets weighted by excess over Node; JSON + Markdown
+            (benchmarks/packages/PROFILE.md explains the method).
 
   lock      acquire|release|status the host measurement mutex by hand.
 
