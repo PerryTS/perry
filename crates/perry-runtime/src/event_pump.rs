@@ -333,7 +333,7 @@ static PUMP: Pump = Pump {
 /// an actual `cvar.wait_timeout` sleep counts as progress.
 static NOTIFIED: AtomicBool = AtomicBool::new(false);
 
-thread_local! {
+crate::perry_thread_local! {
     /// #11434: a notify issued by THIS thread, for this thread's own
     /// `js_wait_for_event`. `NOTIFIED` is one process-wide flag, and every JS
     /// agent (the main thread and each `worker_threads` worker) consumes it in
@@ -472,8 +472,9 @@ pub extern "C" fn js_notify_main_thread() {
     // visible).
     NOTIFIED.store(true, Ordering::Release);
     // #11434: and for this thread's own next wait, which no other agent's wait
-    // can consume. `try_with`: a notify from a thread-local destructor is a
-    // no-op here rather than a panic.
+    // can consume. Hot TLS (`perry_thread_local!`): this runs on every notify.
+    // `try_with`: a notify during thread teardown is a no-op here rather than
+    // a panic.
     let _ = SELF_NOTIFIED.try_with(|flag| flag.set(true));
     // PERRY_LOOP_STATS: stamp the notify for the wake-latency histogram before
     // any wake below can return the waiter. One relaxed load when off.
