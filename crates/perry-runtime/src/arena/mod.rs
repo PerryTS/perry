@@ -25,6 +25,8 @@ mod promote;
 mod quarantine;
 mod reset;
 mod stats;
+/// #11471: thread-exit release of process-global address-keyed tables.
+pub mod thread_exit;
 mod walk;
 pub(crate) use map_allocations::walk_map_allocations;
 

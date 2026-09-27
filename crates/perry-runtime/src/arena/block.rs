@@ -537,6 +537,9 @@ impl Drop for Arena {
                 .map(|block| (block.data as usize, block.data as usize + block.size))
                 .collect();
             crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
+            // #11471: every other process-global table keyed by, or holding,
+            // an address in these blocks (see `arena::thread_exit`).
+            super::thread_exit::release_freed_ranges(&ranges);
         }
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ
