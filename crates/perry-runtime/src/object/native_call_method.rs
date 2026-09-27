@@ -1313,7 +1313,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         std::borrow::Cow::Borrowed("")
     } else {
         let bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-        String::from_utf8_lossy(bytes)
+        // #10502: validate with `str::from_utf8` (ASCII word-at-a-time fast
+        // path) and fall back to the lossy decoder only for invalid bytes.
+        // `from_utf8_lossy` answers the same `Cow` but walks `Utf8Chunks`
+        // chunk by chunk even for a valid name: ~1.5% of a prototype-method
+        // dispatch profile, on every call.
+        match std::str::from_utf8(bytes) {
+            Ok(name) => std::borrow::Cow::Borrowed(name),
+            Err(_) => String::from_utf8_lossy(bytes),
+        }
     };
     let method_name: &str = &method_name_cow;
     let root_scope = crate::gc::RuntimeHandleScope::new();

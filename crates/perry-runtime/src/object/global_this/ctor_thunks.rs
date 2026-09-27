@@ -567,4 +567,47 @@ mod tests {
             object_proto.get_nanbox_f64()
         ));
     }
+
+    // #10497: the predicate and `builtin_prototype_value("Function")` answer
+    // from the per-realm memo now. Pin that the memo names exactly the object
+    // the by-name walk they replaced finds — `globalThis.Function.prototype`
+    // read through the constructor's dynamic `prototype` property — so a wrong
+    // row (Array's, Object's, or nothing) cannot pass as "fast".
+    #[test]
+    fn function_prototype_memo_is_the_by_name_intrinsic() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+            b"Function".as_ptr(),
+            8,
+        ));
+        let walked = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
+            closure_addr(ctor.get_nanbox_f64()),
+            "prototype",
+        ));
+        assert!(
+            crate::value::JSValue::from_bits(walked.get_nanbox_u64()).is_pointer(),
+            "the by-name walk must find a real Function.prototype, or the \
+             comparison below is vacuous"
+        );
+        assert_eq!(
+            super::builtin_prototype_value("Function").to_bits(),
+            walked.get_nanbox_u64()
+        );
+        assert_eq!(
+            crate::array::function_prototype_addr(),
+            closure_addr(walked.get_nanbox_f64())
+        );
+        assert!(super::is_function_prototype_object_value(
+            walked.get_nanbox_f64()
+        ));
+        assert_ne!(
+            crate::array::function_prototype_addr(),
+            crate::array::object_prototype_addr()
+        );
+        assert_ne!(
+            crate::array::function_prototype_addr(),
+            crate::array::array_prototype_addr()
+        );
+    }
 }
