@@ -196,6 +196,10 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
     assert_eq!(
         dynamic_index_site_blocks(&ir),
         vec![
+            // #10515: the admitted byte-view (`Uint8Array` / `Buffer`) arm.
+            "arrlike.u8.brand",
+            "arrlike.u8.bounds",
+            "arrlike.u8.load",
             "arrlike.ic.header",
             "arrlike.ic.brand",
             "arrlike.ic.array_guard",
@@ -370,7 +374,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
         );
         assert_eq!(
             dynamic_index_site_blocks(&ir).len(),
-            21,
+            24,
             "{name}: a number context must not change the emitted block shape:\n{ir}"
         );
         let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
@@ -715,9 +719,20 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     let kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.kind.")
         .expect("the object-kind guard exists");
     assert!(
-        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.ic.miss"),
+        kind.contains("icmp eq i8") && kind.contains(", 2") && kind.contains("arrlike.u8.brand"),
         "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load; everything \
-         else must leave through the single exit:\n{kind}"
+         else goes to the byte-view arm:\n{kind}"
+    );
+    // #10515: the byte-view arm admits only a `GC_TYPE_BUFFER` whose address
+    // the admission cache holds; everything else leaves through the exit.
+    let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
+        .expect("the byte-view brand guard exists");
+    assert!(
+        u8_brand.contains(", 10")
+            && u8_brand.contains("@PERRY_U8_INLINE_CACHE")
+            && u8_brand.contains("arrlike.ic.miss"),
+        "the byte-view arm must test GC_TYPE_BUFFER and the admission cache, \
+         and exit on a miss:\n{u8_brand}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the
     // dense-tail family token now live behind that exit rather than at every
