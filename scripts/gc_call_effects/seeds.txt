@@ -20,7 +20,7 @@
 # is not Leaf. AllocOnly cuts these (under RFC D1/D2 they stop reading frame
 # roots at allocation points), so they stay seeds only for the Leaf class.
 collector regex ^perry_runtime::gc::policy::gc_check_trigger -- the allocation-point trigger (RFC A1/A2): OldReclaim full, the slack valve, a mutator assist, or a direct minor can run inside it
-collector regex flush_deferred_gc_request|gc::roots::exit_gc_root_lock -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523)
+collector regex flush_deferred_gc_request|gc::roots::exit_gc_root_lock$ -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523). Anchored: exit_gc_root_lock_noncollecting (the #11523 fix) never flushes
 collector regex ^perry_runtime::gc::gc_collect_(minor|full) -- the minor and full collectors themselves
 collector regex ^perry_runtime::gc::copying::run_copied_minor_attempt -- the copying (moving) minor
 collector contains gc::roots::stack_maps::visit_stack_map_root_slots -- reads (and rewrites) the native frame roots of every generated frame: the chokepoint every precise collection passes
