@@ -60,12 +60,12 @@ pub(crate) struct Accessor {
 
 /// Largest code address a raw word can hold: below it no NaN-box tag bit is
 /// set, so the word is a Number to the collector.
-const RAW_ADDRESS_LIMIT: usize = 1 << 48;
+const RAW_ADDRESS_LIMIT: u64 = 1 << 48;
 
 #[inline]
 fn raw_word(raw: usize) -> u64 {
-    debug_assert!(raw < RAW_ADDRESS_LIMIT);
-    if raw < RAW_ADDRESS_LIMIT {
+    debug_assert!((raw as u64) < RAW_ADDRESS_LIMIT);
+    if (raw as u64) < RAW_ADDRESS_LIMIT {
         raw as u64
     } else {
         0
@@ -74,7 +74,7 @@ fn raw_word(raw: usize) -> u64 {
 
 #[inline]
 fn raw_of(word: u64) -> usize {
-    if (word as usize) < RAW_ADDRESS_LIMIT {
+    if word < RAW_ADDRESS_LIMIT {
         word as usize
     } else {
         0
