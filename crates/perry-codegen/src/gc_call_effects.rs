@@ -426,10 +426,13 @@ mod tests {
         "js_object_get_own_field_or_undef",
     ];
 
-    /// #11523: formerly `CannotCollect`, but each reaches
-    /// `flush_deferred_gc_request` through a `GcRootRegistryGuard` drop, which
-    /// runs a collection deferred while the root lock was held. Not `Leaf`
-    /// until the runtime stops flushing on guard drop (RFC S3, arm D).
+    /// #11523: these take the typed-feedback registry's root lock. With an
+    /// ordinary `GcRootRegistryGuard` the release can flush a deferred
+    /// collection, and the graph proved all of them collecting. The registry
+    /// now uses `NonCollectingRootRegistryGuard`, a distinct type whose drop
+    /// has no path to `flush_deferred_gc_request`, so the generated table
+    /// proves them `Leaf` again. If this goes red, a flushing lock is back on
+    /// their path: run `scripts/gc_call_effects/why.py`.
     const ISSUE_11523: &[&str] = &[
         "js_gc_note_slot_layout",
         "js_gc_note_slot_layout_aware",
@@ -602,14 +605,21 @@ mod tests {
     }
 
     #[test]
-    fn issue_11523_guard_flush_helpers_are_not_leaf() {
+    fn issue_11523_noncollecting_guard_helpers_are_provably_leaf() {
+        let mut leaf = 0;
         for name in ISSUE_11523 {
+            // Six (the numeric index guards and the lazy-array layout
+            // helpers) reach JS or a materializing allocator on their own
+            // paths; none may be collecting through the root lock alone,
+            // which is exactly what AllocOnly would mean here.
             assert_ne!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name} reaches flush_deferred_gc_request (#11523)"
+                runtime_class(name),
+                RuntimeClass::AllocOnly,
+                "{name} reaches a collector again (a flushing root lock?)"
             );
+            leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
         }
+        assert!(leaf >= 15, "only {leaf} of the #11523 helpers are Leaf");
     }
 
     /// The box/closure family's containment in the root-dominance checker's
