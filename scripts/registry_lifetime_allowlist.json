@@ -590,6 +590,13 @@
       "name": "UNTRANSFERABLE_OBJECTS",
       "verdict": "open_leak",
       "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "PARAMS",
+      "fn": "wasi_body_params",
+      "verdict": "bounded_by_program",
+      "why": "WASI-only per-thread memo keyed by a wasm function-table index (a function pointer, never a heap address): one entry per distinct compiled closure body ever called, so growth stops at the program's function count"
     }
   ]
 }
