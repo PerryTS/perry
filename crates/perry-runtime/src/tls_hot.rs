@@ -176,6 +176,14 @@ pub(crate) struct HotTls {
     /// aarch64 reads and writes it at the fixed byte offset
     /// [`HOT_TLS_IMPLICIT_THIS_OFFSET`] (see `hot_tls_layout_is_what_codegen_assumes`).
     pub(crate) implicit_this: Cell<u64>,
+    /// `agent_ptrs::PERRY_AGENT_PTRS` — this thread's per-agent pointer block.
+    /// Generated code on Apple aarch64 reads it at the fixed byte offset
+    /// [`HOT_TLS_AGENT_PTRS_OFFSET`] (`perry-codegen/src/expr/agent_ptr.rs`),
+    /// so it sits right after `implicit_this`, where only fixed-size fields
+    /// precede it: an array sized by a tunable constant (the prototype rows,
+    /// the box caches, the generic slots) must never come before a field
+    /// whose offset generated code bakes in.
+    pub(crate) agent_ptrs: Cell<*mut u8>,
     /// `gc::dirty_page_cache` — the direct-mapped dirty-page cache, indexed
     /// by the page number's low bits (`usize::MAX` = way empty). Sixteen ways
     /// because real store patterns interleave a handful of pages: an ECS
@@ -203,10 +211,6 @@ pub(crate) struct HotTls {
     /// `gc::roots::RUNTIME_HANDLE_STACK`. Appended after the generic slots so
     /// none of the offsets consumed by generated code move (#9183).
     pub(crate) runtime_handle_stack: Cell<*mut u8>,
-    /// `agent_ptrs::PERRY_AGENT_PTRS` — this thread's per-agent pointer block.
-    /// Appended for the same reason; generated code on Apple aarch64 reads it
-    /// at [`HOT_TLS_AGENT_PTRS_OFFSET`] (`perry-codegen/src/expr/agent_ptr.rs`).
-    pub(crate) agent_ptrs: Cell<*mut u8>,
 }
 
 /// Byte offsets generated code hard-codes into its inline hot-cache access

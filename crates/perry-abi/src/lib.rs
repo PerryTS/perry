@@ -15,8 +15,9 @@ pub const AGENT_PTR_SLOTS: usize = 4;
 /// Slot 1: the address of this agent's implicit-`this` cell
 /// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
 pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;
-/// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64).
-pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 6640;
+/// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): directly
+/// after `implicit_this` (128), behind fixed-size fields only.
+pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 136;
 
 /// `closure::ClosureHeader` (LP64): the code pointer at 0, the u32 capture
 /// count at 8, the u32 type tag at 12. A value is a closure when its type tag
