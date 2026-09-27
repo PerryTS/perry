@@ -129,6 +129,11 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #11360: a `PERRY_STORE_CENSUS=1` build emits a counter increment on
     // every censused store route, so it changes the emitted IR.
     "PERRY_STORE_CENSUS",
+    // #11489: `PERRY_METHOD_SITE=0` keeps the old method dispatcher, and
+    // `PERRY_AGENT_PTR_ACCESS=call` forces the call-based agent block access;
+    // both change the emitted IR.
+    "PERRY_METHOD_SITE",
+    "PERRY_AGENT_PTR_ACCESS",
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it
     // changes the generated code and must be a cache input.

@@ -1205,6 +1205,15 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
     // #11360: a `=1` build emits a census counter bump per store route.
+    // #11489: method-site and agent-pointer access A/B switches.
+    h.field(
+        "env_method_site",
+        env_var("PERRY_METHOD_SITE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_agent_ptr_access",
+        env_var("PERRY_AGENT_PTR_ACCESS").as_deref().unwrap_or(""),
+    );
     h.field(
         "env_store_census",
         env_var("PERRY_STORE_CENSUS").as_deref().unwrap_or(""),
