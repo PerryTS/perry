@@ -244,16 +244,26 @@ fn copy_ascii_span(
 /// repeatedly from the beginning of a non-ASCII input. Only offsets survive GC.
 pub(super) struct SpanCopies<'a, 's> {
     readers: [BoundSpan<'a, HeapSubject<'s>>; 2],
+    /// The subject, when it is ASCII: a piece is then one byte copy, as
+    /// `copy_ascii_span` makes for a capture, instead of two unit-by-unit
+    /// passes and two polls.
+    ascii: Option<&'a BoundSubject<HeapSubject<'s>>>,
+    stride: super::perex_runtime::PieceStride,
 }
 
 impl<'a, 's> SpanCopies<'a, 's> {
     pub(super) fn new(subject: &'a BoundSubject<HeapSubject<'s>>) -> Result<Self, EngineError> {
         let empty = Span::new(0, 0).unwrap();
+        let ascii = subject
+            .with_view(|input| input.ascii_bytes().is_some())
+            .map_err(EngineError::Subject)?;
         Ok(Self {
             readers: [
                 BoundSpan::new(subject, empty).map_err(|e| read_error(e, |n| match n {}))?,
                 BoundSpan::new(subject, empty).map_err(|e| read_error(e, |n| match n {}))?,
             ],
+            ascii: ascii.then_some(subject),
+            stride: super::perex_runtime::PieceStride::new(),
         })
     }
 
@@ -264,6 +274,27 @@ impl<'a, 's> SpanCopies<'a, 's> {
         budget: &mut Budget,
     ) -> Result<*mut StringHeader, EngineError> {
         let span = Span::new(start, end).ok_or(EngineError::InvalidSpan)?;
+        if let Some(subject) = self.ascii {
+            // One poll per `POLL_UNITS` units of pieces rather than two per
+            // piece; the copy itself allocates through the ordinary path.
+            let due = self.stride.due(span.len());
+            let mut poll = || {
+                if due {
+                    super::perex_runtime::poll()
+                } else {
+                    Ok(())
+                }
+            };
+            if let Some(output) = copy_ascii_span(
+                subject,
+                span,
+                budget,
+                super::perex_api::OUTPUT_BYTES,
+                &mut poll,
+            )? {
+                return Ok(output);
+            }
+        }
         for reader in &mut self.readers {
             reader
                 .retarget(span)

@@ -52,6 +52,43 @@ impl From<StorageError> for EngineError {
     }
 }
 
+/// The safepoint poll for a loop that emits many small pieces: once per
+/// `POLL_UNITS` units of output, counting each piece as one more unit so a
+/// run of empty or one-unit pieces still reaches it. A poll per piece runs the
+/// budgeted trigger ladder for a handful of units each, which on a short
+/// `split` was a third of the call; `perex_replace_storage::POLL_UNITS`
+/// records why 512 keeps the collector's openings without a peak-RSS cost.
+pub(crate) struct PieceStride {
+    unpolled: usize,
+}
+
+impl PieceStride {
+    pub(crate) const fn new() -> Self {
+        Self { unpolled: 0 }
+    }
+
+    /// Whether the piece of `units` just emitted brings the poll due, which it
+    /// then resets. The caller runs the poll.
+    pub(crate) fn due(&mut self, units: usize) -> bool {
+        self.unpolled = self.unpolled.saturating_add(units).saturating_add(1);
+        if self.unpolled >= super::perex_replace_storage::POLL_UNITS {
+            self.unpolled = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Account for a piece and poll when that brings the poll due.
+    pub(crate) fn tick(&mut self, units: usize) -> Result<(), EngineError> {
+        if self.due(units) {
+            poll()
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Normal runtime poll. Test/embedding callers may supply an alternative poll
 /// that requests cancellation or forces actual collection. No input/program
 /// view or scratch slice is live when any poll is invoked.
