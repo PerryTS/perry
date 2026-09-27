@@ -6347,6 +6347,29 @@ pub fn run_with_parse_cache(
         .clone()
         .or_else(|| find_stdlib_library(target.as_deref()));
 
+    // perry-stdlib's optional features install through the installer this
+    // object registers (see `stdlib_installs.rs`): everything the archive was
+    // compiled with for an auto-optimized archive, only this program's
+    // features for the prebuilt full-feature one. Generated before the stub
+    // scan below so the scan sees its install references resolved by the
+    // stdlib archive.
+    if ctx.needs_stdlib && stdlib_lib_resolved.is_some() {
+        let install_symbols =
+            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs);
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!("  stdlib installs: {}", install_symbols.join(", "));
+        }
+        let installer_bytes = perry_codegen::stubs::generate_stdlib_installer_object(
+            &install_symbols,
+            target.as_deref(),
+        )?;
+        let installer_path = object_output_dir.join("_perry_stdlib_installs.o");
+        fs::write(&installer_path, &installer_bytes)?;
+        obj_cleanup_paths.push(installer_path.clone());
+        obj_paths.push(installer_path);
+        obj_fingerprints.push(None);
+    }
+
     // Generate stubs for missing symbols from unresolved imports (npm packages etc.)
     {
         use std::collections::{BTreeSet, HashSet};
