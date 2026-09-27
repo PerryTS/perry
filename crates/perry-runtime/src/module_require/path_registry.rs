@@ -495,6 +495,13 @@ impl PathModuleRegistry {
         result
     }
 
+    /// Resolution tests presence without executing initializers or reading
+    /// exports. Uninitialized and failed compiled modules still have a path.
+    pub(super) fn contains_registered(&self, key: &str) -> bool {
+        let present = self.lock().entries.contains_key(key);
+        present || lookup_init_addr(key).is_some()
+    }
+
     pub(super) fn has_exports(&self, key: &str) -> bool {
         self.published_exports(key).is_some()
     }
@@ -1038,6 +1045,27 @@ mod path_module_registry_tests {
             "the second heap got the first heap's value"
         );
         MODULE_PATH_REGISTRY.with(|registry| registry.remove_for_test(KEY));
+    }
+
+    #[test]
+    fn resolution_presence_includes_uninitialized_and_failed_modules() {
+        let registry = PathModuleRegistry::default();
+        let key = "resolve-only.js";
+        assert!(!registry.contains_registered(key));
+        assert!(registry.register_init(key.into(), 23));
+        assert!(registry.contains_registered(key));
+        assert_eq!(registry.published_exports(key), None);
+        assert_eq!(
+            registry.require_with(key, &|_| Err(TAG_UNDEFINED)),
+            Err(PathModuleRequireError::Initializer(TAG_UNDEFINED))
+        );
+        assert!(registry.contains_registered(key));
+        registry.remove_for_test(key);
+        assert!(
+            registry.contains_registered(key),
+            "initializer metadata is sufficient"
+        );
+        with_init_addrs(|addrs| addrs.remove(key));
     }
 
     #[test]

@@ -91,3 +91,47 @@ fn require_resolve_relative_files_canonicalize_symlinks() {
         )
     );
 }
+
+struct RegisteredFiles(Vec<String>);
+impl Drop for RegisteredFiles {
+    fn drop(&mut self) {
+        MODULE_PATH_REGISTRY.with(|registry| {
+            for key in &self.0 {
+                registry.remove_for_test(key);
+            }
+        });
+    }
+}
+
+#[test]
+fn compiled_modules_resolve_without_build_host_files() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let fixture = Fixture::new();
+    let base = fixture.0.canonicalize().unwrap();
+    let keys: Vec<_> = ["gone/db.json", "gone/code.js", "gone/folder/index.json"]
+        .into_iter()
+        .map(|path| base.join(path).to_string_lossy().into_owned())
+        .collect();
+    let _registered = RegisteredFiles(keys.clone());
+    for key in &keys {
+        assert!(!Path::new(key).exists());
+        // Undefined is a valid export, so resolution needs a presence test.
+        assert!(MODULE_PATH_REGISTRY.with(|registry| {
+            registry.register_final_exports(key.clone(), crate::value::TAG_UNDEFINED)
+        }));
+    }
+    for (request, target) in [
+        ("./gone/db.json", "gone/db.json"),
+        ("./gone/db", "gone/db.json"),
+        ("./gone/sub/../db.json", "gone/db.json"),
+        ("./gone/code", "gone/code.js"),
+        ("./gone/folder", "gone/folder/index.json"),
+    ] {
+        assert_eq!(
+            resolve_request(&base, request).ok(),
+            Some(base.join(target)),
+            "{request} must resolve from the compiled registry"
+        );
+    }
+    assert!(resolve_request(&base, "./gone/missing.json").is_err());
+}
