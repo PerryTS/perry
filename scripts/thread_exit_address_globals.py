@@ -160,6 +160,7 @@ EXPORTED = re.compile(r"#\[\s*(?:unsafe\s*\(\s*)?(?:no_mangle|export_name)")
 TYPE_ALIAS = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+(\w+)(?:<[^=]*>)?\s*=\s*(.+?);", re.M | re.S
 )
+UPPER_IDENT = re.compile(r"\b[A-Z][A-Z0-9_]*\b")
 TYPE_IDENT = re.compile(r"\b[A-Z]\w*\b")
 OUTER_NAME = re.compile(r"^(?:[\w$]+::)*(\w+)")
 MAX_EXPANSION_DEPTH = 4
@@ -202,6 +203,11 @@ def scan(root: Path) -> list[dict]:
         for match in TYPE_ALIAS.finditer(code):
             aliases.setdefault(match.group(1), match.group(2))
     all_code = "\n".join(codes.values())
+    # One pass over every upper-case identifier, instead of one full-text
+    # regex scan per candidate (hundreds of them over ~30 MB of source).
+    mentions: dict[str, list[int]] = {}
+    for match in UPPER_IDENT.finditer(all_code):
+        mentions.setdefault(match.group(0), []).append(match.end())
 
     candidates: list[dict] = []
     for path, text in texts.items():
@@ -225,7 +231,7 @@ def scan(root: Path) -> list[dict]:
             counter_only = (
                 bool(SCALAR_ATOMIC.match(type_text))
                 and not EXPORTED.search(attrs)
-                and _uses_are_counter_only(name, all_code)
+                and _uses_are_counter_only(name, all_code, mentions.get(name, []))
             )
             outer = OUTER_NAME.match(type_text)
             candidates.append(
@@ -241,18 +247,18 @@ def scan(root: Path) -> list[dict]:
     return candidates
 
 
-def _uses_are_counter_only(name: str, all_code: str) -> bool:
+def _uses_are_counter_only(name: str, all_code: str, ends: list[int]) -> bool:
     uses = 0
-    for match in re.finditer(r"\b%s\b" % re.escape(name), all_code):
-        start = all_code.rfind("\n", 0, match.start()) + 1
-        end = all_code.find("\n", match.end())
+    for match_end in ends:
+        start = all_code.rfind("\n", 0, match_end) + 1
+        end = all_code.find("\n", match_end)
         line = all_code[start : end if end >= 0 else len(all_code)]
         if re.search(r"\bstatic\s+(?:mut\s+)?%s\s*:" % re.escape(name), line):
             continue
         if re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?use\b", line):
             continue
         uses += 1
-        if not COUNTER_USE.match(all_code[match.end() : match.end() + 120]):
+        if not COUNTER_USE.match(all_code[match_end : match_end + 120]):
             return False
     return uses > 0
 
