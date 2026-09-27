@@ -37,7 +37,13 @@ pub struct AgentPtrs([Cell<*const u8>; AGENT_PTR_SLOTS]);
 /// `#[thread_local]` (not `thread_local!`) because generated code must be able
 /// to name the TLS symbol itself. Const-initialised and without drop glue, so
 /// no destructor is registered and a late read during teardown sees null.
-#[no_mangle]
+///
+/// Not exported on Windows: MSVC targets cannot export TLS across images, so
+/// rustc emits a thread-local shim for the static under the same symbol name
+/// and a `#[no_mangle]` static fails to build ("symbol `PERRY_AGENT_PTRS` is
+/// already defined"). Only ELF executables name it
+/// (`perry-codegen/src/expr/agent_ptr.rs`); Windows takes the accessor call.
+#[cfg_attr(not(windows), no_mangle)]
 #[thread_local]
 pub static PERRY_AGENT_PTRS: AgentPtrs =
     AgentPtrs([const { Cell::new(std::ptr::null()) }; AGENT_PTR_SLOTS]);
