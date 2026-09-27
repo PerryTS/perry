@@ -755,6 +755,26 @@ not a calibrated zero: the residual is enumerated by shape in #7664. Lower it as
 the population is fixed; a promotion that freezes the budget where it is has
 bought a number, not an invariant.
 
+## Rematerialized global-backed roots (native lowering)
+
+A root slot whose only heap value is a copy of an immutable, collector-rewritten
+global is not relocated. It is re-read from that global at each use
+(`crates/perry-codegen/src/function/precise_roots/remat.rs`). Two global families
+qualify: string-literal handles (`<mod>_.str.N.handle`) and class-keys arrays
+(`@perry_class_keys_*`). Both are registered with `js_gc_register_global_root`,
+rewritten on evacuation, and written only by their module's init. The pass checks
+the rest on the emitted IR. Every store into the slot must be a load of that one
+global or a constant, the slot's address must not escape, and the function must
+not store to the global. Any slot that fails a check stays an ordinary
+`ptr addrspace(1)` root.
+
+The slot stays a plain alloca and records "holds the global's value" as a
+non-heap marker in the `0x7FFC` band. Each read becomes
+`select(slot == marker, load @G, slot)`, so the value a consumer sees is always
+loaded after the last safepoint. Module `let`/`var` globals (`@perry_global_*`)
+and static fields are registered roots too, but the program reassigns them, so
+they are never rematerialized. A re-read could observe a later assignment.
+
 ## Rules of thumb
 
 - **Root before you call, not after.** If a value must survive a call, its root

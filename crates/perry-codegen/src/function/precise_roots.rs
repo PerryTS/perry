@@ -6,6 +6,8 @@
 //! [`retype_landing_pads_for_statepoints`], both called from
 //! `LlFunction::serialize`.
 
+mod remat;
+
 fn parse_shadow_bind(line: &str) -> Option<(usize, String)> {
     let rest = line
         .trim()
@@ -322,7 +324,25 @@ pub(super) fn lower_precise_roots_to_native_stack(
     }
 
     let root_ptrs: Vec<String> = roots.into_iter().flatten().collect();
-    let report = crate::statepoint_report::enabled().then(|| {
+
+    // Slots that only ever hold a copy of an immutable, collector-rewritten
+    // global (string-literal handles, class-keys arrays) are re-read from that
+    // global at each use instead of being relocated. See `remat.rs` for the
+    // conditions; a slot that fails any of them stays a root below.
+    let remat_plans = remat::plan(&lines, &root_ptrs);
+    let remat_ir;
+    let (lines, root_ptrs) = if remat_plans.is_empty() {
+        (lines, root_ptrs)
+    } else {
+        remat_ir = remat::apply(&lines, &remat_plans);
+        let kept = root_ptrs
+            .into_iter()
+            .filter(|ptr| !remat_plans.contains_key(ptr))
+            .collect::<Vec<_>>();
+        (remat_ir.lines().collect::<Vec<&str>>(), kept)
+    };
+
+    let report =crate::statepoint_report::enabled().then(|| {
         crate::statepoint_report::FunctionRecord::new(
             function_name,
             "rs4gc",
