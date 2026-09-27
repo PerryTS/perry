@@ -81,6 +81,10 @@ fn retained_chain_ring_keeps_every_next_edge_scannable() {
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
+        // The from-space scan below is a `gc-instruments` knob. Since
+        // bfd3465fb a binary built without the instruments refuses it at
+        // startup, so link them in on the COMPILE step (#11560).
+        .env("PERRY_GC_INSTRUMENTS", "1")
         .output()
         .expect("run perry compile");
     assert!(
