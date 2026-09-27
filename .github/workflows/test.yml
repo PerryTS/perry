@@ -3142,10 +3142,15 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.plan).parity.shards }}
     runs-on: ubuntu-latest
-    # A healthy shard must finish well below this cap after the 12-way split.
-    # 210 is a hang backstop with cold-cache/host-contention margin, not a
+    # A hang backstop with cold-cache/host-contention margin, not a
     # performance budget; a cancelled shard makes full-suite-gate fail.
-    timeout-minutes: 210
+    # #11560: auto-optimize rebuilds a runtime+stdlib per distinct feature set
+    # (~370 rebuilds of ~280s across the 12 shards), so the harness alone runs
+    # 2h06m-3h05m per shard (09-27 full run) and shard 3's job took 3h24m of
+    # the old 210 -- six minutes of margin, before #11563 let the rebuilds that
+    # used to be killed at 300s run to completion. The shard count is the real
+    # lever; this cap only keeps a slow-but-healthy shard from being cancelled.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust toolchain
