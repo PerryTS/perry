@@ -173,6 +173,9 @@ mod tests {
         assert!(freed.holds_bits(0x2010));
         assert!(!freed.holds_bits(0x7FFD_0000_0000_4000));
         assert!(!freed.holds_value(1.5));
-        assert!(!freed.holds_bits(0x7FFE_0000_0000_2010), "an int32 is not an address");
+        assert!(
+            !freed.holds_bits(0x7FFE_0000_0000_2010),
+            "an int32 is not an address"
+        );
     }
 }

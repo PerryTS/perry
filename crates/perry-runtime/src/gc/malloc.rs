@@ -184,8 +184,7 @@ impl Drop for MallocState {
                 .filter_map(|&header| {
                     // SAFETY: every entry in `objects` is a live `gc_malloc`
                     // header until `free_all_tracked_objects` frees it below.
-                    let (flags, size) =
-                        unsafe { ((*header).gc_flags, (*header).size as usize) };
+                    let (flags, size) = unsafe { ((*header).gc_flags, (*header).size as usize) };
                     (flags & GC_FLAG_PINNED == 0 && size != 0)
                         .then(|| (header as usize, header as usize + size))
                 })
