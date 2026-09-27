@@ -2375,8 +2375,11 @@ static PROTO_ID_UNIQUE_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 /// A prototype identity no other link has: for a prototype with no serial.
 pub(crate) fn fresh_unique_proto_id() -> u64 {
     let n = PROTO_ID_UNIQUE_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    // Stay clear of PROTO_ID_NULL at the very top of the UNIQUE band.
-    PROTO_ID_UNIQUE | (n & ((1 << PROTO_ID_TAG_SHIFT) - 2))
+    // Stay clear of PROTO_ID_NULL at the very top of the UNIQUE band. Reduce
+    // modulo the band size minus one rather than masking with `...FE`: that
+    // mask dropped bit 0, so serials 2k and 2k+1 collapsed onto one identity
+    // and two distinct prototypes could share a shape.
+    PROTO_ID_UNIQUE | (n % ((1 << PROTO_ID_TAG_SHIFT) - 1))
 }
 
 /// The class whose vtable an instance of `class_id` inherits through, or 0 for
