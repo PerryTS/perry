@@ -77,6 +77,22 @@ pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
     std::slice::from_raw_parts(data, len).to_vec()
 }
 
+/// Extract the raw bytes of a NaN-boxed argument value. An inline short
+/// string (SSO, `SHORT_STRING_TAG`) carries its bytes in the value itself and
+/// has no heap `StringHeader`, so masking it down to 48 bits and handing the
+/// result to [`bytes_from_ptr`] dereferences its payload as an address
+/// (#11481). Decode that representation directly; every other value keeps
+/// the existing masked-pointer path (Buffer / heap string / raw pointer).
+pub(super) unsafe fn bytes_from_value(value: f64) -> Vec<u8> {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_short_string() {
+        let mut buf = [0u8; perry_runtime::value::SHORT_STRING_MAX_LEN];
+        let n = js.short_string_to_buf(&mut buf);
+        return buf[..n].to_vec();
+    }
+    bytes_from_ptr((value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64)
+}
+
 /// Allocate a new Buffer, copy `bytes` into it, return the registered pointer.
 pub(super) unsafe fn alloc_buffer_from_slice(
     bytes: &[u8],
@@ -393,8 +409,7 @@ pub(super) unsafe fn string_bytes_from_arg(arg: f64) -> Vec<u8> {
     if let Some(s) = string_from_jsvalue(arg.to_bits()) {
         return s.into_bytes();
     }
-    let ptr = (arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-    bytes_from_ptr(ptr)
+    bytes_from_value(arg)
 }
 
 pub(super) fn js_bool(b: bool) -> f64 {
@@ -516,7 +531,7 @@ pub(super) unsafe fn bytes_from_value_bits(bits: u64) -> Option<Vec<u8>> {
     if ptr < 0x1000 {
         return None;
     }
-    Some(bytes_from_ptr(ptr as i64))
+    Some(bytes_from_value(f64::from_bits(bits)))
 }
 
 pub(super) unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
@@ -749,8 +764,7 @@ pub(super) unsafe fn crypto_key_input_to_private_pem(value_bits: u64) -> Option<
     if matches!(format.as_deref(), Some(f) if f.eq_ignore_ascii_case("jwk")) {
         return jwk_rsa_private_to_pem(value_bits).or_else(|| jwk_ec_private_to_pem(value_bits));
     }
-    let ptr = (value_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-    String::from_utf8(bytes_from_ptr(ptr)).ok()
+    String::from_utf8(bytes_from_value(f64::from_bits(value_bits))).ok()
 }
 
 pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<String> {
@@ -786,8 +800,7 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
         }
         return jwk_rsa_public_to_pem(value_bits).or_else(|| jwk_ec_public_to_pem(value_bits));
     }
-    let ptr = (value_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-    let pem = String::from_utf8(bytes_from_ptr(ptr)).ok()?;
+    let pem = String::from_utf8(bytes_from_value(f64::from_bits(value_bits))).ok()?;
     if let Some(v) = parse_ec_public_key_pem(&pem) {
         return v.to_public_key_pem();
     }

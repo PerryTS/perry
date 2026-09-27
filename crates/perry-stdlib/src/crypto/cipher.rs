@@ -724,10 +724,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     let str_bytes = string_bytes_from_arg(args[0]);
                     decode_string_bytes_with_tag(&str_bytes, in_tag)
                 }
-                None => {
-                    let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-                    bytes_from_ptr(ptr)
-                }
+                None => bytes_from_value(args[0]),
             };
             let previous_len = state.buffer.len();
             state.buffer.extend_from_slice(&bytes);
@@ -1160,8 +1157,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             if state.encrypt || !state.kind.is_gcm() {
                 return nanbox_undefined();
             }
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-            let tag = bytes_from_ptr(ptr);
+            let tag = bytes_from_value(args[0]);
             state.auth_tag = Some(tag);
             nanbox_pointer_f64(handle as usize)
         }
@@ -1172,8 +1168,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             if args.is_empty() {
                 state.aad.clear();
             } else {
-                let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-                state.aad = bytes_from_ptr(ptr);
+                state.aad = bytes_from_value(args[0]);
             }
             nanbox_pointer_f64(handle as usize)
         }

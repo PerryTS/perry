@@ -53,7 +53,7 @@ pub unsafe extern "C" fn js_crypto_create_diffie_hellman(
     let second_string = if second_val.is_finite() {
         String::new()
     } else {
-        String::from_utf8(bytes_from_ptr(arg_ptr(second_val))).unwrap_or_default()
+        String::from_utf8(bytes_from_value(second_val)).unwrap_or_default()
     };
     let (prime_encoding, generator_value, generator_encoding) = if matches!(
         second_string.as_str(),
@@ -110,8 +110,7 @@ pub unsafe extern "C" fn js_crypto_ecdh_convert_key(
     output_encoding_val: f64,
     format_val: f64,
 ) -> f64 {
-    let curve_ptr = arg_ptr(curve_val);
-    let curve = String::from_utf8(bytes_from_ptr(curve_ptr))
+    let curve = String::from_utf8(bytes_from_value(curve_val))
         .unwrap_or_default()
         .to_ascii_lowercase();
     if !matches!(curve.as_str(), "prime256v1" | "secp256r1" | "p-256") {
@@ -119,11 +118,11 @@ pub unsafe extern "C" fn js_crypto_ecdh_convert_key(
     }
 
     let input_encoding =
-        String::from_utf8(bytes_from_ptr(arg_ptr(input_encoding_val))).unwrap_or_default();
+        String::from_utf8(bytes_from_value(input_encoding_val)).unwrap_or_default();
     let output_encoding =
-        String::from_utf8(bytes_from_ptr(arg_ptr(output_encoding_val))).unwrap_or_default();
-    let format = String::from_utf8(bytes_from_ptr(arg_ptr(format_val))).unwrap_or_default();
-    let key_bytes = decode_ecdh_input(arg_ptr(key_val), &input_encoding);
+        String::from_utf8(bytes_from_value(output_encoding_val)).unwrap_or_default();
+    let format = String::from_utf8(bytes_from_value(format_val)).unwrap_or_default();
+    let key_bytes = decode_ecdh_input(key_val, &input_encoding);
     let public = match P256PublicKey::from_sec1_bytes(&key_bytes) {
         Ok(public) => public,
         Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -159,8 +158,7 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-            let bytes = bytes_from_ptr(ptr);
+            let bytes = bytes_from_value(args[0]);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
@@ -281,7 +279,7 @@ pub unsafe fn dispatch_ecdh(handle: i64, method: &str, args: &[f64]) -> f64 {
             };
             let input_encoding = arg_string(args, 1);
             let output_encoding = arg_string(args, 2);
-            let public_bytes = decode_ecdh_input(arg_ptr(args[0]), &input_encoding);
+            let public_bytes = decode_ecdh_input(args[0], &input_encoding);
             let public = match P256PublicKey::from_sec1_bytes(&public_bytes) {
                 Ok(public) => public,
                 Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
@@ -473,8 +471,7 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-            let bytes = bytes_from_ptr(ptr);
+            let bytes = bytes_from_value(args[0]);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
@@ -491,7 +488,7 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
                     encoding_tag_from_arg(args.get(2).copied()).unwrap_or(EncodingTag(0));
                 decode_string_bytes_with_tag(signature.as_bytes(), encoding)
             } else {
-                bytes_from_ptr(arg_ptr(args[1]))
+                bytes_from_value(args[1])
             };
             let pem = match crypto_key_input_to_public_pem(key_bits) {
                 Some(pem) => pem,

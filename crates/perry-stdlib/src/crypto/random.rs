@@ -295,7 +295,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             undefined
         }
     };
-    // SSO-safe StringHeader pointer (matches `unbox_to_i64` on the direct path).
+    // SSO-safe StringHeader pointer (matches `unbox_str_handle` on the direct path).
     let str_ptr = |n: usize| -> i64 { perry_runtime::js_get_string_pointer_unified(arg(n)) as i64 };
     // A buffer-or-string arg's raw pointer (bytes_from_ptr handles both).
     let bytes_ptr = |n: usize| -> i64 {
@@ -714,8 +714,7 @@ pub(super) unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
             n.to_be_bytes().to_vec()
         };
     }
-    let ptr = (raw & 0x0000_FFFF_FFFF_FFFF) as i64;
-    bytes_from_ptr(ptr)
+    bytes_from_value(bits)
 }
 
 pub(super) fn bytes_to_u128(bytes: &[u8]) -> Option<u128> {

@@ -1263,13 +1263,9 @@ pub(super) fn nanbox_ptr<T>(ptr: *mut T) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000u64 | ((ptr as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
-pub(super) fn arg_ptr(arg: f64) -> i64 {
-    (arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
-}
-
 pub(super) unsafe fn arg_bytes(args: &[f64], idx: usize) -> Vec<u8> {
     args.get(idx)
-        .map(|arg| bytes_from_ptr(arg_ptr(*arg)))
+        .map(|arg| bytes_from_value(*arg))
         .unwrap_or_default()
 }
 
@@ -1293,8 +1289,8 @@ pub(super) unsafe fn ecdh_output(bytes: &[u8], encoding: Option<&str>) -> f64 {
     nanbox_ptr(alloc_buffer_from_slice(bytes))
 }
 
-pub(super) unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
-    let bytes = bytes_from_ptr(ptr);
+pub(super) unsafe fn decode_ecdh_input(value: f64, encoding: &str) -> Vec<u8> {
+    let bytes = bytes_from_value(value);
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
         return perry_hex::decode(s).unwrap_or_default();
@@ -1309,11 +1305,11 @@ pub(super) unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
 }
 
 pub(super) unsafe fn decode_crypto_value(value: f64, encoding: &str) -> Vec<u8> {
-    decode_ecdh_input(arg_ptr(value), encoding)
+    decode_ecdh_input(value, encoding)
 }
 
 pub(super) unsafe fn decode_hash_update_value(value: f64, encoding: &str) -> Vec<u8> {
-    let bytes = bytes_from_ptr(arg_ptr(value));
+    let bytes = bytes_from_value(value);
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
         return perry_hex::decode(s).unwrap_or_default();

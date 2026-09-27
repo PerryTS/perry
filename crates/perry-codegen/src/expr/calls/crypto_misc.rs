@@ -27,8 +27,8 @@ pub(crate) fn arm_crypto_create_hmac(
     emit_validate_string_arg(ctx, &alg_box, "hmac");
     emit_validate_crypto_key_arg(ctx, &key_box, "key");
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let key_handle = unbox_to_i64(blk, &key_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let key_handle = unbox_str_handle(blk, &key_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_create_hmac",
@@ -59,9 +59,9 @@ pub(crate) fn arm_crypto_create_cipheriv(
         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
     };
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let key_handle = unbox_to_i64(blk, &key_box);
-    let iv_handle = unbox_to_i64(blk, &iv_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let key_handle = unbox_str_handle(blk, &key_box);
+    let iv_handle = unbox_str_handle(blk, &iv_box);
     let fname = if property == "createCipheriv" {
         "js_crypto_create_cipheriv"
     } else {
@@ -144,7 +144,7 @@ pub(crate) fn arm_crypto_create_sign_verify(
     }
     let alg_box = lower_expr(ctx, &args[0])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     let fname = if property == "createSign" {
         "js_crypto_create_sign"
     } else {
@@ -413,8 +413,8 @@ pub(crate) fn arm_crypto_sign(
         None
     };
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let data_handle = unbox_to_i64(blk, &data_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let data_handle = unbox_str_handle(blk, &data_box);
     if let Some(callback_box) = callback_box {
         return Ok(blk.call(
             DOUBLE,
@@ -454,9 +454,9 @@ pub(crate) fn arm_crypto_verify(
         None
     };
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let data_handle = unbox_to_i64(blk, &data_box);
-    let sig_handle = unbox_to_i64(blk, &sig_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let data_handle = unbox_str_handle(blk, &data_box);
+    let sig_handle = unbox_str_handle(blk, &sig_box);
     if let Some(callback_box) = callback_box {
         return Ok(blk.call(
             DOUBLE,
@@ -505,7 +505,7 @@ pub(crate) fn arm_crypto_public_private_crypt(
         _ => unreachable!(),
     };
     let key_handle = blk.call(I64, key_converter, &[(DOUBLE, &key_box)]);
-    let data_handle = unbox_to_i64(blk, &data_box);
+    let data_handle = unbox_str_handle(blk, &data_box);
     let fname = match property {
         "publicEncrypt" => "js_crypto_public_encrypt",
         "privateDecrypt" => "js_crypto_private_decrypt",
@@ -533,9 +533,9 @@ pub(crate) fn arm_crypto_create_secret_key(
         None
     };
     let blk = ctx.block();
-    let key_handle = unbox_to_i64(blk, &key_box);
+    let key_handle = unbox_str_handle(blk, &key_box);
     let enc_handle = if let Some(enc) = enc_box {
-        unbox_to_i64(blk, &enc)
+        unbox_str_handle(blk, &enc)
     } else {
         "0".to_string()
     };
@@ -559,7 +559,7 @@ pub(crate) fn arm_crypto_generate_key_sync(
     let alg_box = lower_expr(ctx, &args[0])?;
     let options_box = lower_expr(ctx, &args[1])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_generate_key_sync",
@@ -581,7 +581,7 @@ pub(crate) fn arm_crypto_generate_key_async(
     let options_box = lower_expr(ctx, &args[1])?;
     let cb_box = lower_expr(ctx, &args[2])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_generate_key_async",
@@ -609,7 +609,7 @@ pub(crate) fn arm_crypto_generate_key_pair_sync(
         None
     };
     let blk = ctx.block();
-    let type_handle = unbox_to_i64(blk, &type_box);
+    let type_handle = unbox_str_handle(blk, &type_box);
     let opts_handle = match &opts_box {
         Some(b) => unbox_to_i64(blk, b),
         None => "0".to_string(),

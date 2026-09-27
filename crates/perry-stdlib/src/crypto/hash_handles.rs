@@ -485,8 +485,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 {
                     output_encoding.to_ascii_lowercase()
                 } else {
-                    let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-                    let enc_bytes = bytes_from_ptr(enc_ptr);
+                    let enc_bytes = bytes_from_value(args[0]);
                     std::str::from_utf8(&enc_bytes)
                         .unwrap_or("hex")
                         .to_ascii_lowercase()
@@ -744,8 +743,7 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let buf = alloc_buffer_from_slice(&digest);
                 f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
             } else {
-                let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-                let enc_bytes = bytes_from_ptr(enc_ptr);
+                let enc_bytes = bytes_from_value(args[0]);
                 let enc = std::str::from_utf8(&enc_bytes)
                     .unwrap_or("hex")
                     .to_ascii_lowercase();
@@ -867,3 +865,78 @@ pub unsafe fn dispatch_hmac_property(handle: i64, property: &str) -> f64 {
 // `final()` has run. For decrypt-side GCM, `setAuthTag(buf)` must be called
 // before `final()` so the verifier can authenticate.
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod sso_arg_tests {
+    use super::*;
+
+    /// A runtime-built short string is an inline SSO value, not a heap
+    /// `StringHeader`. Assert the fixture really is one, or every check
+    /// below would pass on the heap path and prove nothing.
+    fn sso(s: &str) -> f64 {
+        let v = perry_runtime::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
+        assert!(
+            JSValue::from_bits(v.to_bits()).is_short_string(),
+            "fixture {s:?} must be an inline SSO value"
+        );
+        v
+    }
+
+    fn heap_str(s: &str) -> f64 {
+        let p = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(p).bits())
+    }
+
+    fn handle_of(boxed: f64) -> i64 {
+        (boxed.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+    }
+
+    fn result_string(v: f64) -> String {
+        unsafe { string_from_jsvalue(v.to_bits()) }.expect("digest must return a string")
+    }
+
+    /// #11481: `createHash("sha1").update("x" + 3).digest("hex")` segfaulted
+    /// in `bytes_from_ptr` because the SSO `update` argument was masked and
+    /// dereferenced as a `StringHeader*`. The digest encoding is SSO too.
+    #[test]
+    fn hash_update_and_digest_accept_sso_strings() {
+        unsafe {
+            let h = handle_of(js_crypto_create_hash(
+                js_string_from_bytes(b"sha1".as_ptr(), 4) as i64,
+            ));
+            dispatch_hash(h, "update", &[sso("x3")]);
+            let out = dispatch_hash(h, "digest", &[sso("hex")]);
+            assert_eq!(
+                result_string(out),
+                "15da3daa68966ce00bc4d1103f0561573cd36b8a"
+            );
+
+            // SSO data with an SSO input encoding (`update(str, "hex")`).
+            let h = handle_of(js_crypto_create_hash(
+                js_string_from_bytes(b"sha1".as_ptr(), 4) as i64,
+            ));
+            dispatch_hash(h, "update", &[sso("7833"), sso("hex")]);
+            let out = dispatch_hash(h, "digest", &[heap_str("hex")]);
+            assert_eq!(
+                result_string(out),
+                "15da3daa68966ce00bc4d1103f0561573cd36b8a"
+            );
+        }
+    }
+
+    #[test]
+    fn hmac_update_and_digest_accept_sso_strings() {
+        unsafe {
+            let h = handle_of(js_crypto_create_hmac(
+                js_string_from_bytes(b"sha256".as_ptr(), 6) as i64,
+                js_string_from_bytes(b"k".as_ptr(), 1) as i64,
+            ));
+            dispatch_hmac(h, "update", &[sso("x3")]);
+            let out = dispatch_hmac(h, "digest", &[sso("hex")]);
+            assert_eq!(
+                result_string(out),
+                "12fb7723251890c7dd9b9db6bb12f0130b60f52a4c4afd07999254f672d45835"
+            );
+        }
+    }
+}

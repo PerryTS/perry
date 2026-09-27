@@ -18,7 +18,7 @@ pub(crate) fn arm_crypto_argon2_sync(
     let alg_box = lower_expr(ctx, &args[0])?;
     let params_box = lower_expr(ctx, &args[1])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_argon2_sync",
@@ -40,7 +40,7 @@ pub(crate) fn arm_crypto_argon2(
     let params_box = lower_expr(ctx, &args[1])?;
     let cb_box = lower_expr(ctx, &args[2])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_argon2_async",
@@ -63,10 +63,10 @@ pub(crate) fn arm_crypto_hkdf_sync_alg(
     let info_box = lower_expr(ctx, &args[3])?;
     let len_box = lower_expr(ctx, &args[4])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let ikm_handle = unbox_to_i64(blk, &ikm_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
-    let info_handle = unbox_to_i64(blk, &info_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let ikm_handle = unbox_str_handle(blk, &ikm_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
+    let info_handle = unbox_str_handle(blk, &info_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_hkdf_bytes_alg",
@@ -97,10 +97,10 @@ pub(crate) fn arm_crypto_hkdf_async_alg(
     let len_box = lower_expr(ctx, &args[4])?;
     let cb_box = lower_expr(ctx, &args[5])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
-    let ikm_handle = unbox_to_i64(blk, &ikm_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
-    let info_handle = unbox_to_i64(blk, &info_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
+    let ikm_handle = unbox_str_handle(blk, &ikm_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
+    let info_handle = unbox_str_handle(blk, &info_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_hkdf_async_alg",
@@ -137,8 +137,8 @@ pub(crate) fn arm_crypto_scrypt(
     };
     let cb_box = lower_expr(ctx, cb_expr)?;
     let blk = ctx.block();
-    let pwd_handle = unbox_to_i64(blk, &pwd_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
+    let pwd_handle = unbox_str_handle(blk, &pwd_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_scrypt_async",
@@ -180,10 +180,10 @@ pub(crate) fn arm_crypto_pbkdf2_sync(
         emit_validate_string_arg(ctx, db, "digest");
     }
     let blk = ctx.block();
-    let pwd_handle = unbox_to_i64(blk, &pwd_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
+    let pwd_handle = unbox_str_handle(blk, &pwd_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
     let digest_handle = match &digest_box {
-        Some(b) => unbox_to_i64(blk, b),
+        Some(b) => unbox_str_handle(blk, b),
         None => "0".to_string(),
     };
     let buf_handle = blk.call(
@@ -216,9 +216,9 @@ pub(crate) fn arm_crypto_pbkdf2_async(
     let alg_box = lower_expr(ctx, &args[4])?;
     let cb_box = lower_expr(ctx, &args[5])?;
     let blk = ctx.block();
-    let pwd_handle = unbox_to_i64(blk, &pwd_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let pwd_handle = unbox_str_handle(blk, &pwd_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_pbkdf2_async_alg",
@@ -253,8 +253,8 @@ pub(crate) fn arm_crypto_scrypt_sync(
     // #2013/#3146: node validates keylen as an integer in [0, 2^31-1].
     emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
     let blk = ctx.block();
-    let pwd_handle = unbox_to_i64(blk, &pwd_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
+    let pwd_handle = unbox_str_handle(blk, &pwd_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_scrypt_bytes",
@@ -283,10 +283,10 @@ pub(crate) fn arm_crypto_hkdf_sync(
     let info_box = lower_expr(ctx, &args[3])?;
     let keylen_box = lower_expr(ctx, &args[4])?;
     let blk = ctx.block();
-    let digest_handle = unbox_to_i64(blk, &digest_box);
-    let ikm_handle = unbox_to_i64(blk, &ikm_box);
-    let salt_handle = unbox_to_i64(blk, &salt_box);
-    let info_handle = unbox_to_i64(blk, &info_box);
+    let digest_handle = unbox_str_handle(blk, &digest_box);
+    let ikm_handle = unbox_str_handle(blk, &ikm_box);
+    let salt_handle = unbox_str_handle(blk, &salt_box);
+    let info_handle = unbox_str_handle(blk, &info_box);
     let buf_handle = blk.call(
         I64,
         "js_crypto_hkdf_sync",

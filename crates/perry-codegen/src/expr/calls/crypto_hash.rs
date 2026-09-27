@@ -218,13 +218,13 @@ pub(crate) fn arm_crypto_hash_chain(
                 }
             }
             let blk = ctx.block();
-            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let alg_handle = unbox_str_handle(blk, &alg_box);
             // Allocate the handle. Both helpers return f64 already
             // NaN-boxed with POINTER_TAG, suitable as the receiver
             // for `js_native_call_method`.
             let recv = if create_method == "createHmac" || create_method == "Hmac" {
                 let key_box = key_box_opt.expect("createHmac needs a key arg");
-                let key_handle = unbox_to_i64(blk, &key_box);
+                let key_handle = unbox_str_handle(blk, &key_box);
                 blk.call(
                     DOUBLE,
                     "js_crypto_create_hmac",
@@ -337,7 +337,7 @@ pub(crate) fn arm_crypto_create_hash(
     // #2013/#3146: reject a non-string algorithm before unboxing.
     emit_validate_string_arg(ctx, &alg_box, "algorithm");
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
     if let Some(options_box) = options_box {
         Ok(blk.call(

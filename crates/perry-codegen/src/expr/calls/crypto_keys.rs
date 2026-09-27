@@ -24,7 +24,7 @@ pub(crate) fn arm_crypto_create_sign_verify_legacy(
     };
     let alg_box = lower_expr(ctx, &args[0])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     let fname = if property == "createSign" || property == "Sign" {
         "js_crypto_create_sign"
     } else {
@@ -44,7 +44,7 @@ pub(crate) fn arm_crypto_create_ecdh(
     }
     let curve_box = lower_expr(ctx, &args[0])?;
     let blk = ctx.block();
-    let curve_handle = unbox_to_i64(blk, &curve_box);
+    let curve_handle = unbox_str_handle(blk, &curve_box);
     Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
 }
 
@@ -129,7 +129,7 @@ pub(crate) fn arm_crypto_generate_key_pair_async(
     let options = lower_expr(ctx, &args[1])?;
     let callback = lower_expr(ctx, &args[2])?;
     let blk = ctx.block();
-    let alg_handle = unbox_to_i64(blk, &alg_box);
+    let alg_handle = unbox_str_handle(blk, &alg_box);
     Ok(blk.call(
         DOUBLE,
         "js_crypto_generate_key_pair_async",
