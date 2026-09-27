@@ -165,7 +165,34 @@ fn member_evaluation(receiver: f64, cid: u32) -> Option<u64> {
             return Some(evaluation.to_bits());
         }
     }
-    None
+    subclass_instance_evaluation(receiver, cid)
+}
+
+/// An instance with no recorded brand whose own class is a SUBCLASS of the
+/// guarded class: `class Other extends make("second") {}` then `new Other()`.
+/// Only a static `new` of the guarded class itself stamps a brand, so such an
+/// instance used to fall through to "the first evaluation" and every inherited
+/// member read the first evaluation's captures (`own:first own:first`, #11579).
+/// Its class's heritage names the evaluation it extends — the same walk an
+/// inherited static takes — so resolve it through the instance's class ref.
+/// An instance of the guarded class itself stays unresolved (the owner), as
+/// before.
+fn subclass_instance_evaluation(receiver: f64, cid: u32) -> Option<u64> {
+    let value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if !value.is_pointer() || super::class_registry::is_class_object_value(receiver) {
+        return None;
+    }
+    let object = value.as_pointer::<super::ObjectHeader>();
+    if object.is_null() || !crate::value::addr_class::is_plausible_heap_addr(object as usize) {
+        return None;
+    }
+    let own_cid = super::js_object_get_class_id(object);
+    if own_cid == 0 || own_cid == cid {
+        return None;
+    }
+    let class_ref = f64::from_bits((0x7FFE_u64 << 48) | u64::from(own_cid));
+    super::class_ref_id(class_ref)?;
+    super::capture_owner_for_template(class_ref, cid).map(f64::to_bits)
 }
 
 /// The capture array of a non-owner evaluation, or `None` for the owner.
