@@ -34,10 +34,13 @@
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 
+#[path = "shapes_birth_width.rs"]
+mod shapes_birth_width;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
 #[cfg(test)]
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
@@ -48,9 +51,9 @@ pub(crate) use shapes_slot_list::{
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
 };
 use shapes_store::{
-    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_CARRIED_SEEN,
-    RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED, RECORD_FLAG_OLD_CARRIER,
-    RECORD_FLAG_OLD_CARRIER_SEEN,
+    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
+    RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
+    RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
 
 #[derive(Clone)]
@@ -982,6 +985,17 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     // history (see `IdList::append_unchecked`).
     inner.facts_append_fresh(facts, id);
     inner.family_append_fresh(keys_id, id);
+    // #10905: every shape of the transition tree below a keyless birth shape
+    // is minted exactly once, here, so this is where the birth shape learns
+    // how wide its descendants grow (`shapes_birth_width`).
+    if object_kind == ShapeObjectKind::Ordinary && semantic_generation == 0 {
+        shapes_birth_width::note_descendant_width(
+            &inner,
+            table.slab(),
+            proto_id,
+            logical_key_count,
+        );
+    }
     Ok(id)
 }
 
@@ -1302,6 +1316,7 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
             (*record).set(RECORD_FLAG_OLD_CARRIER, seen);
             (*record).set(RECORD_FLAG_OLD_CARRIER_SEEN, false);
             (*record).set(RECORD_FLAG_CARRIED_SEEN, false);
+            (*record).set(RECORD_FLAG_BIRTH_OWNER, false);
         }
     });
 }
@@ -2927,7 +2942,11 @@ pub(crate) fn prune_uncarried_shape_descriptors_after_full_trace() {
     table.slab().for_each(|id, record| {
         // SAFETY: live slab record, read immediately under agent ownership.
         let record = unsafe { &*record };
-        if !record.has(RECORD_FLAG_CARRIED_SEEN) && !record.cache_carrier() {
+        // #10905: a keyless birth shape an allocation consulted this epoch
+        // keeps the width it learned, though its births sit on wider shapes.
+        if !record.has(RECORD_FLAG_CARRIED_SEEN | RECORD_FLAG_BIRTH_OWNER)
+            && !record.cache_carrier()
+        {
             stale.push(id);
         }
     });

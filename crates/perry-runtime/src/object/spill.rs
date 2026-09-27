@@ -424,6 +424,12 @@ fn hot_learned_inline_fields() -> &'static LearnedInlineTable {
 
 #[inline]
 fn note_learned_inline_fields(obj_ptr: usize, class_id: u32, needed_fields: u32) {
+    // #10905: a spill also teaches the object's keyless birth shape, if it has
+    // one, how wide its descendants grow (`shapes_birth_width`).
+    // SAFETY: every caller passes a live shaped object it is storing into.
+    unsafe {
+        crate::object::shapes::note_spill_width(obj_ptr as *const ObjectHeader, needed_fields)
+    };
     if class_id == 0 || needed_fields > LEARNED_INLINE_MAX_FIELDS {
         return;
     }

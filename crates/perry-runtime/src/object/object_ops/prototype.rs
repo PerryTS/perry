@@ -82,7 +82,28 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
-    let born = js_object_alloc(0, 0);
+    // #10905: the result is born on the keyless shape `(proto, [])`, and that
+    // BIRTH shape knows how wide its descendants grow (in-object slack
+    // tracking, `shapes::shapes_birth_width`), so the object is allocated
+    // that wide instead of at the two-slot floor its own keys would spill
+    // past. The shape names the prototype by its serial, which marking
+    // assigns; the link below marks it too, and a second mark is a no-op.
+    let birth_width = {
+        let value = crate::value::JSValue::from_bits(proto.get_nanbox_u64());
+        if value.is_pointer() {
+            // SAFETY: a validated object pointer, rooted by `proto`; the mark
+            // roots its target across its own allocation.
+            unsafe {
+                crate::object::proto_validity::mark_object_as_prototype(
+                    value.as_pointer::<ObjectHeader>() as usize,
+                )
+            }
+            .map_or(0, crate::object::shapes::keyless_birth_width)
+        } else {
+            0
+        }
+    };
+    let born = js_object_alloc(0, birth_width);
     // `OrdinaryObjectCreate(proto)`: the result is an ORDINARY object, and its
     // [[Prototype]] becomes a fact of its shape in the link below (#11342).
     // So it is born ordinary like every other ordinary birth site

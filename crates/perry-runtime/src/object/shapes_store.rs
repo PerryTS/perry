@@ -40,9 +40,14 @@ pub(super) const RECORD_FLAG_FACTS_INDEXED: u8 = 1 << 1;
 pub(super) const RECORD_FLAG_OLD_CARRIER: u8 = 1 << 2;
 pub(super) const RECORD_FLAG_OLD_CARRIER_SEEN: u8 = 1 << 3;
 pub(super) const RECORD_FLAG_CACHE_CARRIER: u8 = 1 << 4;
-// Bit 5 is FREE: it was `RECORD_FLAG_KIND_CLASS` until the object kind
-// became a 2-bit field in `flags_and_kind` (#10868), a flag byte having no
-// room for a third value.
+// Bit 5 was `RECORD_FLAG_KIND_CLASS` until the object kind became a 2-bit
+// field in `flags_and_kind` (#10868), a flag byte having no room for a third
+// value.
+/// #10905: a keyless birth shape an allocation consulted during the current
+/// full-collection epoch (`shapes_birth_width`). Keeps the record, and so the
+/// width it learned, through the next synchronous full prune; the epoch
+/// rotation clears it.
+pub(super) const RECORD_FLAG_BIRTH_OWNER: u8 = 1 << 5;
 pub(super) const RECORD_FLAG_CARRIED_SEEN: u8 = 1 << 6;
 pub(super) const RECORD_FLAG_EXTERNAL_CARRIER: u8 = 1 << 7;
 
@@ -64,9 +69,11 @@ pub(crate) struct ShapeRecord {
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-9: the `ShapeObjectKind`
-    /// discriminant. Bits 16-23: the attribute SUMMARY byte
-    /// (`key_attrs::SUMMARY_*`), an identity fact. Bits 10-15 and 24-31:
-    /// reserved.
+    /// discriminant. Bits 10-15: the births a keyless birth shape served while
+    /// tracking its width (#10905). Bits 16-23: the attribute SUMMARY byte
+    /// (`key_attrs::SUMMARY_*`), an identity fact. Bits 24-31: the inline
+    /// width a keyless birth shape's descendants grow to (#10905). The two
+    /// #10905 fields are learned facts of the record, never identity.
     ///
     /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
     /// same four bytes in the same place, so the record stays 32 bytes and
@@ -86,6 +93,13 @@ const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
 /// summary here instead.
 const RECORD_SUMMARY_SHIFT: u32 = 16;
 const RECORD_SUMMARY_MASK: u32 = 0xFF << RECORD_SUMMARY_SHIFT;
+
+/// #10905 (`shapes_birth_width`): births served while tracking, bits 10-15.
+const RECORD_BIRTHS_SHIFT: u32 = 10;
+const RECORD_BIRTHS_MASK: u32 = 0x3F << RECORD_BIRTHS_SHIFT;
+/// #10905 (`shapes_birth_width`): the learned descendant width, bits 24-31.
+const RECORD_WIDTH_SHIFT: u32 = 24;
+const RECORD_WIDTH_MASK: u32 = 0xFF << RECORD_WIDTH_SHIFT;
 
 const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 40);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
@@ -145,6 +159,37 @@ impl ShapeRecord {
         self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
             | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
         self
+    }
+
+    /// The inline width this keyless birth shape's descendants grow to
+    /// (#10905), or 0 when nothing was learned.
+    #[inline]
+    pub(super) fn descendant_width(&self) -> u32 {
+        (self.flags_and_kind & RECORD_WIDTH_MASK) >> RECORD_WIDTH_SHIFT
+    }
+
+    /// Raise [`ShapeRecord::descendant_width`] to `width` (monotone,
+    /// saturating at the byte).
+    #[inline]
+    pub(super) fn note_descendant_width(&mut self, width: u32) {
+        let width = width.min(RECORD_WIDTH_MASK >> RECORD_WIDTH_SHIFT);
+        if width > self.descendant_width() {
+            self.flags_and_kind =
+                (self.flags_and_kind & !RECORD_WIDTH_MASK) | (width << RECORD_WIDTH_SHIFT);
+        }
+    }
+
+    /// Births this keyless birth shape served while tracking (#10905).
+    #[inline]
+    pub(super) fn tracked_births(&self) -> u32 {
+        (self.flags_and_kind & RECORD_BIRTHS_MASK) >> RECORD_BIRTHS_SHIFT
+    }
+
+    #[inline]
+    pub(super) fn set_tracked_births(&mut self, births: u32) {
+        let births = births.min(RECORD_BIRTHS_MASK >> RECORD_BIRTHS_SHIFT);
+        self.flags_and_kind =
+            (self.flags_and_kind & !RECORD_BIRTHS_MASK) | (births << RECORD_BIRTHS_SHIFT);
     }
 
     #[inline]
