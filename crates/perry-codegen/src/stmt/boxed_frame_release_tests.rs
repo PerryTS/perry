@@ -239,6 +239,17 @@ fn mapped_arguments_parameter_is_never_released_by_its_frame() {
         ir.contains("js_arguments_object_map_index"),
         "premise: a is mapped\n{ir}"
     );
+    // #11506: the object is born with room for its one alias, so the
+    // `map_index` store after it cannot allocate while `args_obj` is a bare
+    // register.
+    let alloc = ir
+        .lines()
+        .find(|line| line.contains("@js_arguments_object_alloc_mapped("))
+        .unwrap_or_else(|| panic!("a mapped object must be born with its alias room\n{ir}"));
+    assert!(
+        alloc.trim_end().ends_with("i32 1)"),
+        "room for exactly the one mapped parameter: {alloc}"
+    );
     assert_eq!(
         ir.matches("call i64 @js_box_alloc_bits(").count(),
         2,

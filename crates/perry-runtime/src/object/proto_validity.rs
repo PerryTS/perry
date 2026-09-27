@@ -196,8 +196,9 @@ pub(crate) const NULL_PROTOTYPE_SERIAL: u64 = u64::MAX;
 /// Mark a receiver a shape-keyed read cache must refuse whatever its ShapeId
 /// says: `process.env` or an `arguments` object, whose reads are answered by
 /// something other than the object's shape. Called from the single writer of
-/// each of those two registries, in the same breath as the insert, so "in the
-/// registry" and "carries the flag" are one statement, not two that can drift.
+/// each of those two facts (the `process.env` registry insert, the
+/// `ObjectMeta::arguments` store), in the same breath as it records them, so
+/// "is one" and "carries the flag" are one statement, not two that can drift.
 ///
 /// # Safety
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
@@ -211,8 +212,8 @@ pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
 }
 
 /// Does this object carry [`mark_exotic_read_receiver`]'s flag? For the
-/// `debug_assert`s that keep the flag and the two registries from drifting
-/// apart; a read cache that has already loaded `meta` tests the bit directly.
+/// `debug_assert`s that keep the flag and the two facts it summarizes from
+/// drifting apart; a read cache that has already loaded `meta` tests the bit directly.
 ///
 /// # Safety
 /// `obj` is a live heap address, or 0.

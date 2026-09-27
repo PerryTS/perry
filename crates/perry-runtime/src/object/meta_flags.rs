@@ -25,10 +25,12 @@ pub(crate) const OBJECT_META_FLAG_IS_PROTOTYPE: u64 = 1 << 5;
 /// is `process.env` or an `arguments` object — so a shape-keyed cache must
 /// refuse it however well its ShapeId matches.
 ///
-/// A per-object summary of two address-keyed registries, set inside each
-/// registry's single writer, in the same breath as the insert. It replaces two
-/// probes that cost 14.0 and 5.0 instructions on every cached read and that an
-/// EMITTED read sequence could not have called at all.
+/// A per-object summary set by the single writer of each of those two facts,
+/// in the same breath as it records them: the `process.env` registry insert,
+/// and the store of `ObjectMeta::arguments` (#11506; it was an address-keyed
+/// registry too until then). It replaces two probes that cost 14.0 and 5.0
+/// instructions on every cached read and that an EMITTED read sequence could
+/// not have called at all.
 pub(crate) const OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: u64 = 1 << 6;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in

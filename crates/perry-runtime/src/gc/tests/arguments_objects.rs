@@ -9,16 +9,21 @@ fn key(name: &str) -> *const crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
 
-fn arguments(values: &[f64], callee: f64, restricted: bool) -> *mut ObjectHeader {
+fn bundle(values: &[f64]) -> f64 {
     let mut array = crate::array::js_array_alloc(values.len() as u32);
     for &value in values {
         array = crate::array::js_array_push_f64(array, value);
     }
-    js_arguments_object_alloc(
-        crate::value::js_nanbox_pointer(array as i64),
-        callee,
-        restricted as i32,
-    )
+    crate::value::js_nanbox_pointer(array as i64)
+}
+
+fn arguments(values: &[f64], callee: f64, restricted: bool) -> *mut ObjectHeader {
+    js_arguments_object_alloc(bundle(values), callee, restricted as i32)
+}
+
+/// A sloppy mapped object with room for `mapped_count` parameter aliases.
+fn mapped_arguments(values: &[f64], callee: f64, mapped_count: u32) -> *mut ObjectHeader {
+    js_arguments_object_alloc_mapped(bundle(values), callee, mapped_count)
 }
 
 fn get(obj: *const ObjectHeader, name: &str) -> JSValue {
@@ -125,7 +130,7 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     let child_value = crate::value::js_nanbox_pointer(child as i64);
     let text = crate::string::js_string_from_bytes(b"arguments payload".as_ptr(), 17);
     let text_value = crate::value::js_nanbox_string(text as i64);
-    let args = arguments(&[child_value, text_value, 7.0], child_value, false);
+    let args = mapped_arguments(&[child_value, text_value, 7.0], child_value, 3);
     let mapped = crate::r#box::js_box_alloc(8.0);
     js_arguments_object_map_index(args, 2, mapped);
     js_shadow_slot_set(0, ptr_bits(args as usize));
@@ -157,4 +162,93 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     assert!(!get_property_attrs(moved as usize, "length")
         .unwrap()
         .enumerable());
+}
+
+/// #11506: the mapped state is an `ObjectMeta` child edge, so a copying minor
+/// must move the alias array WITH its owner and rewrite the record's word —
+/// there is no address-keyed table left to rekey. Removing the
+/// `(*meta).arguments` visit in `gc/layout_slot_visit.rs` leaves the word
+/// naming from-space and turns the `assert_ne!` below red.
+#[test]
+fn arguments_mapping_survives_a_moving_collection() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    register_scanners();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let args = mapped_arguments(&[1.0, 2.0], undefined, 2);
+    let first = crate::r#box::js_box_alloc(1.0);
+    let second = crate::r#box::js_box_alloc(2.0);
+    js_arguments_object_map_index(args, 0, first);
+    js_arguments_object_map_index(args, 1, second);
+    let map_before = test_arguments_mapping_array(args).expect("a mapped object has a map");
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+
+    gc_collect_minor();
+
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    assert_ne!(moved, args, "test premise: the owner must actually move");
+    let map_after = test_arguments_mapping_array(moved).expect("the mapped state must survive");
+    assert_ne!(
+        map_after, map_before,
+        "the alias array must evacuate with its owner and the record's word be rewritten"
+    );
+    assert_eq!(test_arguments_mapped_box(moved, 0), Some(first as usize));
+    assert_eq!(test_arguments_mapped_box(moved, 1), Some(second as usize));
+    // Aliasing still runs both ways through the moved object.
+    js_object_set_field_by_name(moved, key("1"), 20.0);
+    assert_eq!(crate::r#box::js_box_get(second), 20.0);
+    crate::r#box::js_box_set(first, 10.0);
+    assert_eq!(get(moved, "0").bits(), 10.0f64.to_bits());
+}
+
+/// CreateMappedArgumentsObject maps only the indices the call passed: a
+/// parameter past the argument count never aliases the object, even once the
+/// index is later defined on it. The old table mapped every parameter, so
+/// `arguments[1] = 5` in `f(a, b)` called as `f(1)` read back `b`.
+#[test]
+fn only_passed_arguments_are_mapped() {
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let args = mapped_arguments(&[1.0], undefined, 2);
+    let a = crate::r#box::js_box_alloc(1.0);
+    let b = crate::r#box::js_box_alloc(undefined);
+    js_arguments_object_map_index(args, 0, a);
+    js_arguments_object_map_index(args, 1, b);
+    assert_eq!(test_arguments_mapped_box(args, 0), Some(a as usize));
+    assert_eq!(
+        test_arguments_mapped_box(args, 1),
+        None,
+        "index 1 was not passed, so it must not alias `b`"
+    );
+    js_object_set_field_by_name(args, key("1"), 5.0);
+    assert_eq!(get(args, "1").bits(), 5.0f64.to_bits());
+    assert!(crate::r#box::js_box_get(b).to_bits() == crate::value::TAG_UNDEFINED);
+}
+
+/// The state word, not the exotic-receiver flag it travels with, is what
+/// makes an object an arguments object: `process.env` carries the same flag,
+/// and every other object with a metadata record carries neither.
+#[test]
+fn only_the_state_word_identifies_an_arguments_object() {
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // Arm the latch so the probe really reads the receiver.
+    let args = arguments(&[1.0], undefined, true);
+    assert!(is_arguments_object(args));
+    let flagged = js_object_alloc(0, 1);
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(flagged as usize) };
+    assert!(unsafe {
+        crate::object::proto_validity::object_is_exotic_read_receiver(flagged as usize)
+    });
+    assert!(
+        !is_arguments_object(flagged),
+        "an exotic-flagged ordinary object is not an arguments object"
+    );
+    let with_meta = js_object_alloc(0, 1);
+    assert!(!unsafe { object_meta_ensure(with_meta) }.is_null());
+    assert!(!is_arguments_object(with_meta));
+    // A restricted object is never mapped, whatever the prologue asks.
+    let restricted = arguments(&[1.0], undefined, true);
+    js_arguments_object_map_index(restricted, 0, crate::r#box::js_box_alloc(1.0));
+    assert_eq!(test_arguments_mapped_box(restricted, 0), None);
+    assert!(test_arguments_mapping_array(restricted).is_none());
 }

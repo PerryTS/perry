@@ -259,10 +259,10 @@ fn class_statics_buffers_and_mapped_arguments_use_the_slow_path() {
 
         let args = crate::array::js_array_alloc(1);
         crate::array::js_array_push(args, JSValue::number(1.0));
-        let arguments = crate::object::js_arguments_object_alloc(
+        let arguments = crate::object::js_arguments_object_alloc_mapped(
             crate::value::js_nanbox_pointer(args as i64),
             f64::from_bits(crate::value::TAG_UNDEFINED),
-            0,
+            1,
         );
         let cell = crate::r#box::js_box_alloc(79.0);
         crate::object::js_arguments_object_map_index(arguments, 0, cell);

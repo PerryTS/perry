@@ -393,12 +393,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::prune_dead_descriptor_owner_entries,
         young_prune: Some(crate::object::prune_dead_descriptor_owner_entries_young),
     },
-    DeadKeyPrune {
-        table: "ARGUMENTS_OBJECTS",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::prune_dead_arguments_object_entries,
-        young_prune: None,
-    },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "OBJECT_PROTOTYPES",

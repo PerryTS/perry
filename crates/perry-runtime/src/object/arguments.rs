@@ -1,20 +1,40 @@
 //! ECMAScript Arguments objects.
 //!
 //! The storage is an ordinary `ObjectHeader` so existing own-key enumeration,
-//! descriptors, and Object APIs keep working. Sloppy mapped arguments add a
-//! side table from numeric indices to Perry mutable-capture boxes.
+//! descriptors, and Object APIs keep working. What makes one exotic lives on
+//! the object's own metadata record, in [`ObjectMeta::arguments`] (#11506):
+//! that it IS an arguments object, whether its `callee` is the restricted
+//! thrower, and, for a sloppy mapped object, which indices alias a
+//! parameter's mutable-capture box.
+//!
+//! That word used to be an entry in `ARGUMENTS_OBJECTS`, a thread-local table
+//! keyed by the object's ADDRESS: a hash insert on every call of a function
+//! that materializes `arguments`, a rekey whenever the object moved, and a
+//! dead-owner prune on every collection. On the record it moves with its owner
+//! and dies with it, and needs none of the three.
 
 use super::*;
 
-#[derive(Default)]
-struct ArgumentsMeta {
-    mapped: HashMap<u32, usize>,
-    restricted_callee: bool,
-}
+// The encodings of `ObjectMeta::arguments`. The word is NaN-boxed so the meta
+// trace arm (`gc/layout_slot_visit.rs`) visits it exactly like `expando`: the
+// two scalar states carry no heap reference and are skipped, and the mapped
+// state is a traced, rewritten child edge.
+//
+// * `0`: not an arguments object. Every other object's record.
+// * `TAG_TRUE`: an unmapped object whose `callee` is the restricted thrower
+//   (strict code or a non-simple parameter list: CreateUnmappedArgumentsObject).
+// * `TAG_FALSE`: a sloppy `callee` with no index aliasing a parameter.
+// * `POINTER_TAG | array`: a sloppy mapped object. The `GC_TYPE_ARRAY` holds one
+//   element per mappable index: that parameter's box address as a plain
+//   Number, or `TAG_HOLE` once the index is unmapped. Boxes are `std::alloc`
+//   cells (`crate::r#box`), never arena objects, and they never move, so the
+//   elements are deliberately not pointer bit patterns and nothing traces or
+//   rewrites them. (The old table's "strong" visit of them was a validated
+//   no-op for the same reason.)
+const ARGUMENTS_RESTRICTED: u64 = crate::value::TAG_TRUE;
+const ARGUMENTS_UNMAPPED: u64 = crate::value::TAG_FALSE;
 
 crate::perry_thread_local! {
-    static ARGUMENTS_OBJECTS: RefCell<crate::fast_hash::PtrHashMap<usize, ArgumentsMeta>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
     // Bounded, agent-local cache of immutable ordered keys, one per arity and
     // `callee` kind (index `len` for a mapped/sloppy `callee`, `65 + len` for a
     // restricted one). The attributes of `length` and `callee` are part of the
@@ -25,97 +45,136 @@ crate::perry_thread_local! {
         RefCell::new([std::ptr::null_mut(); 130]);
 }
 
-/// Latched by the one and only registry insert (`js_arguments_object_create`).
-/// Twin of `set::SET_REGISTRY_EVER_USED` / `map::MAP_REGISTRY_EVER_USED`, and
-/// added for the same reason: [`is_arguments_object`] is a *probe*, run on
-/// paths that have nothing to do with `arguments` — the by-name property-get
-/// tail, `Array.prototype.push`, the array and `Symbol.iterator` iterator
-/// entries, `Array.from`/`concat`, class construction — so a program that
-/// never writes the identifier `arguments` still paid a thread-local
-/// resolution plus a `RefCell` borrow plus a pointer hash on each of them.
-/// On the `interp` benchmark that was **2.8% of the whole program** proving
-/// the absence of a feature the source does not contain.
+/// Latched by the one and only writer of `ObjectMeta::arguments`
+/// (`arguments_object_alloc`). Twin of `set::SET_REGISTRY_EVER_USED` /
+/// `map::MAP_REGISTRY_EVER_USED`, and added for the same reason:
+/// [`is_arguments_object`] is a *probe*, run on paths that have nothing to do
+/// with `arguments` — the by-name property-get tail, `Array.prototype.push`,
+/// the array and `Symbol.iterator` iterator entries, `Array.from`/`concat`,
+/// class construction — so a program that never writes the identifier
+/// `arguments` still paid for the lookup on each of them. With the old
+/// address-keyed registry that was a thread-local resolution plus a `RefCell`
+/// borrow plus a pointer hash, and on the `interp` benchmark **2.8% of the
+/// whole program** proving the absence of a feature the source does not
+/// contain. The meta-record lookup that replaced it (#11506) is cheaper, but it
+/// still reads the receiver's GC header and metadata record, which the latch
+/// keeps off every such path.
 ///
 /// Process-global rather than per-thread on purpose: Darwin has no local-exec
 /// TLS, so reading a `thread_local!` flag would cost the very `_tlv_get_addr`
 /// call this exists to avoid. Being global only makes it *conservative* — one
-/// thread creating an arguments object sends every thread back to the
-/// registry, which is the pre-existing behaviour.
+/// thread creating an arguments object sends every thread back to the real
+/// lookup, which is the pre-latch behaviour.
 static ARGUMENTS_OBJECTS_EVER_USED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// True when no arguments object has ever been created, so
-/// [`is_arguments_object`] can answer without touching the thread-local
-/// registry.
+/// [`is_arguments_object`] can answer without touching the receiver.
 #[inline(always)]
 fn arguments_registry_never_used() -> bool {
     !ARGUMENTS_OBJECTS_EVER_USED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// What an object's `ObjectMeta::arguments` word says about it.
+#[derive(Clone, Copy)]
+enum ArgumentsState {
+    Restricted,
+    Unmapped,
+    Mapped(*mut ArrayHeader),
+}
+
+impl ArgumentsState {
+    fn restricted_callee(self) -> bool {
+        matches!(self, ArgumentsState::Restricted)
+    }
+
+    /// The box parameter `index` still aliases, if any. Never allocates, and
+    /// the box it names never moves, so the answer survives a collection.
+    unsafe fn mapped_box(self, index: u32) -> Option<*mut crate::r#box::Box> {
+        let ArgumentsState::Mapped(map) = self else {
+            return None;
+        };
+        if index >= (*map).length {
+            return None;
+        }
+        let bits = *(crate::array::array_elements_ptr(map) as *const u64).add(index as usize);
+        if bits == crate::value::TAG_HOLE {
+            return None;
+        }
+        Some(f64::from_bits(bits) as usize as *mut crate::r#box::Box)
+    }
+
+    /// Break index `index`'s alias. Never allocates.
+    unsafe fn unmap(self, index: u32) {
+        let ArgumentsState::Mapped(map) = self else {
+            return;
+        };
+        if index < (*map).length {
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel.
+            *(crate::array::array_elements_ptr(map) as *mut u64).add(index as usize) =
+                crate::value::TAG_HOLE;
+        }
+    }
+}
+
+/// `obj`'s arguments state, read from its metadata record. Never allocates.
+/// `obj` may be any pointer a probe was handed: a non-object, a handle, or an
+/// ordinary object without a record all answer `None`.
+///
+/// # Safety
+/// `obj` is a live heap address or arbitrary non-pointer bits (the
+/// `try_read_gc_header` contract).
+#[inline]
+unsafe fn arguments_state(obj: *const ObjectHeader) -> Option<ArgumentsState> {
+    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return None;
+    }
+    match (*meta).arguments {
+        0 => None,
+        ARGUMENTS_RESTRICTED => Some(ArgumentsState::Restricted),
+        ARGUMENTS_UNMAPPED => Some(ArgumentsState::Unmapped),
+        bits => Some(ArgumentsState::Mapped(
+            JSValue::from_bits(bits).as_pointer::<ArrayHeader>() as *mut ArrayHeader,
+        )),
+    }
+}
+
+/// The shared per-arity key lists are the only runtime-held state left here;
+/// everything per object lives on its metadata record.
 pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ARGUMENTS_KEYS.with(|cache| {
         for keys in cache.borrow_mut().iter_mut() {
             visitor.visit_raw_mut_ptr_slot(keys);
         }
     });
-    let mut moved = Vec::new();
-    ARGUMENTS_OBJECTS.with(|m| {
-        let mut map = m.borrow_mut();
-        for (&owner, meta) in map.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            // 2026-07-09 GC audit wave 2: the mapped-arguments capture BOXES
-            // are real heap references (`js_arguments_object_map_index`
-            // stores raw `Box` pointers) and were never visited — a moving
-            // GC could sweep or relocate a box out from under the next
-            // `arguments[i]` read/write. Visit them STRONGLY so they stay
-            // live and get rewritten to their post-move addresses.
-            for box_ptr in meta.mapped.values_mut() {
-                visitor.visit_usize_slot(box_ptr);
-            }
-        }
-        for (old_owner, new_owner) in moved.drain(..) {
-            if let Some(meta) = map.remove(&old_owner) {
-                map.insert(new_owner, meta);
-            }
-        }
-    });
-}
-
-/// Death pruning (2026-07-09 GC audit wave 2): one entry was inserted per
-/// CALL of any function referencing `arguments` and never removed, so the
-/// table grew at call rate and `is_arguments_object` misfired on a fresh
-/// object at a recycled address. `is_dead_owner` is one of the GC's
-/// deadness predicates (`gc::dead_owner`).
-pub(crate) fn prune_dead_arguments_object_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    ARGUMENTS_OBJECTS.with(|m| {
-        let mut map = m.borrow_mut();
-        if !map.is_empty() {
-            map.retain(|owner, _| !is_dead_owner(*owner));
-        }
-    });
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear_arguments_object_roots() {
-    ARGUMENTS_OBJECTS.with(|m| m.borrow_mut().clear());
     ARGUMENTS_KEYS.with(|cache| cache.borrow_mut().fill(std::ptr::null_mut()));
 }
 
+/// Test-only: the box parameter `index` of `obj` aliases, as its metadata
+/// record says.
 #[cfg(test)]
-pub(crate) fn test_arguments_object_registered(addr: usize) -> bool {
-    ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&addr))
+pub(crate) fn test_arguments_mapped_box(obj: *const ObjectHeader, index: u32) -> Option<usize> {
+    unsafe { arguments_state(obj)?.mapped_box(index) }.map(|b| b as usize)
 }
 
+/// Test-only: the mapping array a sloppy mapped object's record points at.
 #[cfg(test)]
-pub(crate) fn test_arguments_mapped_box(addr: usize, index: u32) -> Option<usize> {
-    ARGUMENTS_OBJECTS.with(|m| {
-        m.borrow()
-            .get(&addr)
-            .and_then(|meta| meta.mapped.get(&index).copied())
-    })
+pub(crate) fn test_arguments_mapping_array(obj: *const ObjectHeader) -> Option<*mut ArrayHeader> {
+    match unsafe { arguments_state(obj) }? {
+        ArgumentsState::Mapped(map) => Some(map),
+        ArgumentsState::Restricted | ArgumentsState::Unmapped => None,
+    }
 }
 
 fn key_name(key: *const crate::StringHeader) -> Option<String> {
@@ -260,6 +319,34 @@ pub extern "C" fn js_arguments_object_alloc(
     callee: f64,
     restricted_callee: i32,
 ) -> *mut ObjectHeader {
+    arguments_object_alloc(raw_args, callee, restricted_callee != 0, 0)
+}
+
+/// A sloppy MAPPED arguments object (#11506): [`js_arguments_object_alloc`]
+/// with an unrestricted `callee`, plus room for `mapped_count` parameter
+/// aliases, which the prologue then fills with
+/// [`js_arguments_object_map_index`]. CreateMappedArgumentsObject maps only
+/// the indices the call actually passed (`index < len`), so the room is
+/// `min(mapped_count, len)`.
+///
+/// The room is allocated HERE and never in `map_index`: the prologue holds
+/// the object in a bare register across its `map_index` calls, so those
+/// calls must not be able to collect.
+#[no_mangle]
+pub extern "C" fn js_arguments_object_alloc_mapped(
+    raw_args: f64,
+    callee: f64,
+    mapped_count: u32,
+) -> *mut ObjectHeader {
+    arguments_object_alloc(raw_args, callee, false, mapped_count)
+}
+
+fn arguments_object_alloc(
+    raw_args: f64,
+    callee: f64,
+    restricted_callee: bool,
+    mapped_count: u32,
+) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let raw_args = scope.root_nanbox_f64(raw_args);
     let callee = scope.root_nanbox_f64(callee);
@@ -272,7 +359,7 @@ pub extern "C" fn js_arguments_object_alloc(
         crate::array::js_array_length(arr_ptr)
     };
 
-    let keys = scope.root_raw_mut_ptr(arguments_keys(len, restricted_callee != 0));
+    let keys = scope.root_raw_mut_ptr(arguments_keys(len, restricted_callee));
     let obj = scope.root_raw_mut_ptr(js_object_alloc(0, len.saturating_add(2)));
     obj.with_mut_ptr(|obj| {
         keys.with_mut_ptr(|keys| unsafe {
@@ -302,7 +389,7 @@ pub extern "C" fn js_arguments_object_alloc(
         js_object_set_field(obj, len, JSValue::number(len as f64));
     });
 
-    if restricted_callee != 0 {
+    if restricted_callee {
         let thrower = thrower_closure_value();
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
             set_property_attrs(
@@ -334,30 +421,58 @@ pub extern "C" fn js_arguments_object_alloc(
         });
     }
 
-    // Latch BEFORE the insert, so no probe can observe a populated registry
-    // through a `false` flag.
+    // The mapping room: one `TAG_HOLE` per mappable index until the prologue
+    // fills it. An unmapped object (restricted `callee`) never has one.
+    let map_len = if restricted_callee {
+        0
+    } else {
+        mapped_count.min(len)
+    };
+    let map = scope.root_raw_mut_ptr::<ArrayHeader>(std::ptr::null_mut());
+    if map_len > 0 {
+        map.set_raw_mut_ptr(crate::array::js_array_alloc_with_length_exact(map_len));
+    }
+
     // The per-OBJECT half of the latch below, set in the same breath as the
-    // insert so that "in this registry" and "carries the flag" are one
-    // statement. A shape-keyed read cache refuses this object on the flag
-    // alone, without this registry's hash probe and without needing to reach a
-    // thread-local at all — which emitted code could not do.
+    // state word so that "is an arguments object" and "carries the flag" are
+    // one statement. A shape-keyed read cache refuses this object on the flag
+    // alone, without decoding the state word — which emitted code could not
+    // do. This allocates the metadata record the state word lives in.
     obj.with_mut_ptr(|obj: *mut ObjectHeader| {
         unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
         obj
     });
-    obj.with_mut_ptr(|obj| {
-        ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
-        ARGUMENTS_OBJECTS.with(|m| {
-            m.borrow_mut().insert(
-                obj as usize,
-                ArgumentsMeta {
-                    mapped: HashMap::new(),
-                    restricted_callee: restricted_callee != 0,
-                },
-            );
-        });
-        obj
-    })
+
+    // Latch BEFORE the store, so no probe can observe an arguments object
+    // through a `false` flag.
+    ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
+    // The mark above allocated the record, so this is a load; should it ever
+    // have to allocate, `object_meta_ensure` roots the owner itself.
+    let (meta, obj) = obj.across_mut::<ObjectHeader, _>(|| {
+        obj.with_mut_ptr(|obj: *mut ObjectHeader| unsafe { object_meta_ensure(obj) })
+    });
+    let state = map.with_mut_ptr(|map: *mut ArrayHeader| {
+        if restricted_callee {
+            ARGUMENTS_RESTRICTED
+        } else if map.is_null() {
+            ARGUMENTS_UNMAPPED
+        } else {
+            crate::value::js_nanbox_pointer(map as i64).to_bits()
+        }
+    });
+    // The ONE writer of `ObjectMeta::arguments`. Nothing between the
+    // allocation above and here can collect.
+    unsafe {
+        // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object
+        // barrier, exactly as `cell_expando_ensure` does for `expando`.
+        (*meta).arguments = state;
+        crate::gc::runtime_write_barrier_slot(
+            meta as usize,
+            &(*meta).arguments as *const _ as usize,
+            state,
+        );
+    }
+    obj
 }
 
 /// #10509: `arguments[key]` in a function whose Arguments object codegen
@@ -450,37 +565,46 @@ pub extern "C" fn js_arguments_object_map_index(
     if obj.is_null() || box_ptr.is_null() {
         return;
     }
-    ARGUMENTS_OBJECTS.with(|m| {
-        if let Some(meta) = m.borrow_mut().get_mut(&(obj as usize)) {
-            meta.mapped.insert(index, box_ptr as usize);
+    // Never allocates: the prologue holds `obj` in a bare register across
+    // these calls. The room was sized by `js_arguments_object_alloc_mapped`;
+    // an index at or past it is one this call did not pass, which
+    // CreateMappedArgumentsObject leaves unmapped.
+    unsafe {
+        let Some(ArgumentsState::Mapped(map)) = arguments_state(obj) else {
+            return;
+        };
+        if index < (*map).length {
+            // GC_STORE_AUDIT(POINTER_FREE): the box address as a plain Number.
+            // A box is a `std::alloc` cell, never a heap edge.
+            *(crate::array::array_elements_ptr(map) as *mut u64).add(index as usize) =
+                (box_ptr as usize as f64).to_bits();
         }
-    });
+    }
 }
 
 pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
     #[cfg(test)]
     TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // #7854: nothing has ever been created ⟹ nothing can be found. Checked
-    // first because it is the only arm that costs neither a thread-local
-    // resolution nor a hash. See `ARGUMENTS_OBJECTS_EVER_USED`.
+    // first because it is the only arm that never touches the receiver. See
+    // `ARGUMENTS_OBJECTS_EVER_USED`.
     if arguments_registry_never_used() {
         return false;
     }
     if obj.is_null() {
         return false;
     }
-    let found = ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&(obj as usize)));
-    // A registry hit MUST imply the flag: a shape-keyed read cache refuses
-    // this receiver on the flag alone, so an insert that skipped the mark
-    // would silently widen that cache onto an object with its own index
-    // semantics.
+    let found = unsafe { arguments_state(obj) }.is_some();
+    // A state word MUST imply the flag: a shape-keyed read cache refuses this
+    // receiver on the flag alone, so a store that skipped the mark would
+    // silently widen that cache onto an object with its own index semantics.
     debug_assert!(
         !found
             || unsafe {
                 crate::object::proto_validity::object_is_exotic_read_receiver(obj as usize)
             },
         "an arguments object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: a \
-         registry insert bypassed js_arguments_object_alloc"
+         state-word store bypassed arguments_object_alloc"
     );
     found
 }
@@ -518,10 +642,13 @@ pub(crate) unsafe fn arguments_object_get_index(
     if !is_arguments_object(obj) {
         return None;
     }
-    let name = index.to_string();
-    let key = intern_key(&name);
+    // Interning the key allocates, and `obj` is dereferenced after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let key = intern_key(&index.to_string());
     Some(
-        arguments_object_get_field(obj, key)
+        obj_h
+            .with_const_ptr(|obj| arguments_object_get_field(obj, key))
             .map(|value| f64::from_bits(value.bits()))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
     )
@@ -535,9 +662,11 @@ pub(crate) unsafe fn arguments_object_set_index(
     if !is_arguments_object(obj) {
         return false;
     }
-    let name = index.to_string();
-    let key = intern_key(&name);
-    arguments_object_set_field(obj, key, value)
+    // Interning the key allocates, and `obj` is dereferenced after it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let key = intern_key(&index.to_string());
+    obj_h.with_mut_ptr(|obj| arguments_object_set_field(obj, key, value))
 }
 
 pub(crate) fn arguments_object_to_string_tag(value: f64) -> Option<f64> {
@@ -555,24 +684,20 @@ pub(crate) unsafe fn arguments_object_get_field(
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
     let name = key_name(key)?;
-    let (mapped_box, restricted_callee) = ARGUMENTS_OBJECTS.with(|m| {
-        let map = m.borrow();
-        let meta = map.get(&(obj as usize))?;
-        let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
-            if super::own_key_present(obj as *mut ObjectHeader, key) {
-                meta.mapped.get(&idx).copied()
-            } else {
-                None
-            }
-        });
-        Some((mapped_box, meta.restricted_callee))
-    })?;
+    let state = arguments_state(obj)?;
+    let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
+        if super::own_key_present(obj as *mut ObjectHeader, key) {
+            state.mapped_box(idx)
+        } else {
+            None
+        }
+    });
 
-    if name == "callee" && restricted_callee {
+    if name == "callee" && state.restricted_callee() {
         arguments_throw_type_error(std::ptr::null());
     }
     if let Some(box_ptr) = mapped_box {
-        let value = crate::r#box::js_box_get(box_ptr as *mut crate::r#box::Box);
+        let value = crate::r#box::js_box_get(box_ptr);
         return Some(JSValue::from_bits(value.to_bits()));
     }
     if super::own_key_present(obj as *mut ObjectHeader, key) {
@@ -600,22 +725,18 @@ pub(crate) unsafe fn arguments_object_set_field(
     let Some(name) = key_name(key) else {
         return false;
     };
-    let Some((mapped_box, restricted_callee)) = ARGUMENTS_OBJECTS.with(|m| {
-        let map = m.borrow();
-        let meta = map.get(&(obj as usize))?;
-        let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
-            if super::own_key_present(obj, key) {
-                meta.mapped.get(&idx).copied()
-            } else {
-                None
-            }
-        });
-        Some((mapped_box, meta.restricted_callee))
-    }) else {
+    let Some(state) = arguments_state(obj) else {
         return false;
     };
+    let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
+        if super::own_key_present(obj, key) {
+            state.mapped_box(idx)
+        } else {
+            None
+        }
+    });
 
-    if name == "callee" && restricted_callee {
+    if name == "callee" && state.restricted_callee() {
         arguments_throw_type_error(std::ptr::null());
     }
     if !super::own_key_present(obj, key) {
@@ -638,7 +759,7 @@ pub(crate) unsafe fn arguments_object_set_field(
     }
     write_ordinary_own_value(obj, key, value);
     if let Some(box_ptr) = mapped_box {
-        crate::r#box::js_box_set(box_ptr as *mut crate::r#box::Box, value);
+        crate::r#box::js_box_set(box_ptr, value);
     }
     true
 }
@@ -648,17 +769,14 @@ pub(crate) unsafe fn arguments_object_before_delete(
     key: *const crate::StringHeader,
 ) -> Option<i32> {
     let name = key_name(key)?;
-    ARGUMENTS_OBJECTS.with(|m| {
-        let mut map = m.borrow_mut();
-        let meta = map.get_mut(&(obj as usize))?;
-        if name == "callee" && meta.restricted_callee {
-            return Some(0);
-        }
-        if let Some(index) = super::canonical_array_index(&name) {
-            meta.mapped.remove(&index);
-        }
-        None
-    })
+    let state = arguments_state(obj)?;
+    if name == "callee" && state.restricted_callee() {
+        return Some(0);
+    }
+    if let Some(index) = super::canonical_array_index(&name) {
+        state.unmap(index);
+    }
+    None
 }
 
 pub(crate) unsafe fn arguments_object_after_define(
@@ -676,40 +794,45 @@ pub(crate) unsafe fn arguments_object_after_define(
     if desc_ptr.is_null() {
         return;
     }
+    // The descriptor reads below intern their keys and may run getters, so
+    // both objects are rooted across them and re-read afterwards.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let desc = scope.root_raw_mut_ptr(desc_ptr);
     let value_key = intern_key("value");
-    let value = if super::own_key_present(desc_ptr, value_key) {
+    let value = if desc.with_mut_ptr(|desc| super::own_key_present(desc, value_key)) {
         Some(f64::from_bits(
-            js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key).bits(),
+            desc.with_const_ptr(|desc| js_object_get_field_by_name(desc, value_key))
+                .bits(),
         ))
     } else {
         None
     };
+    let value = value.map(|value| scope.root_nanbox_f64(value));
     let get_key = intern_key("get");
     let set_key = intern_key("set");
     let writable_key = intern_key("writable");
-    let has_accessor =
-        super::own_key_present(desc_ptr, get_key) || super::own_key_present(desc_ptr, set_key);
-    let writable_false = if super::own_key_present(desc_ptr, writable_key) {
-        let writable = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, writable_key);
+    let has_accessor = desc.with_mut_ptr(|desc| {
+        super::own_key_present(desc, get_key) || super::own_key_present(desc, set_key)
+    });
+    let writable_false = if desc.with_mut_ptr(|desc| super::own_key_present(desc, writable_key)) {
+        let writable = desc.with_const_ptr(|desc| js_object_get_field_by_name(desc, writable_key));
         crate::value::js_is_truthy(f64::from_bits(writable.bits())) == 0
     } else {
         false
     };
-    ARGUMENTS_OBJECTS.with(|m| {
-        let mut map = m.borrow_mut();
-        let Some(meta) = map.get_mut(&(obj as usize)) else {
-            return;
-        };
-        let Some(box_ptr) = meta.mapped.get(&index).copied() else {
-            return;
-        };
-        if let Some(value) = value {
-            crate::r#box::js_box_set(box_ptr as *mut crate::r#box::Box, value);
-        }
-        if has_accessor || writable_false {
-            meta.mapped.remove(&index);
-        }
-    });
+    let Some(state) = obj.with_mut_ptr(|obj: *mut ObjectHeader| arguments_state(obj)) else {
+        return;
+    };
+    let Some(box_ptr) = state.mapped_box(index) else {
+        return;
+    };
+    if let Some(value) = value {
+        crate::r#box::js_box_set(box_ptr, value.get_nanbox_f64());
+    }
+    if has_accessor || writable_false {
+        state.unmap(index);
+    }
 }
 
 pub(crate) unsafe fn arguments_object_descriptor(
@@ -717,10 +840,7 @@ pub(crate) unsafe fn arguments_object_descriptor(
     key: *const crate::StringHeader,
 ) -> Option<f64> {
     let name = key_name(key)?;
-    let restricted_callee = ARGUMENTS_OBJECTS.with(|m| {
-        let map = m.borrow();
-        map.get(&(obj as usize)).map(|meta| meta.restricted_callee)
-    })?;
+    let restricted_callee = arguments_state(obj)?.restricted_callee();
     if !super::own_key_present(obj, key) {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
@@ -749,13 +869,9 @@ pub(crate) unsafe fn arguments_object_descriptor(
         ));
     }
     let value = if let Some(index) = super::canonical_array_index(&name) {
-        ARGUMENTS_OBJECTS
-            .with(|m| {
-                m.borrow()
-                    .get(&(obj as usize))
-                    .and_then(|meta| meta.mapped.get(&index).copied())
-            })
-            .map(|box_ptr| crate::r#box::js_box_get(box_ptr as *mut crate::r#box::Box))
+        arguments_state(obj)
+            .and_then(|state| state.mapped_box(index))
+            .map(|box_ptr| crate::r#box::js_box_get(box_ptr))
             .unwrap_or_else(|| f64::from_bits(read_ordinary_own_value(obj, key).bits()))
     } else {
         f64::from_bits(read_ordinary_own_value(obj, key).bits())
@@ -774,8 +890,13 @@ pub(crate) unsafe fn arguments_object_to_vec(obj: *const ObjectHeader) -> Option
     if !is_arguments_object(obj) {
         return None;
     }
+    // Every key below is interned, which allocates, and `obj` is dereferenced
+    // after each one.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
     let length_key = intern_key("length");
-    let length_value = arguments_object_get_field(obj, length_key)
+    let length_value = obj_h
+        .with_const_ptr(|obj| arguments_object_get_field(obj, length_key))
         .map(|v| f64::from_bits(v.bits()))
         .unwrap_or(0.0);
     let len = if length_value.is_finite() && length_value > 0.0 {
@@ -785,9 +906,9 @@ pub(crate) unsafe fn arguments_object_to_vec(obj: *const ObjectHeader) -> Option
     };
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
-        let name = i.to_string();
-        let key = intern_key(&name);
-        let value = arguments_object_get_field(obj, key)
+        let key = intern_key(&i.to_string());
+        let value = obj_h
+            .with_const_ptr(|obj| arguments_object_get_field(obj, key))
             .map(|v| f64::from_bits(v.bits()))
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         out.push(value);
@@ -831,13 +952,23 @@ pub(crate) unsafe fn arguments_object_index_value(obj: *const ObjectHeader, inde
 pub(crate) unsafe fn arguments_object_to_array(
     obj: *const ObjectHeader,
 ) -> Option<*mut ArrayHeader> {
-    let values = arguments_object_to_vec(obj)?;
-    let arr = crate::array::js_array_alloc(values.len() as u32);
-    let mut current = arr;
-    for value in values {
-        current = crate::array::js_array_push_f64(current, value);
+    if !is_arguments_object(obj) {
+        return None;
     }
-    Some(current)
+    // Every read below interns its key and may run an accessor, so the source
+    // and the result are rooted, and each value lands in the result before
+    // the next allocation. The result is born with room for every element, so
+    // no push grows it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let len = obj_h.with_const_ptr(|obj| arguments_object_length(obj));
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len));
+    for i in 0..len {
+        let value = obj_h.with_const_ptr(|obj| arguments_object_index_value(obj, i));
+        let next = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, value));
+        out.set_raw_mut_ptr(next);
+    }
+    Some(out.with_mut_ptr(|arr: *mut ArrayHeader| arr))
 }
 
 #[no_mangle]

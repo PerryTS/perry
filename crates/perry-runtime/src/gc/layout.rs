@@ -1848,8 +1848,8 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             // DIVERGENT AND UNREACHABLE (#10868 step 2.5 stage 1): the
             // authoritative meta enumerator is layout_slot_visit ObjectMeta
             // rewrite arm, which does not delegate here. This iterator has
-            // four edge sources and the record has six pointer words, so
-            // expando and dictionary_keys are absent below.
+            // four edge sources and the record has seven pointer words, so
+            // expando, dictionary_keys and arguments are absent below.
             // Prototype and the private-evaluation brand are explicit prefix
             // edges. Keep the brand out of the payload selection: its class
             // object can be reachable only through this metadata record, so

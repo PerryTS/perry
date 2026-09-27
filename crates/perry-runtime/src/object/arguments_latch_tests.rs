@@ -7,8 +7,8 @@
 //! resolution plus a `RefCell` borrow plus a pointer hash to prove the absence
 //! of a feature most programs never use (2.8% of `gc-handoff/apps/interp.ts`).
 //!
-//! The whole soundness argument is "`ARGUMENTS_OBJECTS` has exactly ONE insert
-//! site, and it arms the latch before inserting". These tests pin both halves,
+//! The whole soundness argument is "`ObjectMeta::arguments` has exactly ONE
+//! writer, and it arms the latch before storing". These tests pin both halves,
 //! and they pin THE SUBJECT rather than the answer: `latch_off_is_what_makes
 //! _the_probe_cheap` forces the latch off with a real entry present and requires
 //! the probe to answer `false`, so a deleted or never-taken short-circuit turns
@@ -19,7 +19,7 @@
 //! The latch is process-global on purpose (Darwin has no local-exec TLS, so a
 //! `thread_local!` flag would cost the very `_tlv_get_addr` this removes), which
 //! makes it only ever CONSERVATIVE: one thread arming it sends every thread back
-//! to the registry, i.e. to the pre-#7854 behaviour.
+//! to the real lookup, i.e. to the pre-#7854 behaviour.
 
 use super::*;
 
@@ -37,7 +37,7 @@ fn args_object() -> *mut ObjectHeader {
 }
 
 /// The load-bearing claim: creating an arguments object arms the latch. If a
-/// future edit adds a second `ARGUMENTS_OBJECTS` insert site without arming it,
+/// future edit adds a second `ObjectMeta::arguments` writer without arming it,
 /// `is_arguments_object` starts answering `false` for a real arguments object —
 /// a silent wrong answer — and this goes red.
 #[test]
@@ -45,7 +45,7 @@ fn creating_an_arguments_object_arms_the_latch() {
     let args = args_object();
     assert!(
         !crate::object::arguments::test_arguments_registry_never_used(),
-        "js_arguments_object_alloc must arm ARGUMENTS_OBJECTS_EVER_USED before inserting"
+        "js_arguments_object_alloc must arm ARGUMENTS_OBJECTS_EVER_USED before storing"
     );
     assert!(
         crate::object::is_arguments_object(args),
