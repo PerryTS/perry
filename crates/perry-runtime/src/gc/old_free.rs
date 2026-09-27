@@ -104,7 +104,7 @@ impl OldFreeHeads {
 
     #[inline]
     fn small_class(total_size: usize) -> Option<usize> {
-        (total_size <= OLD_FREE_SMALL_MAX && total_size % 8 == 0).then_some(total_size / 8)
+        (total_size <= OLD_FREE_SMALL_MAX && total_size.is_multiple_of(8)).then_some(total_size / 8)
     }
 
     /// The head for `total_size`, if one exists. `0` means an empty chain.
