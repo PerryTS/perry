@@ -428,32 +428,46 @@ fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
     let ir = ir();
     let deref =
         block_body(&ir, "idxset.recv_prop.deref.").expect("guarded store emits its `deref` block");
+    let follow = block_body(&ir, "idxset.recv_prop.deref.follow.")
+        .expect("guarded store emits its `deref.follow` block");
     let live = block_body(&ir, "idxset.recv_prop.deref.live.")
         .expect("guarded store emits its `deref.live` block");
     let fast =
         block_body(&ir, "idxset.recv_prop.fast.").expect("guarded store emits its `fast` block");
 
-    // (1) `deref` reads the stub's first payload word and selects it as the
-    // live handle when the header says ARRAY + FORWARDED.
-    let select_line = deref
+    // (0) #10513: `deref` decides on the ARRAY brand byte alone, so a receiver
+    // that is not an Array leaves before any forwarding or integrity work.
+    assert!(
+        deref.contains("sub i64") && deref.contains("load i8"),
+        "`deref` reads the brand byte:\n{deref}"
+    );
+    assert!(
+        deref.contains("br i1") && deref.contains("idxset.recv_prop.deref.follow."),
+        "`deref` must branch into `deref.follow` on the ARRAY brand:\n{deref}"
+    );
+
+    // (1) `deref.follow` reads the stub's first payload word and selects it as
+    // the live handle when the header says FORWARDED.
+    let select_line = follow
         .lines()
         .map(str::trim)
         .find(|line| line.contains("select i1") && line.contains("i64"))
-        .expect("`deref` selects between the forwarding target and the receiver");
+        .expect("`deref.follow` selects between the forwarding target and the receiver");
     let live_handle = select_line
         .split(" = ")
         .next()
         .expect("select defines a register")
         .to_string();
     let target = operand(select_line, 2).expect("select's taken operand");
-    let target_def = def_of(&deref, &target).expect("forwarding target is defined in `deref`");
+    let target_def =
+        def_of(&follow, &target).expect("forwarding target is defined in `deref.follow`");
     assert!(
         target_def.contains("load i64"),
         "the forwarding target must be the stub's first payload word, got `{target_def}`"
     );
     assert!(
-        deref.contains("br i1") && deref.contains("idxset.recv_prop.deref.live."),
-        "`deref` must branch into `deref.live` after the heap-band test of the live handle"
+        follow.contains("br i1") && follow.contains("idxset.recv_prop.deref.live."),
+        "`deref.follow` must branch into `deref.live` after the heap-band test of the live handle"
     );
 
     // (2) `deref.live` re-reads the ARRAY brand and the FORWARDED bit from the

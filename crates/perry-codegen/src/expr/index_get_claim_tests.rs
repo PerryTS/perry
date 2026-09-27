@@ -215,6 +215,10 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
             "arrlike.elem.bounds",
             "arrlike.elem.load",
             "arrlike.elem.value",
+            // #10514: one growth-forwarding hop healed inline.
+            "arrlike.ic.fwd_check",
+            "arrlike.ic.fwd_follow",
+            "arrlike.ic.fwd_header",
             "arrlike.ic.miss",
             "arrlike.ic.merge",
         ],
@@ -370,7 +374,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
         );
         assert_eq!(
             dynamic_index_site_blocks(&ir).len(),
-            21,
+            24,
             "{name}: a number context must not change the emitted block shape:\n{ir}"
         );
         let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
