@@ -697,7 +697,7 @@ mod tests {
                 cid as i64,
                 b"name".as_ptr(),
                 4,
-                static_name as usize as i64,
+                static_name as *const () as usize as i64,
                 0,
                 0,
             )

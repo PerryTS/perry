@@ -3555,23 +3555,6 @@
    "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
   },
   {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOLS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Class ids are process-global but members hold symbol addresses and JS values from the writing thread; members with a freed symbol or value are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOL_ORDER"
-   ],
-   "verdict": "no_heap_address",
-   "why": "class_id -> Vec of SymbolHeader::id (monotonic u64 ids, stable across moves) recording creation order (symbol.rs:1162-1172); holds no addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/intl/segments_view.rs",
    "names": [
     "OPENS"

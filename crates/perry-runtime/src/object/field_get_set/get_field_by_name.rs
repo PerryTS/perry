@@ -110,7 +110,7 @@ pub(crate) fn class_value_get_field(
         // it); `key` is a live string header.
         unsafe {
             let bytes = std::slice::from_raw_parts(
-                (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                crate::string::string_data(key),
                 (*key).byte_len as usize,
             );
             if let Some(v) = crate::closure::props::bag_get(ptr, bytes) {

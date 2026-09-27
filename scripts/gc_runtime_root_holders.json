@@ -403,7 +403,7 @@
         "sources": {
           "crates/perry-runtime/src/gc/census.rs": "25601f25ac70aa998f8cb5c1939d11e7c43a96235d4edf39a78e261b68709471",
           "crates/perry-runtime/src/gc/cycle.rs": "4744196ba5e9c5ac40912154cf5b45b4a618d81ddc776ab1095fbc585f27c878",
-          "crates/perry-runtime/src/gc/mod.rs": "bb38a949495846fd30598064bb04d8e8d384721c25a9a21d1029da1e0c5caa3c",
+          "crates/perry-runtime/src/gc/mod.rs": "78f68fd77965239935bf501c831a6dfd035d4af18692a487d5aeb2dee2e332b6",
           "crates/perry-runtime/src/gc/policy.rs": "7e2304ec822d26877df4eaf7aefb55c485c66425b8946b56a9b271a0abcc635b",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
@@ -878,19 +878,6 @@
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
       "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it \u2014 #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_STATIC_PROTOTYPES",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::class_registry::gc_roots::scan_class_side_table_roots_mut and its budgeted step twin (class_side_table_root_snapshot enumerates ClassSideTableRootSlot::StaticPrototype; scan_class_side_table_root_slot visits that slot)",
-      "why": "Constructor-side [[Prototype]] recorded by Object.setPrototypeOf(Ctor, obj) on a declared class. Holds a real heap ObjectHeader address as usize, so it is visited with visit_usize_slot in BOTH the full and budgeted class-side-table walks, exactly like the CLASS_DECL_PROTOTYPE_OBJECTS entries beside it, and class_static_prototype_root_store fires runtime_write_barrier_root_raw_ptr on the stored pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_STATIC_PROTOTYPE_NULLED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Set of class ids whose constructor [[Prototype]] was explicitly set to null, so Object.getPrototypeOf answers null rather than the default Function.prototype. Stores u32 class ids only \u2014 no heap address, nothing to trace or forward."
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
