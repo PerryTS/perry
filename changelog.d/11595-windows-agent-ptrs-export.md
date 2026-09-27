@@ -1,0 +1,1 @@
+- **perry-runtime (Windows)**: `PERRY_AGENT_PTRS` is no longer `#[no_mangle]` on Windows. MSVC cannot export TLS across images, and the duplicate thread-local shim symbol broke every `x86_64-pc-windows-msvc` release build of perry-runtime since #11489.
