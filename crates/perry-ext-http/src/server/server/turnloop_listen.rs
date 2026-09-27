@@ -185,61 +185,156 @@ mod tests {
 
     /// `http.Server.listen()` must reach the agent's turnloop loop on whichever
     /// thread asks, and there is no hyper accept loop to fall back to any more.
-    /// The three outcomes are the three routes:
+    /// The three outcomes are the three routes, and every one is exercised on
+    /// every run:
     ///
     /// * this thread owns the loop — the bind happens here, synchronously, so
     ///   the server is listening on a real port before `listen()` returns;
     /// * another thread owns it — the bind is posted to that owner, so nothing
-    ///   is bound or reported on this thread yet;
-    /// * no loop exists for the agent — the listen fails with Node's
-    ///   `'error'`, code `ENOTSUP`, and never reports `'listening'`.
+    ///   is bound or reported on this thread, and the owner's next turn binds;
+    /// * no loop exists for the agent — here, a thread declined while another
+    ///   owned the route, asking after that owner exited (a decline is for the
+    ///   thread's life, so it does not re-claim) — the listen fails with Node's
+    ///   `'error'`, code `ENOTSUP`, and never reports `'listening'`. (A route
+    ///   claimed with no loop built yet is the transient `EAGAIN` instead.)
     ///
-    /// **The route is observed, not assumed**: an agent's route is claimed once
-    /// per thread by the first thread to ask, so which harness thread this
-    /// lands on decides it. Every arm asserts something; none is a skip.
+    /// **Each route runs on an agent this test mints.** An unclaimed libtest
+    /// thread resolves to the PRIMARY agent, whose single route slot belongs to
+    /// whichever test thread asked first, for as long as that thread lives. The
+    /// old version observed the route on such a thread, so which arm ran was
+    /// decided by other tests — and a non-owner's arm could not be decided at
+    /// all: whether a post lands depends on the owner still being alive and
+    /// having built its loop, which another test's thread settles between this
+    /// test's check and its `listen()` (#11597). A fresh agent's slot is one
+    /// nobody else can name.
     #[test]
     fn listen_reaches_the_loop_on_every_route() {
-        let owns_loop = crate::server::turnloop_serve::enabled();
-        let can_post = perry_ffi::agent_post::available();
-        let handle = register_handle(HttpServer::with_handler(0));
-        let args = crate::server::types::ListenArgs {
-            opts: 0.0,
-            host: Some("127.0.0.1".to_string()),
-            callback: 0,
-        };
-        unsafe { super::super::listen_http_server(handle, args) };
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
 
-        let (listening, bound_port, listening_emit, error_code) = {
+        type Observed = (bool, u16, bool, Option<String>, Option<i64>);
+        /// `listen()` on 127.0.0.1:0, and what the server reports right after.
+        fn listen_and_observe(handle: i64) -> Observed {
+            let args = crate::server::types::ListenArgs {
+                opts: 0.0,
+                host: Some("127.0.0.1".to_string()),
+                callback: 0,
+            };
+            unsafe { super::super::listen_http_server(handle, args) };
             let s = get_handle::<HttpServer>(handle).expect("server handle");
             (
                 s.listening,
                 s.bound_port,
                 s.pending_listening_emit,
                 s.pending_error_emit.as_ref().map(|e| e.code.clone()),
+                crate::server::turnloop_serve::listener_for_server(handle),
             )
-        };
-        let listener = crate::server::turnloop_serve::listener_for_server(handle);
-        if let Some(id) = listener {
-            crate::server::turnloop_serve::close_listener(id);
         }
-        drop_handle(handle);
+        fn close(handle: i64, listener: Option<i64>) {
+            if let Some(id) = listener {
+                crate::server::turnloop_serve::close_listener(id);
+            }
+            drop_handle(handle);
+        }
 
-        if owns_loop {
+        // Routes 1 and 2: an owner, and a second thread of its agent.
+        std::thread::spawn(|| {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            assert!(
+                crate::server::turnloop_serve::enabled(),
+                "the first thread of a fresh agent must own its loop"
+            );
+            let handle = register_handle(HttpServer::with_handler(0));
+            let (listening, bound_port, listening_emit, error_code, listener) =
+                listen_and_observe(handle);
+            close(handle, listener);
             assert!(listening, "an owned loop must bind synchronously");
             assert_ne!(bound_port, 0, "port 0 must report the kernel's port");
             assert!(listener.is_some(), "the bind must be a turnloop listener");
             assert!(listening_emit, "a bound server owes a 'listening' emit");
             assert_eq!(error_code, None);
-        } else if can_post {
+
+            // The owner's loop exists now; a turn publishes its postbox.
+            let limit = Instant::now() + Duration::from_secs(10);
+            while !perry_ffi::agent_post::available() {
+                assert!(Instant::now() < limit, "the owner never published a route");
+                perry_runtime::event_pump::js_loop_turn_bounded(0);
+            }
+
+            let handle = register_handle(HttpServer::with_handler(0));
+            let posted = std::thread::spawn(move || {
+                perry_runtime::agent::enter_agent_for_test(agent);
+                let owns = crate::server::turnloop_serve::enabled();
+                let can_post = perry_ffi::agent_post::available();
+                (owns, can_post, listen_and_observe(handle))
+            })
+            .join()
+            .expect("the posting thread does not panic");
+            let (owns, can_post, (listening, _, listening_emit, error_code, listener)) = posted;
+            assert!(!owns, "a second thread of the agent must not own its loop");
+            assert!(can_post, "the agent has a live, built loop to post to");
             assert!(!listening, "a posted bind has not run on this thread");
             assert!(listener.is_none());
             assert!(!listening_emit);
             assert_eq!(error_code, None);
-        } else {
-            assert!(!listening);
-            assert!(!listening_emit, "a failed listen never emits 'listening'");
-            assert_eq!(error_code.as_deref(), Some("ENOTSUP"));
-        }
+
+            // The owner runs the posted bind on its next turn.
+            let ran_before = perry_ffi::agent_post::dispatched();
+            let limit = Instant::now() + Duration::from_secs(10);
+            while perry_ffi::agent_post::dispatched() == ran_before {
+                assert!(Instant::now() < limit, "the owner never ran the posted bind");
+                perry_runtime::event_pump::js_loop_turn_bounded(10);
+            }
+            let listening = get_handle::<HttpServer>(handle).is_some_and(|s| s.listening);
+            close(
+                handle,
+                crate::server::turnloop_serve::listener_for_server(handle),
+            );
+            assert!(listening, "the posted bind must land on the owner");
+            perry_runtime::agent::retire_agent(agent);
+        })
+        .join()
+        .expect("the owner thread does not panic");
+
+        // Route 3: a thread declined by a live owner, asking after that owner
+        // has exited. Its `Declined` is for the life of the thread, so it does
+        // not claim the freed slot, and the agent has no route left to post to.
+        let (claimed_tx, claimed_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let claimant = std::thread::spawn(move || {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            // Asking claims the route slot, without building a loop.
+            let claimed = crate::server::turnloop_serve::enabled();
+            claimed_tx.send((agent, claimed)).expect("the test is waiting");
+            let _ = release_rx.recv();
+            perry_runtime::agent::retire_agent(agent);
+        });
+        let (agent, claimed) = claimed_rx.recv().expect("the claimant reports");
+        assert!(claimed, "the first thread of a fresh agent claims its route");
+        let (declined_tx, declined_rx) = mpsc::channel();
+        let (gone_tx, gone_rx) = mpsc::channel::<()>();
+        let handle = register_handle(HttpServer::with_handler(0));
+        let refused = std::thread::spawn(move || {
+            perry_runtime::agent::enter_agent_for_test(agent);
+            let owns = crate::server::turnloop_serve::enabled();
+            declined_tx.send(()).expect("the test is waiting");
+            gone_rx.recv().expect("the test reports the owner gone");
+            let can_post = perry_ffi::agent_post::available();
+            (owns, can_post, listen_and_observe(handle))
+        });
+        declined_rx.recv().expect("the declined thread reports");
+        release_tx.send(()).expect("the claimant is waiting");
+        claimant.join().expect("the claimant does not panic");
+        gone_tx.send(()).expect("the declined thread is waiting");
+        let refused = refused.join().expect("the refused thread does not panic");
+        let (owns, can_post, (listening, _, listening_emit, error_code, listener)) = refused;
+        close(handle, listener);
+        assert!(!owns, "the route was held by a live claimant when asked");
+        assert!(!can_post, "the owner is gone, so there is nothing to post to");
+        assert!(!listening);
+        assert!(listener.is_none());
+        assert!(!listening_emit, "a failed listen never emits 'listening'");
+        assert_eq!(error_code.as_deref(), Some("ENOTSUP"));
     }
 
     /// An ordinary server must never share its port: a second `listen()` on it
