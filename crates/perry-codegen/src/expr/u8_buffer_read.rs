@@ -236,3 +236,208 @@ fn lower_u8_buffer_checked_load(
         ],
     ))
 }
+
+// ---------------------------------------------------------------------------
+// #10515: the same admission cache, for the i32-ABI reads and for WRITES.
+//
+// The cache contract (`perry-runtime/src/buffer/header.rs`) is that an entry
+// names a live registered byte view — `Uint8Array` or `Buffer` — that OWNS its
+// bytes inline at `+8` (no foreign span, not a registered view). A write to
+// such a buffer is exactly `js_buffer_set`'s store: views over it resolve
+// their bytes through this backing rather than holding a copy (see
+// `buffer/view.rs`), so there is nothing to propagate. Every guard miss —
+// a view, a foreign span, an out-of-range index, a non-pointer, an
+// unadmitted buffer — takes the unchanged runtime accessor, which also primes
+// the cache for the next access.
+// ---------------------------------------------------------------------------
+
+/// Pointer tag + full-address admission hit for `obj_box`. Returns
+/// `(hit, raw_address)`, both in the current block.
+fn emit_u8_cache_admission(ctx: &mut FnCtx<'_>, obj_box: &str) -> (String, String) {
+    let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(obj_box);
+    let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+    let tagged = blk.and(I64, &obj_bits, &tag_mask);
+    let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
+    // Slot formula duplicates `buffer/header.rs::u8_inline_cache_slot`.
+    let slot = blk.lshr(I64, &raw, "3");
+    let slot = blk.and(I64, &slot, "63");
+    let entry_ptr = blk.gep(
+        "[64 x i64]",
+        "@PERRY_U8_INLINE_CACHE",
+        &[(I64, "0"), (I64, &slot)],
+    );
+    let entry_val = blk.load(I64, &entry_ptr);
+    let admitted = blk.icmp_eq(I64, &entry_val, &raw);
+    (blk.and(I1, &is_ptr, &admitted), raw)
+}
+
+/// `idx ult length` against an admitted buffer's `u32` length at offset 0.
+/// `ult` also rejects a negative (or `-1`-sentinel) index.
+fn emit_u8_in_bounds(ctx: &mut FnCtx<'_>, raw: &str, idx_i32: &str) -> String {
+    let blk = ctx.block();
+    let hdr_ptr = blk.inttoptr(I64, raw);
+    let len = blk.load(I32, &hdr_ptr);
+    blk.icmp_ult(I32, idx_i32, &len)
+}
+
+fn emit_u8_byte_ptr(ctx: &mut FnCtx<'_>, raw: &str, idx_i32: &str) -> String {
+    let blk = ctx.block();
+    let data_base = blk.add(I64, raw, "8");
+    let idx_i64 = blk.zext(I32, idx_i32, I64);
+    let addr = blk.add(I64, &data_base, &idx_i64);
+    blk.inttoptr(I64, &addr)
+}
+
+/// Guarded inline byte READ in the runtime helper's native i32 ABI:
+/// `slow_fn(handle: i64, idx: i32) -> i32` (`js_uint8array_get` /
+/// `js_buffer_get`, which answer the `0` byte sentinel out of range).
+pub(crate) fn emit_u8_cached_get_i32(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_i32: &str,
+    slow_fn: &str,
+) -> String {
+    let chk_idx = ctx.new_block("u8c.get.chk");
+    let load_idx = ctx.new_block("u8c.get.load");
+    let slow_idx = ctx.new_block("u8c.get.slow");
+    let merge_idx = ctx.new_block("u8c.get.merge");
+    let chk_label = ctx.block_label(chk_idx);
+    let load_label = ctx.block_label(load_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    ctx.block().cond_br(&hit, &chk_label, &slow_label);
+
+    ctx.current_block = chk_idx;
+    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    ctx.block().cond_br(&in_bounds, &load_label, &slow_label);
+
+    ctx.current_block = load_idx;
+    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    let (fast_val, fast_end) = {
+        let blk = ctx.block();
+        let byte = blk.load(I8, &ptr);
+        let val = blk.zext(I8, &byte, I32);
+        let end = blk.label.clone();
+        blk.br(&merge_label);
+        (val, end)
+    };
+
+    ctx.current_block = slow_idx;
+    let (slow_val, slow_end) = {
+        let blk = ctx.block();
+        let val = blk.call(I32, slow_fn, &[(I64, &raw), (I32, idx_i32)]);
+        let end = blk.label.clone();
+        blk.br(&merge_label);
+        (val, end)
+    };
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        I32,
+        &[
+            (fast_val.as_str(), fast_end.as_str()),
+            (slow_val.as_str(), slow_end.as_str()),
+        ],
+    )
+}
+
+/// Guarded inline byte read yielding a JS value: the byte as a Number in
+/// bounds, else `slow_fn(handle, idx) -> double` (`js_uint8array_index_get_value`
+/// / `js_buffer_index_get_value`, which answer `undefined` out of range).
+pub(crate) fn emit_u8_cached_get_value(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_i32: &str,
+    slow_fn: &str,
+) -> String {
+    let chk_idx = ctx.new_block("u8c.getv.chk");
+    let load_idx = ctx.new_block("u8c.getv.load");
+    let slow_idx = ctx.new_block("u8c.getv.slow");
+    let merge_idx = ctx.new_block("u8c.getv.merge");
+    let chk_label = ctx.block_label(chk_idx);
+    let load_label = ctx.block_label(load_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    ctx.block().cond_br(&hit, &chk_label, &slow_label);
+
+    ctx.current_block = chk_idx;
+    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    ctx.block().cond_br(&in_bounds, &load_label, &slow_label);
+
+    ctx.current_block = load_idx;
+    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    let (fast_val, fast_end) = {
+        let blk = ctx.block();
+        let byte = blk.load(I8, &ptr);
+        let val = blk.uitofp(I8, &byte, DOUBLE);
+        let end = blk.label.clone();
+        blk.br(&merge_label);
+        (val, end)
+    };
+
+    ctx.current_block = slow_idx;
+    let (slow_val, slow_end) = {
+        let blk = ctx.block();
+        let val = blk.call(DOUBLE, slow_fn, &[(I64, &raw), (I32, idx_i32)]);
+        let end = blk.label.clone();
+        blk.br(&merge_label);
+        (val, end)
+    };
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_val.as_str(), fast_end.as_str()),
+            (slow_val.as_str(), slow_end.as_str()),
+        ],
+    )
+}
+
+/// Guarded inline byte WRITE in the runtime helper's i32 ABI: `val_i32` is
+/// already ToInt32'd by the caller, and the store keeps its low byte exactly
+/// as `js_buffer_set` does (`value & 0xFF`). Misses call
+/// `slow_fn(handle, idx, value)` (`js_uint8array_set` / `js_buffer_set`).
+pub(crate) fn emit_u8_cached_set_i32(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_i32: &str,
+    val_i32: &str,
+    slow_fn: &str,
+) {
+    let chk_idx = ctx.new_block("u8c.set.chk");
+    let store_idx = ctx.new_block("u8c.set.store");
+    let slow_idx = ctx.new_block("u8c.set.slow");
+    let merge_idx = ctx.new_block("u8c.set.merge");
+    let chk_label = ctx.block_label(chk_idx);
+    let store_label = ctx.block_label(store_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    ctx.block().cond_br(&hit, &chk_label, &slow_label);
+
+    ctx.current_block = chk_idx;
+    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    ctx.block().cond_br(&in_bounds, &store_label, &slow_label);
+
+    ctx.current_block = store_idx;
+    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    {
+        let blk = ctx.block();
+        let byte = blk.trunc(I32, val_i32, I8);
+        blk.store(I8, &byte, &ptr);
+        blk.br(&merge_label);
+    }
+
+    ctx.current_block = slow_idx;
+    {
+        let blk = ctx.block();
+        blk.call_void(slow_fn, &[(I64, &raw), (I32, idx_i32), (I32, val_i32)]);
+        blk.br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+}

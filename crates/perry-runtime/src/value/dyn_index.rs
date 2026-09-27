@@ -168,6 +168,19 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return js_dyn_index_get(boxed, index.get_nanbox_f64());
     }
     let jsval = JSValue::from_bits(bits);
+    // #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) with a
+    // canonical in-bounds index answers from the inline-access cache before
+    // the string / symbol / typed-array / registry dispatch below.
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if crate::buffer::u8_inline_cache_hit(raw_ptr) {
+            if let Some(byte) = finite_nonnegative_i32_index(index)
+                .and_then(|idx| crate::buffer::cached_u8_read(raw_ptr, idx))
+            {
+                return f64::from(byte);
+            }
+        }
+    }
     if jsval.is_any_string() {
         return crate::string::js_string_index_get_boxed(value, index);
     }
@@ -550,6 +563,27 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, strict: i32) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // #10515: a Number stored at a canonical in-bounds index of an admitted
+    // owning byte view (`Uint8Array` / `Buffer`) is one byte write. Only a
+    // Number: any other value's ToNumber may run user code, which the full
+    // path below orders against the bounds check.
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if crate::buffer::u8_inline_cache_hit(raw_ptr) && {
+            let v = JSValue::from_bits(value.to_bits());
+            v.is_number() || v.is_int32()
+        } {
+            if let Some(idx) = finite_nonnegative_i32_index(index) {
+                if crate::buffer::cached_u8_write(
+                    raw_ptr,
+                    idx,
+                    crate::typedarray::jsvalue_to_uint8(value),
+                ) {
+                    return value;
+                }
+            }
+        }
+    }
     // Proxies use small tagged handles rather than heap addresses. They must
     // take their [[Set]] path before any direct-property fast path.
     if crate::proxy::js_proxy_is_proxy(obj) != 0 {

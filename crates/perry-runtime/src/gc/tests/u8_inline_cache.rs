@@ -33,18 +33,19 @@ fn test_prime_admits_inline_u8_and_contract_holds() {
         *crate::buffer::buffer_data_mut(buf).add(3) = 0xAB;
     }
 
-    // Unmarked: not a Uint8Array, must not be admitted.
+    // Unmarked: a Node `Buffer`, whose element semantics are a Uint8Array's
+    // (#10515 admits it).
     crate::buffer::u8_inline_cache_try_prime(addr);
     assert!(
-        !crate::buffer::test_u8_inline_cache_holds(addr),
-        "an unmarked buffer must not be admitted"
+        crate::buffer::test_u8_inline_cache_holds(addr),
+        "an inline-storage Buffer must be admitted"
     );
 
     crate::buffer::mark_as_uint8array(addr);
     crate::buffer::u8_inline_cache_try_prime(addr);
     assert!(
         crate::buffer::test_u8_inline_cache_holds(addr),
-        "a marked inline-storage buffer must be admitted"
+        "a marked inline-storage Uint8Array must be admitted"
     );
 
     // The emitted reader's view of an admitted entry: length then byte.
@@ -160,4 +161,77 @@ fn test_reissued_address_does_not_inherit_admission() {
         "a re-registered address must not inherit the dead tenant's \
          inline-read admission"
     );
+}
+
+/// #10515: the non-integer-indexed brands that share `BufferHeader` storage —
+/// ArrayBuffer, SharedArrayBuffer, DataView (whose payload holds its data
+/// pointer) — are never admitted, and a brand mark that arrives after a prime
+/// revokes the admission. Fails if `u8_inline_cache_try_prime` stops asking
+/// the brand, or a `mark_as_*` loses its invalidation.
+#[test]
+fn test_non_byte_view_brands_are_never_admitted() {
+    let _guard = GcTestIsolationGuard::new();
+
+    type Mark = fn(usize);
+    let marks: [(&str, Mark); 3] = [
+        ("ArrayBuffer", crate::buffer::mark_as_array_buffer),
+        (
+            "SharedArrayBuffer",
+            crate::buffer::mark_as_shared_array_buffer,
+        ),
+        ("DataView", crate::buffer::mark_as_data_view),
+    ];
+    for (brand, mark) in marks {
+        let buf = crate::buffer::buffer_alloc(16);
+        let addr = buf as usize;
+        unsafe { (*buf).length = 16 };
+        mark(addr);
+        crate::buffer::u8_inline_cache_try_prime(addr);
+        assert!(
+            !crate::buffer::test_u8_inline_cache_holds(addr),
+            "a {brand} is not integer-indexed and must not be admitted"
+        );
+
+        // Mark AFTER a prime: the admission must be revoked.
+        let buf = crate::buffer::buffer_alloc(16);
+        let addr = buf as usize;
+        unsafe { (*buf).length = 16 };
+        crate::buffer::u8_inline_cache_try_prime(addr);
+        assert!(
+            crate::buffer::test_u8_inline_cache_holds(addr),
+            "test premise: a plain Buffer is admitted"
+        );
+        mark(addr);
+        assert!(
+            !crate::buffer::test_u8_inline_cache_holds(addr),
+            "marking a primed buffer as a {brand} must revoke its admission"
+        );
+    }
+}
+
+/// #10515: the runtime byte accessors answer an admitted buffer from the cache
+/// and prime a fresh one on its first access, so the SECOND access of an owning
+/// buffer through any runtime route is a cache hit.
+#[test]
+fn test_runtime_byte_access_primes_and_hits() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let buf = crate::buffer::buffer_alloc(8);
+    let addr = buf as usize;
+    unsafe { (*buf).length = 8 };
+    assert!(!crate::buffer::test_u8_inline_cache_holds(addr));
+    crate::buffer::js_buffer_set(buf, 2, 0x1FF);
+    assert!(
+        crate::buffer::test_u8_inline_cache_holds(addr),
+        "the first byte store must prime the admission"
+    );
+    assert_eq!(crate::buffer::cached_u8_read(addr, 2), Some(0xFF));
+    assert!(crate::buffer::cached_u8_write(addr, 3, 7));
+    assert_eq!(crate::buffer::js_buffer_get(buf, 3), 7);
+    assert_eq!(
+        crate::buffer::cached_u8_read(addr, 8),
+        None,
+        "out of range leaves the cache"
+    );
+    assert!(!crate::buffer::cached_u8_write(addr, -1, 1));
 }
