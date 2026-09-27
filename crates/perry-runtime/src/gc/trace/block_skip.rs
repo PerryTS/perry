@@ -413,9 +413,7 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live:
         GcMoveHookKind::ObjectOverflowFields => object_side_tables_live,
         // Pruned post-trace by `closure::prune_dead_closure_side_table_owners`.
         GcMoveHookKind::ClosureDynamicProps => false,
-        GcMoveHookKind::ErrorSideTables
-        | GcMoveHookKind::RegExpSideTables
-        | GcMoveHookKind::LazyArrayTape => true,
+        GcMoveHookKind::ErrorSideTables | GcMoveHookKind::LazyArrayTape => true,
         GcMoveHookKind::None
         | GcMoveHookKind::MapForeachStack
         | GcMoveHookKind::SetSideTables

@@ -170,8 +170,8 @@ impl PostTraceProbe {
 /// forwarded — every live from-space object was evacuated (FORWARDED) or is
 /// pinned-and-marked by this point. Mirrors `is_dead_copied_minor_from_space_map`.
 /// Crate-visible form for the per-type registry walkers that finalize their
-/// own dead from-space instances after a copied minor (`regex`): is `addr` a
-/// from-space `obj_type` cell that was neither evacuated nor pinned?
+/// own dead from-space instances after a copied minor (`json_tape_store`): is
+/// `addr` a from-space `obj_type` cell that was neither evacuated nor pinned?
 pub(crate) fn owner_is_dead_copied_minor_from_space_of_type(addr: usize, obj_type: u8) -> bool {
     owner_is_dead_copied_minor_from_space(addr, Some(obj_type))
 }

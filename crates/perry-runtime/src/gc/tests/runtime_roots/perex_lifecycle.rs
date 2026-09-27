@@ -96,7 +96,7 @@ fn perex_lifecycle_reclaims_evicted_programs_when_their_only_receivers_die() {
         old
     );
     for (header, program) in dead_addresses {
-        assert!(!crate::regex::test_regex_pointer_entry_exists(header));
+        assert!(!build_valid_pointer_set().contains(&header));
         assert!(!build_valid_pointer_set().contains(&program));
     }
     assert!(matches(&survivor, "pre77"));
