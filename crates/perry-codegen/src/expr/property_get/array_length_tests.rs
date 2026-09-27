@@ -442,7 +442,7 @@ fn emit_outlined_read(property: &str) -> String {
 #[test]
 fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
     let ir = emit_outlined_read("length");
-    let blocks = blocks_of(&ir, "call double @js_object_get_field_ic_fast(");
+    let blocks = blocks_of(&ir, "call double @js_object_get_field_ic(");
     assert!(
         !blocks.iter().any(|(l, _)| l.starts_with("pic.")),
         "test premise: the read must be full-outlined, not the inline tower"
@@ -477,30 +477,13 @@ fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
         def(entry_body, operands[1])
     );
 
-    // The helper is still the one exit (S2: its GC-leaf hit, with the
-    // collecting miss on a cold arm that rejoins at `split_merge`), and the
-    // merge joins the two answers.
-    let (_, call_body) = block(&blocks, "pget.outline_call");
-    assert!(
-        call_body
-            .iter()
-            .any(|l| l.contains("@js_object_get_field_ic_fast(")),
-        "the outlined helper's leaf hit is called from `pget.outline_call`"
-    );
-    let (_, slow_body) = block(&blocks, "pget.outline.split_slow");
-    assert!(
-        slow_body
-            .iter()
-            .any(|l| l.contains("@js_object_get_field_ic_fast_miss(")),
-        "{slow_body:?}"
-    );
-    let (call_label, split_merge_body) = block(&blocks, "pget.outline.split_merge");
-    let call_value = split_merge_body
+    // The helper is still the one call, and the merge joins the two answers.
+    let (call_label, call_body) = block(&blocks, "pget.outline_call");
+    let call = call_body
         .iter()
-        .find(|l| l.contains(" = phi double "))
-        .and_then(|l| l.split_once(" = "))
-        .map(|(v, _)| v)
-        .expect("the split rejoins its hit and its miss");
+        .find(|l| l.contains("@js_object_get_field_ic("))
+        .expect("the outlined helper is called from `pget.outline_call`");
+    let call_value = call.split_once(" = ").map(|(v, _)| v).unwrap();
     let (load_label, load_body) = block(&blocks, "pget.array_length");
     let len_value = load_body
         .iter()
@@ -524,8 +507,12 @@ fn a_full_outline_length_read_serves_a_live_plain_array_before_the_helper() {
 #[test]
 fn a_full_outline_non_length_read_is_the_bare_helper_call() {
     let ir = emit_outlined_read("foo");
+    // S2: a non-`.length` full-outline read is the GC-leaf hit plus the cold
+    // collecting miss (`ic_fast_split.rs`); `.length` keeps the single call.
     assert!(
-        ir.contains("@js_object_get_field_ic_fast("),
+        ir.contains("@js_object_get_field_ic_fast(")
+            && ir.contains("@js_object_get_field_ic_fast_miss(")
+            && !ir.contains("call double @js_object_get_field_ic("),
         "test premise: the read is full-outlined:\n{ir}"
     );
     for gone in [

@@ -407,22 +407,32 @@ pub(crate) fn lower_generic_property_get(
                 (arm, merge_idx, merge_label)
             });
         let key_handle = emit_key_handle(ctx, &key_handle_global);
-        // S2: the MRU hit is a GC-leaf call; only its decline arm is the
-        // collecting (statepoint) call. See `ic_fast_split.rs`.
         let ic_args = [
             (I64, obj_bits.as_str()),
             (I64, key_handle.as_str()),
             (I64, feedback_site_id.as_str()),
             (PTR, cache_slot_ref.as_str()),
         ];
-        let val = crate::expr::ic_fast_split::emit_hole_declining_split(
-            ctx,
-            "pget.outline",
-            "js_object_get_field_ic_fast",
-            &ic_args,
-            "js_object_get_field_ic_fast_miss",
-            &ic_args,
-        );
+        // S2: the MRU hit is a GC-leaf call; only its decline arm is the
+        // collecting (statepoint) call. See `ic_fast_split.rs`. NOT for
+        // `.length`: what reaches this call there is mostly a string or
+        // another non-Array receiver no MRU word can serve, so the leaf call
+        // would be a pure extra call in front of the helper (+0.65 %
+        // instructions on a string-`.length` loop, measured). It keeps the
+        // single call.
+        let val = if property == "length" {
+            ctx.block()
+                .call(DOUBLE, "js_object_get_field_ic", &ic_args)
+        } else {
+            crate::expr::ic_fast_split::emit_hole_declining_split(
+                ctx,
+                "pget.outline",
+                "js_object_get_field_ic_fast",
+                &ic_args,
+                "js_object_get_field_ic_fast_miss",
+                &ic_args,
+            )
+        };
         let Some(((len, len_end_label), merge_idx, merge_label)) = array_arm else {
             return Ok(val);
         };
