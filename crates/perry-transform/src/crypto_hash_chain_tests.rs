@@ -389,3 +389,60 @@ fn reference_from_another_function_escapes() {
     run(&mut module);
     assert_eq!(dbg(&module.functions[0].body), before);
 }
+
+fn run_init(init: Vec<Stmt>) -> Vec<Stmt> {
+    let mut module = Module::new("m");
+    module.init = init;
+    run(&mut module);
+    module.init
+}
+
+#[test]
+fn module_init_const_in_a_loop_body_is_rewritten() {
+    // The #11515 createHash-only loop: `for (..) { const h = ...; h.update(..); s += h.digest("hex").length }`.
+    let init = vec![Stmt::While {
+        condition: Expr::Bool(true),
+        body: vec![
+            let_h(2, create_hash("sha1")),
+            Stmt::Expr(call(h(2), "update", vec![x()])),
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::PropertyGet {
+                    object: Box::new(call(h(2), "digest", vec![s("hex")])),
+                    property: "length".into(),
+                    byte_offset: 0,
+                }),
+            )),
+            Stmt::Break,
+        ],
+    }];
+    assert_handle_free(&run_init(init));
+}
+
+#[test]
+fn module_top_level_binding_keeps_the_handle() {
+    // Could be exported or a script global: named without a LocalId.
+    let init = vec![
+        let_h(2, create_hash("sha1")),
+        Stmt::Expr(call(h(2), "update", vec![x()])),
+        Stmt::Expr(call(h(2), "digest", vec![s("hex")])),
+    ];
+    let before = dbg(&init);
+    assert_eq!(dbg(&run_init(init)), before);
+}
+
+#[test]
+fn module_init_nested_var_keeps_the_handle() {
+    // A nested `var` (HIR: mutable) at module scope is still a script global.
+    let mut decl = let_h(2, create_hash("sha1"));
+    if let Stmt::Let { mutable, .. } = &mut decl {
+        *mutable = true;
+    }
+    let init = vec![Stmt::If {
+        condition: x(),
+        then_branch: vec![decl, Stmt::Expr(call(h(2), "digest", vec![s("hex")]))],
+        else_branch: None,
+    }];
+    let before = dbg(&init);
+    assert_eq!(dbg(&run_init(init)), before);
+}
