@@ -76,6 +76,8 @@ pub unsafe extern "C" fn js_crypto_chain_hash_init(
     options: f64,
 ) -> f64 {
     let (state, output_len) = new_hash_state_or_throw(alg_ptr, options);
+    // GC_STORE_AUDIT(POINTER_FREE): the chain state is plain digest words in a
+    // codegen-owned frame slot; it holds no GC reference.
     std::ptr::write(
         slot as *mut ChainState,
         ChainState::Hash {
@@ -94,6 +96,8 @@ pub unsafe extern "C" fn js_crypto_chain_hmac_init(
     key_ptr: i64,
 ) -> f64 {
     let state = new_hmac_state_or_throw(alg_ptr, key_ptr);
+    // GC_STORE_AUDIT(POINTER_FREE): the chain state is plain digest words in a
+    // codegen-owned frame slot; it holds no GC reference.
     std::ptr::write(
         slot as *mut ChainState,
         ChainState::Hmac { state: Some(state) },
@@ -196,10 +200,8 @@ impl DigestEncoding {
             };
         }
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if (bits >> 48) as u16 == 0x7FFD
-            && addr >= 0x1000
-            && !perry_runtime::buffer::is_registered_buffer(addr)
-        {
+        // `object_field_bits` rejects non-object payloads itself.
+        if (bits >> 48) as u16 == 0x7FFD && !perry_runtime::buffer::is_registered_buffer(addr) {
             let output_len = object_field_bits(bits, b"outputLength")
                 .and_then(|b| nanboxed_to_usize(f64::from_bits(b)));
             let kind = object_field_string(bits, b"outputEncoding")
