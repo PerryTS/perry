@@ -10,6 +10,14 @@ check('class', a, new Proxy(class B {}, {}));
 const wrapped = new Proxy(A, {});
 check('matching', a, wrapped);
 check('nested', a, new Proxy(wrapped, {}));
+function makeClass(n: number) { return class Captured { x = n; }; }
+const C = makeClass(4);
+const D = makeClass(5);
+const captured = new C();
+const wrappedCaptured = new Proxy(C, {});
+console.log('captured callable', typeof wrappedCaptured);
+check('captured matching', captured, wrappedCaptured);
+check('captured sibling', captured, new Proxy(D, {}));
 check('array', [], new Proxy(Array, {}));
 check('arrow', a, new Proxy(() => {}, {}));
 check('bound', a, new Proxy(A.bind(null), {}));

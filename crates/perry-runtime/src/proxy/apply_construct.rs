@@ -26,6 +26,12 @@ pub(crate) fn is_callable_function(value: f64) -> bool {
     if lookup(value).is_some() {
         return super::proxy_wraps_callable(value);
     }
+    // Capturing/per-evaluation classes are heap class objects, not closures
+    // or INT32 class refs. They still have [[Call]] (which throws when used
+    // without `new`), so a Proxy must retain their callable classification.
+    if crate::object::is_class_object_value(value) {
+        return true;
+    }
     // A POINTER_TAG value is callable only if it points at a closure.
     if (bits & !POINTER_MASK) == POINTER_TAG {
         let raw = (bits & POINTER_MASK) as usize;
