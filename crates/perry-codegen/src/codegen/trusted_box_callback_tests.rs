@@ -308,7 +308,14 @@ fn direct_arrow_gets_a_private_body_but_keeps_the_public_validation_path() {
     // The trusted getter remains only as the cold TDZ/suppression fallback;
     // normal writes need no helper at all.
     assert!(trusted.contains("getelementptr i8, ptr"), "{trusted}");
-    assert!(trusted.contains(", i64 16"), "{trusted}");
+    // Captures start right after the closure header.
+    assert!(
+        trusted.contains(&format!(
+            ", i64 {}",
+            crate::runtime_abi::CLOSURE_HEADER_SIZE
+        )),
+        "{trusted}"
+    );
     assert!(trusted.contains("inttoptr i64"), "{trusted}");
     assert!(trusted.contains("load i64, ptr"), "{trusted}");
     assert!(trusted.contains("store i64"), "{trusted}");

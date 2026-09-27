@@ -53,6 +53,17 @@ fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
 #[test]
 fn test_json_reviver_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    // The object model's production scanners (the copying-nursery guard takes
+    // the thread's registry away). The parse mints shapes over young keys
+    // arrays; without these a copied minor leaves their shape-table families
+    // under the from-space address, and once the nursery reuses that address
+    // the post-minor prune retires the LIVE object's shape. Which address is
+    // reused depends only on allocation sizes, so the gap stayed latent until
+    // a cell size changed. Registered before the first minor of the test.
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
 
@@ -90,6 +101,17 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _callback_guard = RuntimeCallbackRootGuard::new();
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // The object model's production scanners (the copying-nursery guard takes
+    // the thread's registry away). The parse mints shapes over young keys
+    // arrays; without these a copied minor leaves their shape-table families
+    // under the from-space address, and once the nursery reuses that address
+    // the post-minor prune retires the LIVE object's shape. Which address is
+    // reused depends only on allocation sizes, so the gap stayed latent until
+    // a cell size changed. Registered before the first minor of the test.
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
     let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
