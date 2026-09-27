@@ -282,48 +282,15 @@ pub(super) fn al_length(recv: f64) -> i64 {
     }
     match classify_pointer(recv) {
         Some(PtrKind::Object) => {
-            // Plain object / function: `Get(O, "length")`. An OWN accessor —
-            // even a setter-only one — shadows anything inherited (test262
-            // some/15.4.4.17-2-12): fire its getter or read undefined, and
-            // never fall through to the prototype probes.
-            let raw_addr = (b & 0x0000_FFFF_FFFF_FFFF) as usize;
-            let mut len_val;
-            if let Some(acc) = crate::object::get_accessor_descriptor(raw_addr, "length") {
-                len_val = if acc.get != 0 {
-                    f64::from_bits(
-                        unsafe { crate::object::invoke_accessor_getter(acc.get, recv) }.bits(),
-                    )
-                } else {
-                    undef()
-                };
-            } else {
-                let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-                len_val = crate::object::js_object_get_field_by_name_f64(
-                    raw_addr as *const crate::object::ObjectHeader,
-                    key,
-                );
-                let key_v = f64::from_bits(JSValue::string_ptr(key).bits());
-                let own_present =
-                    crate::object::js_object_has_own(recv, key_v).to_bits() == TAG_TRUE;
-                // `Get(O, "length")` walks the prototype chain — an inherited
-                // `Object.prototype.length = 2` (test262 sort/S15.4.4.11_A6_T2,
-                // splice/S15.4.4.12_A4_T1) resolves only when there is no own
-                // property at all.
-                // The fast own-field getter uses a numeric zero miss sentinel
-                // for some empty anonymous shapes. Existence, not that returned
-                // payload, decides whether Get must continue up the prototype
-                // chain; otherwise `{}` incorrectly hides
-                // `Object.prototype.length` with a fabricated own zero.
-                if !own_present {
-                    len_val = object_get_named_property_chain(raw_addr, "length");
-                    // The recorded/default proto tables may resolve a DIFFERENT
-                    // cell than the user-visible `Object.prototype` (read off
-                    // the `Object` constructor) — probe it as a last resort.
-                    if len_val.to_bits() == TAG_UNDEFINED {
-                        len_val = canonical_object_prototype_named_get("length");
-                    }
-                }
-            }
+            // Read once with the original receiver, including class and
+            // inherited accessors. A second prototype lookup would both lose
+            // the class getter's result and bind inherited getters incorrectly.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let receiver = scope.root_nanbox_f64(recv);
+            let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+            let len_val = unsafe {
+                crate::object::native_get::get_by_canonical_key(receiver.get_nanbox_f64(), key)
+            };
             // `LengthOfArrayLike` is `ToLength(ToNumber(Get(O, "length")))`.
             // A non-numeric `length` (e.g. `length: true` → 1, `length: "2"` →
             // 2) must be ToNumber-coerced first — the raw NaN-boxed bool/string
@@ -348,79 +315,6 @@ pub(super) fn al_length(recv: f64) -> i64 {
         // Exotic cells / bare primitives → empty array-like.
         Some(PtrKind::Exotic) | None => 0,
     }
-}
-
-/// Read a named property off the user-visible `Object.prototype` (resolved
-/// through the `Object` constructor, where user writes like
-/// `Object.prototype.length = 2` actually land).
-fn canonical_object_prototype_named_get(name: &str) -> f64 {
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_v = JSValue::from_bits(ctor.to_bits());
-    if !ctor_v.is_pointer() {
-        return undef();
-    }
-    let proto =
-        crate::closure::closure_get_dynamic_prop(ctor_v.as_pointer::<u8>() as usize, "prototype");
-    let proto_v = JSValue::from_bits(proto.to_bits());
-    if !proto_v.is_pointer() {
-        return undef();
-    }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let proto_bits = f64::from_bits(JSValue::pointer(proto_v.as_pointer::<u8>()).bits());
-    let key_bits = f64::from_bits(JSValue::string_ptr(key).bits());
-    if crate::object::js_object_has_own(proto_bits, key_bits).to_bits() != TAG_TRUE {
-        return undef();
-    }
-    crate::object::js_object_get_field_by_name_f64(
-        proto_v.as_pointer::<crate::object::ObjectHeader>(),
-        key,
-    )
-}
-
-/// `Get(O, name)` over the recorded/default prototype chain for an ordinary
-/// heap object, for a *named* (non-index) key. Companion to
-/// `object_get_property_chain`; used when the direct own read misses.
-fn object_get_named_property_chain(obj_ptr: usize, name: &str) -> f64 {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let key_val = f64::from_bits(JSValue::string_ptr(key).bits());
-    let mut cur = obj_ptr;
-    for _ in 0..1000 {
-        if cur == 0 {
-            return undef();
-        }
-        let cur_val = f64::from_bits(crate::value::js_nanbox_pointer(cur as i64).to_bits());
-        if crate::object::js_object_has_own(cur_val, key_val).to_bits() == TAG_TRUE {
-            return crate::object::js_object_get_field_by_name_f64(
-                cur as *const crate::object::ObjectHeader,
-                key,
-            );
-        }
-        let proto_bits = match crate::object::prototype_chain::object_static_prototype(cur) {
-            Some(bits) => bits,
-            None => match unsafe {
-                crate::object::prototype_chain::default_object_prototype_for_owner(cur)
-            } {
-                Some(bits) => bits,
-                None => return undef(),
-            },
-        };
-        if proto_bits == TAG_NULL {
-            return undef();
-        }
-        let t16 = proto_bits >> 48;
-        let next = if t16 == 0x7FFD {
-            (proto_bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else if t16 == 0 && proto_bits > 0x10000 {
-            proto_bits as usize
-        } else {
-            return undef();
-        };
-        if next == cur {
-            return undef();
-        }
-        cur = next;
-    }
-    undef()
 }
 
 /// `Get(ToObject(recv), k)` (returns `undefined` for absent/out-of-range).
@@ -1740,13 +1634,10 @@ pub fn try_object_arraylike_mutator(
     run_object_mutator(object, method, args_ptr, args_len)
 }
 
-/// Run a generic `Array.prototype` mutator over a *plain-object* receiver
-/// (object literal / anonymous shape — never a real array / typed array /
-/// buffer / class instance). Returns `None` for any other receiver so the
-/// caller keeps its existing behavior. Unlike [`try_object_arraylike_mutator`]
-/// this applies NO own-property gate — callers (e.g. the bound-method dispatch
-/// for a borrowed builtin) have already established that the array algorithm
-/// must run on `recv`.
+/// Run a borrowed `Array.prototype` mutator over an ordinary object,
+/// including class instances and functions. Returns `None` for other receiver
+/// kinds. Unlike [`try_object_arraylike_mutator`], this applies no class or own
+/// property gate: callers have established that the array algorithm must run.
 pub fn run_object_mutator(
     recv: f64,
     method: &str,
@@ -1754,14 +1645,6 @@ pub fn run_object_mutator(
     args_len: usize,
 ) -> Option<f64> {
     if !matches!(classify_pointer(recv), Some(PtrKind::Object)) {
-        return None;
-    }
-    let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
-    let class_id = crate::object::js_object_get_class_id(raw);
-    if class_id != 0
-        && !crate::object::is_anon_shape_class_id(class_id)
-        && !super::subclass::is_array_subclass_class_id(class_id)
-    {
         return None;
     }
     let result = match method {
@@ -1781,3 +1664,6 @@ pub fn run_object_mutator(
     };
     Some(result)
 }
+
+#[cfg(test)]
+mod class_mutator_tests;
