@@ -105,3 +105,23 @@ show("split-cap", "a1b22c".split(/(\d+)/));
 show("ws", "a \t  b".split(/\s+/));
 show("ws-trim", "  x y  ".replace(/^\s+|\s+$/g, ""));
 show("ws-nonascii", /^\s{3}$/.test(" 　﻿"));
+
+// String-template replacements, whose output is built from spans of the
+// subject and the template: ASCII and non-ASCII on either side, every
+// substitution form, empty pieces and empty results.
+show("rep-g", "a-b-c".replace(/-/g, "+"));
+show("rep-1", "Hello".replace(/l/, "L"));
+show("rep-empty", "---".replace(/-/g, ""));
+show("rep-all-empty", "".replace(/x*/g, "y"));
+show("rep-dollar", "a-b".replace(/(-)/g, "[$1|$&|$`|$'|$$]"));
+show("rep-named", "2026-09-27".replace(/(?<y>\d+)-(?<m>\d+)-(?<d>\d+)/, "$<d>/$<m>/$<y>"));
+show("rep-missing-group", "ab".replace(/(a)(x)?/, "[$2]"));
+show("rep-nonascii-subject", "café-thé".replace(/-/g, " & "));
+show("rep-nonascii-template", "a-b".replace(/-/g, "→"));
+show("rep-astral", "a\u{1F600}b".replace(/\u{1F600}/u, "$&$&"));
+show("rep-lone", "a\ud800b".replace(/b/, "$`"));
+show("rep-escape", 'say "hi"\\n'.replace(/\\n/g, "\n").replace(/^"|"$/g, ""));
+show("rep-dotenv-quote", "'quoted value'".replace(/^(['"`])([\s\S]*)\1$/gm, "$2"));
+show("rep-sticky", (() => { const r = /a/y; r.lastIndex = 1; return ["baa".replace(r, "X"), r.lastIndex]; })());
+show("rep-replaceAll", "x.y.z".replaceAll(/\./g, "$&$&"));
+show("rep-long", ("ab-".repeat(300)).replace(/-/g, "+").length);

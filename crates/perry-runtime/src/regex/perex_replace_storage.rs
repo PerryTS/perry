@@ -73,6 +73,36 @@ impl<'a> List<'a> {
         }
         Ok(())
     }
+
+    /// `push` for a list no code outside this operation has seen yet, such as
+    /// a `split` result still being built. Nothing can have frozen, sealed or
+    /// wrapped it, so an append that fits its capacity stores in place and
+    /// cannot throw; it skips the catch frame `push` sets up, which was about
+    /// a tenth of a short `split`. An append that must grow takes `push`.
+    pub(super) fn push_unseen(
+        &mut self,
+        value: f64,
+        budget: &mut Budget,
+    ) -> Result<(), EngineError> {
+        let fits = self
+            .root
+            .with_const_ptr::<crate::array::ArrayHeader, _>(|array| unsafe {
+                (*array).length < (*array).capacity
+            });
+        if !fits {
+            return self.push(value, budget);
+        }
+        host::charge(budget, 1)?;
+        let array = self
+            .root
+            .with_mut_ptr(|array| crate::array::js_array_push_f64(array, value));
+        self.root.set_raw_mut_ptr(array);
+        self.count += 1;
+        if self.count % api::QUANTUM == 0 {
+            host::poll()?;
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn call(
@@ -531,12 +561,144 @@ impl<'a> Pieces<'a> {
         }
         Ok(())
     }
+    /// `finish` for native pieces over an ASCII subject and template: every
+    /// piece is then a byte span already in the output's encoding, so the
+    /// output is one allocation and a copy per piece, instead of two passes
+    /// that decode and re-encode every unit through a cursor. `None` for any
+    /// other `Pieces`, which `finish` builds as before.
+    fn finish_ascii(
+        &self,
+        original: &RuntimeHandle<'_>,
+        template: Option<&RuntimeHandle<'_>>,
+        budget: &mut Budget,
+    ) -> Result<Option<*mut StringHeader>, EngineError> {
+        let Some(native) = self.native.as_ref() else {
+            return Ok(None);
+        };
+        if self.list.len() != 0 {
+            return Err(EngineError::InvalidSpan);
+        }
+        let original_subject = subject(*original)?;
+        let template_subject = template.map(|t| subject(*t)).transpose()?;
+        let ascii_length = |bound: &BoundSubject<HeapSubject<'_>>| {
+            bound
+                .with_view(|input| input.ascii_bytes().map(<[u8]>::len))
+                .map_err(EngineError::Subject)
+        };
+        let Some(original_length) = ascii_length(&original_subject)? else {
+            return Ok(None);
+        };
+        let template_length = match template_subject.as_ref() {
+            Some(bound) => match ascii_length(bound)? {
+                Some(length) => length,
+                None => return Ok(None),
+            },
+            None => 0,
+        };
+        let mut total = 0usize;
+        for &(source, start, end) in &native.records {
+            let length = match source {
+                Source::Original => original_length,
+                Source::Template if template_subject.is_some() => template_length,
+                Source::Template => return Err(EngineError::InvalidSpan),
+            };
+            if start > end || end as usize > length {
+                return Err(EngineError::InvalidSpan);
+            }
+            total = total
+                .checked_add((end - start) as usize)
+                .ok_or(StorageError::Limit)?;
+        }
+        if total != self.units {
+            return Err(EngineError::InvalidSpan);
+        }
+        let limit = api::OUTPUT_BYTES.min(
+            u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<StringHeader>() - 7,
+        );
+        if total > limit || total > crate::string::MAX_STRING_LENGTH {
+            return Err(StorageError::Limit.into());
+        }
+        // The charge the two unit-by-unit passes made.
+        host::charge(budget, total.saturating_mul(2))?;
+        let scope = RuntimeHandleScope::new();
+        let output = api::caught(|| {
+            let (p, _) = crate::string::string_storage_alloc(total as u32);
+            unsafe {
+                crate::string::init_string_header(p, 0, 0, total as u32, 0, 0);
+            }
+            p
+        })?;
+        let output = scope.root_string_ptr(output);
+        // Nothing below allocates or collects: both subject views and the
+        // output's data pointer are reacquired inside one scope.
+        output.with_mut_ptr::<StringHeader, _>(|header| {
+            let data = unsafe { crate::string::string_data(header).cast_mut() };
+            let mut written = 0usize;
+            original_subject
+                .with_view(|original| {
+                    let original = original.ascii_bytes().ok_or(EngineError::InvalidSpan)?;
+                    let mut copy = |bytes: &[u8]| {
+                        // Bounded by the total measured above.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                bytes.as_ptr(),
+                                data.add(written),
+                                bytes.len(),
+                            );
+                        }
+                        written += bytes.len();
+                    };
+                    match template_subject.as_ref() {
+                        Some(template) => template
+                            .with_view(|template| {
+                                let template =
+                                    template.ascii_bytes().ok_or(EngineError::InvalidSpan)?;
+                                for &(source, start, end) in &native.records {
+                                    let bytes = match source {
+                                        Source::Original => original,
+                                        Source::Template => template,
+                                    };
+                                    copy(&bytes[start as usize..end as usize]);
+                                }
+                                Ok::<(), EngineError>(())
+                            })
+                            .map_err(EngineError::Subject)?,
+                        None => {
+                            for &(_, start, end) in &native.records {
+                                copy(&original[start as usize..end as usize]);
+                            }
+                            Ok(())
+                        }
+                    }
+                })
+                .map_err(EngineError::Subject)??;
+            if written != total {
+                return Err(EngineError::InvalidSpan);
+            }
+            unsafe {
+                crate::string::init_string_header(
+                    header,
+                    total as u32,
+                    total as u32,
+                    total as u32,
+                    0,
+                    0,
+                );
+            }
+            Ok::<(), EngineError>(())
+        })?;
+        Ok(Some(output.with_mut_ptr(|output| output)))
+    }
+
     pub(super) fn finish(
         &self,
         original: &RuntimeHandle<'_>,
         template: Option<&RuntimeHandle<'_>>,
         budget: &mut Budget,
     ) -> Result<*mut StringHeader, EngineError> {
+        if let Some(output) = self.finish_ascii(original, template, budget)? {
+            return Ok(output);
+        }
         let limit = api::OUTPUT_BYTES.min(
             u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<StringHeader>() - 7,
         );

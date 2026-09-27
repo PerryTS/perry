@@ -136,6 +136,18 @@ fn forward_split(
     // A piece is usually a few units; the loop polls once per POLL_UNITS of
     // them rather than once per piece.
     let mut stride = host::PieceStride::new();
+    // Without capture groups a piece needs only the match itself; asking for
+    // every capture built, filled and copied a slot array per piece to learn
+    // that there were none.
+    let mode = if forward
+        .with_view(|program| program.capture_count())
+        .map_err(EngineError::Program)?
+        > 1
+    {
+        CaptureMode::All
+    } else {
+        CaptureMode::Full
+    };
     while q < size {
         let local = RuntimeHandleScope::new();
         let (found, position) = host::find_near(
@@ -143,7 +155,7 @@ fn forward_split(
             bound,
             q,
             near,
-            CaptureMode::All,
+            mode,
             budget,
             memory,
             api::QUANTUM,
@@ -215,7 +227,7 @@ fn push_span(
     budget: &mut Budget,
 ) -> Result<(), EngineError> {
     let result = copies.copy(start, end, budget)?;
-    output.push(js_nanbox_string(result as i64), budget)
+    output.push_unseen(js_nanbox_string(result as i64), budget)
 }
 
 /// Split by an untouched RegExp without its protocol Gets (#10518).
