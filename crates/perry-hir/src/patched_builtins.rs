@@ -23,12 +23,17 @@
 //! [`ANY_MEMBER`] when the write's key is not static (`console[m] = f`) or the
 //! whole namespace object was replaced (`globalThis.console = {…}`).
 //!
-//! Builtin PROTOTYPE methods (`Array.prototype.join = f; arr.join()`) are out
-//! of scope here: the runtime's own array/string method dispatch ignores a
-//! replaced prototype method even for a fully dynamic `arr[key]()` call, so
-//! there is no dynamic path for the call site to fall back to yet.
+//! #11394: the same pre-scan records writes onto the PROTOTYPE of the builtins
+//! whose instance methods are dispatched by name (`Array.prototype.push = f`,
+//! `Map.prototype.get = f`, `Function.prototype.bind = f`), keyed
+//! `("Array.prototype", "push")`. A proven receiver folds such a call to an
+//! intrinsic (`ArrayPush`, `MapGet`) and a dynamic one matches the name in the
+//! runtime's native dispatcher; neither reads the prototype slot. A call whose
+//! method name is patched on any of these prototypes lowers instead to the
+//! runtime entry that performs the property lookup first
+//! (`js_native_call_method_patched_proto`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use swc_ecma_ast as ast;
@@ -51,6 +56,14 @@ const BUILTIN_NAMESPACES: &[&str] = &[
 /// Identifiers that name the global object.
 const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "window", "self"];
 
+/// Builtins whose `prototype` methods the runtime answers by NAME on an
+/// instance (arrays, Map/Set, functions), so a replacement on the prototype is
+/// only honored if the call site is routed through a lookup (#11394).
+const PROTOTYPE_OWNERS: &[&str] = &["Array", "Map", "Set", "Function"];
+
+/// Suffix of a [`PatchedBuiltins`] key naming a builtin's prototype object.
+const PROTOTYPE_SUFFIX: &str = ".prototype";
+
 pub fn is_builtin_namespace(name: &str) -> bool {
     BUILTIN_NAMESPACES.contains(&name)
 }
@@ -69,14 +82,11 @@ fn peel(mut e: &ast::Expr) -> &ast::Expr {
     }
 }
 
-/// Static property name of a member access (`o.p` / `o["p"]`).
+/// Static property name of a member access (`o.p` / `o["p"]` / `o[7]`).
 pub fn static_member_name(prop: &ast::MemberProp) -> Option<String> {
     match prop {
         ast::MemberProp::Ident(p) => Some(p.sym.to_string()),
-        ast::MemberProp::Computed(c) => match peel(&c.expr) {
-            ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(str::to_string),
-            _ => None,
-        },
+        ast::MemberProp::Computed(c) => str_arg(&c.expr),
         ast::MemberProp::PrivateName(_) => None,
     }
 }
@@ -95,6 +105,26 @@ fn namespace_receiver(e: &ast::Expr) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `C.prototype` or `globalThis.C.prototype` for a builtin `C` in
+/// [`PROTOTYPE_OWNERS`], or an identifier in `aliases` bound to one
+/// (`const AP = Array.prototype; AP.push = f`); answers the owner name.
+fn prototype_receiver(e: &ast::Expr, aliases: &BTreeMap<String, String>) -> Option<String> {
+    let m = match peel(e) {
+        ast::Expr::Ident(id) => return aliases.get(id.sym.as_ref()).cloned(),
+        ast::Expr::Member(m) => m,
+        _ => return None,
+    };
+    if static_member_name(&m.prop).as_deref() != Some("prototype") {
+        return None;
+    }
+    let owner = match peel(&m.obj) {
+        ast::Expr::Ident(id) => id.sym.to_string(),
+        ast::Expr::Member(g) if is_global_object(&g.obj) => static_member_name(&g.prop)?,
+        _ => return None,
+    };
+    PROTOTYPE_OWNERS.contains(&owner.as_str()).then_some(owner)
 }
 
 fn prop_name_key(p: &ast::PropName) -> Option<String> {
@@ -128,15 +158,47 @@ fn object_literal_keys(e: &ast::Expr) -> Option<Vec<String>> {
     Some(keys)
 }
 
+fn is_index_key(key: &str) -> bool {
+    !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A literal property key: a string, or an integer-valued number (`[7]`,
+/// `defineProperty(o, 7, …)` — an index, which no method call can name).
 fn str_arg(e: &ast::Expr) -> Option<String> {
     match peel(e) {
         ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(str::to_string),
+        ast::Expr::Lit(ast::Lit::Num(n))
+            if n.value.fract() == 0.0 && n.value.abs() < 9_007_199_254_740_992.0 =>
+        {
+            Some(format!("{}", n.value as i64))
+        }
         _ => None,
     }
 }
 
 struct Scanner<'a> {
     out: &'a mut PatchedBuiltins,
+    /// Identifiers bound to a builtin prototype anywhere in the module, by
+    /// NAME and not by scope: a same-named binding elsewhere can only add a
+    /// patch that never happens, which costs a lookup and never a wrong call.
+    proto_aliases: BTreeMap<String, String>,
+}
+
+/// Collects `const AP = Array.prototype`-style aliases ahead of the scan, so a
+/// write through one is seen wherever the declaration sits.
+struct AliasCollector<'a> {
+    aliases: &'a mut BTreeMap<String, String>,
+}
+
+impl Visit for AliasCollector<'_> {
+    fn visit_var_declarator(&mut self, d: &ast::VarDeclarator) {
+        if let (ast::Pat::Ident(name), Some(init)) = (&d.name, &d.init) {
+            if let Some(owner) = prototype_receiver(init, &BTreeMap::new()) {
+                self.aliases.insert(name.id.sym.to_string(), owner);
+            }
+        }
+        d.visit_children_with(self);
+    }
 }
 
 impl Scanner<'_> {
@@ -149,6 +211,13 @@ impl Scanner<'_> {
     fn record_write(&mut self, target: &ast::Expr, member: Option<String>) {
         if let Some(ns) = namespace_receiver(target) {
             self.add(ns, member);
+        } else if let Some(owner) = prototype_receiver(target, &self.proto_aliases) {
+            // An index (`Array.prototype[7]`) is an element, not a method any
+            // call site names; the array runtime already honors it (#6981).
+            if member.as_deref().is_some_and(is_index_key) {
+                return;
+            }
+            self.add(format!("{owner}{PROTOTYPE_SUFFIX}"), member);
         } else if is_global_object(target) {
             // `globalThis.console = {…}` replaces the whole namespace.
             // A dynamic key (`globalThis[k] = v`, `Object.assign(global,
@@ -284,7 +353,11 @@ impl Visit for Scanner<'_> {
 
 /// Collect every built-in member write in `module`.
 pub fn scan_module(module: &ast::Module, out: &mut PatchedBuiltins) {
-    module.visit_with(&mut Scanner { out });
+    let mut proto_aliases = BTreeMap::new();
+    module.visit_with(&mut AliasCollector {
+        aliases: &mut proto_aliases,
+    });
+    module.visit_with(&mut Scanner { out, proto_aliases });
 }
 
 thread_local! {
@@ -313,6 +386,29 @@ pub fn namespace_member_patched(ns: &str, member: &str) -> bool {
             || s.contains(&(ns.to_string(), ANY_MEMBER.to_string()))
     })
     .unwrap_or(false)
+}
+
+/// Was a method named `member` written onto the prototype of a builtin whose
+/// instance methods are dispatched by name (#11394)? Deliberately not keyed by
+/// the receiver's kind: a call site rarely proves it, and the runtime entry it
+/// selects consults the actual receiver.
+pub fn prototype_method_patched(member: &str) -> bool {
+    with_set(|s| {
+        s.iter()
+            .any(|(ns, m)| ns.ends_with(PROTOTYPE_SUFFIX) && (m == member || m == ANY_MEMBER))
+    })
+    .unwrap_or(false)
+}
+
+/// The method names [`prototype_method_patched`] answers for, as the sorted
+/// list codegen is handed ([`ANY_MEMBER`] when a write's key was dynamic).
+pub fn patched_prototype_methods(set: &PatchedBuiltins) -> Vec<String> {
+    let names: BTreeSet<&str> = set
+        .iter()
+        .filter(|(ns, _)| ns.ends_with(PROTOTYPE_SUFFIX))
+        .map(|(_, m)| m.as_str())
+        .collect();
+    names.into_iter().map(str::to_string).collect()
 }
 
 #[cfg(test)]

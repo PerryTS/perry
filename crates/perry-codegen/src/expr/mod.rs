@@ -3008,7 +3008,7 @@ mod bigint_set;
 mod binary;
 #[cfg(test)]
 mod boolean_number_tests;
-mod call_spread;
+pub(crate) mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
 pub(crate) mod class_env;

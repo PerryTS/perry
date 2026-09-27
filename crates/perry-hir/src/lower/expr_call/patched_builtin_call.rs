@@ -78,6 +78,18 @@ pub(super) fn try_patched_builtin_call(
         property: ns,
     };
 
+    Ok(Ok(dynamic_member_call(call, object, method, args)))
+}
+
+/// `object.method(args…)` as an ordinary property-get-then-call: the callee is
+/// read off the live receiver and invoked with it as `this`, carrying `call`'s
+/// spread arguments.
+pub(super) fn dynamic_member_call(
+    call: &ast::CallExpr,
+    object: Expr,
+    method: String,
+    args: Vec<Expr>,
+) -> Expr {
     let callee = Box::new(Expr::PropertyGet {
         byte_offset: call.span.lo.0,
         object: Box::new(object),
@@ -96,16 +108,16 @@ pub(super) fn try_patched_builtin_call(
                 }
             })
             .collect();
-        return Ok(Ok(Expr::CallSpread {
+        return Expr::CallSpread {
             callee,
             args,
             type_args: Vec::new(),
-        }));
+        };
     }
-    Ok(Ok(Expr::Call {
+    Expr::Call {
         callee,
         args,
         type_args: Vec::new(),
         byte_offset: call.span.lo.0,
-    }))
+    }
 }

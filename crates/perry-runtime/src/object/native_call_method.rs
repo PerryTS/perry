@@ -15,6 +15,7 @@ mod disposal;
 mod handle_methods;
 mod namespace_override;
 mod object_proto;
+mod patched_proto;
 mod primitive_methods;
 mod proto_dispatch;
 mod string_methods;

@@ -868,6 +868,18 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, PTR, I64, PTR, I64],
     );
+    // #11394: same ABI; looks the method up first because the program writes
+    // this name onto a builtin prototype.
+    module.declare_function(
+        "js_native_call_method_patched_proto",
+        DOUBLE,
+        &[DOUBLE, PTR, I64, PTR, I64],
+    );
+    module.declare_function(
+        "js_native_call_method_patched_proto_apply",
+        DOUBLE,
+        &[DOUBLE, PTR, I64, I64],
+    );
     module.declare_function(
         "js_native_call_method_by_id",
         DOUBLE,
