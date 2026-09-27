@@ -77,12 +77,27 @@ pub extern "C" fn js_object_get_field_by_name(
     // callers, `js_object_get_field_by_name_f64`). It goes BEFORE
     // `try_data_get_by_name` because that is the walk it replaces; a decline
     // costs an epoch load and one failed compare.
+    use crate::object::inherited_read_cache::{inherited_read_cache_lookup, Lookup};
+    match unsafe { inherited_read_cache_lookup(obj, key) } {
+        Lookup::Hit(value) => return value,
+        // A walk from this pair was refused and recorded: do not prime again.
+        Lookup::Declined => return get_field_by_name_past_inherited_cache(obj, key),
+        Lookup::Unknown => {}
+    }
+    if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
+        return value;
+    }
+    // Hook D: the data probe missed, so this read is headed for the generic
+    // walk. Record what that walk finds (an inherited holder, or that the key
+    // is absent from the whole chain) so the next read of this (receiver
+    // shape, key) pair is served by the lookup above. The prime proves the
+    // key is not an own property before it walks.
     if let Some(value) =
-        unsafe { crate::object::inherited_read_cache::inherited_read_cache_hit(obj, key) }
+        unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime_by_name(obj, key) }
     {
         return value;
     }
-    get_field_by_name_past_inherited_cache(obj, key)
+    get_field_by_name_past_data_probe(obj, key)
 }
 
 #[cfg(test)]
@@ -150,6 +165,16 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
         return value;
     }
+    get_field_by_name_past_data_probe(obj, key)
+}
+
+/// [`get_field_by_name_past_inherited_cache`] for a caller that has also
+/// already run `try_data_get_by_name` and been refused (hook D in
+/// `js_object_get_field_by_name`), so the probe is not paid twice.
+fn get_field_by_name_past_data_probe(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> JSValue {
     // Guard hoisted to the call site: an ordinary key is rejected on a length
     // compare and one byte here, so the overwhelmingly common property read
     // makes no call into the private-member path at all.

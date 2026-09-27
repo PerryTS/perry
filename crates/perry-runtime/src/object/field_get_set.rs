@@ -291,10 +291,10 @@ pub use field_ops::{
     js_value_to_object,
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
+pub(crate) use get_field_by_name::get_field_by_name_past_inherited_cache;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
-pub(crate) use get_field_by_name::get_field_by_name_past_inherited_cache;
 pub(super) use has_property::native_module_own_field_by_key;
 pub(crate) use has_property::{
     closure_dynamic_prop_by_key, prototype_value_has_property, reified_function_method_name,
