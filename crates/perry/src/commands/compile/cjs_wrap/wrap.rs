@@ -1330,6 +1330,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         if (__perry_cjs_require_is_builtin(specifier)) {{
             return __perry_cjs_base_require(specifier);
         }}
+        // Native addons resolve through the same authenticated manifest and
+        // cache as createRequire and process.dlopen, including computed paths.
+        if (specifier.slice(-5) === '.node') {{
+            if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+            return __perry_cjs_reload_require(specifier);
+        }}
         // Runtime `require(path)` of a module Perry AOT-compiled but that is
         // only reachable via a computed path. Next's webpack runtime uses both
         // absolute page paths and relative chunk paths (`./chunks/` + id).
@@ -1378,8 +1384,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         // require reads + JSON.parses `.json` files; the statically-resolved
         // cases above only cover specifiers known at compile time, so a path
         // computed at runtime falls here. `.json` is pure data (no eval), so we
-        // read it from disk and parse it. `.js`/`.node` runtime require stays
-        // unsupported — that would require evaluating arbitrary code.
+        // read it from disk and parse it. Uncompiled `.js` runtime require
+        // stays unsupported — that would require evaluating arbitrary code.
         if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
             return __perry_require_json_disk(specifier);
         }}
