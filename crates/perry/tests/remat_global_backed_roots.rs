@@ -129,9 +129,9 @@ fn global_backed_roots_survive_evacuation_when_rematerialized() {
     let ir = traced_ir(dir.path());
     let remat_reads: Vec<&str> = ir.lines().filter(|l| l.contains(".rmg = load ")).collect();
     assert!(
-        remat_reads
-            .iter()
-            .any(|l| l.contains("load double, ptr @") && l.contains(".str.") && l.ends_with(".handle")),
+        remat_reads.iter().any(|l| l.contains("load double, ptr @")
+            && l.contains(".str.")
+            && l.ends_with(".handle")),
         "no rematerialized string-literal read in the traced IR; the test's \
          subject never ran. Rematerialized reads:\n{}",
         remat_reads.join("\n")

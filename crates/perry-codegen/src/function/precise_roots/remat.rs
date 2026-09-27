@@ -242,7 +242,10 @@ fn parse_def(rhs: &str) -> Option<Def<'_>> {
 }
 
 /// Follow bit-preserving casts back to a global load: `Some((T, "@G"))`.
-fn resolve_global<'a>(defs: &HashMap<&'a str, Def<'a>>, mut reg: &'a str) -> Option<(&'a str, &'a str)> {
+fn resolve_global<'a>(
+    defs: &HashMap<&'a str, Def<'a>>,
+    mut reg: &'a str,
+) -> Option<(&'a str, &'a str)> {
     for _ in 0..8 {
         match defs.get(reg)? {
             Def::GlobalLoad(ty, g) => return Some((ty, g)),
@@ -373,7 +376,8 @@ fn mark_literal(ty: &str) -> String {
 /// Rewrite every access to a planned slot (see the module docs) and return
 /// the new function text. Lines not touching a planned slot pass through.
 pub(super) fn apply(lines: &[&str], plans: &HashMap<String, Plan>) -> String {
-    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum::<usize>() + plans.len() * 256);
+    let mut out =
+        String::with_capacity(lines.iter().map(|l| l.len() + 1).sum::<usize>() + plans.len() * 256);
     let mark_i64 = (REMAT_MARK as i64).to_string();
     for line in lines {
         let trimmed = line.trim();
@@ -401,13 +405,17 @@ pub(super) fn apply(lines: &[&str], plans: &HashMap<String, Plan>) -> String {
             if let Some(plan) = plans.get(ptr) {
                 let bits = if ty == "double" {
                     out.push_str(&format!("  {result}.rmv = load double, ptr {ptr}\n"));
-                    out.push_str(&format!("  {result}.rmb = bitcast double {result}.rmv to i64\n"));
+                    out.push_str(&format!(
+                        "  {result}.rmb = bitcast double {result}.rmv to i64\n"
+                    ));
                     format!("{result}.rmb")
                 } else {
                     out.push_str(&format!("  {result}.rmv = load i64, ptr {ptr}\n"));
                     format!("{result}.rmv")
                 };
-                out.push_str(&format!("  {result}.rmk = icmp eq i64 {bits}, {mark_i64}\n"));
+                out.push_str(&format!(
+                    "  {result}.rmk = icmp eq i64 {bits}, {mark_i64}\n"
+                ));
                 out.push_str(&format!(
                     "  {result}.rmg = load {}, ptr {}\n",
                     plan.global_ty, plan.global

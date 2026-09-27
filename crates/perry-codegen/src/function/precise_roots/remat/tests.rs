@@ -97,7 +97,10 @@ fn a_mutable_module_global_is_not_rematerialized() {
     let ir = fixture("@perry_global_m__x", "");
     let plans = plan(&lines(&ir), &roots());
     assert!(!plans.contains_key("%s"), "{plans:?}");
-    assert!(plans.contains_key("%k"), "the unrelated keys slot still qualifies");
+    assert!(
+        plans.contains_key("%k"),
+        "the unrelated keys slot still qualifies"
+    );
 }
 
 #[test]
@@ -192,15 +195,18 @@ fn rematerialized_slots_take_no_relocate_and_reload_after_the_safepoint() {
         let mut names = vec![reg.clone()];
         for l in &body[idx..] {
             if let Some((sel, rhs)) = l.trim().split_once(" = select i1 true, ") {
-                if rhs.split(", ").next().is_some_and(|t| t.ends_with(&format!(" {reg}"))) {
+                if rhs
+                    .split(", ")
+                    .next()
+                    .is_some_and(|t| t.ends_with(&format!(" {reg}")))
+                {
                     names.push(sel.to_string());
                 }
             }
         }
         let consumes = |l: &&str| {
             l.contains(consumer)
-                && l
-                    .split(|c: char| !(c.is_alphanumeric() || "%._".contains(c)))
+                && l.split(|c: char| !(c.is_alphanumeric() || "%._".contains(c)))
                     .any(|tok| names.iter().any(|n| n == tok))
         };
         assert!(
@@ -253,7 +259,10 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
                 mutable: false,
                 init: Some(Expr::Object(vec![("a".to_string(), Expr::Number(1.0))])),
             },
-            Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1), Expr::LocalGet(2)]))),
+            Stmt::Return(Some(Expr::Array(vec![
+                Expr::LocalGet(1),
+                Expr::LocalGet(2),
+            ]))),
         ],
         is_async: false,
         is_generator: false,
@@ -268,8 +277,8 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
         emit_ir_only: true,
         ..Default::default()
     };
-    let ir = String::from_utf8(crate::compile_module(&hir, opts).expect("compiles"))
-        .expect("utf-8");
+    let ir =
+        String::from_utf8(crate::compile_module(&hir, opts).expect("compiles")).expect("utf-8");
     let func = ir
         .split("\ndefine ")
         .find(|f| f.contains("__build("))
@@ -277,14 +286,22 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
     // The literal's handle global, by its bytes constant.
     let handle_loads: Vec<&str> = func
         .lines()
-        .filter(|l| l.contains("load double, ptr @") && l.contains(".str.") && l.contains(".handle"))
+        .filter(|l| {
+            l.contains("load double, ptr @") && l.contains(".str.") && l.contains(".handle")
+        })
         .collect();
-    assert!(!handle_loads.is_empty(), "the literal is read from its handle:\n{func}");
+    assert!(
+        !handle_loads.is_empty(),
+        "the literal is read from its handle:\n{func}"
+    );
     // No root slot is ever fed from a handle load.
     for line in func.lines() {
         if let Some(rest) = line.trim().strip_prefix("%rs4gc.b") {
             let (_, rhs) = rest.split_once(" = ").unwrap_or(("", ""));
-            if let Some(src) = rhs.strip_prefix("bitcast double ").and_then(|r| r.split(' ').next()) {
+            if let Some(src) = rhs
+                .strip_prefix("bitcast double ")
+                .and_then(|r| r.split(' ').next())
+            {
                 let def = func
                     .lines()
                     .find(|l| l.trim().starts_with(&format!("{src} = ")))

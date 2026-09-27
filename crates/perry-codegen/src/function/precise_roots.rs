@@ -342,7 +342,7 @@ pub(super) fn lower_precise_roots_to_native_stack(
         (remat_ir.lines().collect::<Vec<&str>>(), kept)
     };
 
-    let report =crate::statepoint_report::enabled().then(|| {
+    let report = crate::statepoint_report::enabled().then(|| {
         crate::statepoint_report::FunctionRecord::new(
             function_name,
             "rs4gc",
