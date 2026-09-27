@@ -2735,7 +2735,7 @@
       "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
       "name": "BY_NAME_SEEN",
       "verdict": "not_a_gc_pointer",
-      "why": "#10495/#10753: per-thread direct-mapped filter of u32 FINGERPRINTS of (receiver ShapeId, key address) pairs that missed a by-name read once, so hook D primes the inherited-read cache on a pair's second miss only. A fingerprint is a hash, never dereferenced or compared as an address; a moved or recycled key can only cost one extra or one skipped prime."
+      "why": "#10495/#10753: per-thread direct-mapped filter of u32 words, each a FINGERPRINT of a (receiver ShapeId, key address) pair plus a 2-bit sighting count, so hook D primes the inherited-read cache on a pair's second or third by-name miss only and then stops trying. A fingerprint is a hash, never dereferenced or compared as an address; a moved or recycled key can only cost one extra or one skipped prime."
     },
     {
       "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",

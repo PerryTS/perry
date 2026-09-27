@@ -971,14 +971,16 @@ pub(crate) unsafe fn inherited_read_cache_prime_by_name(
     {
         return None;
     }
+    // The filter first: after a pair has been given up on, this compare is
+    // all hook D costs.
+    let slot = by_name_attempt(obj, key)?;
     if !crate::object::object_is_shaped(obj) || crate::object::dictionary::is_dictionary(obj) {
-        return None;
-    }
-    if !key_seen_before(obj, key) {
+        by_name_give_up(slot);
         return None;
     }
     let len = (*key).byte_len as usize;
     if len > (*key).capacity as usize {
+        by_name_give_up(slot);
         return None;
     }
     let bytes = std::slice::from_raw_parts(crate::string::string_data(key), len);
@@ -986,50 +988,81 @@ pub(crate) unsafe fn inherited_read_cache_prime_by_name(
     if !keys.is_null()
         && crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), bytes).is_some()
     {
+        // An OWN key the data probe refused (an accessor, a hole): no entry
+        // can ever describe it, and without this the linear key scan above
+        // would run on every read of the pair.
+        by_name_give_up(slot);
         return None;
     }
     inherited_read_cache_prime(obj, key)
 }
 
-/// Direct-mapped filter of (receiver ShapeId, key address) pairs that have
-/// missed a by-name read once. Holds FINGERPRINTS, not addresses: nothing here
-/// is ever dereferenced or compared as a pointer, so it is not a GC root, and
-/// a collector move or a recycled address can only cost one extra (or one
-/// skipped) prime.
+/// Direct-mapped filter of (receiver ShapeId, key address) pairs seen by hook
+/// D. Each word is a FINGERPRINT (upper 30 bits) plus a sighting count (low 2
+/// bits); nothing here is ever dereferenced or compared as a pointer, so it is
+/// not a GC root, and a collector move, a recycled address or a collision can
+/// only cost one extra, or one skipped, prime.
 const SEEN_SIZE: usize = 256;
+const SEEN_COUNT_MASK: u32 = 3;
+/// Count at which hook D stops trying for a pair.
+const SEEN_GIVEN_UP: u32 = 3;
 
 crate::perry_thread_local! {
     static BY_NAME_SEEN: std::cell::UnsafeCell<[u32; SEEN_SIZE]> =
         const { std::cell::UnsafeCell::new([0; SEEN_SIZE]) };
 }
 
-/// Has this (receiver shape, key) pair missed a by-name read before?
+/// Should hook D try to prime this (receiver shape, key) pair now? `Some`
+/// (the filter slot, for [`by_name_give_up`]) on the 2nd and 3rd sightings.
 ///
-/// The prime walks the chain AND runs the generic getter to confirm, so it
-/// costs more than the read it replaces. That pays off only for a pair that
-/// is read again. A key built fresh for every read — `o["k" + i]`, or a
-/// runtime path that mints a transient key string per call — would pay it
-/// on every read and evict useful entries while its string was kept alive
-/// by the table. Priming on the SECOND sighting skips exactly those: a
-/// transient key's address never repeats.
+/// * First sighting: `None`. The prime walks the chain AND runs the generic
+///   getter to confirm, so it costs more than the read it replaces and pays
+///   off only for a pair read again. A key minted fresh for every read —
+///   `o["k" + i]`, or a runtime path that builds a transient key string per
+///   call — never repeats its address, so it never pays.
+/// * Second and third sightings: try. A successful prime is served by the
+///   table from then on and never comes back here; a refusal the table
+///   records is answered `Declined` there. Two tries, because a walk that
+///   first MARKS a prototype abandons and records nothing, by design.
+/// * After that, or once the pair is known unprimeable: `None`, for the price
+///   of this one compare. Without it, a pair that repeats but can never prime
+///   (an own key the data probe refuses) paid the own-key scan on every read:
+///   +11.5% on cron/next_dates before this cap existed.
 ///
 /// # Safety
 /// `obj` is a proved ordinary object.
 #[inline]
-unsafe fn key_seen_before(obj: *const ObjectHeader, key: *const crate::StringHeader) -> bool {
+unsafe fn by_name_attempt(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<usize> {
     let shape = shapes::object_shape_stamp(obj) as u64;
     let h = ((key as usize as u64) >> 4 ^ shape << 20).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let index = (h >> 56) as usize & (SEEN_SIZE - 1);
-    let print = (h >> 24) as u32 | 1;
+    let id = ((h >> 24) as u32 & !SEEN_COUNT_MASK) | (SEEN_COUNT_MASK + 1);
     BY_NAME_SEEN.with(|cell| {
         let seen = &mut *cell.get();
-        if seen[index] == print {
-            true
-        } else {
-            seen[index] = print;
-            false
+        let word = seen[index];
+        if word & !SEEN_COUNT_MASK != id {
+            seen[index] = id | 1;
+            return None;
         }
+        let count = word & SEEN_COUNT_MASK;
+        if count >= SEEN_GIVEN_UP {
+            return None;
+        }
+        seen[index] = id | (count + 1);
+        Some(index)
     })
+}
+
+/// Stop trying for the pair whose filter slot [`by_name_attempt`] returned.
+#[inline]
+fn by_name_give_up(index: usize) {
+    BY_NAME_SEEN.with(|cell| unsafe {
+        let seen = &mut *cell.get();
+        seen[index] |= SEEN_GIVEN_UP;
+    });
 }
 
 /// The walk itself. Every `None` here is a refusal; `note` is what makes the
