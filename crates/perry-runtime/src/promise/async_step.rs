@@ -1026,6 +1026,7 @@ fn build_async_step_thunks(
 // Capture layout: [step_closure_ptr]
 extern "C" fn async_step_fulfill_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
@@ -1148,6 +1149,7 @@ fn forward_swallowed_rejection(result: f64, trap_next: *mut Promise) {
 
 extern "C" fn async_step_reject_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
@@ -1372,11 +1374,16 @@ fn array_from_async_call_next(
     }
     // Synchronous iterator path: invoke the handler directly with the
     // result so the iteration loop continues without going through .then.
-    array_from_async_step(chain_closure as *const _, next_result);
+    array_from_async_step(
+        chain_closure as *const _,
+        crate::closure::JsThis::current(),
+        next_result,
+    );
 }
 
 extern "C" fn array_from_async_reject(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let result_promise = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -1392,6 +1399,7 @@ extern "C" fn array_from_async_reject(
 /// another `.next()` call.
 extern "C" fn array_from_async_step(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     iter_result: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -1480,6 +1488,7 @@ fn array_from_async_await_value(closure: *const crate::closure::ClosureHeader, v
 
 extern "C" fn array_from_async_value_step(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
@@ -1515,6 +1524,7 @@ fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, v
 
 extern "C" fn array_from_async_mapped_step(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
@@ -1603,6 +1613,7 @@ mod tests {
 
     extern "C" fn relocating_step(
         _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
         _value: f64,
         _is_error: f64,
     ) -> f64 {
@@ -1702,7 +1713,7 @@ mod tests {
                 ])
             });
 
-            async_step_fulfill_thunk(thunk, 41.0);
+            async_step_fulfill_thunk(thunk, crate::closure::JsThis::current(), 41.0);
 
             assert_eq!(
                 (*captured_to).state,

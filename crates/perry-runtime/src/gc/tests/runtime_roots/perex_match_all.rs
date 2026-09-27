@@ -132,23 +132,47 @@ fn retained_input_population() -> usize {
             && bytes(js_nanbox_string(p as i64)) == b"a unique input retained only by the iterator"
     })
 }
-extern "C" fn identity(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn identity(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     arg
 }
-extern "C" fn throw_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(941.0)
 }
-extern "C" fn throw_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn throw_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(942.0)
 }
-extern "C" fn no_match(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn no_match(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     f64::from_bits(TAG_NULL)
 }
-extern "C" fn return_this(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn return_this(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     crate::object::js_implicit_this_get()
 }
-extern "C" fn factory(_: *const crate::closure::ClosureHeader, receiver: f64, flags: f64) -> f64 {
+extern "C" fn factory(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    receiver: f64,
+    flags: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let flags = scope.root_nanbox_f64(flags);
@@ -511,7 +535,10 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
     assert_eq!(get(&step, b"done").to_bits(), crate::value::TAG_TRUE);
 }
 
-extern "C" fn collecting_missing_construct(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collecting_missing_construct(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -527,32 +554,52 @@ fn ordered_field(event: u64, name: &[u8]) -> f64 {
     gc_collect_minor();
     get(&receiver, name)
 }
-extern "C" fn ordered_input(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_input(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered_field(1, b"text")
 }
-extern "C" fn ordered_constructor(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_constructor(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered_field(2, b"holder")
 }
-extern "C" fn ordered_species(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_species(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered_field(3, b"factory")
 }
-extern "C" fn ordered_flags(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_flags(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered_field(4, b"flagText")
 }
 extern "C" fn ordered_factory(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     receiver: f64,
     flags: f64,
 ) -> f64 {
     ordered(5);
-    factory(closure, receiver, flags)
+    factory(closure, crate::closure::JsThis::current(), receiver, flags)
 }
-extern "C" fn ordered_index(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_index(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered(6);
     gc_collect_minor();
     1.75
 }
-extern "C" fn ordered_set_index(_: *const crate::closure::ClosureHeader, index: f64) -> f64 {
+extern "C" fn ordered_set_index(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    index: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     ordered(7);
@@ -619,7 +666,11 @@ fn perex_match_all_species_and_lastindex_order_survives_collecting_callbacks() {
     assert_eq!(bytes(get(&matcher, b"seenFlags")), b"gu");
 }
 
-extern "C" fn arrow_species(_: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn arrow_species(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     value
 }
 

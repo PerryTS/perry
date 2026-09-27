@@ -106,10 +106,18 @@ pub(super) fn captured<'s>(
     );
     f
 }
-extern "C" fn throw_text(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_text(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(971.0)
 }
-extern "C" fn hook(_: *const crate::closure::ClosureHeader, input: f64, replacement: f64) -> f64 {
+extern "C" fn hook(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+    replacement: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_f64(input);
     let replacement = scope.root_nanbox_f64(replacement);
@@ -119,6 +127,7 @@ extern "C" fn hook(_: *const crate::closure::ClosureHeader, input: f64, replacem
 }
 extern "C" fn builtin_callback(
     c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     first: f64,
     absent: f64,
@@ -163,7 +172,11 @@ extern "C" fn builtin_callback(
     );
     matched.get_nanbox_f64()
 }
-extern "C" fn alias_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn alias_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     gc_collect_minor();
@@ -180,6 +193,7 @@ extern "C" fn alias_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64
 }
 extern "C" fn alias_callback(
     c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     position: f64,
     input: f64,
@@ -205,7 +219,10 @@ extern "C" fn alias_callback(
     put(&state, b"replacements", get(&state, b"replacements") + 1.0);
     js_nanbox_string(crate::string::js_string_from_bytes(b"X".as_ptr(), 1) as i64)
 }
-extern "C" fn named_getter(c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn named_getter(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     gc_collect_minor();
@@ -216,6 +233,7 @@ extern "C" fn named_getter(c: *const crate::closure::ClosureHeader) -> f64 {
 }
 extern "C" fn collecting_throw(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _: f64,
     _: f64,
     _: f64,
@@ -447,7 +465,10 @@ fn perex_replace_collecting_throw_cleans_native_arguments_roots_and_this() {
     crate::object::js_implicit_this_set(displaced.get_nanbox_f64());
 }
 
-extern "C" fn primitive_hook_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn primitive_hook_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     assert_eq!(crate::object::js_implicit_this_get(), 23.0);
     gc_collect_minor();
     crate::closure::js_register_closure_arity(hook as *const u8, 2);

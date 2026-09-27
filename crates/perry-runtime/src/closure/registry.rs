@@ -484,24 +484,33 @@ fn invalidate_dispatch_strategy(func_ptr: *const u8) {
 mod dispatch_recent_tests {
     use super::*;
 
-    extern "C" fn body_a(_: *const ClosureHeader) -> f64 {
+    extern "C" fn body_a(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         1.0
     }
-    extern "C" fn body_b(_: *const ClosureHeader) -> f64 {
+    extern "C" fn body_b(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         2.0
     }
-    extern "C" fn body_c(_: *const ClosureHeader) -> f64 {
+    extern "C" fn body_c(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         3.0
     }
-    extern "C" fn body_d(_: *const ClosureHeader) -> f64 {
+    extern "C" fn body_d(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         4.0
     }
 
-    extern "C" fn add_two(_: *const ClosureHeader, left: f64, right: f64) -> f64 {
+    extern "C" fn add_two(
+        _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        left: f64,
+        right: f64,
+    ) -> f64 {
         left + right
     }
 
-    extern "C" fn identify_rest_array(_: *const ClosureHeader, value: f64) -> f64 {
+    extern "C" fn identify_rest_array(
+        _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        value: f64,
+    ) -> f64 {
         let is_pointer = value.to_bits() >> 48 == crate::value::POINTER_TAG >> 48;
         if is_pointer {
             1.0
@@ -1186,11 +1195,11 @@ pub unsafe fn dispatch_rest_bundled(
         ($($i:tt),* $(,)?) => {{
             if let Some(arguments_double) = all_arguments_double {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure $(, a!($i))*, rest_double, arguments_double
+                    func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*, rest_double, arguments_double
                 )
             } else {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure $(, a!($i))*, rest_double
+                    func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*, rest_double
                 )
             }
         }};
@@ -1273,7 +1282,7 @@ pub unsafe fn dispatch_with_arity(
     // `arm!` macro builds the (padded) call args from the arg-index token list.
     macro_rules! arm {
         ($($i:tt),* $(,)?) => {
-            crate::closure::body_call::js_body_call!(func_ptr, closure $(, a!($i))*)
+            crate::closure::body_call::js_body_call!(func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*)
         };
     }
     match k {
@@ -1413,28 +1422,28 @@ pub(crate) fn closure_registry_census() -> Vec<crate::gc::census::SideTableRow> 
 mod body_record_tests {
     use super::*;
 
-    extern "C" fn rec_a(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_a(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         1.0
     }
-    extern "C" fn rec_b(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_b(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         2.0
     }
-    extern "C" fn rec_c(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_c(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         3.0
     }
-    extern "C" fn rec_d(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_d(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         4.0
     }
-    extern "C" fn rec_trusted(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_trusted(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         5.0
     }
-    extern "C" fn rec_versioned(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_versioned(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         6.0
     }
-    extern "C" fn rec_e(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_e(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         7.0
     }
-    extern "C" fn rec_f(_: *const ClosureHeader) -> f64 {
+    extern "C" fn rec_f(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         8.0
     }
 

@@ -413,7 +413,8 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
 /// `js_create_callback(func_ptr, closure_env, param_count)` registers a JS
 /// callable whose trampoline invokes `func_ptr(closure_env, args_ptr,
 /// args_len)`. Perry closure bodies have signature
-/// `(closure_ptr, arg0, arg1, ...)` per arity instead, so the codegen
+/// `(callee, this, arg0, arg1, ...)` per arity instead
+/// (`perry_abi::JS_BODY_*`), so the codegen
 /// arm for `Expr::JsCreateCallback` (issue #248 Phase 2B) passes
 /// `js_closure_call_array` as the trampoline `func_ptr` and the raw
 /// `*const ClosureHeader` (NaN-boxing stripped) as `closure_env`. The

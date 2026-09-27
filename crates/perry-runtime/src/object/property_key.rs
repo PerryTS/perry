@@ -561,7 +561,10 @@ pub unsafe extern "C" fn js_object_super_call(
 mod property_key_tests {
     use super::*;
 
-    extern "C" fn accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn accessor_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         123.0
     }
 

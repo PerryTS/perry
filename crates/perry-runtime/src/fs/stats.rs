@@ -16,6 +16,7 @@ use super::*;
 
 pub(crate) extern "C" fn stats_closure_return_captured(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Slot 0 holds the pre-computed NaN-boxed boolean.
     crate::closure::js_closure_get_capture_f64(closure, 0)

@@ -17,6 +17,7 @@ crate::perry_thread_local! {
 
 extern "C" fn delete_current_map_entry(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     key: f64,
     collection: f64,
@@ -29,6 +30,7 @@ extern "C" fn delete_current_map_entry(
 
 extern "C" fn delete_earlier_map_entry(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     key: f64,
     collection: f64,
@@ -488,6 +490,7 @@ fn clear_truncates_the_squeeze_history() {
 
 extern "C" fn delete_earlier_then_live_read(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     key: f64,
     collection: f64,

@@ -72,7 +72,10 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
     }
 }
 
-extern "C" fn array_getter_collects(_closure: *const crate::ClosureHeader) -> f64 {
+extern "C" fn array_getter_collects(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     GETTER_CALLS.with(|c| c.set(c.get() + 1));
     crate::gc::gc_collect_minor();
     17.0

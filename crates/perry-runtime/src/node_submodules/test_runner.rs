@@ -361,7 +361,11 @@ fn take_directive_reason(
     }
 }
 
-extern "C" fn test_done(_closure: *const ClosureHeader, error: f64) -> f64 {
+extern "C" fn test_done(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    error: f64,
+) -> f64 {
     if !is_undefined_value(error) && !JSValue::from_bits(error.to_bits()).is_null() {
         crate::exception::js_throw(error);
     }
@@ -722,7 +726,10 @@ fn print_summary(stats: &Stats) {
     println!("ℹ duration_ms 0");
 }
 
-extern "C" fn test_runner_task(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn test_runner_task(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let root = TEST_RUNNER.with(|runner| {
         let mut runner = runner.borrow_mut();
         runner.running = true;
@@ -766,6 +773,7 @@ extern "C" fn test_runner_task(_closure: *const ClosureHeader) -> f64 {
 
 pub(crate) extern "C" fn thunk_test(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -775,6 +783,7 @@ pub(crate) extern "C" fn thunk_test(
 
 pub(crate) extern "C" fn thunk_test_skip(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -784,6 +793,7 @@ pub(crate) extern "C" fn thunk_test_skip(
 
 pub(crate) extern "C" fn thunk_test_todo(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -793,6 +803,7 @@ pub(crate) extern "C" fn thunk_test_todo(
 
 pub(crate) extern "C" fn thunk_test_only(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -802,6 +813,7 @@ pub(crate) extern "C" fn thunk_test_only(
 
 pub(crate) extern "C" fn thunk_test_suite(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -811,6 +823,7 @@ pub(crate) extern "C" fn thunk_test_suite(
 
 pub(crate) extern "C" fn thunk_test_suite_skip(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -820,6 +833,7 @@ pub(crate) extern "C" fn thunk_test_suite_skip(
 
 pub(crate) extern "C" fn thunk_test_suite_todo(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -829,6 +843,7 @@ pub(crate) extern "C" fn thunk_test_suite_todo(
 
 pub(crate) extern "C" fn thunk_test_suite_only(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     options: f64,
     callback: f64,
@@ -836,16 +851,25 @@ pub(crate) extern "C" fn thunk_test_suite_only(
     register_suite(TestMode::Only, name, options, callback)
 }
 
-pub(crate) extern "C" fn thunk_test_before(_closure: *const ClosureHeader, callback: f64) -> f64 {
+pub(crate) extern "C" fn thunk_test_before(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
     register_hook(HookKind::Before, callback)
 }
 
-pub(crate) extern "C" fn thunk_test_after(_closure: *const ClosureHeader, callback: f64) -> f64 {
+pub(crate) extern "C" fn thunk_test_after(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
     register_hook(HookKind::After, callback)
 }
 
 pub(crate) extern "C" fn thunk_test_before_each(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     register_hook(HookKind::BeforeEach, callback)
@@ -853,12 +877,17 @@ pub(crate) extern "C" fn thunk_test_before_each(
 
 pub(crate) extern "C" fn thunk_test_after_each(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     register_hook(HookKind::AfterEach, callback)
 }
 
-pub(crate) extern "C" fn thunk_test_run(_closure: *const ClosureHeader, _options: f64) -> f64 {
+pub(crate) extern "C" fn thunk_test_run(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _options: f64,
+) -> f64 {
     let mut array = crate::array::js_array_alloc(0);
     for _ in 0..10 {
         array = crate::array::js_array_push_f64(array, undefined_value());
@@ -868,52 +897,98 @@ pub(crate) extern "C" fn thunk_test_run(_closure: *const ClosureHeader, _options
 
 #[no_mangle]
 pub extern "C" fn js_node_test_register(name: f64, options: f64, callback: f64) -> f64 {
-    thunk_test(std::ptr::null(), name, options, callback)
+    thunk_test(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        name,
+        options,
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_skip(name: f64, options: f64, callback: f64) -> f64 {
-    thunk_test_skip(std::ptr::null(), name, options, callback)
+    thunk_test_skip(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        name,
+        options,
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_todo(name: f64, options: f64, callback: f64) -> f64 {
-    thunk_test_todo(std::ptr::null(), name, options, callback)
+    thunk_test_todo(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        name,
+        options,
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_only(name: f64, options: f64, callback: f64) -> f64 {
-    thunk_test_only(std::ptr::null(), name, options, callback)
+    thunk_test_only(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        name,
+        options,
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_suite(name: f64, options: f64, callback: f64) -> f64 {
-    thunk_test_suite(std::ptr::null(), name, options, callback)
+    thunk_test_suite(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        name,
+        options,
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_before(callback: f64) -> f64 {
-    thunk_test_before(std::ptr::null(), callback)
+    thunk_test_before(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_after(callback: f64) -> f64 {
-    thunk_test_after(std::ptr::null(), callback)
+    thunk_test_after(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_before_each(callback: f64) -> f64 {
-    thunk_test_before_each(std::ptr::null(), callback)
+    thunk_test_before_each(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_after_each(callback: f64) -> f64 {
-    thunk_test_after_each(std::ptr::null(), callback)
+    thunk_test_after_each(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        callback,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_run(options: f64) -> f64 {
-    thunk_test_run(std::ptr::null(), options)
+    thunk_test_run(std::ptr::null(), crate::closure::JsThis::current(), options)
 }
 
 pub(crate) fn scan_node_test_runner_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

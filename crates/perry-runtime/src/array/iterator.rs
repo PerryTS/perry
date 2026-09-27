@@ -307,6 +307,7 @@ fn async_from_sync_iter_result(value: f64, done: bool) -> f64 {
 
 extern "C" fn async_from_sync_fulfilled(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     // `async_from_sync_iter_result` allocates and can move the nursery `outer`
@@ -328,6 +329,7 @@ extern "C" fn async_from_sync_fulfilled(
 
 extern "C" fn async_from_sync_rejected_value(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     // `async_from_sync_close` calls back into JS and allocates, which can move
@@ -598,6 +600,7 @@ fn async_from_sync_call(iter: f64, method: &[u8], args: &[f64], close_on_rejecti
 
 extern "C" fn async_from_sync_next(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     // Root the captured sync iterator + its `[[NextMethod]]` across the sync
@@ -633,6 +636,7 @@ extern "C" fn async_from_sync_next(
 
 extern "C" fn async_from_sync_return(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -659,6 +663,7 @@ extern "C" fn async_from_sync_return(
 
 extern "C" fn async_from_sync_throw(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -677,7 +682,10 @@ extern "C" fn async_from_sync_throw(
     }
 }
 
-extern "C" fn async_from_sync_async_iterator(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn async_from_sync_async_iterator(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 

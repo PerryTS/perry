@@ -96,6 +96,7 @@ macro_rules! thunk {
         #[allow(non_snake_case)] // thunk name mirrors JS API surface
         pub(crate) extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             _arg: f64,
         ) -> f64 {
             let msg: &'static str = $msg;
@@ -197,6 +198,7 @@ thunk!(
 
 extern "C" fn thunk_vm_create_context(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     sandbox: f64,
     options: f64,
 ) -> f64 {

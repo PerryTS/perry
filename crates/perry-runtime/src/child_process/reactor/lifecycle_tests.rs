@@ -50,7 +50,12 @@ fn native_process_fixture() {
     assert_eq!(tail, b"exit");
 }
 
-extern "C" fn event(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn event(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     let id = crate::closure::js_closure_get_capture_f64(closure, 0) as usize;
     EVENTS.with(|e| {
         e.borrow_mut()
@@ -59,7 +64,11 @@ extern "C" fn event(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
     cp_undefined()
 }
 
-extern "C" fn data(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn data(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     OUTPUT.with(|o| o.borrow_mut().extend(cp_value_to_bytes(value)));
     cp_undefined()
 }

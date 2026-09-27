@@ -7,11 +7,20 @@
 use perry_runtime::gc::RuntimeHandleScope;
 use perry_runtime::{ClosureHeader, JSValue, ObjectHeader};
 
-extern "C" fn thunk1(_closure: *const ClosureHeader, _a: f64) -> f64 {
+extern "C" fn thunk1(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _a: f64,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
-extern "C" fn thunk2(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn thunk2(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 

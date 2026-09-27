@@ -34,6 +34,7 @@ pub(crate) fn process_features_value() -> f64 {
 
 extern "C" fn process_report_function_get_report(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     validate_report_error_arg(err);
@@ -42,6 +43,7 @@ extern "C" fn process_report_function_get_report(
 
 extern "C" fn process_report_function_write_report(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     file: f64,
     err: f64,
 ) -> f64 {

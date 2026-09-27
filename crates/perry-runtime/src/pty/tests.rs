@@ -13,17 +13,29 @@ thread_local! {
     static REMOVED_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-extern "C" fn removed(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
+extern "C" fn removed(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _chunk: f64,
+) -> f64 {
     REMOVED_CALLS.with(|n| n.set(n.get() + 1));
     cp_undefined()
 }
 
-extern "C" fn data(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn data(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     OUTPUT.with(|o| o.borrow_mut().push_str(&cp_value_to_string(chunk).unwrap()));
     cp_undefined()
 }
 
-extern "C" fn exited(_closure: *const ClosureHeader, event: f64) -> f64 {
+extern "C" fn exited(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     EXITS.with(|e| e.borrow_mut().push(cp_get_field(event, b"exitCode")));
     cp_undefined()
 }

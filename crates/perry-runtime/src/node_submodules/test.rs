@@ -218,13 +218,21 @@ fn assert_mock_target_method(value: f64) {
     }
 }
 
-extern "C" fn mock_timers_enable(_closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn mock_timers_enable(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     let (apis, now) = parse_mock_timer_options(options);
     crate::timer::js_mock_timers_enable(apis, now);
     undefined_value()
 }
 
-extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
+extern "C" fn mock_timers_tick(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
     let delay = if is_undefined_value(ms) {
         1.0
     } else {
@@ -234,18 +242,28 @@ extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
     undefined_value()
 }
 
-extern "C" fn mock_timers_run_all(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_timers_run_all(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::timer::js_mock_timers_run_all();
     undefined_value()
 }
 
-extern "C" fn mock_timers_set_time(_closure: *const ClosureHeader, ms: f64) -> f64 {
+extern "C" fn mock_timers_set_time(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    ms: f64,
+) -> f64 {
     let time = validate_mock_timer_number("time", ms, false);
     crate::timer::js_mock_timers_set_time(time);
     undefined_value()
 }
 
-extern "C" fn mock_timers_reset(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_timers_reset(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::timer::js_mock_timers_reset();
     undefined_value()
 }
@@ -775,7 +793,11 @@ fn record_mock_call(id: i64, args_value: f64, this_value: f64, result: f64, erro
 #[path = "test_metadata_unit_tests.rs"]
 mod metadata_tests;
 
-extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn mock_function_invoke(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let id = closure_id(closure);
     let args = array_values(rest).unwrap_or_default();
     let (implementation, is_symbol_method) = MOCK_STATES.with(|states| {
@@ -854,7 +876,10 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
     }
 }
 
-extern "C" fn mock_context_call_count(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_call_count(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     MOCK_STATES.with(|states| {
         states
@@ -872,7 +897,10 @@ extern "C" fn mock_context_call_count(closure: *const ClosureHeader) -> f64 {
     })
 }
 
-extern "C" fn mock_context_reset_calls(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_reset_calls(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = closure_id(closure);
     MOCK_STATES.with(|states| {
         if let Some(state) = states.borrow_mut().iter_mut().find(|state| state.id == id) {
@@ -884,6 +912,7 @@ extern "C" fn mock_context_reset_calls(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn mock_context_mock_implementation(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     implementation: f64,
 ) -> f64 {
     assert_callable_arg("implementation", implementation);
@@ -898,6 +927,7 @@ extern "C" fn mock_context_mock_implementation(
 
 extern "C" fn mock_context_mock_implementation_once(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     implementation: f64,
     on_call: f64,
 ) -> f64 {
@@ -929,13 +959,17 @@ extern "C" fn mock_context_mock_implementation_once(
     undefined_value()
 }
 
-extern "C" fn mock_context_restore(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_context_restore(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_mock_state(closure_id(closure));
     undefined_value()
 }
 
 extern "C" fn mock_fn_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     original: f64,
     implementation_or_options: f64,
     options: f64,
@@ -970,6 +1004,7 @@ extern "C" fn mock_fn_thunk(
 
 extern "C" fn mock_method_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1100,6 +1135,7 @@ fn create_getter_mock(target: f64, property: f64, implementation: f64, times: Op
 
 extern "C" fn mock_getter_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1167,6 +1203,7 @@ fn create_setter_mock(target: f64, property: f64, implementation: f64, times: Op
 
 extern "C" fn mock_setter_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     property: f64,
     implementation: f64,
@@ -1190,7 +1227,10 @@ extern "C" fn mock_setter_thunk(
     )
 }
 
-extern "C" fn mock_reset_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_reset_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_tracked_mocks();
     MOCK_STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
@@ -1216,7 +1256,10 @@ fn restore_tracked_mocks() {
     property_mock::restore_all();
 }
 
-extern "C" fn mock_restore_all_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn mock_restore_all_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     restore_tracked_mocks();
     undefined_value()
 }
@@ -1301,14 +1344,22 @@ fn mock_object_value() -> f64 {
     })
 }
 
-extern "C" fn test_context_diagnostic(_closure: *const ClosureHeader, message: f64) -> f64 {
+extern "C" fn test_context_diagnostic(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    message: f64,
+) -> f64 {
     let message =
         value_to_string(message).unwrap_or_else(|| crate::builtins::format_jsvalue(message, 0));
     CURRENT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().push(message));
     undefined_value()
 }
 
-extern "C" fn test_context_plan(_closure: *const ClosureHeader, expected: f64) -> f64 {
+extern "C" fn test_context_plan(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    expected: f64,
+) -> f64 {
     let n = crate::builtins::js_number_coerce(expected);
     if !n.is_finite() || n < 0.0 {
         let message = format!(
@@ -1321,7 +1372,11 @@ extern "C" fn test_context_plan(_closure: *const ClosureHeader, expected: f64) -
     undefined_value()
 }
 
-extern "C" fn test_context_skip(_closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn test_context_skip(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_SKIP));
     if let Some(reason) = value_to_string(reason) {
         CURRENT_DIAGNOSTICS
@@ -1330,7 +1385,11 @@ extern "C" fn test_context_skip(_closure: *const ClosureHeader, reason: f64) -> 
     undefined_value()
 }
 
-extern "C" fn test_context_todo(_closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn test_context_todo(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_TODO));
     if let Some(reason) = value_to_string(reason) {
         CURRENT_DIAGNOSTICS
@@ -1347,6 +1406,7 @@ macro_rules! test_context_assertion3 {
     ($name:ident, $assertion:path) => {
         extern "C" fn $name(
             _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
             actual: f64,
             expected: f64,
             message: f64,
@@ -1399,6 +1459,7 @@ test_context_assertion3!(test_context_assert_throws, crate::object::js_assert_th
 
 extern "C" fn test_context_assert_ok(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     message: f64,
 ) -> f64 {
@@ -1406,12 +1467,20 @@ extern "C" fn test_context_assert_ok(
     crate::object::js_assert_ok(value, message)
 }
 
-extern "C" fn test_context_assert_fail(_closure: *const ClosureHeader, message: f64) -> f64 {
+extern "C" fn test_context_assert_fail(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    message: f64,
+) -> f64 {
     record_test_context_assertion();
     crate::object::js_assert_fail(message)
 }
 
-extern "C" fn test_context_assert_if_error(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn test_context_assert_if_error(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     record_test_context_assertion();
     crate::object::js_assert_if_error(value)
 }
@@ -1530,6 +1599,7 @@ pub extern "C" fn js_node_test_mock_fn(
 ) -> f64 {
     mock_fn_thunk(
         std::ptr::null(),
+        crate::closure::JsThis::current(),
         original,
         implementation_or_options,
         options,
@@ -1543,7 +1613,14 @@ pub extern "C" fn js_node_test_mock_method(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_method_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_method_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1553,7 +1630,14 @@ pub extern "C" fn js_node_test_mock_getter(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_getter_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_getter_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1563,7 +1647,14 @@ pub extern "C" fn js_node_test_mock_setter(
     implementation: f64,
     options: f64,
 ) -> f64 {
-    mock_setter_thunk(std::ptr::null(), target, property, implementation, options)
+    mock_setter_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        target,
+        property,
+        implementation,
+        options,
+    )
 }
 
 #[no_mangle]
@@ -1583,47 +1674,55 @@ pub extern "C" fn js_node_test_mock_property_with_presence(
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_reset() -> f64 {
-    mock_reset_thunk(std::ptr::null())
+    mock_reset_thunk(std::ptr::null(), crate::closure::JsThis::current())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_restore_all() -> f64 {
-    mock_restore_all_thunk(std::ptr::null())
+    mock_restore_all_thunk(std::ptr::null(), crate::closure::JsThis::current())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64) -> f64 {
-    snapshot_set_default_serializers(std::ptr::null(), serializers)
+    snapshot_set_default_serializers(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        serializers,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_resolve_snapshot_path(resolver: f64) -> f64 {
-    snapshot_set_resolve_snapshot_path(std::ptr::null(), resolver)
+    snapshot_set_resolve_snapshot_path(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        resolver,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_enable(options: f64) -> f64 {
-    mock_timers_enable(std::ptr::null(), options)
+    mock_timers_enable(std::ptr::null(), crate::closure::JsThis::current(), options)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_tick(ms: f64) -> f64 {
-    mock_timers_tick(std::ptr::null(), ms)
+    mock_timers_tick(std::ptr::null(), crate::closure::JsThis::current(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_run_all() -> f64 {
-    mock_timers_run_all(std::ptr::null())
+    mock_timers_run_all(std::ptr::null(), crate::closure::JsThis::current())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_set_time(ms: f64) -> f64 {
-    mock_timers_set_time(std::ptr::null(), ms)
+    mock_timers_set_time(std::ptr::null(), crate::closure::JsThis::current(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
-    mock_timers_reset(std::ptr::null())
+    mock_timers_reset(std::ptr::null(), crate::closure::JsThis::current())
 }
 
 pub(crate) fn decorate_test_export(

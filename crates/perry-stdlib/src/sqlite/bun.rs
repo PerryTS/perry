@@ -209,6 +209,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_finalize(stmt_handle: Handle) {
 
 unsafe extern "C" fn bun_sqlite_transaction_wrapper(
     wrapper: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     rest_value: f64,
 ) -> f64 {
     let db_handle = js_closure_get_capture_f64(wrapper, 0) as Handle;

@@ -859,6 +859,7 @@ pub(super) fn make_resolving_functions(
 ///     rather than fulfilling with the thenable as a plain value.
 pub(super) extern "C" fn promise_resolve_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -896,6 +897,7 @@ pub(super) extern "C" fn promise_resolve_fn(
 /// Called when user calls reject(reason) inside the executor.
 pub(super) extern "C" fn promise_reject_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -1079,6 +1081,7 @@ fn attach_promise_all_after_prior_reaction(promise: *mut Promise, state: Promise
 
 extern "C" fn promise_all_ordered_fulfill_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
@@ -1096,6 +1099,7 @@ extern "C" fn promise_all_ordered_fulfill_handler(
 
 extern "C" fn promise_all_ordered_reject_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -1195,6 +1199,7 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
 /// Handler for Promise.race fulfill — resolves the race promise with the first value
 extern "C" fn promise_race_resolve_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -1212,6 +1217,7 @@ extern "C" fn promise_race_resolve_handler(
 /// Handler for Promise.race reject — rejects the race promise with the first reason
 extern "C" fn promise_race_reject_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
@@ -1537,6 +1543,7 @@ pub extern "C" fn js_promise_all_settled(
 
 extern "C" fn promise_all_settled_fulfill_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
@@ -1565,6 +1572,7 @@ extern "C" fn promise_all_settled_fulfill_handler(
 
 extern "C" fn promise_all_settled_reject_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
@@ -1671,6 +1679,7 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
 
 extern "C" fn promise_any_fulfill_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
@@ -1694,6 +1703,7 @@ extern "C" fn promise_any_fulfill_handler(
 
 extern "C" fn promise_any_reject_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
@@ -1798,6 +1808,7 @@ mod tests {
 
     extern "C" fn test_thenable_resolve_twice(
         closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
         on_fulfilled: f64,
         _on_rejected: f64,
     ) -> f64 {
@@ -1812,6 +1823,7 @@ mod tests {
 
     extern "C" fn test_thenable_reject(
         closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
         _on_fulfilled: f64,
         on_rejected: f64,
     ) -> f64 {

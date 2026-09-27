@@ -32,7 +32,11 @@ fn row(value: f64) -> Row {
     use crate::object::js_instanceof;
     Row {
         is_view_direct: is_true(crate::object::js_util_types_is_array_buffer_view(value)),
-        is_view_value: is_true(array_buffer_is_view_thunk(std::ptr::null(), value)),
+        is_view_value: is_true(array_buffer_is_view_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            value,
+        )),
         typed: is_true(crate::object::js_util_types_is_typed_array(value)),
         uint8: is_true(crate::object::js_util_types_is_uint8_array(value)),
         int8: is_true(crate::object::js_util_types_is_int8_array(value)),

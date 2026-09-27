@@ -740,7 +740,10 @@ pub(crate) unsafe fn js_wasi_init_subclass(this_box: f64, options: f64) {
 }
 
 #[no_mangle]
-pub extern "C" fn js_wasi_get_import_object(_closure: *const ClosureHeader) -> f64 {
+pub extern "C" fn js_wasi_get_import_object(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     if heap_object_ptr(this.get_nanbox_f64()).is_none() || !is_wasi_instance(this.get_nanbox_f64())
@@ -777,7 +780,11 @@ pub extern "C" fn js_wasi_get_import_object(_closure: *const ClosureHeader) -> f
 }
 
 #[no_mangle]
-pub extern "C" fn js_wasi_start(_closure: *const ClosureHeader, instance: f64) -> f64 {
+pub extern "C" fn js_wasi_start(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    instance: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let instance = scope.root_nanbox_f64(instance);
     let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
@@ -817,7 +824,11 @@ pub extern "C" fn js_wasi_start(_closure: *const ClosureHeader, instance: f64) -
 }
 
 #[no_mangle]
-pub extern "C" fn js_wasi_initialize(_closure: *const ClosureHeader, instance: f64) -> f64 {
+pub extern "C" fn js_wasi_initialize(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    instance: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let instance = scope.root_nanbox_f64(instance);
     let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
@@ -852,6 +863,7 @@ pub extern "C" fn js_wasi_initialize(_closure: *const ClosureHeader, instance: f
 #[no_mangle]
 pub extern "C" fn js_wasi_finalize_bindings(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     instance: f64,
     rest: f64,
 ) -> f64 {
@@ -1140,6 +1152,7 @@ fn import_function_name(closure: *const ClosureHeader) -> &'static str {
 #[no_mangle]
 pub extern "C" fn js_wasi_import_stub(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,

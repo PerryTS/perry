@@ -76,32 +76,60 @@ fn promise_from_result_value(call: impl FnOnce() -> Result<f64, f64>) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fs_promises_read_file(path: f64, options: f64) -> f64 {
-    thunk_fs_promises_readFile(std::ptr::null(), path, options)
+    thunk_fs_promises_readFile(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        path,
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_fs_promises_write_file(path: f64, data: f64, options: f64) -> f64 {
-    thunk_fs_promises_writeFile(std::ptr::null(), path, data, options)
+    thunk_fs_promises_writeFile(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        path,
+        data,
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_fs_promises_append_file(path: f64, data: f64, options: f64) -> f64 {
-    thunk_fs_promises_appendFile(std::ptr::null(), path, data, options)
+    thunk_fs_promises_appendFile(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        path,
+        data,
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_fs_promises_mkdir(path: f64, options: f64) -> f64 {
-    thunk_fs_promises_mkdir(std::ptr::null(), path, options)
+    thunk_fs_promises_mkdir(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        path,
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_fs_promises_rmdir(path: f64, options: f64) -> f64 {
-    thunk_fs_promises_rmdir(std::ptr::null(), path, options)
+    thunk_fs_promises_rmdir(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        path,
+        options,
+    )
 }
 
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_readFile(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     encoding: f64,
 ) -> f64 {
@@ -114,6 +142,7 @@ pub(crate) extern "C" fn thunk_fs_promises_readFile(
 
 pub(crate) extern "C" fn thunk_fs_promises_open(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     flags: f64,
     _mode: f64,
@@ -143,6 +172,7 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     data: f64,
     options: f64,
@@ -160,6 +190,7 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_appendFile(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     data: f64,
     options: f64,
@@ -175,6 +206,7 @@ pub(crate) extern "C" fn thunk_fs_promises_appendFile(
 
 pub(crate) extern "C" fn thunk_fs_promises_chmod(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     mode: f64,
 ) -> f64 {
@@ -183,6 +215,7 @@ pub(crate) extern "C" fn thunk_fs_promises_chmod(
 
 pub(crate) extern "C" fn thunk_fs_promises_chown(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     uid: f64,
     gid: f64,
@@ -192,6 +225,7 @@ pub(crate) extern "C" fn thunk_fs_promises_chown(
 
 pub(crate) extern "C" fn thunk_fs_promises_lchown(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     uid: f64,
     gid: f64,
@@ -203,6 +237,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lchown(
 
 pub(crate) extern "C" fn thunk_fs_promises_lchmod(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     mode: f64,
 ) -> f64 {
@@ -219,6 +254,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lchmod(
 
 pub(crate) extern "C" fn thunk_fs_promises_mkdir(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -229,6 +265,7 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdir(
 
 pub(crate) extern "C" fn thunk_fs_promises_readdir(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -240,6 +277,7 @@ pub(crate) extern "C" fn thunk_fs_promises_readdir(
 
 pub(crate) extern "C" fn thunk_fs_promises_stat(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -248,6 +286,7 @@ pub(crate) extern "C" fn thunk_fs_promises_stat(
 
 pub(crate) extern "C" fn thunk_fs_promises_statfs(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -256,6 +295,7 @@ pub(crate) extern "C" fn thunk_fs_promises_statfs(
 
 pub(crate) extern "C" fn thunk_fs_promises_lstat(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -264,6 +304,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lstat(
 
 pub(crate) extern "C" fn thunk_fs_promises_rm(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -272,6 +313,7 @@ pub(crate) extern "C" fn thunk_fs_promises_rm(
 
 pub(crate) extern "C" fn thunk_fs_promises_rmdir(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -280,6 +322,7 @@ pub(crate) extern "C" fn thunk_fs_promises_rmdir(
 
 pub(crate) extern "C" fn thunk_fs_promises_unlink(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
 ) -> f64 {
     // #9574: writeFile/appendFile are parked on the timer queue, while most
@@ -297,6 +340,7 @@ pub(crate) extern "C" fn thunk_fs_promises_unlink(
 
 pub(crate) extern "C" fn thunk_fs_promises_rename(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     from: f64,
     to: f64,
 ) -> f64 {
@@ -306,6 +350,7 @@ pub(crate) extern "C" fn thunk_fs_promises_rename(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_copyFile(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     from: f64,
     to: f64,
     flags: f64,
@@ -315,6 +360,7 @@ pub(crate) extern "C" fn thunk_fs_promises_copyFile(
 
 pub(crate) extern "C" fn thunk_fs_promises_cp(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     from: f64,
     to: f64,
     options: f64,
@@ -324,6 +370,7 @@ pub(crate) extern "C" fn thunk_fs_promises_cp(
 
 pub(crate) extern "C" fn thunk_fs_promises_truncate(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     len: f64,
 ) -> f64 {
@@ -332,6 +379,7 @@ pub(crate) extern "C" fn thunk_fs_promises_truncate(
 
 pub(crate) extern "C" fn thunk_fs_promises_utimes(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     atime: f64,
     mtime: f64,
@@ -343,6 +391,7 @@ pub(crate) extern "C" fn thunk_fs_promises_utimes(
 
 pub(crate) extern "C" fn thunk_fs_promises_lutimes(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     atime: f64,
     mtime: f64,
@@ -354,6 +403,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lutimes(
 
 pub(crate) extern "C" fn thunk_fs_promises_link(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     from: f64,
     to: f64,
 ) -> f64 {
@@ -362,6 +412,7 @@ pub(crate) extern "C" fn thunk_fs_promises_link(
 
 pub(crate) extern "C" fn thunk_fs_promises_symlink(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     path: f64,
     _type: f64,
@@ -371,6 +422,7 @@ pub(crate) extern "C" fn thunk_fs_promises_symlink(
 
 pub(crate) extern "C" fn thunk_fs_promises_readlink(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -379,6 +431,7 @@ pub(crate) extern "C" fn thunk_fs_promises_readlink(
 
 pub(crate) extern "C" fn thunk_fs_promises_realpath(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -387,6 +440,7 @@ pub(crate) extern "C" fn thunk_fs_promises_realpath(
 
 pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     prefix: f64,
     options: f64,
 ) -> f64 {
@@ -396,6 +450,7 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdtemp(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_fs_promises_mkdtempDisposable(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     prefix: f64,
     options: f64,
 ) -> f64 {
@@ -404,6 +459,7 @@ pub(crate) extern "C" fn thunk_fs_promises_mkdtempDisposable(
 
 pub(crate) extern "C" fn thunk_fs_promises_opendir(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
 ) -> f64 {
     match crate::fs::js_fs_opendir_value_with_path(path) {
@@ -420,6 +476,7 @@ pub(crate) extern "C" fn thunk_fs_promises_opendir(
 
 pub(crate) extern "C" fn thunk_fs_promises_glob(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     pattern: f64,
     options: f64,
 ) -> f64 {
@@ -428,6 +485,7 @@ pub(crate) extern "C" fn thunk_fs_promises_glob(
 
 pub(crate) extern "C" fn thunk_fs_promises_watch(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     options: f64,
 ) -> f64 {
@@ -436,6 +494,7 @@ pub(crate) extern "C" fn thunk_fs_promises_watch(
 
 pub(crate) extern "C" fn thunk_fs_promises_access(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     path: f64,
     mode: f64,
 ) -> f64 {
@@ -672,7 +731,10 @@ fn abort_pending_question(interface: f64) {
     crate::promise::js_promise_reject(promise, crate::url::js_abort_error_value());
 }
 
-extern "C" fn readline_promises_abort_question(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_promises_abort_question(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     abort_pending_question(this_value(closure));
     undefined()
 }
@@ -697,12 +759,19 @@ fn append_interface_input(interface: f64, chunk: f64) {
     set_value_field(interface, RL_IF_PENDING_TEXT, boxed_str(pending.as_bytes()));
 }
 
-extern "C" fn readline_promises_input_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn readline_promises_input_data(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     append_interface_input(this_value(closure), chunk);
     undefined()
 }
 
-extern "C" fn readline_promises_input_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_promises_input_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let interface = this_value(closure);
     cleanup_question_abort_listener(interface);
     set_value_field(interface, RL_IF_CLOSED, bool_value(true));
@@ -730,7 +799,10 @@ fn attach_interface_input(interface: f64, input: f64) {
     let _ = crate::node_stream::js_node_stream_method_on(raw, boxed_str(b"close"), close_value);
 }
 
-extern "C" fn readline_promises_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_promises_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let interface = this_value(closure);
     cleanup_question_abort_listener(interface);
     set_value_field(interface, RL_IF_PENDING_PROMISE, undefined());
@@ -740,6 +812,7 @@ extern "C" fn readline_promises_close(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn readline_promises_question(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     query: f64,
     options: f64,
 ) -> f64 {
@@ -814,6 +887,7 @@ fn readline_promises_create_interface(opts: f64) -> f64 {
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_createInterface(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     opts: f64,
 ) -> f64 {
     readline_promises_create_interface(opts)
@@ -822,6 +896,7 @@ pub(crate) extern "C" fn thunk_readline_createInterface(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_Interface(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     opts: f64,
 ) -> f64 {
     readline_promises_create_interface(opts)
@@ -856,7 +931,10 @@ fn flush_readline_actions(value: f64) {
     }
 }
 
-extern "C" fn readline_auto_commit_callback(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_auto_commit_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     flush_readline_actions(this_value(closure));
     undefined()
 }
@@ -886,7 +964,11 @@ fn append_readline_action(value: f64, sequence: String) {
     schedule_readline_auto_commit(value);
 }
 
-extern "C" fn readline_action_clear_line(closure: *const ClosureHeader, dir: f64) -> f64 {
+extern "C" fn readline_action_clear_line(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    dir: f64,
+) -> f64 {
     let value = this_value(closure);
     let mode = match number_to_i32(dir) {
         1 => 0,
@@ -897,13 +979,21 @@ extern "C" fn readline_action_clear_line(closure: *const ClosureHeader, dir: f64
     value
 }
 
-extern "C" fn readline_action_clear_screen_down(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_action_clear_screen_down(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let value = this_value(closure);
     append_readline_action(value, "\x1b[0J".to_string());
     value
 }
 
-extern "C" fn readline_action_cursor_to(closure: *const ClosureHeader, x: f64, y: f64) -> f64 {
+extern "C" fn readline_action_cursor_to(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+    y: f64,
+) -> f64 {
     let value = this_value(closure);
     let col = number_to_i32(x).saturating_add(1);
     let sequence = if is_null_or_undefined(y) {
@@ -916,7 +1006,12 @@ extern "C" fn readline_action_cursor_to(closure: *const ClosureHeader, x: f64, y
     value
 }
 
-extern "C" fn readline_action_move_cursor(closure: *const ClosureHeader, dx: f64, dy: f64) -> f64 {
+extern "C" fn readline_action_move_cursor(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    dx: f64,
+    dy: f64,
+) -> f64 {
     let value = this_value(closure);
     let dx = number_to_i32(dx);
     let dy = number_to_i32(dy);
@@ -935,12 +1030,18 @@ extern "C" fn readline_action_move_cursor(closure: *const ClosureHeader, dx: f64
     value
 }
 
-extern "C" fn readline_action_commit(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_action_commit(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     flush_readline_actions(this_value(closure));
     promise_value(null_value())
 }
 
-extern "C" fn readline_action_rollback(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readline_action_rollback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let value = this_value(closure);
     set_value_field(value, RL_ACTION_QUEUE, boxed_str(b""));
     set_value_field(value, RL_ACTION_AUTO_PENDING, bool_value(false));
@@ -995,6 +1096,7 @@ pub extern "C" fn js_readline_promises_readline_new(output: f64, options: f64) -
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_readline_Readline(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     output: f64,
     options: f64,
 ) -> f64 {

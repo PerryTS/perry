@@ -358,8 +358,16 @@ pub(crate) use field_get_set::{
     private_member_access_hints_restore, private_member_access_hints_savepoint,
     scan_private_lexical_brand_roots_mut,
 };
+#[cfg(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+))]
+pub(crate) use this_binding::implicit_this_bits;
 #[cfg(test)]
 pub(crate) use this_binding::js_derived_super_scope_push;
+#[cfg(test)]
+pub(crate) use this_binding::this_witness_counts;
 pub(crate) use this_binding::SuperNewTargetScope;
 pub(crate) use this_binding::{
     derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
@@ -372,7 +380,7 @@ pub(crate) use this_binding::{
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
     js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve, ImplicitThisScope,
+    js_static_this_resolve, js_this_param_witness, ImplicitThisScope,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;

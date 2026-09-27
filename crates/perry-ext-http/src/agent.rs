@@ -321,7 +321,10 @@ unsafe fn read_string_field(obj_f64: f64, field: &str) -> Option<String> {
     perry_ffi::read_string(js).map(String::from)
 }
 
-extern "C" fn agent_connection_abort_listener(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn agent_connection_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     let socket = unsafe { perry_ffi::closure_capture_f64(closure, 0) } as i64;
     let signal_value = unsafe { perry_ffi::closure_capture_f64(closure, 1) };
     unsafe {

@@ -18,6 +18,8 @@ mod v8_stubs;
 mod wide_call;
 
 #[cfg(test)]
+mod receiver_param_tests;
+#[cfg(test)]
 mod tests;
 
 pub use alloc::{
@@ -33,6 +35,7 @@ pub use alloc::{
 pub(crate) use alloc::{
     closure_install_boxed_captures, gc_capture_slot_range, singleton_closure_if_cached,
 };
+pub use body_call::JsThis;
 pub use shape::closure_kind_probe;
 
 pub(crate) use registry::closure_registry_census;

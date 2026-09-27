@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    extern "C" fn target_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn target_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         42.0
     }
 

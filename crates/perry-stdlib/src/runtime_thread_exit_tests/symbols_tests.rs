@@ -28,7 +28,10 @@ extern "C" {
     fn js_u8_buffer_read_f64(target: *const u8, index: i32) -> f64;
 }
 
-extern "C" fn probe_thunk(_closure: *const perry_runtime::ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 

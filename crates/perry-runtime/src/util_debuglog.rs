@@ -194,7 +194,11 @@ fn write_stderr_line(line: &str) {
     eprint!("{line}");
 }
 
-extern "C" fn logger_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn logger_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

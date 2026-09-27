@@ -273,7 +273,10 @@ fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Pro
     perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
 }
 
-extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f64 {
+extern "C" fn writable_write_start_microtask(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let writer_id = writable_capture_usize(closure, 1);
@@ -291,7 +294,11 @@ extern "C" fn writable_write_start_microtask(closure: *const ClosureHeader) -> f
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn writable_write_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _value: f64,
+) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let writer_id = writable_capture_usize(closure, 1);
@@ -301,7 +308,11 @@ extern "C" fn writable_write_fulfilled(closure: *const ClosureHeader, _value: f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn writable_write_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn writable_write_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let write_promise = writable_capture_promise(closure, 2);
@@ -360,7 +371,11 @@ unsafe fn try_call_writable_close(cb: i64) -> Result<f64, u64> {
         .map_err(f64::to_bits)
 }
 
-extern "C" fn writable_close_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn writable_close_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _value: f64,
+) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let close_promise = writable_capture_promise(closure, 1);
@@ -369,7 +384,11 @@ extern "C" fn writable_close_fulfilled(closure: *const ClosureHeader, _value: f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn writable_close_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn writable_close_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let close_promise = writable_capture_promise(closure, 1);

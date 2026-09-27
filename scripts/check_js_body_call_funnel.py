@@ -14,6 +14,20 @@ change (the receiver becomes a parameter), so the calls are funneled:
 
 A transmute FROM a body type to an erased pointer (installing a native body)
 is not a call and is not this gate's business.
+
+The receiver is a parameter of every JS body (`perry_abi::JS_BODY_THIS_PARAM`,
+this-as-a-parameter stage 1), and a native body is installed through an
+erased `*const u8`, so nothing the compiler checks connects a native's
+signature to the ABI it is called with. Two definition rules close that:
+
+* every `extern "C" fn` DEFINITION shaped like a JS body — its first
+  parameter a closure header, every other parameter `f64`, returning `f64` —
+  declares the receiver (`JsThis`) as its second parameter, unless it is a
+  call ENTRY (`perry_abi::JS_CALL_ENTRIES`: it takes a closure as an ordinary
+  argument) or says `NOT-A-JS-BODY: <why>` on one of the three lines above;
+* a function whose address is handed straight to a closure allocator
+  (`js_closure_alloc*`, `js_register_closure_*`, perry-ffi's `alloc_closure` /
+  `register_closure_arity`) declares the receiver.
 """
 
 from __future__ import annotations
@@ -93,6 +107,104 @@ def transmute_targets(text: str):
 
 NOT_A_BODY = "NOT-A-JS-BODY:"
 
+# Rust definitions (never a pointer type: those have no name).
+FN_HEAD_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(\$?\w+)\s*(?:<[^>]*>)?\s*\(')
+RET_F64_BODY_RE = re.compile(r"\s*->\s*f64\s*(?:where[^{;]*)?\{")
+
+
+def fn_defs(text: str):
+    """Yield (name, params_text, start) for every `extern "C" fn` DEFINITION
+    returning `f64`; the parameter list may nest parentheses (a macro's
+    `$($a: f64),*`)."""
+    for m in FN_HEAD_RE.finditer(text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        if depth == 0 and RET_F64_BODY_RE.match(text, i):
+            yield m.group(1), text[m.end() : i - 1], m.start()
+
+
+CLOSURE_PARAM_RE = re.compile(
+    r"^\*(?:const|mut)\s+(?:[\w:]*::)?(?:ClosureHeader|RawClosureHeader)$|^ClosurePtr$"
+)
+JS_THIS_RE = re.compile(r"^(?:[\w:]*::)?JsThis$")
+ALLOC_RE = re.compile(
+    r"\b(?:js_closure_alloc(?:_singleton|_with_captures_singleton)?|js_register_closure_\w+"
+    r"|alloc_closure|register_closure_arity)\s*\(\s*(\w+)\s+as\s+\*const",
+    re.S,
+)
+
+
+def call_entries(root: Path) -> set[str]:
+    """`perry_abi::JS_CALL_ENTRIES`: runtime entry points that take a closure
+    as an ordinary argument (and read the receiver from the cell)."""
+    text = (root / "crates/perry-abi/src/lib.rs").read_text(encoding="utf-8")
+    m = re.search(r"pub const JS_CALL_ENTRIES:[^=]*=\s*\[(.*?)\];", text, re.S)
+    if not m:
+        raise SystemExit("check_js_body_call_funnel: perry_abi::JS_CALL_ENTRIES not found")
+    return set(re.findall(r'"(\w+)"', m.group(1)))
+
+
+def param_types(params: str) -> list[str]:
+    """Types of a comma-separated parameter list (macro repetitions such as
+    `$($a: f64),*` count as `f64`)."""
+    params = re.sub(r"\$\(|\)\s*,?\s*[*+]", ",", params)
+    out = []
+    for p in (x.strip() for x in params.split(",")):
+        if not p:
+            continue
+        out.append(p.split(":", 1)[-1].strip() if ":" in p else p)
+    return out
+
+
+def definition_violations(root: Path):
+    entries = call_entries(root)
+    bases = list(RUNTIME_ROOTS) + sorted(
+        p.relative_to(root).as_posix() for p in root.glob("crates/perry-ext-*/src")
+    ) + ["crates/perry-ffi/src"]
+    defs: dict[str, list[tuple[str, int, list[str]]]] = {}
+    texts = []
+    out = []
+    for base in bases:
+        if not (root / base).exists():
+            continue
+        for path in sorted((root / base).rglob("*.rs")):
+            rel = path.relative_to(root).as_posix()
+            text = path.read_text(encoding="utf-8")
+            lines = text.split("\n")
+            texts.append((rel, text))
+            for name, params, start in fn_defs(text):
+                types = param_types(params)
+                line = text.count("\n", 0, start) + 1
+                defs.setdefault(name, []).append((rel, line, types))
+                if not types or not CLOSURE_PARAM_RE.match(types[0]):
+                    continue
+                if len(types) > 1 and JS_THIS_RE.match(types[1]):
+                    continue
+                if not all(t == "f64" for t in types[1:]):
+                    continue
+                if name in entries or exempt(lines, line):
+                    continue
+                out.append(
+                    f"{rel}:{line}: JS body `{name}` does not declare the receiver "
+                    "(`_this: JsThis` after the closure; perry_abi::JS_BODY_THIS_PARAM)"
+                )
+    for rel, text in texts:
+        for m in ALLOC_RE.finditer(text):
+            name = m.group(1)
+            found = defs.get(name)
+            if not found:
+                continue  # a typed local; the compiler checked its type
+            if any(len(t) > 1 and JS_THIS_RE.match(t[1]) for _, _, t in found):
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            out.append(
+                f"{rel}:{line}: `{name}` is installed as a JS body but does not declare "
+                "the callee and the receiver (perry_abi::JS_BODY_*)"
+            )
+    return out
+
 
 def exempt(lines, line: int) -> bool:
     """A native (non-JS) callback with a body-shaped type — a Rust helper
@@ -157,18 +269,43 @@ def self_test() -> int:
         "rt_funnel_ok": (RUNTIME_FUNNEL,
                          'fn f(p: *const u8) { let g: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(p) }; }', False),
         "cg_indirect": ("crates/perry-codegen/src/lower_call/x.rs", "fn f() { blk.call_indirect(DOUBLE, &p, &a); }", True),
+        "def_no_this": ("crates/perry-runtime/src/x.rs",
+                        'extern "C" fn body(_c: *const ClosureHeader, a: f64) -> f64 { a }', True),
+        "def_with_this": ("crates/perry-runtime/src/x.rs",
+                          'extern "C" fn body(_c: *const ClosureHeader, _this: crate::closure::JsThis, a: f64) -> f64 { a }', False),
+        "def_macro_no_this": ("crates/perry-runtime/src/x.rs",
+                              'macro_rules! m { ($n:ident) => { extern "C" fn $n(_c: *const ClosureHeader, $($a: f64),*) -> f64 { 0.0 } }; }', True),
+        "def_entry_ok": ("crates/perry-runtime/src/x.rs",
+                         'pub extern "C" fn js_closure_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64 { a }', False),
+        "def_exempt_ok": ("crates/perry-runtime/src/x.rs",
+                          '// NOT-A-JS-BODY: a helper taking a closure argument.\nextern "C" fn helper(c: *const ClosureHeader, a: f64) -> f64 { a }', False),
+        "def_macro_rep_no_this": ("crates/perry-runtime/src/x.rs",
+                                  'macro_rules! m { ($n:ident) => { extern "C" fn $n(c: *const ClosureHeader $(, $a: f64)*) -> f64 { 0.0 } }; }', True),
+        "def_macro_rep_ok": ("crates/perry-runtime/src/x.rs",
+                             'macro_rules! m { ($n:ident) => { extern "C" fn $n(c: *const ClosureHeader, _this: JsThis $(, $a: f64)*) -> f64 { 0.0 } }; }', False),
+        "def_ffi_no_this": ("crates/perry-ext-zz/src/x.rs",
+                            'extern "C" fn cb(_c: *const RawClosureHeader, a: f64) -> f64 { a }', True),
+        "alloc_receiverless": ("crates/perry-runtime/src/x.rs",
+                               'extern "C" fn noop() -> f64 { 0.0 }\nfn f() { js_closure_alloc(noop as *const u8, 0); }', True),
+        "alloc_ok": ("crates/perry-runtime/src/x.rs",
+                     'extern "C" fn b(_c: *const ClosureHeader, _this: JsThis) -> f64 { 0.0 }\nfn f() { js_closure_alloc(b as *const u8, 0); }', False),
         "cg_funnel_ok": ("crates/perry-codegen/src/expr/body_call.rs", "fn f() { blk.call_indirect(DOUBLE, &p, &a); }", False),
     }
     failed = 0
     for name, (rel, text, expect_red) in cases.items():
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for d in (*RUNTIME_ROOTS, CODEGEN_ROOT):
+            for d in (*RUNTIME_ROOTS, CODEGEN_ROOT, "crates/perry-abi/src"):
                 (root / d).mkdir(parents=True, exist_ok=True)
+            (root / "crates/perry-abi/src/lib.rs").write_text(
+                'pub const JS_CALL_ENTRIES: [&str; 1] = ["js_closure_call2"];', encoding="utf-8"
+            )
             p = root / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(text, encoding="utf-8")
-            red = bool(runtime_violations(root) or codegen_violations(root))
+            red = bool(
+                runtime_violations(root) or codegen_violations(root) or definition_violations(root)
+            )
             if red != expect_red:
                 print(f"self-test {name}: expected {'red' if expect_red else 'green'}, got {'red' if red else 'green'}")
                 failed += 1
@@ -184,13 +321,17 @@ def main() -> int:
     args = ap.parse_args()
     if args.self_test:
         return self_test()
-    violations = runtime_violations(REPO) + codegen_violations(REPO)
+    violations = runtime_violations(REPO) + codegen_violations(REPO) + definition_violations(REPO)
     if violations:
         print("\n".join(violations))
-        print(f"\n{len(violations)} JS body call(s) outside the funnels "
-              "(runtime: closure/body_call.rs macros; codegen: expr::body_call::emit_js_body_call)")
+        print(f"\n{len(violations)} violation(s): JS body calls outside the funnels "
+              "(runtime: closure/body_call.rs macros; codegen: expr::body_call::emit_js_body_call) "
+              "or JS body definitions without the receiver")
         return 1
-    print("check_js_body_call_funnel: every JS body call goes through its funnel")
+    print(
+        "check_js_body_call_funnel: every JS body call goes through its funnel "
+        "and every JS body declares the receiver"
+    )
     return 0
 
 

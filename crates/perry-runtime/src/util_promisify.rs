@@ -319,7 +319,11 @@ pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
 /// Receives the rest array of forwarded args (NaN-boxed pointer to an
 /// `ArrayHeader`). Builds an args list `[…rest, inner_cb]`, runs the
 /// original under a setjmp trap so a sync `throw` rejects the promise.
-extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn outer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
 
     let fn_value = if closure.is_null() {
@@ -426,7 +430,12 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
 ///
 /// Standard Node convention: a null/undefined `err` means the call
 /// succeeded with `value`. Anything else is a rejection.
-extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, value: f64) -> f64 {
+extern "C" fn inner_callback_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+    value: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -446,7 +455,11 @@ extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, valu
 /// [`outer_thunk`] but installs a 3-arg inner callback so the resolved
 /// value is Node's `{ publicKey, privateKey }` object (via
 /// `customPromisifyArgs`) rather than just the public key.
-extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn gkp_outer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
 
     let fn_value = if closure.is_null() {
@@ -548,6 +561,7 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
 /// `customPromisifyArgs`); otherwise rejects with `err`.
 extern "C" fn gkp_inner_callback_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     public_key: f64,
     private_key: f64,
@@ -602,7 +616,11 @@ extern "C" fn gkp_inner_callback_thunk(
 
 /// `util.deprecate()` wrapper body. Receives all user arguments bundled in
 /// `rest_value`, emits one warning per wrapper, then forwards the call.
-extern "C" fn deprecate_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn deprecate_outer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -654,7 +672,11 @@ extern "C" fn deprecate_outer_thunk(closure: *const ClosureHeader, rest_value: f
 ///
 /// The last incoming argument is the Node-style callback. Every preceding
 /// argument is forwarded to the original promise-returning function.
-extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn callbackify_outer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
 
     let fn_value = if closure.is_null() {
@@ -841,7 +863,11 @@ fn throw_callbackify_not_thenable(value: f64) -> ! {
     throw_plain_type_error("The \"original\" function did not return a Promise");
 }
 
-extern "C" fn callbackify_fulfilled_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn callbackify_fulfilled_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -853,7 +879,11 @@ extern "C" fn callbackify_fulfilled_thunk(closure: *const ClosureHeader, value: 
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn callbackify_rejected_thunk(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn callbackify_rejected_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

@@ -116,6 +116,7 @@ fn test_copying_minor_weakmap_dead_key_entry_clears() {
 
 extern "C" fn finreg_test_callback(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _held: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)

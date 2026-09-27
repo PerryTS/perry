@@ -79,7 +79,10 @@ mod tests {
     fn queued_microtask_runs_and_restores_quiescence() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
@@ -181,7 +184,11 @@ mod tests {
     fn buffered_stdin_is_delivered_without_any_timer() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+                _: f64,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
@@ -237,7 +244,10 @@ mod tests {
     fn exit_promise_checkpoint_leaves_ticks_forbidden() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }

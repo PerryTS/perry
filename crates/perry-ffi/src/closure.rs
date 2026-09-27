@@ -59,12 +59,35 @@ extern "C" {
     fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index: u32, value: f64);
 }
 
+/// The receiver every native closure body takes as its SECOND parameter:
+/// the NaN-boxed `this` bits, passed in an integer register. A body a
+/// wrapper hands to [`alloc_closure`] must be declared
+///
+/// ```ignore
+/// extern "C" fn body(closure: *const RawClosureHeader, this: JsThis, a0: f64, ...) -> f64
+/// ```
+///
+/// (perry's JS body ABI, `perry_abi::JS_BODY_*`). `repr(transparent)` over
+/// `u64`, so it is ABI-identical to perry-runtime's `closure::JsThis`.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct JsThis(pub u64);
+
+impl JsThis {
+    /// The receiver bits.
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+}
+
 /// Register the arity the runtime uses when dispatching a native closure.
 pub fn register_closure_arity(func: *const u8, arity: u32) {
     unsafe { js_register_closure_arity(func, arity) }
 }
 
-/// Allocate a native closure with `capture_count` f64 capture slots.
+/// Allocate a native closure with `capture_count` f64 capture slots. `func`
+/// is a body declared with the receiver as its second parameter (see
+/// [`JsThis`]).
 pub fn alloc_closure(func: *const u8, capture_count: u32) -> *mut ClosureHeader {
     unsafe { js_closure_alloc(func, capture_count) }
 }
@@ -176,7 +199,7 @@ mod tests {
     #[cfg(feature = "runtime-link")]
     #[test]
     fn native_closure_retains_capture() {
-        unsafe extern "C" fn callback(_: *const ClosureHeader) -> f64 {
+        unsafe extern "C" fn callback(_: *const ClosureHeader, _this: crate::JsThis) -> f64 {
             0.0
         }
         register_closure_arity(callback as *const u8, 0);

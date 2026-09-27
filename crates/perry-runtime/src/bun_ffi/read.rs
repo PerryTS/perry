@@ -104,7 +104,12 @@ unsafe fn read_value(kind: u8, pointer: f64, offset: f64) -> f64 {
 
 macro_rules! reader {
     ($name:ident, $kind:expr) => {
-        extern "C" fn $name(_closure: *const ClosureHeader, pointer: f64, offset: f64) -> f64 {
+        extern "C" fn $name(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            pointer: f64,
+            offset: f64,
+        ) -> f64 {
             unsafe { read_value($kind, pointer, offset) }
         }
     };

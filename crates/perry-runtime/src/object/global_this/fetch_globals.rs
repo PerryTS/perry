@@ -193,6 +193,7 @@ pub unsafe extern "C" fn js_global_or_console_property_by_name(
 #[inline(never)]
 pub(crate) extern "C" fn global_this_builtin_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     std::hint::black_box(global_this_builtin_noop_thunk as *const u8);
@@ -201,6 +202,7 @@ pub(crate) extern "C" fn global_this_builtin_noop_thunk(
 
 pub(crate) extern "C" fn global_this_date_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     let string = crate::date::js_date_to_string(crate::date::js_date_new());
@@ -268,6 +270,7 @@ fn global_this_init_headers_handle(init: f64) -> f64 {
 
 pub(crate) extern "C" fn global_this_blob_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     parts: f64,
     options: f64,
 ) -> f64 {
@@ -277,6 +280,7 @@ pub(crate) extern "C" fn global_this_blob_thunk(
 
 pub(crate) extern "C" fn global_this_file_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     parts: f64,
     name: f64,
     options: f64,
@@ -293,6 +297,7 @@ pub(crate) extern "C" fn global_this_file_thunk(
 
 pub(crate) extern "C" fn global_this_headers_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     init: f64,
 ) -> f64 {
     let headers = super::super::global_fetch::call_global_headers_new();
@@ -307,6 +312,7 @@ pub(crate) extern "C" fn global_this_headers_thunk(
 
 pub(crate) extern "C" fn global_this_response_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     body: f64,
     init: f64,
 ) -> f64 {
@@ -341,6 +347,7 @@ pub(crate) extern "C" fn global_this_response_thunk(
 
 pub(crate) extern "C" fn global_this_request_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     init: f64,
 ) -> f64 {
@@ -464,9 +471,19 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
         undef
     };
     let handle = if kind == 1 {
-        global_this_request_thunk(std::ptr::null(), arg0, arg1)
+        global_this_request_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+        )
     } else {
-        global_this_response_thunk(std::ptr::null(), arg0, arg1)
+        global_this_response_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+        )
     };
     let this_box = crate::value::js_nanbox_pointer(inst as i64);
     attach_fetch_handle_to_this(this_box, handle);
@@ -478,7 +495,12 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
 /// `undefined` (the super-call value).
 #[no_mangle]
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
-    let handle = global_this_request_thunk(std::ptr::null(), input, init);
+    let handle = global_this_request_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        input,
+        init,
+    );
     unsafe { attach_fetch_handle_to_this(this_box, handle) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -487,7 +509,12 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 /// `js_request_subclass_init` for the Response handle.
 #[no_mangle]
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
-    let handle = global_this_response_thunk(std::ptr::null(), body, init);
+    let handle = global_this_response_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        body,
+        init,
+    );
     unsafe { attach_fetch_handle_to_this(this_box, handle) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1002,9 +1029,19 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 undef
             };
             let handle = if kind == Some("Request") {
-                global_this_request_thunk(std::ptr::null(), arg0, arg1)
+                global_this_request_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    arg0,
+                    arg1,
+                )
             } else {
-                global_this_response_thunk(std::ptr::null(), arg0, arg1)
+                global_this_response_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    arg0,
+                    arg1,
+                )
             };
             attach_fetch_handle_to_this(this_box, handle);
             undef
@@ -1135,12 +1172,14 @@ static KEEP_JS_FETCH_OR_VALUE_SUPER: unsafe extern "C" fn(f64, f64, *const f64, 
 
 pub(crate) extern "C" fn global_this_response_error_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     super::super::global_fetch::call_global_response_static_error()
 }
 
 pub(crate) extern "C" fn global_this_response_json_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     init: f64,
 ) -> f64 {
@@ -1162,6 +1201,7 @@ pub(crate) extern "C" fn global_this_response_json_thunk(
 
 pub(crate) extern "C" fn global_this_response_redirect_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     url: f64,
     status: f64,
 ) -> f64 {
@@ -1176,6 +1216,7 @@ pub(crate) extern "C" fn global_this_response_redirect_thunk(
 
 pub(crate) extern "C" fn global_this_eval_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
 ) -> f64 {
     // PerformEval step: "If Type(x) is not String, return x." A non-string
@@ -1227,7 +1268,10 @@ pub(crate) extern "C" fn global_this_eval_thunk(
 mod dynamic_super_new_target_tests {
     use super::*;
 
-    extern "C" fn read_new_target(_closure: *const crate::ClosureHeader) -> f64 {
+    extern "C" fn read_new_target(
+        _closure: *const crate::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         crate::object::js_new_target_get()
     }
 

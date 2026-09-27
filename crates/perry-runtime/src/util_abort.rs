@@ -77,7 +77,10 @@ fn promise_from_capture(closure: *const ClosureHeader, index: u32) -> *mut crate
     js_nanbox_get_pointer(f64::from_bits(bits)) as *mut crate::promise::Promise
 }
 
-extern "C" fn aborted_resolve_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn aborted_resolve_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let promise = promise_from_capture(closure, 0);
     let signal = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     if !promise.is_null() {

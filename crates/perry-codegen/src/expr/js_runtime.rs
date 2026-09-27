@@ -248,7 +248,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // a JS function whose trampoline (perry-jsruntime/src/interop.rs:993,
         // `native_callback_trampoline`) calls
         // `func_ptr(closure_env, args_ptr, args_len)` — but Perry closure
-        // bodies expect `(closure_ptr, arg0, arg1, ...)` per arity. Bridge
+        // bodies expect `(callee, this, arg0, arg1, ...)` per arity. Bridge
         // is the `js_closure_call_array` runtime helper added alongside
         // (`crates/perry-runtime/src/closure.rs`) which takes the i64
         // closure pointer and dispatches to the right `js_closure_callN`

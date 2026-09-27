@@ -15,12 +15,16 @@ fn web_method_receiver(name: &str) -> *mut ObjectHeader {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
 }
 
-extern "C" fn url_prototype_href_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn url_prototype_href_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::url::js_url_get_href(web_method_receiver("URL"))
 }
 
 extern "C" fn abort_controller_prototype_abort_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     crate::url::js_abort_controller_abort_reason(web_method_receiver("AbortController"), reason);
@@ -29,6 +33,7 @@ extern "C" fn abort_controller_prototype_abort_thunk(
 
 extern "C" fn abort_signal_prototype_throw_if_aborted_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::url::js_abort_signal_throw_if_aborted(web_method_receiver("AbortSignal"))
 }
@@ -227,6 +232,7 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
 
 extern "C" fn object_prototype_dunder_proto_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Spec (Annex B §B.3.1 `get __proto__`): `ToObject(this).[[GetPrototypeOf]]()`.
     // `js_object_get_prototype_of` already implements exactly this shape —
@@ -239,6 +245,7 @@ extern "C" fn object_prototype_dunder_proto_getter_thunk(
 
 extern "C" fn object_prototype_dunder_proto_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let receiver = crate::object::js_implicit_this_get();

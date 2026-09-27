@@ -146,6 +146,7 @@ fn throw_permission_arg_type(name: &str, value: f64) -> ! {
 
 extern "C" fn process_permission_has_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     scope_value: f64,
     reference_value: f64,
 ) -> f64 {
@@ -168,6 +169,7 @@ extern "C" fn process_permission_has_thunk(
 
 extern "C" fn process_permission_drop_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     scope_value: f64,
     reference_value: f64,
 ) -> f64 {

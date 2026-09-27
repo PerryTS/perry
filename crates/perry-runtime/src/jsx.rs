@@ -398,7 +398,11 @@ mod tests {
     }
 
     /// A function component: `(props) => <span>{props.children}</span>`.
-    extern "C" fn span_component(_closure: *const ClosureHeader, props: f64) -> f64 {
+    extern "C" fn span_component(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        props: f64,
+    ) -> f64 {
         js_jsx(str_val("span"), props)
     }
 

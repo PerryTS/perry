@@ -8,9 +8,10 @@ use std::cell::{Cell, RefCell};
 // Implicit `this` for closure-typed class fields invoked method-style.
 //
 // Issue #519: when `obj.fn(args)` calls a closure stored as a class field,
-// the field-scan dispatch in `js_native_call_method` can't bind `this`
-// through the closure ABI (closures take `(closure_ptr, arg0, …)` — no
-// `this` slot). Hono's RegExpRouter does this with `match = match` (the
+// the field-scan dispatch in `js_native_call_method` could not bind `this`
+// through the closure ABI, which then had no `this` slot (it has one since
+// this-as-a-parameter stage 1, `perry_abi::JS_BODY_THIS_PARAM`, but bodies
+// still read this cell). Hono's RegExpRouter does this with `match = match` (the
 // imported function from matcher.js), and the function body's
 // `this.buildAllMatchers()` reads `this = 0` and TypeErrors out.
 //
@@ -171,6 +172,89 @@ pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
         }
     })
 }
+
+/// The implicit-`this` cell's raw bits: the receiver a JS body called right
+/// now would read. `closure::JsThis::current` is the body-call funnel's
+/// spelling of it (through `agent_ptrs` everywhere but Apple aarch64, where
+/// this `HotTls` read is the fast path).
+#[cfg(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+))]
+#[inline(always)]
+pub(crate) fn implicit_this_bits() -> u64 {
+    implicit_this_cell().get()
+}
+
+static THIS_WITNESS_CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static THIS_WITNESS_MISMATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static THIS_WITNESS_REPORT: std::sync::Once = std::sync::Once::new();
+
+/// How many mismatches [`js_this_param_witness`] names individually before it
+/// only counts.
+const THIS_WITNESS_NAMED: u64 = 64;
+
+/// The this-as-a-parameter stage-1 witness: the prologue of every compiled
+/// body that reads the implicit-`this` cell calls this with its `this`
+/// PARAMETER (`perry_abi::JS_BODY_THIS_PARAM`) and its own name, and it
+/// compares the two. Stage 1 requires that every caller passes exactly the
+/// receiver the cell holds, so a mismatch names a caller that does not.
+///
+/// Emitted ONLY by a build compiled with `PERRY_THIS_WITNESS=1` — a
+/// COMPILE-time knob, so a product build contains no call and pays nothing.
+/// Reported once, on stderr, at exit, as one `PERRY_THIS_WITNESS checks=N
+/// mismatches=M` line; the first mismatches are also named as they happen.
+/// A leaf: it never allocates on the JS heap and never collects.
+#[no_mangle]
+pub extern "C" fn js_this_param_witness(param_bits: u64, site: *const u8, site_len: u64) {
+    use std::sync::atomic::Ordering;
+    THIS_WITNESS_REPORT.call_once(|| unsafe {
+        libc::atexit(this_witness_report);
+    });
+    THIS_WITNESS_CHECKS.fetch_add(1, Ordering::Relaxed);
+    let cell_bits = implicit_this_cell().get();
+    if cell_bits == param_bits {
+        return;
+    }
+    let n = THIS_WITNESS_MISMATCHES.fetch_add(1, Ordering::Relaxed);
+    if n < THIS_WITNESS_NAMED {
+        let name = if site.is_null() {
+            "?".into()
+        } else {
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(site, site_len as usize) })
+        };
+        eprintln!(
+            "PERRY_THIS_WITNESS mismatch in {name}: this param={param_bits:#018x} cell={cell_bits:#018x}"
+        );
+    }
+}
+
+/// `(checks, mismatches)` so far (tests).
+#[cfg(test)]
+pub(crate) fn this_witness_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        THIS_WITNESS_CHECKS.load(Ordering::Relaxed),
+        THIS_WITNESS_MISMATCHES.load(Ordering::Relaxed),
+    )
+}
+
+extern "C" fn this_witness_report() {
+    use std::sync::atomic::Ordering;
+    eprintln!(
+        "PERRY_THIS_WITNESS checks={} mismatches={}",
+        THIS_WITNESS_CHECKS.load(Ordering::Relaxed),
+        THIS_WITNESS_MISMATCHES.load(Ordering::Relaxed)
+    );
+}
+
+/// Keepalive anchor — `js_this_param_witness` is called only from generated
+/// code of a witness build, so the auto-optimize whole-program build would
+/// otherwise dead-strip it.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_THIS_PARAM_WITNESS: extern "C" fn(u64, *const u8, u64) = js_this_param_witness;
 
 /// Read the current implicit `this` (issue #519).
 #[no_mangle]

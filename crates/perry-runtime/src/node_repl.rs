@@ -366,13 +366,23 @@ fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-extern "C" fn repl_on_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+extern "C" fn repl_on_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
     let server = crate::object::js_implicit_this_get();
     add_listener(server, event, listener, false);
     server
 }
 
-extern "C" fn repl_once_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+extern "C" fn repl_once_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
     let server = crate::object::js_implicit_this_get();
     add_listener(server, event, listener, true);
     server
@@ -380,6 +390,7 @@ extern "C" fn repl_once_thunk(_closure: *const ClosureHeader, event: f64, listen
 
 extern "C" fn repl_emit_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     arg0: f64,
     arg1: f64,
@@ -398,6 +409,7 @@ extern "C" fn repl_emit_thunk(
 
 extern "C" fn repl_display_prompt_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _preserve_cursor: f64,
 ) -> f64 {
     let server = crate::object::js_implicit_this_get();
@@ -405,12 +417,16 @@ extern "C" fn repl_display_prompt_thunk(
     undefined()
 }
 
-extern "C" fn repl_clear_buffered_command_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn repl_clear_buffered_command_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     undefined()
 }
 
 extern "C" fn repl_setup_history_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _path: f64,
     callback: f64,
 ) -> f64 {
@@ -425,6 +441,7 @@ extern "C" fn repl_setup_history_thunk(
 
 extern "C" fn repl_define_command_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     keyword: f64,
     command: f64,
 ) -> f64 {
@@ -439,7 +456,11 @@ extern "C" fn repl_define_command_thunk(
     undefined()
 }
 
-extern "C" fn repl_write_thunk(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn repl_write_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     let server = crate::object::js_implicit_this_get();
     let input = string_to_rust(chunk).unwrap_or_default();
     for line in input.split_inclusive('\n') {

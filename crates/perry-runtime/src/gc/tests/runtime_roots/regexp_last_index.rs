@@ -27,7 +27,10 @@ use crate::regex::RegExpHeader;
 use crate::string::StringHeader;
 
 /// Stand-in for `{ valueOf() { …allocating user JS…; return 0 } }`.
-extern "C" fn collect_then_zero(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collect_then_zero(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::gc::gc_collect_minor();
     // Recycle the just-retired from-space blocks back out as fresh strings, so
     // a stale borrow reads THESE bytes rather than the subject's old ones.

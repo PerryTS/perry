@@ -42,7 +42,13 @@ fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 0) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[], declared)
         },
-        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure) },
+        _ => unsafe {
+            crate::closure::body_call::js_body_call!(
+                func_ptr,
+                closure,
+                crate::closure::JsThis::current()
+            )
+        },
     }
 }
 
@@ -64,15 +70,24 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0]);
     }
-    dispatch_call1_resolved(closure, func_ptr, arg0, resolve_strategy(func_ptr))
+    dispatch_call1_resolved(
+        closure,
+        func_ptr,
+        arg0,
+        resolve_strategy(func_ptr),
+        crate::closure::JsThis::current(),
+    )
 }
 
+/// `this` is the receiver the implicit-`this` cell holds for the call — the
+/// caller knows it, so the direct arm does not re-read the cell.
 #[inline(always)]
 fn dispatch_call1_resolved(
     closure: *const ClosureHeader,
     func_ptr: *const u8,
     arg0: f64,
     strategy: DispatchStrategy,
+    this: crate::closure::JsThis,
 ) -> f64 {
     match strategy.kind() {
         DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
@@ -83,7 +98,7 @@ fn dispatch_call1_resolved(
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 1) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
         },
-        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure, arg0) },
+        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure, this, arg0) },
     }
 }
 
@@ -114,7 +129,15 @@ fn js_closure_call1_receiverless_impl(closure: *const ClosureHeader, arg0: f64) 
     let func_ptr = get_valid_func_ptr(closure);
     let strategy = (!func_ptr.is_null()).then(|| resolve_strategy(func_ptr));
     if let Some(arrow_strategy) = strategy.filter(|strategy| strategy.is_arrow()) {
-        return dispatch_call1_resolved(closure, func_ptr, arg0, arrow_strategy);
+        // An arrow's `this` is lexical: it reads neither the cell nor the
+        // parameter, so the receiver passed is unobservable.
+        return dispatch_call1_resolved(
+            closure,
+            func_ptr,
+            arg0,
+            arrow_strategy,
+            crate::closure::JsThis::UNDEFINED,
+        );
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -122,7 +145,14 @@ fn js_closure_call1_receiverless_impl(closure: *const ClosureHeader, arg0: f64) 
     let previous_this = crate::object::js_implicit_this_set(undefined);
     let previous_this_handle = scope.root_nanbox_f64(previous_this);
     let result = match strategy {
-        Some(strategy) => dispatch_call1_resolved(closure, func_ptr, arg0, strategy),
+        // The cell was bound to `undefined` just above.
+        Some(strategy) => dispatch_call1_resolved(
+            closure,
+            func_ptr,
+            arg0,
+            strategy,
+            crate::closure::JsThis::UNDEFINED,
+        ),
         None => dispatch_proxy_callee_or_throw(closure, &[arg0]),
     };
     crate::object::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
@@ -147,7 +177,15 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
         DispatchKind::Arity(declared) if arity_needs_dispatch(declared, 2) => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
         },
-        _ => unsafe { crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1) },
+        _ => unsafe {
+            crate::closure::body_call::js_body_call!(
+                func_ptr,
+                closure,
+                crate::closure::JsThis::current(),
+                arg0,
+                arg1
+            )
+        },
     }
 }
 
@@ -175,7 +213,14 @@ pub extern "C" fn js_closure_call3(
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
         },
         _ => unsafe {
-            crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2)
+            crate::closure::body_call::js_body_call!(
+                func_ptr,
+                closure,
+                crate::closure::JsThis::current(),
+                arg0,
+                arg1,
+                arg2
+            )
         },
     }
 }
@@ -213,7 +258,15 @@ pub extern "C" fn js_closure_call4(
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
         },
         _ => unsafe {
-            crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2, arg3)
+            crate::closure::body_call::js_body_call!(
+                func_ptr,
+                closure,
+                crate::closure::JsThis::current(),
+                arg0,
+                arg1,
+                arg2,
+                arg3
+            )
         },
     }
 }
@@ -257,7 +310,16 @@ pub extern "C" fn js_closure_call5(
         }
     }
     unsafe {
-        crate::closure::body_call::js_body_call!(func_ptr, closure, arg0, arg1, arg2, arg3, arg4)
+        crate::closure::body_call::js_body_call!(
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4
+        )
     }
 }
 
@@ -307,7 +369,15 @@ pub extern "C" fn js_closure_call6(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5
         )
     }
 }
@@ -374,7 +444,16 @@ pub extern "C" fn js_closure_call7(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6
         )
     }
 }
@@ -409,7 +488,17 @@ pub extern "C" fn js_closure_call8(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7
         )
     }
 }
@@ -445,7 +534,18 @@ pub extern "C" fn js_closure_call9(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8
         )
     }
 }
@@ -482,7 +582,19 @@ pub extern "C" fn js_closure_call10(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9
         )
     }
 }
@@ -526,7 +638,20 @@ pub extern "C" fn js_closure_call11(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10
         )
     }
 }
@@ -571,7 +696,20 @@ pub extern "C" fn js_closure_call12(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10,
             arg11
         )
     }
@@ -618,8 +756,22 @@ pub extern "C" fn js_closure_call13(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-            arg11, arg12
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10,
+            arg11,
+            arg12
         )
     }
 }
@@ -667,8 +819,23 @@ pub extern "C" fn js_closure_call14(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-            arg11, arg12, arg13
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10,
+            arg11,
+            arg12,
+            arg13
         )
     }
 }
@@ -719,8 +886,24 @@ pub extern "C" fn js_closure_call15(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-            arg11, arg12, arg13, arg14
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10,
+            arg11,
+            arg12,
+            arg13,
+            arg14
         )
     }
 }
@@ -772,8 +955,25 @@ pub extern "C" fn js_closure_call16(
     }
     unsafe {
         crate::closure::body_call::js_body_call!(
-            func_ptr, closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10,
-            arg11, arg12, arg13, arg14, arg15
+            func_ptr,
+            closure,
+            crate::closure::JsThis::current(),
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            arg6,
+            arg7,
+            arg8,
+            arg9,
+            arg10,
+            arg11,
+            arg12,
+            arg13,
+            arg14,
+            arg15
         )
     }
 }
@@ -782,7 +982,11 @@ pub extern "C" fn js_closure_call16(
 mod receiverless_tests {
     use super::*;
 
-    extern "C" fn observe_dynamic_this(_: *const ClosureHeader, _: f64) -> f64 {
+    extern "C" fn observe_dynamic_this(
+        _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _: f64,
+    ) -> f64 {
         crate::object::js_implicit_this_get()
     }
 
@@ -814,9 +1018,12 @@ mod receiverless_tests {
 mod abi_table_tests {
     use super::*;
 
+    // An ENTRY takes the callee and the JS arguments; unlike a body it does
+    // not take the receiver (it reads it from the implicit-`this` cell).
     macro_rules! entry {
+        (@f64 $x:tt) => { f64 };
         ($f:ident; $($x:tt),*) => {{
-            let f: crate::closure::body_call::js_body_fn_ty!($($x),*) = $f;
+            let f: extern "C" fn(*const ClosureHeader $(, entry!(@f64 $x))*) -> f64 = $f;
             (stringify!($f), f as *const u8)
         }};
     }

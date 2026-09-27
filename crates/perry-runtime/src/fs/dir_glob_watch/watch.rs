@@ -923,7 +923,10 @@ fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
     state.active = true;
 }
 
-extern "C" fn watch_file_poll_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn watch_file_poll_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let delivery = WATCH_FILE_STATES.with(|states| {
         let mut states = states.borrow_mut();
@@ -946,13 +949,19 @@ extern "C" fn watch_file_poll_impl(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn fs_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_abort_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     close_fs_watcher(id);
     undefined_value()
 }
 
-extern "C" fn promise_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_abort_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let signal = PROMISE_WATCHERS.with(|watchers| {
         watchers
@@ -969,14 +978,20 @@ extern "C" fn promise_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn fs_watcher_close_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     close_fs_watcher(id);
     self_value
 }
 
-extern "C" fn fs_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_ref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
@@ -987,7 +1002,10 @@ extern "C" fn fs_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
     self_value
 }
 
-extern "C" fn fs_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_unref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
@@ -1000,6 +1018,7 @@ extern "C" fn fs_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn fs_watcher_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1017,6 +1036,7 @@ extern "C" fn fs_watcher_on_impl(
 
 extern "C" fn fs_watcher_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1034,6 +1054,7 @@ extern "C" fn fs_watcher_once_impl(
 
 extern "C" fn fs_watcher_off_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1049,7 +1070,10 @@ extern "C" fn fs_watcher_off_impl(
     self_value
 }
 
-extern "C" fn stat_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stat_watcher_ref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     WATCH_FILE_STATES.with(|states| {
@@ -1060,7 +1084,10 @@ extern "C" fn stat_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
     self_value
 }
 
-extern "C" fn stat_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stat_watcher_unref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     WATCH_FILE_STATES.with(|states| {
@@ -1073,6 +1100,7 @@ extern "C" fn stat_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn stat_watcher_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1090,6 +1118,7 @@ extern "C" fn stat_watcher_on_impl(
 
 extern "C" fn stat_watcher_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1107,6 +1136,7 @@ extern "C" fn stat_watcher_once_impl(
 
 extern "C" fn stat_watcher_off_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1135,7 +1165,10 @@ enum GlobNextAction {
     Entry(FsGlobMatch, bool),
 }
 
-extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = GLOB_ITERATORS.with(|iterators| {
         let mut iterators = iterators.borrow_mut();
@@ -1163,7 +1196,10 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn glob_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().remove(&id);
@@ -1171,11 +1207,17 @@ extern "C" fn glob_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
     resolved_iterator_promise(undefined_value(), true)
 }
 
-extern "C" fn glob_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
-extern "C" fn bun_glob_sync_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = GLOB_ITERATORS.with(|iterators| {
         let mut iterators = iterators.borrow_mut();
@@ -1205,7 +1247,10 @@ extern "C" fn bun_glob_sync_iterator_next_impl(closure: *const ClosureHeader) ->
     }
 }
 
-extern "C" fn bun_glob_sync_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().remove(&id);
@@ -1213,11 +1258,17 @@ extern "C" fn bun_glob_sync_iterator_return_impl(closure: *const ClosureHeader) 
     iterator_result(undefined_value(), true)
 }
 
-extern "C" fn bun_glob_sync_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
-extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = PROMISE_WATCHERS.with(|watchers| {
         let mut watchers = watchers.borrow_mut();
@@ -1255,7 +1306,10 @@ extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn promise_watcher_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let pending = close_promise_watcher_return(id);
     for promise in pending {
@@ -1264,7 +1318,10 @@ extern "C" fn promise_watcher_return_impl(closure: *const ClosureHeader) -> f64 
     resolved_iterator_promise(undefined_value(), true)
 }
 
-extern "C" fn promise_watcher_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 

@@ -29,6 +29,7 @@ use super::*;
 /// memory-sharing `ArrayBuffer` view.
 extern "C" fn fast_buffer_constructor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     byte_offset: f64,
     length: f64,
@@ -43,12 +44,21 @@ extern "C" fn fast_buffer_constructor_thunk(
         let buf = crate::buffer::js_buffer_alloc(size, 0);
         return crate::value::js_nanbox_pointer(buf as i64);
     }
-    super::buffer_constructor_thunk(closure, value, byte_offset, length)
+    super::buffer_constructor_thunk(
+        closure,
+        crate::closure::JsThis::current(),
+        value,
+        byte_offset,
+        length,
+    )
 }
 
 /// `get [Symbol.species]` on `Buffer`: answers the `FastBuffer` held in the
 /// getter's own capture slot 0.
-extern "C" fn buffer_species_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn buffer_species_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 

@@ -97,7 +97,10 @@ fn resolve_dispose_method(resource: f64, want_async: bool) -> f64 {
 // read `this` observe the resource. Used by `stack.use(resource)`.
 // ---------------------------------------------------------------------------
 
-extern "C" fn bound_dispose_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bound_dispose_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let method = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let resource = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     if !is_callable_value(method) {
@@ -245,7 +248,10 @@ fn run_disposers(stack: *mut ObjectHeader) {
 // `adopt` closure: captures (value, onDispose) and calls onDispose(value).
 // ---------------------------------------------------------------------------
 
-extern "C" fn adopt_disposer_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn adopt_disposer_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let value = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let on_dispose = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let cb = JSValue::from_bits(on_dispose.to_bits());

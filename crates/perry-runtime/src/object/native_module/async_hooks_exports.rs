@@ -28,6 +28,7 @@ const ASYNC_RESOURCE_METHODS: &[(&str, u32)] = &[
 /// `run`, `exit`, and `runInAsyncScope`.
 extern "C" fn async_hooks_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {

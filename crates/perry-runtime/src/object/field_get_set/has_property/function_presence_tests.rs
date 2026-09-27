@@ -1,6 +1,9 @@
 use super::*;
 
-extern "C" fn noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn noop(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -47,7 +50,10 @@ fn function_presence_follows_prototypes_without_reading_values() {
 #[test]
 fn generator_presence_initializes_function_parents() {
     let _lock = crate::gc::global_side_table_test_lock();
-    extern "C" fn generator_body(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn generator_body(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
     crate::closure::js_register_closure_generator_function(generator_body as *const u8);

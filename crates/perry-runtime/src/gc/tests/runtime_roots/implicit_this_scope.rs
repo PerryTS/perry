@@ -14,13 +14,17 @@
 use super::super::super::*;
 use super::super::support::*;
 
-extern "C" fn collect_arity0(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collect_arity0(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::gc::gc_collect_minor();
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn collect_arity3(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
     _index: f64,
     _recv: f64,

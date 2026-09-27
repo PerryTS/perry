@@ -1088,7 +1088,10 @@ fn global_handle_from_receiver() -> Option<*mut c_void> {
     .map(|handle| handle as *mut c_void)
 }
 
-extern "C" fn js_wasm_global_get(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn js_wasm_global_get(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let Some(handle) = global_handle_from_receiver() else {
         return nanbox_undefined();
     };
@@ -1102,6 +1105,7 @@ extern "C" fn js_wasm_global_get(_closure: *const crate::closure::ClosureHeader)
 
 extern "C" fn js_wasm_global_set(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let Some(handle) = global_handle_from_receiver() else {
@@ -1567,7 +1571,7 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f6
 
 /// `WebAssembly.callExport(handle, name, ...args)` — invoke an exported
 /// function by name with numeric arguments. Currently supports up to 4
-/// numeric args, mirroring the closure-call ABI in `closure.rs`. All
+/// numeric args, mirroring the `js_closure_call{N}` entries. All
 /// arguments and the return value are passed as f64; the runtime infers
 /// the wasm signature from the export type and widens/narrows as needed.
 ///

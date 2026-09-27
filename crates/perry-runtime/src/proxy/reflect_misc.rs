@@ -366,6 +366,7 @@ pub extern "C" fn js_reflect_prevent_extensions(target: f64) -> f64 {
 /// already-revoked proxy is a no-op (Node's `revoke()` is idempotent). (#2846)
 pub(super) extern "C" fn proxy_revoke_trampoline(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let proxy = crate::closure::js_closure_get_capture_f64(closure, 0);
     js_proxy_revoke(proxy);
@@ -378,6 +379,7 @@ mod tests {
 
     extern "C" fn weighted_six(
         _: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
         a0: f64,
         a1: f64,
         a2: f64,

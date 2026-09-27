@@ -614,6 +614,15 @@ pub extern "C" fn js_v8_noop_undefined() -> f64 {
     undefined()
 }
 
+/// [`js_v8_noop_undefined`] as a JS body (the function object
+/// `v8.promiseHooks.onInit(fn)` returns).
+extern "C" fn v8_noop_undefined_body(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    undefined()
+}
+
 /// `v8.startupSnapshot.isBuildingSnapshot()` — Node returns the *number* `0`
 /// (never building a snapshot under Perry), NOT a boolean.
 #[no_mangle]
@@ -645,7 +654,7 @@ pub extern "C" fn js_v8_throw_not_building_snapshot() -> f64 {
 /// `const stop = onInit(fn); stop()` round-trips.
 #[no_mangle]
 pub extern "C" fn js_v8_promise_hook_register() -> f64 {
-    let c = crate::closure::js_closure_alloc_singleton(js_v8_noop_undefined as *const u8);
+    let c = crate::closure::js_closure_alloc_singleton(v8_noop_undefined_body as *const u8);
     crate::value::js_nanbox_pointer(c as i64)
 }
 

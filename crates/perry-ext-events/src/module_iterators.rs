@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) extern "C" fn events_once_event_target_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     arg0: f64,
 ) -> f64 {
     unsafe {
@@ -21,7 +22,10 @@ pub(super) extern "C" fn events_once_event_target_listener(
     undefined_value()
 }
 
-pub(super) extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_once_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
@@ -40,6 +44,7 @@ pub(super) extern "C" fn events_once_abort_listener(closure: *const RawClosureHe
 
 pub(super) extern "C" fn events_once_stream_resolve_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -79,6 +84,7 @@ pub(super) extern "C" fn events_once_stream_resolve_listener(
 
 pub(super) extern "C" fn events_once_stream_reject_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -251,6 +257,7 @@ fn events_on_finish_pending(state: *mut ArrayHeader, reason: Option<f64>) {
 /// immediately, otherwise retain the argument tuple in FIFO order.
 pub(super) extern "C" fn events_on_queue_listener(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     arg0: f64,
 ) -> f64 {
     unsafe {
@@ -289,7 +296,7 @@ pub(super) extern "C" fn events_on_queue_listener(
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
-extern "C" fn events_on_next(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_next(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if state.is_null() {
@@ -318,7 +325,7 @@ extern "C" fn events_on_next(closure: *const RawClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_return(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if state.is_null() {
@@ -366,11 +373,17 @@ extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn events_on_iterator_self(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_iterator_self(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe { js_closure_get_capture_f64(closure, 0) }
 }
 
-extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_on_async_iterator(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         let scope = TransientRootScope::enter();
@@ -443,7 +456,10 @@ pub(super) unsafe fn events_on_install_async_iterator(
 }
 
 /// A configured close event ends the iterator after already-buffered events.
-pub(super) extern "C" fn events_on_close_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_on_close_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
         if !state.is_null() {
@@ -454,7 +470,10 @@ pub(super) extern "C" fn events_on_close_listener(closure: *const RawClosureHead
     undefined_value()
 }
 
-pub(super) extern "C" fn events_on_abort_listener(closure: *const RawClosureHeader) -> f64 {
+pub(super) extern "C" fn events_on_abort_listener(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let data_listener = js_closure_get_capture_ptr(closure, 1);

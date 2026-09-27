@@ -68,6 +68,7 @@ fn alloc_abort_signal() -> *mut ObjectHeader {
 
 extern "C" fn abort_signal_add_event_listener_method(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event_type: f64,
     listener: f64,
 ) -> f64 {
@@ -78,6 +79,7 @@ extern "C" fn abort_signal_add_event_listener_method(
 
 extern "C" fn abort_signal_remove_event_listener_method(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event_type: f64,
     listener: f64,
 ) -> f64 {
@@ -100,6 +102,7 @@ fn abort_signal_listener_method_value(signal: *mut ObjectHeader, add: bool) -> f
 
 extern "C" fn abort_controller_abort_method(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let controller_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
@@ -273,7 +276,10 @@ fn notify_fetch_abort(signal_ptr: i64) {
     }
 }
 
-extern "C" fn abort_error_constructor_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn abort_error_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::error::js_throw_illegal_constructor_type_error()
 }
 
@@ -420,6 +426,7 @@ pub extern "C" fn js_abort_signal_remove_listener(
 /// "abort" once, so Node's `{ once: true }` is behaviorally implied.
 extern "C" fn abort_signal_add_event_listener_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event_type: f64,
     listener: f64,
     _options: f64,
@@ -434,6 +441,7 @@ extern "C" fn abort_signal_add_event_listener_thunk(
 /// Bound-method thunk: `signal.removeEventListener(type, listener[, options])`.
 extern "C" fn abort_signal_remove_event_listener_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event_type: f64,
     listener: f64,
     _options: f64,
@@ -448,6 +456,7 @@ extern "C" fn abort_signal_remove_event_listener_thunk(
 /// Bound-method thunk: `signal.throwIfAborted()`.
 extern "C" fn abort_signal_throw_if_aborted_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let signal =
@@ -545,7 +554,10 @@ fn timeout_dom_exception_value() -> f64 {
 /// signal with a `TimeoutError` and firing its `abort` listeners (which is how
 /// a pending `fetch` bound by the signal learns to reject — see
 /// `js_fetch_with_options`).
-extern "C" fn abort_signal_timeout_fire(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn abort_signal_timeout_fire(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let signal =
         crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
@@ -622,6 +634,7 @@ pub extern "C" fn js_abort_signal_throw_if_aborted(signal: *mut ObjectHeader) ->
 
 extern "C" fn abort_any_propagate_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     // capture 0 = combined signal pointer (NaN-boxed), capture 1 = source signal.

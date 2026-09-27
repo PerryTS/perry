@@ -95,6 +95,7 @@ unsafe fn installed_builtin_method(ctor_name: &str, method_name: &str) -> f64 {
 
 extern "C" fn symbol_to_primitive_nan(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     hint: f64,
 ) -> f64 {
     let hint_value = JSValue::from_bits(hint.to_bits());
@@ -102,12 +103,16 @@ extern "C" fn symbol_to_primitive_nan(
     f64::NAN
 }
 
-extern "C" fn value_of_finite(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn value_of_finite(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     1.0
 }
 
 extern "C" fn symbol_to_primitive_this_object(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     hint: f64,
 ) -> f64 {
     let hint_value = JSValue::from_bits(hint.to_bits());
@@ -115,7 +120,10 @@ extern "C" fn symbol_to_primitive_this_object(
     crate::object::js_implicit_this_get()
 }
 
-extern "C" fn to_iso_string_sentinel(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn to_iso_string_sentinel(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let string = crate::string::js_string_from_bytes(b"iso".as_ptr(), 3);
     crate::value::js_nanbox_string(string as i64)
 }
@@ -411,7 +419,10 @@ fn closure_name_can_be_redefined_with_define_property() {
     }
 }
 
-extern "C" fn closure_accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn closure_accessor_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     4.0
 }
 

@@ -121,7 +121,10 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
             "a built-in callee must receive the primitive, not a ToObject wrapper"
         );
 
-        extern "C" fn sloppy_user_body(_c: *const crate::closure::ClosureHeader) -> f64 {
+        extern "C" fn sloppy_user_body(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+        ) -> f64 {
             0.0
         }
         let user = crate::closure::js_closure_alloc(sloppy_user_body as *const u8, 0);

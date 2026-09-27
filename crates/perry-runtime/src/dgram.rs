@@ -574,7 +574,10 @@ pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hooks::AsyncResource
     }
 }
 
-extern "C" fn dgram_async_dispose(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dgram_async_dispose(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     close_impl(this_value(closure), &[]);
     let promise = crate::promise::js_promise_resolved(undefined_value());
     boxed_pointer(promise as *const u8)

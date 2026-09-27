@@ -220,6 +220,7 @@ fn async_hooks_static_method_value(
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     unsafe {
         let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
@@ -230,6 +231,7 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
 
 extern "C" fn fs_namespace_descriptor_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -306,12 +308,14 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
 
 extern "C" fn sqlite_statement_sync_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
 
 extern "C" fn sqlite_session_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
 }
@@ -371,6 +375,7 @@ fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a s
 
 extern "C" fn buffer_constructor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     encoding_or_offset: f64,
     length: f64,
@@ -416,7 +421,10 @@ extern "C" fn buffer_constructor_thunk(
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
-extern "C" fn buffer_prototype_method_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn buffer_prototype_method_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -447,6 +455,7 @@ fn buffer_prototype_this_addr() -> Option<usize> {
 /// Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_parent_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match buffer_prototype_this_addr() {
         Some(addr) => {
@@ -460,6 +469,7 @@ extern "C" fn buffer_prototype_parent_getter_thunk(
 /// `.byteOffset`, still a real own accessor on Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match buffer_prototype_this_addr() {
         Some(addr) => crate::buffer::buffer_byte_offset(addr) as f64,
@@ -757,6 +767,7 @@ fn attach_assert_prototype(constructor_value: f64) {
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,
@@ -1104,6 +1115,7 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
 
 extern "C" fn x509_issuer_certificate_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -1342,6 +1354,7 @@ pub(crate) fn scan_tls_derived_prototype_roots_mut(
 
 extern "C" fn tls_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {

@@ -1642,6 +1642,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
 
 pub(super) extern "C" fn number_format_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     make_instance(closure, KIND_NUMBER, rest_arg(rest, 0), rest_arg(rest, 1))
@@ -1649,6 +1650,7 @@ pub(super) extern "C" fn number_format_constructor_thunk(
 
 pub(super) extern "C" fn date_time_format_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     make_instance(
@@ -1661,6 +1663,7 @@ pub(super) extern "C" fn date_time_format_constructor_thunk(
 
 pub(super) extern "C" fn collator_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     make_instance(closure, KIND_COLLATOR, rest_arg(rest, 0), rest_arg(rest, 1))
@@ -1668,6 +1671,7 @@ pub(super) extern "C" fn collator_constructor_thunk(
 
 pub(super) extern "C" fn segmenter_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     require_new_target("Segmenter");
@@ -1681,6 +1685,7 @@ pub(super) extern "C" fn segmenter_constructor_thunk(
 
 pub(super) extern "C" fn list_format_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     require_new_target("ListFormat");
@@ -1694,6 +1699,7 @@ pub(super) extern "C" fn list_format_constructor_thunk(
 
 pub(super) extern "C" fn relative_time_format_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     require_new_target("RelativeTimeFormat");
@@ -1707,6 +1713,7 @@ pub(super) extern "C" fn relative_time_format_constructor_thunk(
 
 pub(super) extern "C" fn plural_rules_constructor_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     require_new_target("PluralRules");
@@ -1751,7 +1758,11 @@ fn supported_locales_array(locales: f64, options: f64) -> f64 {
     js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn supported_locales_of_thunk(_closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn supported_locales_of_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     supported_locales_array(rest_arg(rest, 0), rest_arg(rest, 1))
 }
 

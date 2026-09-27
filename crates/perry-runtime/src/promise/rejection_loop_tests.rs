@@ -3,7 +3,12 @@ use super::*;
 
 // Models `for (...) { try { await Promise.reject(remaining) } catch {} }`.
 // Every resumption advances the loop even though no fulfilled await occurs.
-extern "C" fn catching_step(step: ClosurePtr, remaining: f64, is_error: f64) -> f64 {
+extern "C" fn catching_step(
+    step: ClosurePtr,
+    _this: crate::closure::JsThis,
+    remaining: f64,
+    is_error: f64,
+) -> f64 {
     if is_error.to_bits() != crate::value::TAG_TRUE {
         return crate::value::js_nanbox_pointer(js_async_step_done(-1.0, step) as i64);
     }

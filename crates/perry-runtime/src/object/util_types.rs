@@ -433,8 +433,12 @@ mod buffer_view_tests {
             expected_view
         );
         assert_eq!(
-            super::super::global_this::array_buffer_is_view_thunk(std::ptr::null(), value)
-                .to_bits(),
+            super::super::global_this::array_buffer_is_view_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::current(),
+                value
+            )
+            .to_bits(),
             expected_view,
         );
         assert_eq!(

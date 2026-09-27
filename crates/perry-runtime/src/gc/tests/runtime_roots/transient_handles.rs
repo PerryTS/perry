@@ -590,7 +590,10 @@ fn test_transient_runtime_handle_object_overflow_set_gc() {
 #[test]
 fn test_transient_runtime_handle_closure_captures_gc() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
-    extern "C" fn captured_func(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn captured_func(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         0.0
     }
 

@@ -311,7 +311,7 @@ fn read_file_or_reject(path: &str) -> Result<Vec<u8>, f64> {
         .map_err(|err| unsafe { crate::fs::build_fs_error_value(&err, "open", path) })
 }
 
-extern "C" fn bun_file_text(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_file_text(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let path = value_to_string(captured(closure));
     match read_file_or_reject(&path) {
         Ok(bytes) => promise_value(boxed_str(String::from_utf8_lossy(&bytes).as_bytes())),
@@ -319,7 +319,7 @@ extern "C" fn bun_file_text(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_file_json(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_file_json(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let path = value_to_string(captured(closure));
     match read_file_or_reject(&path) {
         Ok(bytes) => json_parse_promise(&bytes),
@@ -327,7 +327,10 @@ extern "C" fn bun_file_json(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_file_array_buffer(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_file_array_buffer(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let path = value_to_string(captured(closure));
     match read_file_or_reject(&path) {
         Ok(bytes) => promise_value(array_buffer_from_bytes(&bytes)),
@@ -335,7 +338,7 @@ extern "C" fn bun_file_array_buffer(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_file_bytes(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_file_bytes(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let path = value_to_string(captured(closure));
     match read_file_or_reject(&path) {
         Ok(bytes) => promise_value(uint8_array_from_bytes(&bytes)),
@@ -343,7 +346,7 @@ extern "C" fn bun_file_bytes(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_file_exists(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_file_exists(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let path = value_to_string(captured(closure));
     let exists = if crate::embedded::lookup(&path).is_some() {
         true
@@ -487,7 +490,7 @@ pub extern "C" fn js_bun_write(dest: f64, data: f64) -> f64 {
 // Bun.stdin / Bun.stdout / Bun.stderr
 // ---------------------------------------------------------------------------
 
-extern "C" fn bun_stdin_text(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_stdin_text(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let mut buf = Vec::new();
     match std::io::stdin().lock().read_to_end(&mut buf) {
         Ok(_) => promise_value(boxed_str(String::from_utf8_lossy(&buf).as_bytes())),
@@ -495,7 +498,7 @@ extern "C" fn bun_stdin_text(_closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_stdin_json(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_stdin_json(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let mut buf = Vec::new();
     match std::io::stdin().lock().read_to_end(&mut buf) {
         Ok(_) => json_parse_promise(&buf),
@@ -503,7 +506,10 @@ extern "C" fn bun_stdin_json(_closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn bun_stdin_array_buffer(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_stdin_array_buffer(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let mut buf = Vec::new();
     match std::io::stdin().lock().read_to_end(&mut buf) {
         Ok(_) => promise_value(array_buffer_from_bytes(&buf)),

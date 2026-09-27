@@ -264,7 +264,10 @@ fn callback_from_sink(sink: f64) -> *const ClosureHeader {
 
 /// The parked operation. Runs on a later event-loop turn; never on the turn
 /// that scheduled it, which is the whole point.
-extern "C" fn perform_deferred_fs_op(closure: *const ClosureHeader) -> f64 {
+extern "C" fn perform_deferred_fs_op(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let mode = js_closure_get_capture_f64(closure, CAP_MODE);
     // The operation allocates (error values, decoded strings), so the captured
     // JS values are read through handles rather than held raw across it — the

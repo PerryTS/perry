@@ -1012,6 +1012,7 @@ macro_rules! ta_thunk {
     ($name:ident, $method:literal, $argc:literal) => {
         pub(super) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             a: f64,
             b: f64,
             d: f64,
@@ -1052,6 +1053,7 @@ ta_thunk!(ta_with_thunk, "with", 2);
 
 pub(super) extern "C" fn ta_last_index_of_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     search_element: f64,
     rest: f64,
 ) -> f64 {
@@ -1063,6 +1065,7 @@ pub(super) extern "C" fn ta_last_index_of_thunk(
 
 pub(super) extern "C" fn ta_reduce_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
@@ -1074,6 +1077,7 @@ pub(super) extern "C" fn ta_reduce_thunk(
 
 pub(super) extern "C" fn ta_reduce_right_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
@@ -1089,6 +1093,7 @@ pub(super) extern "C" fn ta_reduce_right_thunk(
 /// but keeps the install path total.
 pub(super) extern "C" fn ta_generic_thunk(
     c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
     d: f64,
@@ -1148,6 +1153,7 @@ unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
 
 pub(super) extern "C" fn u8_to_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     opts: f64,
     _b: f64,
     _d: f64,
@@ -1161,6 +1167,7 @@ pub(super) extern "C" fn u8_to_base64_thunk(
 
 pub(super) extern "C" fn u8_to_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _d: f64,
@@ -1173,6 +1180,7 @@ pub(super) extern "C" fn u8_to_hex_thunk(
 
 pub(super) extern "C" fn u8_set_from_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     str_arg: f64,
     opts: f64,
     _d: f64,
@@ -1186,6 +1194,7 @@ pub(super) extern "C" fn u8_set_from_base64_thunk(
 
 pub(super) extern "C" fn u8_set_from_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     str_arg: f64,
     _b: f64,
     _d: f64,

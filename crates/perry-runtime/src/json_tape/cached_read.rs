@@ -379,7 +379,10 @@ mod tests {
         }
     }
 
-    extern "C" fn descriptor_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn descriptor_getter(
+        _: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         61.0
     }
 

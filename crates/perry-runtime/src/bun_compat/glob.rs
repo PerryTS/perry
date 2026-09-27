@@ -2,15 +2,27 @@
 
 use super::*;
 
-extern "C" fn bun_glob_scan(closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn bun_glob_scan(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     crate::fs::js_bun_glob_async_iterator(captured(closure), options)
 }
 
-extern "C" fn bun_glob_scan_sync(closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn bun_glob_scan_sync(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    options: f64,
+) -> f64 {
     crate::fs::js_bun_glob_sync_iterator(captured(closure), options)
 }
 
-extern "C" fn bun_glob_match(closure: *const ClosureHeader, path: f64) -> f64 {
+extern "C" fn bun_glob_match(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    path: f64,
+) -> f64 {
     match crate::fs::bun_glob_matches(captured(closure), path) {
         Ok(matches) => bool_value(matches),
         Err(error) => crate::exception::js_throw(error),

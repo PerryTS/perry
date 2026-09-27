@@ -215,6 +215,7 @@ pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
 
 extern "C" fn stream_static_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
 ) -> f64 {

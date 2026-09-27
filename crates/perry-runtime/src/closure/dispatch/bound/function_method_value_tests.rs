@@ -37,7 +37,10 @@ fn function_method_reads_share_the_prototype_function() {
     }
 }
 
-extern "C" fn detached_function_fixture(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn detached_function_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     42.0
 }
 

@@ -10,6 +10,7 @@ fn nanbox_array_or_undef(arr: *mut crate::array::ArrayHeader) -> f64 {
 
 pub(crate) extern "C" fn object_keys_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     nanbox_array_or_undef(super::super::js_object_keys_value(value))
@@ -17,6 +18,7 @@ pub(crate) extern "C" fn object_keys_thunk(
 
 pub(crate) extern "C" fn object_values_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     nanbox_array_or_undef(super::super::js_object_values_value(value))
@@ -24,6 +26,7 @@ pub(crate) extern "C" fn object_values_thunk(
 
 pub(crate) extern "C" fn object_entries_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     nanbox_array_or_undef(super::super::js_object_entries_value(value))
@@ -31,6 +34,7 @@ pub(crate) extern "C" fn object_entries_thunk(
 
 pub(crate) extern "C" fn object_freeze_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_freeze(value)
@@ -38,6 +42,7 @@ pub(crate) extern "C" fn object_freeze_thunk(
 
 pub(crate) extern "C" fn object_create_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     props: f64,
 ) -> f64 {
@@ -50,6 +55,7 @@ pub(crate) extern "C" fn object_create_thunk(
 
 pub(crate) extern "C" fn object_seal_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_seal(value)
@@ -57,6 +63,7 @@ pub(crate) extern "C" fn object_seal_thunk(
 
 pub(crate) extern "C" fn object_is_sealed_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_is_sealed(value)
@@ -64,6 +71,7 @@ pub(crate) extern "C" fn object_is_sealed_thunk(
 
 pub(crate) extern "C" fn object_is_frozen_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_is_frozen(value)
@@ -71,6 +79,7 @@ pub(crate) extern "C" fn object_is_frozen_thunk(
 
 pub(crate) extern "C" fn object_is_extensible_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_is_extensible(value)
@@ -78,6 +87,7 @@ pub(crate) extern "C" fn object_is_extensible_thunk(
 
 pub(crate) extern "C" fn object_prevent_extensions_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_prevent_extensions(value)
@@ -85,6 +95,7 @@ pub(crate) extern "C" fn object_prevent_extensions_thunk(
 
 pub(crate) extern "C" fn object_is_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
 ) -> f64 {
@@ -93,6 +104,7 @@ pub(crate) extern "C" fn object_is_thunk(
 
 pub(crate) extern "C" fn object_set_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     proto: f64,
 ) -> f64 {
@@ -101,6 +113,7 @@ pub(crate) extern "C" fn object_set_prototype_of_thunk(
 
 pub(crate) extern "C" fn object_get_own_property_symbols_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let arr = unsafe { crate::symbol::js_object_get_own_property_symbols(value) };
@@ -109,6 +122,7 @@ pub(crate) extern "C" fn object_get_own_property_symbols_thunk(
 
 pub(crate) extern "C" fn object_get_own_property_descriptors_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_get_own_property_descriptors(value)
@@ -116,6 +130,7 @@ pub(crate) extern "C" fn object_get_own_property_descriptors_thunk(
 
 pub(crate) extern "C" fn object_define_properties_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     descriptors: f64,
 ) -> f64 {
@@ -124,6 +139,7 @@ pub(crate) extern "C" fn object_define_properties_thunk(
 
 pub(crate) extern "C" fn object_group_by_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     items: f64,
     callback: f64,
 ) -> f64 {
@@ -132,6 +148,7 @@ pub(crate) extern "C" fn object_group_by_thunk(
 
 pub(crate) extern "C" fn object_get_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_get_prototype_of(value)
@@ -139,6 +156,7 @@ pub(crate) extern "C" fn object_get_prototype_of_thunk(
 
 pub(crate) extern "C" fn object_get_own_property_names_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_get_own_property_names(value)
@@ -146,6 +164,7 @@ pub(crate) extern "C" fn object_get_own_property_names_thunk(
 
 pub(crate) extern "C" fn object_get_own_property_descriptor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     key: f64,
 ) -> f64 {
@@ -154,6 +173,7 @@ pub(crate) extern "C" fn object_get_own_property_descriptor_thunk(
 
 pub(crate) extern "C" fn object_define_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     key: f64,
     descriptor: f64,
@@ -163,6 +183,7 @@ pub(crate) extern "C" fn object_define_property_thunk(
 
 pub(crate) extern "C" fn object_from_entries_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     super::super::js_object_from_entries(value)
@@ -170,6 +191,7 @@ pub(crate) extern "C" fn object_from_entries_thunk(
 
 pub(crate) extern "C" fn object_assign_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     rest: f64,
 ) -> f64 {
@@ -187,6 +209,7 @@ pub(crate) extern "C" fn object_assign_thunk(
 /// `Object.prototype.hasOwnProperty.call(obj, key)`.
 pub(crate) extern "C" fn object_hasown_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     key: f64,
 ) -> f64 {
@@ -195,6 +218,7 @@ pub(crate) extern "C" fn object_hasown_thunk(
 
 pub(crate) extern "C" fn array_is_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::array::js_array_is_array(value)
@@ -202,6 +226,7 @@ pub(crate) extern "C" fn array_is_array_thunk(
 
 pub(crate) extern "C" fn array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     // Reflective `Array.from.call(C, items)` / `Array.from.apply(C, [items])`
@@ -217,6 +242,7 @@ pub(crate) extern "C" fn array_from_thunk(
 
 pub(crate) extern "C" fn array_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     // Reflective `Array.of.call(C, ...items)` binds `C` as the implicit `this`.
@@ -230,6 +256,7 @@ pub(crate) extern "C" fn array_of_thunk(
 
 pub(crate) extern "C" fn number_is_nan_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_number_is_nan(value)
@@ -237,6 +264,7 @@ pub(crate) extern "C" fn number_is_nan_thunk(
 
 pub(crate) extern "C" fn number_is_finite_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_number_is_finite(value)
@@ -244,6 +272,7 @@ pub(crate) extern "C" fn number_is_finite_thunk(
 
 pub(crate) extern "C" fn number_is_integer_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_number_is_integer(value)
@@ -340,6 +369,7 @@ pub extern "C" fn js_bigint_as_uint_n_call(bits: f64, value: f64) -> f64 {
 
 pub(crate) extern "C" fn bigint_as_int_n_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bits: f64,
     value: f64,
 ) -> f64 {
@@ -348,6 +378,7 @@ pub(crate) extern "C" fn bigint_as_int_n_thunk(
 
 pub(crate) extern "C" fn bigint_as_uint_n_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bits: f64,
     value: f64,
 ) -> f64 {
@@ -356,6 +387,7 @@ pub(crate) extern "C" fn bigint_as_uint_n_thunk(
 
 pub(crate) extern "C" fn json_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     text: f64,
     reviver: f64,
 ) -> f64 {
@@ -378,6 +410,7 @@ pub(crate) extern "C" fn json_parse_thunk(
 
 pub(crate) extern "C" fn json_stringify_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     replacer: f64,
     space: f64,
@@ -387,6 +420,7 @@ pub(crate) extern "C" fn json_stringify_thunk(
 
 pub(crate) extern "C" fn json_raw_json_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     text: f64,
 ) -> f64 {
     unsafe { crate::json::js_json_raw_json(text) }
@@ -394,6 +428,7 @@ pub(crate) extern "C" fn json_raw_json_thunk(
 
 pub(crate) extern "C" fn json_is_raw_json_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     unsafe { crate::json::js_json_is_raw_json(value) }
@@ -401,6 +436,7 @@ pub(crate) extern "C" fn json_is_raw_json_thunk(
 
 pub(crate) extern "C" fn reflect_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     this_arg: f64,
     args: f64,
@@ -419,6 +455,7 @@ pub(crate) extern "C" fn reflect_apply_thunk(
 /// `undefined`, which it already resolves to `target` per spec.
 pub(crate) extern "C" fn reflect_construct_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     args_like: f64,
     new_target: f64,
@@ -434,6 +471,7 @@ pub(crate) extern "C" fn reflect_construct_thunk(
 /// class-static-init time and threw on destructuring the `undefined`).
 pub(crate) extern "C" fn reflect_own_keys_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
 ) -> f64 {
     crate::proxy::js_reflect_own_keys(target)
@@ -441,6 +479,7 @@ pub(crate) extern "C" fn reflect_own_keys_thunk(
 
 pub(crate) extern "C" fn reflect_get_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
     receiver: f64,
@@ -450,6 +489,7 @@ pub(crate) extern "C" fn reflect_get_thunk(
 
 pub(crate) extern "C" fn reflect_set_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
     value: f64,
@@ -460,6 +500,7 @@ pub(crate) extern "C" fn reflect_set_thunk(
 
 pub(crate) extern "C" fn reflect_has_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
 ) -> f64 {
@@ -468,6 +509,7 @@ pub(crate) extern "C" fn reflect_has_thunk(
 
 pub(crate) extern "C" fn reflect_delete_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
 ) -> f64 {
@@ -476,6 +518,7 @@ pub(crate) extern "C" fn reflect_delete_property_thunk(
 
 pub(crate) extern "C" fn reflect_define_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
     descriptor: f64,
@@ -485,6 +528,7 @@ pub(crate) extern "C" fn reflect_define_property_thunk(
 
 pub(crate) extern "C" fn reflect_get_own_property_descriptor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
 ) -> f64 {
@@ -493,6 +537,7 @@ pub(crate) extern "C" fn reflect_get_own_property_descriptor_thunk(
 
 pub(crate) extern "C" fn reflect_get_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
 ) -> f64 {
     crate::proxy::js_reflect_get_prototype_of(target)
@@ -500,6 +545,7 @@ pub(crate) extern "C" fn reflect_get_prototype_of_thunk(
 
 pub(crate) extern "C" fn reflect_set_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     proto: f64,
 ) -> f64 {
@@ -508,6 +554,7 @@ pub(crate) extern "C" fn reflect_set_prototype_of_thunk(
 
 pub(crate) extern "C" fn reflect_is_extensible_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
 ) -> f64 {
     crate::proxy::js_reflect_is_extensible(target)
@@ -515,6 +562,7 @@ pub(crate) extern "C" fn reflect_is_extensible_thunk(
 
 pub(crate) extern "C" fn reflect_prevent_extensions_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
 ) -> f64 {
     crate::proxy::js_reflect_prevent_extensions(target)
@@ -522,6 +570,7 @@ pub(crate) extern "C" fn reflect_prevent_extensions_thunk(
 
 pub(crate) extern "C" fn symbol_for_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     unsafe { crate::symbol::js_symbol_for(key) }
@@ -529,6 +578,7 @@ pub(crate) extern "C" fn symbol_for_thunk(
 
 pub(crate) extern "C" fn symbol_key_for_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     symbol: f64,
 ) -> f64 {
     unsafe { crate::symbol::js_symbol_key_for(symbol) }
@@ -536,6 +586,7 @@ pub(crate) extern "C" fn symbol_key_for_thunk(
 
 pub(crate) extern "C" fn number_is_safe_integer_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     crate::builtins::js_number_is_safe_integer(value)
@@ -546,6 +597,7 @@ pub(crate) extern "C" fn number_is_safe_integer_thunk(
 // the array-like the array-form runtime helpers expect.
 pub(crate) extern "C" fn string_from_char_code_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let s = crate::string::js_string_from_char_code_array(rest);
@@ -554,6 +606,7 @@ pub(crate) extern "C" fn string_from_char_code_static(
 
 pub(crate) extern "C" fn string_from_code_point_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let s = crate::string::js_string_from_code_point_array(rest);
@@ -571,6 +624,7 @@ pub(crate) extern "C" fn string_from_code_point_static(
 // thunks intentionally use the native Promise machinery regardless of `this`.
 extern "C" fn promise_resolve_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
@@ -579,6 +633,7 @@ extern "C" fn promise_resolve_static(
 
 extern "C" fn promise_reject_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
@@ -587,6 +642,7 @@ extern "C" fn promise_reject_static(
 
 extern "C" fn promise_all_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     iterable: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
@@ -595,6 +651,7 @@ extern "C" fn promise_all_static(
 
 extern "C" fn promise_race_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     iterable: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
@@ -603,6 +660,7 @@ extern "C" fn promise_race_static(
 
 extern "C" fn promise_all_settled_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     iterable: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
@@ -611,13 +669,17 @@ extern "C" fn promise_all_settled_static(
 
 extern "C" fn promise_any_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     iterable: f64,
 ) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
     crate::promise::js_promise_any_spec(this_ctor, iterable)
 }
 
-extern "C" fn promise_with_resolvers_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn promise_with_resolvers_static(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this_ctor = crate::object::js_implicit_this_get();
     crate::promise::js_promise_with_resolvers_spec(this_ctor)
 }
@@ -625,6 +687,7 @@ extern "C" fn promise_with_resolvers_static(_closure: *const crate::closure::Clo
 // `Promise.try(fn, ...args)`: call-arity 1 (callback) + rest (forwarded args).
 extern "C" fn promise_try_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
@@ -638,6 +701,7 @@ extern "C" fn promise_try_static(
 // passed straight through as the substitutions array-like.
 pub(crate) extern "C" fn string_raw_static(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     call_site: f64,
     rest: f64,
 ) -> f64 {
@@ -647,21 +711,24 @@ pub(crate) extern "C" fn string_raw_static(
 
 pub(crate) extern "C" fn number_parse_float_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    global_this_parse_float_thunk(closure, value)
+    global_this_parse_float_thunk(closure, crate::closure::JsThis::current(), value)
 }
 
 pub(crate) extern "C" fn number_parse_int_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     radix: f64,
 ) -> f64 {
-    global_this_parse_int_thunk(closure, value, radix)
+    global_this_parse_int_thunk(closure, crate::closure::JsThis::current(), value, radix)
 }
 
 pub(crate) extern "C" fn typed_array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
     map_fn: f64,
     this_arg: f64,
@@ -824,6 +891,7 @@ fn typed_array_create_from_values(
 
 pub(crate) extern "C" fn typed_array_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let kind_opt = typed_array_constructor_this_kind();

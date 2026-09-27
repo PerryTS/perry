@@ -466,6 +466,7 @@ fn weak_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
 
 pub(super) extern "C" fn set_proto_add_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("add");
@@ -477,6 +478,7 @@ pub(super) extern "C" fn set_proto_add_thunk(
 
 pub(super) extern "C" fn set_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("has");
@@ -485,6 +487,7 @@ pub(super) extern "C" fn set_proto_has_thunk(
 
 pub(super) extern "C" fn set_proto_size_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let set = set_receiver_or_throw("size");
     crate::set::js_set_size(set) as f64
@@ -492,6 +495,7 @@ pub(super) extern "C" fn set_proto_size_getter_thunk(
 
 pub(super) extern "C" fn set_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("delete");
@@ -500,6 +504,7 @@ pub(super) extern "C" fn set_proto_delete_thunk(
 
 pub(super) extern "C" fn set_proto_clear_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("clear");
@@ -509,6 +514,7 @@ pub(super) extern "C" fn set_proto_clear_thunk(
 
 pub(super) extern "C" fn set_proto_foreach_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
     this_arg: f64,
 ) -> f64 {
@@ -519,6 +525,7 @@ pub(super) extern "C" fn set_proto_foreach_thunk(
 
 pub(super) extern "C" fn set_proto_values_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("values");
@@ -532,6 +539,7 @@ pub(super) extern "C" fn set_proto_values_thunk(
 
 pub(super) extern "C" fn set_proto_keys_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("keys");
@@ -545,6 +553,7 @@ pub(super) extern "C" fn set_proto_keys_thunk(
 
 pub(super) extern "C" fn set_proto_entries_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let set = set_receiver_or_throw("entries");
@@ -558,6 +567,7 @@ pub(super) extern "C" fn set_proto_entries_thunk(
 
 pub(super) extern "C" fn map_proto_get_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("get");
@@ -566,6 +576,7 @@ pub(super) extern "C" fn map_proto_get_thunk(
 
 pub(super) extern "C" fn map_proto_set_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
     v: f64,
 ) -> f64 {
@@ -578,6 +589,7 @@ pub(super) extern "C" fn map_proto_set_thunk(
 
 pub(super) extern "C" fn map_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("has");
@@ -586,6 +598,7 @@ pub(super) extern "C" fn map_proto_has_thunk(
 
 pub(super) extern "C" fn map_proto_size_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let map = map_receiver_or_throw("size");
     crate::map::js_map_size(map) as f64
@@ -593,6 +606,7 @@ pub(super) extern "C" fn map_proto_size_getter_thunk(
 
 pub(super) extern "C" fn map_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("delete");
@@ -601,6 +615,7 @@ pub(super) extern "C" fn map_proto_delete_thunk(
 
 pub(super) extern "C" fn map_proto_clear_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("clear");
@@ -610,6 +625,7 @@ pub(super) extern "C" fn map_proto_clear_thunk(
 
 pub(super) extern "C" fn map_proto_foreach_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
     this_arg: f64,
 ) -> f64 {
@@ -620,6 +636,7 @@ pub(super) extern "C" fn map_proto_foreach_thunk(
 
 pub(super) extern "C" fn map_proto_keys_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("keys");
@@ -633,6 +650,7 @@ pub(super) extern "C" fn map_proto_keys_thunk(
 
 pub(super) extern "C" fn map_proto_values_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("values");
@@ -646,6 +664,7 @@ pub(super) extern "C" fn map_proto_values_thunk(
 
 pub(super) extern "C" fn map_proto_entries_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _v: f64,
 ) -> f64 {
     let map = map_receiver_or_throw("entries");
@@ -659,6 +678,7 @@ pub(super) extern "C" fn map_proto_entries_thunk(
 
 pub(super) extern "C" fn weakset_proto_add_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKSET, "WeakSet.prototype", "add");
@@ -667,6 +687,7 @@ pub(super) extern "C" fn weakset_proto_add_thunk(
 
 pub(super) extern "C" fn weakset_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKSET, "WeakSet.prototype", "has");
@@ -675,6 +696,7 @@ pub(super) extern "C" fn weakset_proto_has_thunk(
 
 pub(super) extern "C" fn weakset_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     v: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(
@@ -687,6 +709,7 @@ pub(super) extern "C" fn weakset_proto_delete_thunk(
 
 pub(super) extern "C" fn weakmap_proto_get_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKMAP, "WeakMap.prototype", "get");
@@ -695,6 +718,7 @@ pub(super) extern "C" fn weakmap_proto_get_thunk(
 
 pub(super) extern "C" fn weakmap_proto_set_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
     v: f64,
 ) -> f64 {
@@ -704,6 +728,7 @@ pub(super) extern "C" fn weakmap_proto_set_thunk(
 
 pub(super) extern "C" fn weakmap_proto_has_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(crate::weakref::CLASS_ID_WEAKMAP, "WeakMap.prototype", "has");
@@ -712,6 +737,7 @@ pub(super) extern "C" fn weakmap_proto_has_thunk(
 
 pub(super) extern "C" fn weakmap_proto_delete_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     k: f64,
 ) -> f64 {
     let r = weak_receiver_or_throw(

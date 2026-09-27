@@ -21,6 +21,7 @@ use super::*;
 /// RELOCATED rather than freed.
 extern "C" fn test_thenable_then_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     resolve: f64,
     _reject: f64,
 ) -> f64 {

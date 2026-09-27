@@ -26,7 +26,10 @@ pub(super) fn schedule_read_stream_turn(id: usize) {
     }
 }
 
-pub(super) extern "C" fn read_stream_turn_impl(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn read_stream_turn_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let should_close = STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {

@@ -2918,7 +2918,10 @@ mod tests {
     /// including through a nested proxy whose inner proxy gets revoked.
     #[test]
     fn revoked_proxy_keeps_creation_callability() {
-        extern "C" fn dummy_fn(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        extern "C" fn dummy_fn(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+        ) -> f64 {
             f64::from_bits(TAG_UNDEFINED)
         }
         let f = crate::closure::js_closure_alloc(dummy_fn as *const u8, 0);

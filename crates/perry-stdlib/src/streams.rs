@@ -1086,7 +1086,10 @@ unsafe fn invoke_start(stream_id: usize) {
     }
 }
 
-extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_pull_microtask(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
         let stream_id = f64::from_bits(stream_bits) as usize;
@@ -1161,7 +1164,11 @@ fn readable_pull_settled_closure(func: *const u8, stream_id: usize) -> *mut Clos
     closure
 }
 
-extern "C" fn readable_pull_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn readable_pull_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _value: f64,
+) -> f64 {
     unsafe {
         let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
         if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
@@ -1172,7 +1179,11 @@ extern "C" fn readable_pull_fulfilled(closure: *const ClosureHeader, _value: f64
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn readable_pull_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn readable_pull_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     unsafe {
         let stream_id = js_closure_get_capture_ptr(closure, 0) as usize;
         let should_error = {
@@ -2166,7 +2177,11 @@ pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handl
 // ReadableStreamDefaultReader FFI
 // ─────────────────────────────────────────────────────────────────────
 
-extern "C" fn readable_from_chunk_fulfilled(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn readable_from_chunk_fulfilled(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -2178,7 +2193,11 @@ extern "C" fn readable_from_chunk_fulfilled(closure: *const ClosureHeader, value
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn readable_from_chunk_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn readable_from_chunk_rejected(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -2337,7 +2356,7 @@ fn resolved_done_promise() -> f64 {
 }
 
 fn closure_capture_value(
-    func: extern "C" fn(*const ClosureHeader) -> f64,
+    func: extern "C" fn(*const ClosureHeader, perry_runtime::closure::JsThis) -> f64,
     value: f64,
 ) -> *mut ClosureHeader {
     let fn_ptr = func as *const u8;
@@ -2355,7 +2374,10 @@ fn closure_capture_value_get(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(bits)
 }
 
-extern "C" fn readable_stream_iterator_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_stream_iterator_next(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let reader = closure_capture_value_get(closure);
     if reader.to_bits() == TAG_UNDEFINED {
         return resolved_done_promise();
@@ -2363,7 +2385,10 @@ extern "C" fn readable_stream_iterator_next(closure: *const ClosureHeader) -> f6
     unsafe { box_promise(js_reader_read(reader)) }
 }
 
-extern "C" fn readable_stream_iterator_return(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_stream_iterator_return(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let reader = closure_capture_value_get(closure);
     if reader.to_bits() != TAG_UNDEFINED {
         unsafe {
@@ -2373,7 +2398,10 @@ extern "C" fn readable_stream_iterator_return(closure: *const ClosureHeader) -> 
     resolved_done_promise()
 }
 
-extern "C" fn readable_stream_iterator_self(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_stream_iterator_self(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     closure_capture_value_get(closure)
 }
 

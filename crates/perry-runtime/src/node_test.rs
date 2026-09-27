@@ -40,19 +40,29 @@ fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
     boxed_pointer(closure as *const u8)
 }
 
-extern "C" fn noop0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn noop0(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     undefined()
 }
 
-extern "C" fn noop1(_closure: *const ClosureHeader, _arg0: f64) -> f64 {
+extern "C" fn noop1(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg0: f64,
+) -> f64 {
     undefined()
 }
 
-extern "C" fn noop3(_closure: *const ClosureHeader, _arg0: f64, _arg1: f64, _arg2: f64) -> f64 {
+extern "C" fn noop3(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg0: f64,
+    _arg1: f64,
+    _arg2: f64,
+) -> f64 {
     undefined()
 }
 
-extern "C" fn zero0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn zero0(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     0.0
 }
 

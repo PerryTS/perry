@@ -413,6 +413,7 @@ pub unsafe extern "C" fn js_sqlite_pragma(
 /// Captures: [0] = db_handle (as f64), [1] = original closure ptr (as i64)
 pub(crate) unsafe extern "C" fn sqlite_tx_wrapper(
     wrapper_closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     arg0: f64,
 ) -> f64 {
     use perry_runtime::closure::{

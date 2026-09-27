@@ -878,7 +878,10 @@ fn schedule_write_stream_turn(id: usize) {
     }
 }
 
-extern "C" fn write_stream_turn_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn write_stream_turn_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1111,6 +1114,7 @@ fn write_stream_close_step(id: usize) {
 
 pub(crate) extern "C" fn write_stream_write_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -1155,6 +1159,7 @@ pub(crate) extern "C" fn write_stream_write_impl(
 
 pub(crate) extern "C" fn write_stream_end_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -1199,6 +1204,7 @@ pub(crate) extern "C" fn write_stream_end_impl(
 
 pub(crate) extern "C" fn write_stream_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1208,6 +1214,7 @@ pub(crate) extern "C" fn write_stream_on_impl(
 
 pub(crate) extern "C" fn write_stream_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1217,6 +1224,7 @@ pub(crate) extern "C" fn write_stream_once_impl(
 
 pub(crate) extern "C" fn stream_emit_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
@@ -1245,7 +1253,11 @@ use stream_errors::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
 
-pub(crate) extern "C" fn write_stream_close_impl(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn write_stream_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     let id = stream_id_of(closure);
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);
@@ -1352,7 +1364,10 @@ fn install_pipe_drain_resume(source_id: usize, dest: f64) {
     let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
 }
 
-extern "C" fn read_stream_resume_from_drain_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn read_stream_resume_from_drain_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1474,6 +1489,7 @@ fn read_stream_pump(id: usize) {
 
 pub(crate) extern "C" fn read_stream_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1492,6 +1508,7 @@ pub(crate) extern "C" fn read_stream_on_impl(
 
 pub(crate) extern "C" fn read_stream_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1510,6 +1527,7 @@ pub(crate) extern "C" fn read_stream_once_impl(
 
 pub(crate) extern "C" fn read_stream_pipe_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     dest: f64,
     options: f64,
 ) -> f64 {
@@ -1528,7 +1546,10 @@ pub(crate) extern "C" fn read_stream_pipe_impl(
     dest
 }
 
-pub(crate) extern "C" fn read_stream_pause_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_pause_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&stream_id_of(closure)) {
             state.paused = true;
@@ -1537,7 +1558,10 @@ pub(crate) extern "C" fn read_stream_pause_impl(closure: *const ClosureHeader) -
     current_receiver_value()
 }
 
-pub(crate) extern "C" fn read_stream_resume_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_resume_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1548,7 +1572,10 @@ pub(crate) extern "C" fn read_stream_resume_impl(closure: *const ClosureHeader) 
     current_receiver_value()
 }
 
-pub(crate) extern "C" fn read_stream_is_paused_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_is_paused_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let paused = STREAM_REGISTRY.with(|registry| {
         registry
             .borrow()
@@ -1559,7 +1586,11 @@ pub(crate) extern "C" fn read_stream_is_paused_impl(closure: *const ClosureHeade
     bool_value(paused)
 }
 
-pub(crate) extern "C" fn read_stream_close_impl(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn read_stream_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     let id = stream_id_of(closure);
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);

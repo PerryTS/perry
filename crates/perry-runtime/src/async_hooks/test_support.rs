@@ -63,7 +63,11 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
 mod tests {
     use super::*;
 
-    extern "C" fn throwing_lifecycle_hook(_closure: *const ClosureHeader, _async_id: f64) -> f64 {
+    extern "C" fn throwing_lifecycle_hook(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _async_id: f64,
+    ) -> f64 {
         crate::exception::js_throw(73.0)
     }
 

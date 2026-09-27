@@ -24,7 +24,10 @@ fn require_url_receiver(name: &str) -> *mut ObjectHeader {
 
 macro_rules! url_getter {
     ($fn_name:ident, $name:literal, $slot:expr) => {
-        extern "C" fn $fn_name(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        extern "C" fn $fn_name(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+        ) -> f64 {
             let obj = require_url_receiver($name);
             crate::object::js_object_get_field_f64(obj, $slot)
         }
@@ -33,7 +36,11 @@ macro_rules! url_getter {
 
 macro_rules! url_setter {
     ($fn_name:ident, $name:literal, $setter:path) => {
-        extern "C" fn $fn_name(_closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+        extern "C" fn $fn_name(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            value: f64,
+        ) -> f64 {
             let obj = require_url_receiver($name);
             $setter(obj, value);
             f64::from_bits(crate::value::TAG_UNDEFINED)

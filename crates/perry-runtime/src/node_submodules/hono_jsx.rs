@@ -30,6 +30,7 @@ fn fragment_marker_f64() -> f64 {
 /// `jsx(type, props)` — forward to the built-in renderer.
 pub(crate) extern "C" fn thunk_hono_jsx(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     type_arg: f64,
     props: f64,
 ) -> f64 {
@@ -39,6 +40,7 @@ pub(crate) extern "C" fn thunk_hono_jsx(
 /// `jsxs(type, props)` — multi-child shape, same dispatch.
 pub(crate) extern "C" fn thunk_hono_jsxs(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     type_arg: f64,
     props: f64,
 ) -> f64 {
@@ -48,14 +50,22 @@ pub(crate) extern "C" fn thunk_hono_jsxs(
 /// `Fragment` — when used as a component (`jsx(Fragment, { children })`) it
 /// renders its children with no wrapping element. Reuse `js_jsx`'s Fragment
 /// path by passing the `"__Fragment"` marker tag.
-pub(crate) extern "C" fn thunk_hono_fragment(_closure: *const ClosureHeader, props: f64) -> f64 {
+pub(crate) extern "C" fn thunk_hono_fragment(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    props: f64,
+) -> f64 {
     crate::jsx::js_jsx(fragment_marker_f64(), props)
 }
 
 /// `Suspense` — Perry renders synchronously (server-side), so a Suspense
 /// boundary just renders its children (the fallback is never needed because
 /// there is no streaming-suspension point). Same shape as Fragment.
-pub(crate) extern "C" fn thunk_hono_suspense(_closure: *const ClosureHeader, props: f64) -> f64 {
+pub(crate) extern "C" fn thunk_hono_suspense(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    props: f64,
+) -> f64 {
     crate::jsx::js_jsx(fragment_marker_f64(), props)
 }
 
@@ -63,7 +73,11 @@ pub(crate) extern "C" fn thunk_hono_suspense(_closure: *const ClosureHeader, pro
 /// (`js_jsx` boxes nodes itself), so this is an exposed stub returning the
 /// props/value it was handed. Its sole purpose is to make the named export
 /// resolve with `typeof === "function"`.
-pub(crate) extern "C" fn thunk_hono_jsxnode(_closure: *const ClosureHeader, arg: f64) -> f64 {
+pub(crate) extern "C" fn thunk_hono_jsxnode(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     arg
 }
 
@@ -88,6 +102,7 @@ pub unsafe extern "C" fn js_register_jsx_render_stream(f: RenderStreamFn) {
 /// when no stream backend is linked.
 pub(crate) extern "C" fn thunk_hono_render_to_readable_stream(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     node: f64,
     _options: f64,
 ) -> f64 {
@@ -112,6 +127,10 @@ pub(crate) extern "C" fn thunk_hono_render_to_readable_stream(
 
 /// `undefined` helper for any export we deliberately don't back.
 #[allow(dead_code)]
-pub(crate) extern "C" fn thunk_hono_undefined(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+pub(crate) extern "C" fn thunk_hono_undefined(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }

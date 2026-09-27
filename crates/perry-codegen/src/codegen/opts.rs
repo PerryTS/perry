@@ -742,7 +742,7 @@ pub struct ShortSpreadMethodCandidate {
 pub struct ImportedObjectLiteralMethod {
     pub name: String,
     pub func_id: u32,
-    /// Exact closure-call ABI function stored in the live own slot. This is a
+    /// Exact JS body (`perry_abi::JS_BODY_*`) stored in the live own slot. This is a
     /// `perry_closure_*` body for a `this`-capturing method and a
     /// `__perry_wrap_perry_fn_*` wrapper for HIR's lifted no-`this` method.
     pub target: String,

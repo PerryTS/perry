@@ -54,6 +54,7 @@ fn readable_iterator_done() -> f64 {
 
 extern "C" fn ns_readable_iterator_chunk_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
@@ -65,6 +66,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
 
 extern "C" fn ns_readable_iterator_chunk_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
@@ -76,6 +78,7 @@ extern "C" fn ns_readable_iterator_chunk_rejected(
 
 extern "C" fn ns_readable_source_iterator_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     result: f64,
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
@@ -99,6 +102,7 @@ extern "C" fn ns_readable_source_iterator_fulfilled(
 
 extern "C" fn ns_readable_source_iterator_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
@@ -339,7 +343,11 @@ fn iterator_from_listener(closure: *const ClosureHeader) -> f64 {
 }
 
 /// `data` listener: resolve a waiting `next()` or buffer the chunk.
-extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn ns_readable_iter_on_data(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -377,7 +385,10 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
 
 /// `end` listener: a waiting `next()` resolves to `{done:true}`; otherwise the
 /// end is recorded so a later `next()` (after the queue drains) reports done.
-extern "C" fn ns_readable_iter_on_end(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iter_on_end(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -400,7 +411,11 @@ extern "C" fn ns_readable_iter_on_end(closure: *const ClosureHeader) -> f64 {
 
 /// `error` listener: reject a waiting `next()` or store the error for the next
 /// pull.
-extern "C" fn ns_readable_iter_on_error(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn ns_readable_iter_on_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -572,7 +587,10 @@ pub(super) fn call_source_iterator_return(stream: f64) {
     settle_iterator_return_value(returned);
 }
 
-extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iterator_next(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(this_value(closure));
     if iterator_is_done(iterator.get_nanbox_f64()) {
@@ -675,7 +693,10 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     box_pointer(promise.get_raw_const_ptr())
 }
 
-extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iterator_return(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let iterator = this_value(closure);
     let already_done = iterator_is_done(iterator);
     iterator_mark_done(iterator);
@@ -692,15 +713,25 @@ extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 
     readable_iterator_done()
 }
 
-extern "C" fn ns_readable_iterator_self(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iterator_self(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     this_value(closure)
 }
 
-pub(super) extern "C" fn ns_async_iterator(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_async_iterator(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     build_readable_async_iterator(this_value(closure), true)
 }
 
-pub(super) extern "C" fn ns_iterator1(closure: *const ClosureHeader, opts: f64) -> f64 {
+pub(super) extern "C" fn ns_iterator1(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    opts: f64,
+) -> f64 {
     build_readable_async_iterator(this_value(closure), destroy_on_return_from_options(opts))
 }
 
@@ -808,7 +839,10 @@ pub extern "C" fn js_make_single_value_async_iterator(value: f64) -> f64 {
     iterator
 }
 
-extern "C" fn single_value_iterator_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn single_value_iterator_next(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let iterator = this_value(closure);
     if iterator_is_done(iterator) {
         return readable_iterator_done();
@@ -819,7 +853,10 @@ extern "C" fn single_value_iterator_next(closure: *const ClosureHeader) -> f64 {
     resolved_promise(iterator_result(value, false))
 }
 
-extern "C" fn single_value_iterator_return(closure: *const ClosureHeader) -> f64 {
+extern "C" fn single_value_iterator_return(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     iterator_mark_done(this_value(closure));
     readable_iterator_done()
 }
@@ -932,9 +969,9 @@ mod fifo_pending_tests {
         js_closure_set_capture_f64(data_cb, 0, iterator);
 
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-        ns_readable_iter_on_data(data_cb, 1.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::current(), 1.0);
         assert!(readable_is_flowing(stream));
-        ns_readable_iter_on_data(data_cb, 2.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::current(), 2.0);
         assert!(readable_is_paused(stream));
 
         assert_eq!(
@@ -1006,7 +1043,8 @@ mod fifo_pending_tests {
         let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
         js_closure_set_capture_f64(rejected, 0, iterator);
 
-        let result = ns_readable_source_iterator_rejected(rejected, 7.0);
+        let result =
+            ns_readable_source_iterator_rejected(rejected, crate::closure::JsThis::current(), 7.0);
         let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
         assert!(iterator_is_done(iterator));
         assert!(stream_destroyed(stream));

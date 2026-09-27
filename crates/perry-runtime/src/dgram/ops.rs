@@ -9,7 +9,10 @@ use super::*;
 
 use std::net::Ipv4Addr;
 
-extern "C" fn dgram_abort_close_task(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dgram_abort_close_task(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return undefined_value();
     }
@@ -26,7 +29,10 @@ fn schedule_abort_close(socket: f64) {
     crate::builtins::js_queue_microtask(task as i64);
 }
 
-extern "C" fn dgram_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dgram_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if !closure.is_null() {
         schedule_abort_close(js_closure_get_capture_f64(closure, 0));
     }
@@ -485,7 +491,11 @@ fn send_blocked(socket: f64, address: &str) -> bool {
     )) != 0
 }
 
-extern "C" fn lookup_callback(_closure: *const ClosureHeader, _rest: f64) -> f64 {
+extern "C" fn lookup_callback(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     undefined_value()
 }
 

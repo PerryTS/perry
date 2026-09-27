@@ -213,6 +213,7 @@ unsafe fn this_string_decoder_handle() -> i64 {
 
 extern "C" fn string_decoder_proto_write(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     buf: f64,
 ) -> f64 {
     unsafe { dispatch_string_decoder(this_string_decoder_handle(), "write", &[buf]) }
@@ -220,6 +221,7 @@ extern "C" fn string_decoder_proto_write(
 
 extern "C" fn string_decoder_proto_end(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     buf: f64,
 ) -> f64 {
     unsafe { dispatch_string_decoder(this_string_decoder_handle(), "end", &[buf]) }
@@ -227,6 +229,7 @@ extern "C" fn string_decoder_proto_end(
 
 extern "C" fn string_decoder_proto_text(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     buf: f64,
     _offset: f64,
 ) -> f64 {
@@ -235,18 +238,21 @@ extern "C" fn string_decoder_proto_text(
 
 extern "C" fn string_decoder_last_char_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastChar") }
 }
 
 extern "C" fn string_decoder_last_need_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastNeed") }
 }
 
 extern "C" fn string_decoder_last_total_getter(
     _closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe { dispatch_string_decoder_property(this_string_decoder_handle(), "lastTotal") }
 }

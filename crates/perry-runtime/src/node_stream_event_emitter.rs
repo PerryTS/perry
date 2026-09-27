@@ -7,7 +7,11 @@ const STREAM_EVENT_NAMES_KEY: &[u8] = b"__perryStreamEventNames";
 const STREAM_LISTENERS_PREFIX: &[u8] = b"__perryStreamListeners:";
 const STREAM_ONCE_PREFIX: &[u8] = b"__perryStreamOnce:";
 
-pub(super) extern "C" fn ns_set_max_listeners(closure: *const ClosureHeader, value: f64) -> f64 {
+pub(super) extern "C" fn ns_set_max_listeners(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     set_stream_max_listeners(super::this_value(closure), value)
 }
 
@@ -73,7 +77,10 @@ pub(crate) fn validate_max_listeners(value: f64) -> f64 {
     n
 }
 
-pub(super) extern "C" fn ns_get_max_listeners(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_get_max_listeners(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     stream_max_listeners(super::this_value(closure))
 }
 
@@ -86,13 +93,23 @@ fn stream_max_listeners(stream: f64) -> f64 {
     super::get_hidden_value(stream, super::hidden_max_listeners_key()).unwrap_or(10.0)
 }
 
-pub(super) extern "C" fn ns_on2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
+pub(super) extern "C" fn ns_on2(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    cb: f64,
+) -> f64 {
     let stream = super::this_value(closure);
     add_stream_listener_for_event(stream, event, cb);
     stream
 }
 
-pub(super) extern "C" fn ns_once2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
+pub(super) extern "C" fn ns_once2(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    cb: f64,
+) -> f64 {
     let stream = super::this_value(closure);
     add_stream_listener_for_event_with_options(stream, event, cb, true, false);
     stream
@@ -100,6 +117,7 @@ pub(super) extern "C" fn ns_once2(closure: *const ClosureHeader, event: f64, cb:
 
 pub(super) extern "C" fn ns_prepend_listener2(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -110,6 +128,7 @@ pub(super) extern "C" fn ns_prepend_listener2(
 
 pub(super) extern "C" fn ns_prepend_once_listener2(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -120,6 +139,7 @@ pub(super) extern "C" fn ns_prepend_once_listener2(
 
 pub(super) extern "C" fn ns_remove_listener2(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -128,12 +148,18 @@ pub(super) extern "C" fn ns_remove_listener2(
     stream
 }
 
-pub(super) extern "C" fn ns_off2(closure: *const ClosureHeader, event: f64, cb: f64) -> f64 {
-    ns_remove_listener2(closure, event, cb)
+pub(super) extern "C" fn ns_off2(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    cb: f64,
+) -> f64 {
+    ns_remove_listener2(closure, crate::closure::JsThis::current(), event, cb)
 }
 
 pub(super) extern "C" fn ns_remove_all_listeners1(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let stream = super::this_value(closure);
@@ -215,7 +241,11 @@ pub extern "C" fn js_node_stream_method_remove_all_listeners(
     stream
 }
 
-pub(super) extern "C" fn ns_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
+pub(super) extern "C" fn ns_listener_count(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     stream_listener_count_for_event(super::this_value(closure), event) as f64
 }
 
@@ -228,7 +258,10 @@ pub extern "C" fn js_node_stream_method_listener_count(stream_handle: i64, event
     stream_listener_count_for_event(stream, event) as f64
 }
 
-pub(super) extern "C" fn ns_event_names(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_event_names(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stream = super::this_value(closure);
     f64::from_bits(JSValue::pointer(stream_event_names_array(stream) as *const u8).bits())
 }
@@ -238,7 +271,11 @@ pub extern "C" fn js_node_stream_method_event_names(stream_handle: i64) -> i64 {
     stream_event_names_array(super::stream_value_from_handle(stream_handle)) as i64
 }
 
-pub(super) extern "C" fn ns_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
+pub(super) extern "C" fn ns_listeners(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     let stream = super::this_value(closure);
     f64::from_bits(
         JSValue::pointer(stream_listeners_array_for_event(stream, event, false) as *const u8)
@@ -246,7 +283,11 @@ pub(super) extern "C" fn ns_listeners(closure: *const ClosureHeader, event: f64)
     )
 }
 
-pub(super) extern "C" fn ns_raw_listeners(closure: *const ClosureHeader, event: f64) -> f64 {
+pub(super) extern "C" fn ns_raw_listeners(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     let stream = super::this_value(closure);
     f64::from_bits(
         JSValue::pointer(stream_listeners_array_for_event(stream, event, true) as *const u8).bits(),
@@ -678,7 +719,11 @@ pub(super) fn call_listener_args(stream: f64, listener: f64, args: &[f64]) -> f6
     result
 }
 
-pub(super) extern "C" fn ns_capture_rejection(closure: *const ClosureHeader, reason: f64) -> f64 {
+pub(super) extern "C" fn ns_capture_rejection(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(super::TAG_UNDEFINED);
     }

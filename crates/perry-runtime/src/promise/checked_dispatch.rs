@@ -65,7 +65,12 @@ pub extern "C" fn js_promise_then_checked(
         // backing cell and reads `this.constructor` for species chaining.
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_then_thunk(std::ptr::null(), on_fulfilled, on_rejected);
+        let result = promise_prototype_then_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            on_fulfilled,
+            on_rejected,
+        );
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return result;
     }
@@ -86,7 +91,11 @@ pub extern "C" fn js_promise_catch_checked(promise_val: f64, on_rejected: f64) -
     {
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_catch_thunk(std::ptr::null(), on_rejected);
+        let result = promise_prototype_catch_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            on_rejected,
+        );
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return result;
     }
@@ -103,7 +112,11 @@ pub extern "C" fn js_promise_finally_checked(promise_val: f64, on_finally: f64) 
     {
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_finally_thunk(std::ptr::null(), on_finally);
+        let result = promise_prototype_finally_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            on_finally,
+        );
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return result;
     }

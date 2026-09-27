@@ -8,7 +8,10 @@ use super::*;
 /// continue an event-loop iteration early: Auth.js hashes its CSRF token with
 /// `subtle.digest`, so a Next.js Server Component's `await auth()` completed
 /// ahead of Node and reordered the React Flight (RSC) rows of the response.
-extern "C" fn webcrypto_digest_settle(closure: *const perry_runtime::ClosureHeader) -> f64 {
+extern "C" fn webcrypto_digest_settle(
+    closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let promise_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let value_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as u64;
     // Slot 2 holds the remaining macrotask hops (raw i64). Node's threadpool

@@ -50,6 +50,7 @@ fn callable_closure_ptr(value: f64) -> usize {
 /// fires the optional completion callback (see [`schedule_write_callback`]).
 extern "C" fn process_stdout_write_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -62,6 +63,7 @@ extern "C" fn process_stdout_write_stub(
 /// `write` impl for process.stderr. Same as stdout, targeting fd 2.
 extern "C" fn process_stderr_write_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -76,6 +78,7 @@ extern "C" fn process_stderr_write_stub(
 /// optional completion callback so an awaited `stdin.write(x, cb)` resolves.
 extern "C" fn process_stdin_write_noop_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -86,6 +89,7 @@ extern "C" fn process_stdin_write_noop_stub(
 
 extern "C" fn process_stream_emit_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_TRUE)
@@ -93,6 +97,7 @@ extern "C" fn process_stream_emit_stub(
 
 extern "C" fn process_stream_on_once_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -105,6 +110,7 @@ extern "C" fn process_stream_on_once_stub(
 /// Node's `this`-returning contract. Encoding-aware reads remain future work.
 extern "C" fn process_stream_set_encoding_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     crate::object::js_implicit_this_get()
@@ -155,6 +161,7 @@ fn stdin_reader_should_stop() -> bool {
 /// hold on the event loop and stops the reader. No-op return (`undefined`).
 extern "C" fn process_stdin_detach_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(true, std::sync::atomic::Ordering::Release);
@@ -171,6 +178,7 @@ extern "C" fn process_stdin_detach_stub(
 /// delivery (#9676). Node's contract: an unref'd stdin still emits `'data'`.
 extern "C" fn process_stdin_unref_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(true, std::sync::atomic::Ordering::Release);
@@ -185,6 +193,7 @@ extern "C" fn process_stdin_unref_stub(
 /// stream. `resume()` remains the one call that restarts a stopped reader.
 extern "C" fn process_stdin_ref_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
@@ -686,6 +695,7 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
 /// the reader can decide.
 extern "C" fn process_stdin_set_encoding(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     encoding: f64,
 ) -> f64 {
     let name = stdin_event_name(encoding).unwrap_or_default();
@@ -839,6 +849,7 @@ pub fn enable_process_stdin_keypress_events(callback: i64) {
 /// `process.stdin.addListener(event, cb)` / `.on(...)` reached as an object method.
 extern "C" fn process_stdin_add_listener(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -850,12 +861,13 @@ extern "C" fn process_stdin_add_listener(
         }
         return stdin_this_value();
     }
-    process_stdin_on(closure, event, callback)
+    process_stdin_on(closure, crate::closure::JsThis::current(), event, callback)
 }
 
 /// `process.stdin.once(event, cb)` reached as an object method.
 extern "C" fn process_stdin_add_listener_once(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -867,12 +879,13 @@ extern "C" fn process_stdin_add_listener_once(
         }
         return stdin_this_value();
     }
-    process_stdin_once(closure, event, callback)
+    process_stdin_once(closure, crate::closure::JsThis::current(), event, callback)
 }
 
 /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
 extern "C" fn process_stdin_remove_listener(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -938,6 +951,7 @@ fn clear_stdin_listener_list(list: &std::sync::Mutex<Vec<i64>>) {
 /// call that Node treats as authoritative.
 extern "C" fn process_stdin_remove_all_listeners(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let name = stdin_event_name(event);
@@ -999,6 +1013,7 @@ extern "C" fn process_stdin_remove_all_listeners(
 /// as a real array (empty when there are none), like Node's EventEmitter.
 extern "C" fn process_stdin_listeners(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let name = stdin_event_name(event).unwrap_or_default();
@@ -1193,6 +1208,7 @@ fn register_generic_stdin_keypress_listener(event: f64, callback: f64, once: boo
 /// listener and starts the reader. Returns `this` so callers can chain.
 extern "C" fn process_stdin_on(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1232,6 +1248,7 @@ extern "C" fn process_stdin_on(
 /// `process.stdin.once(event, cb)` — fires the listener exactly once.
 extern "C" fn process_stdin_once(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1269,7 +1286,11 @@ extern "C" fn process_stdin_once(
 /// `process.stdin.read([size])` — returns buffered input as a string (stdin is
 /// `setEncoding("utf8")` in practice) or `null` when nothing is buffered, per
 /// Node's `Readable.read()` contract.
-extern "C" fn process_stdin_read(_closure: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn process_stdin_read(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     let bytes = match STDIN_BUFFER.lock() {
         Ok(mut b) => std::mem::take(&mut *b),
         Err(_) => return f64::from_bits(crate::value::TAG_NULL),
@@ -1316,6 +1337,7 @@ pub fn reset_process_stdin_liveness_for_tests() {
 /// paused stdin can resume.
 extern "C" fn process_stdin_resume(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
@@ -1378,86 +1400,8 @@ mod empty_checkpoint_tests {
 }
 
 #[cfg(test)]
-mod reader_lifecycle_tests {
-    use super::{reader_slot_claim_start, reader_slot_claim_stop};
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// #10895: replays the interleaving that stranded fd 0 without a reader —
-    /// the reader decides to stop, and `resume()` asks for a restart BEFORE
-    /// the dying reader has finished leaving. The stop decision must already
-    /// have released the reader slot, or the restart's claim fails and nobody
-    /// ever reads stdin again.
-    ///
-    /// Runs on local flags: no fd-0 reader is spawned and no process-global
-    /// stdin state is touched, so it cannot disturb the liveness tests.
-    #[test]
-    fn a_restart_requested_while_the_reader_is_leaving_is_not_lost() {
-        // A reader is running and `pause()` has latched the detach.
-        let started = AtomicBool::new(true);
-        let detached = AtomicBool::new(true);
-        assert!(
-            reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)),
-            "a detached reader must decide to stop"
-        );
-        // `resume()`: clear the latch, then ask for a reader. The old reader
-        // has not run another instruction since its stop decision.
-        detached.store(false, Ordering::Release);
-        assert!(
-            reader_slot_claim_start(&started),
-            "restart lost: the stopping reader still held the reader slot"
-        );
-        // The respawned reader owns the slot; a second request is a no-op.
-        assert!(!reader_slot_claim_start(&started));
-    }
-
-    /// The other order: `resume()` clears the latch before the reader looks.
-    /// The reader keeps running and no second reader may be started on fd 0.
-    #[test]
-    fn a_resume_that_beats_the_stop_check_keeps_the_one_reader() {
-        let started = AtomicBool::new(true);
-        let detached = AtomicBool::new(true);
-        detached.store(false, Ordering::Release);
-        assert!(!reader_slot_claim_start(&started));
-        assert!(!reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)));
-        assert!(started.load(Ordering::Acquire));
-    }
-
-    /// Hammer the handshake from two threads: a "reader" that stops whenever
-    /// it sees the latch and a "main" that pauses/resumes. After every
-    /// resume the slot must be owned — by the surviving reader or by the
-    /// restart — never stranded.
-    #[test]
-    fn pause_resume_storm_never_strands_the_slot() {
-        use std::sync::Arc;
-        let started = Arc::new(AtomicBool::new(true));
-        let detached = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicBool::new(false));
-        let reader = {
-            let (started, detached, done) = (started.clone(), detached.clone(), done.clone());
-            std::thread::spawn(move || {
-                while !done.load(Ordering::Acquire) {
-                    // A live reader polls the latch between reads; one that
-                    // stopped waits to be "respawned" by main's claim.
-                    if started.load(Ordering::Acquire) {
-                        reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire));
-                    }
-                    std::hint::spin_loop();
-                }
-            })
-        };
-        for _ in 0..200_000 {
-            detached.store(true, Ordering::Release); // pause()
-            detached.store(false, Ordering::Release); // resume(): clear …
-            reader_slot_claim_start(&started); // … then ensure a reader
-            assert!(
-                started.load(Ordering::Acquire),
-                "resume() returned with no reader owning fd 0"
-            );
-        }
-        done.store(true, Ordering::Release);
-        reader.join().unwrap();
-    }
-}
+#[path = "os_process_streams/reader_lifecycle_tests.rs"]
+mod reader_lifecycle_tests;
 
 fn pump_stdin_data_chunks() {
     let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);

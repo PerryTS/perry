@@ -8,7 +8,11 @@ thread_local! {
     static COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-extern "C" fn moving_own_keys(_closure: *const crate::closure::ClosureHeader, target: f64) -> f64 {
+extern "C" fn moving_own_keys(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    target: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -131,6 +135,7 @@ fn for_in_grown_result_and_receiver_survive_prototype_collection() {
 
 extern "C" fn moving_descriptor(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
 ) -> f64 {
@@ -150,7 +155,10 @@ fn descriptor_trap_collection_preserves_for_in_target_and_keys() {
     run(false, true);
 }
 
-extern "C" fn moving_value(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_value(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     COPIED.with(|count| count.set(count.get() + trace.copying_nursery.copied_objects));
     23.0
@@ -158,6 +166,7 @@ extern "C" fn moving_value(_closure: *const crate::closure::ClosureHeader) -> f6
 
 extern "C" fn descriptor_with_moving_field(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _target: f64,
     _key: f64,
 ) -> f64 {

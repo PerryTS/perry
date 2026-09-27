@@ -176,7 +176,10 @@ pub(crate) fn signal_reason(_signal: f64) -> f64 {
     abort_error_value()
 }
 
-extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let promise_value = js_closure_get_capture_f64(closure, 0);
     let signal = js_closure_get_capture_f64(closure, 1);
     let promise =
@@ -216,6 +219,7 @@ fn event_value(name: &[u8]) -> f64 {
 
 extern "C" fn stream_promises_finished_error_listener(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
@@ -223,7 +227,10 @@ extern "C" fn stream_promises_finished_error_listener(
     undefined_value()
 }
 
-extern "C" fn stream_promises_finished_side_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_finished_side_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
     let readable_side = js_closure_get_capture_f64(closure, 1).to_bits() == crate::value::TAG_TRUE;
     if readable_side {
@@ -235,7 +242,10 @@ extern "C" fn stream_promises_finished_side_listener(closure: *const ClosureHead
     undefined_value()
 }
 
-extern "C" fn stream_promises_finished_close_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_finished_close_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
     if finished_state_bool(state, b"settled") {
         return undefined_value();
@@ -537,6 +547,7 @@ fn validate_pipeline_promise_args(source: f64, destination: f64) -> Option<f64> 
 
 extern "C" fn stream_promises_pipeline_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     value: f64,
 ) -> f64 {
@@ -562,6 +573,7 @@ fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_pipeline(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
     destination: f64,
     options_or_rest: f64,
@@ -607,6 +619,7 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_finished(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     stream: f64,
     options: f64,
 ) -> f64 {

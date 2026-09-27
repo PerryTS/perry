@@ -878,11 +878,17 @@ mod rebind_predicate_tests {
     // two `extern "C"` bodies with identical machine code get folded to one
     // address by the linker — which silently makes every case in this test the
     // same closure body.
-    extern "C" fn arrow_probe(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn arrow_probe(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         1.0
     }
 
-    extern "C" fn method_probe(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn method_probe(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         2.0
     }
 

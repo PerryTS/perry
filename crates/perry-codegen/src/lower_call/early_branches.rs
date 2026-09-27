@@ -481,10 +481,13 @@ pub fn try_lower_closure_typed_local_call(
                     // immediate side exit before any cold arm that can run
                     // user code or collect. Hot returns cannot collect; cold
                     // returns never observe caller-side cached heap handles.
+                    // An arrow (the versioned-loop clone admits only arrows):
+                    // lexical `this`, so the receiver parameter is unread.
                     let value = crate::expr::body_call::emit_js_body_call_gc_leaf(
                         ctx.block(),
                         &target,
                         &closure_handle,
+                        crate::expr::body_call::JS_THIS_UNDEFINED,
                         &direct_args,
                     );
                     callee_group.release(ctx);
@@ -506,10 +509,13 @@ pub fn try_lower_closure_typed_local_call(
                 ctx.block().cond_br(&fast_ok, &fast_label, &fallback_label);
 
                 ctx.current_block = fast_idx;
+                // The resolved target is an arrow (lexical `this`): the
+                // receiver parameter is unread.
                 let fast_value = crate::expr::body_call::emit_js_body_call(
                     ctx.block(),
                     crate::expr::body_call::JsBody::Pointer(&target),
                     &closure_handle,
+                    crate::expr::body_call::JS_THIS_UNDEFINED,
                     &lowered_args,
                 );
                 let after_fast = ctx.block().label.clone();
@@ -688,6 +694,14 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = fast_idx;
+                    // The body is handed the receiver the implicit-`this` cell
+                    // holds for this call (stage 1): `undefined` when this site
+                    // bound it above, else whatever the cell already holds.
+                    let direct_this_bits = if prev_this.is_some() {
+                        crate::expr::body_call::JS_THIS_UNDEFINED.to_string()
+                    } else {
+                        crate::expr::body_call::current_this_bits(ctx)
+                    };
                     let typed_f64_param_reps = if ctx.typed_f64_closures.contains(&func_id) {
                         ctx.typed_i1_closure_param_reps
                             .get(&func_id)
@@ -802,6 +816,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
+                            &direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -902,6 +917,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
+                            &direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1005,6 +1021,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
+                            &direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1111,6 +1128,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
+                            &direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1150,6 +1168,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&closure_fn),
                             &closure_handle,
+                            &direct_this_bits,
                             &lowered_args,
                         )
                     };

@@ -1038,6 +1038,7 @@ fn usp_thunk_receiver(closure: *const crate::closure::ClosureHeader) -> *mut Obj
 
 extern "C" fn usp_append_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     value: f64,
 ) -> f64 {
@@ -1047,6 +1048,7 @@ extern "C" fn usp_append_thunk(
 
 extern "C" fn usp_set_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     value: f64,
 ) -> f64 {
@@ -1054,7 +1056,11 @@ extern "C" fn usp_set_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn usp_get_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_get_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     // js_url_search_params_get returns a raw `*mut StringHeader` for the
     // static-lowering path; rebuild the boxed value here instead.
     let wanted = coerce_search_param_arg(name);
@@ -1065,7 +1071,11 @@ extern "C" fn usp_get_thunk(closure: *const crate::closure::ClosureHeader, name:
     }
 }
 
-extern "C" fn usp_has_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_has_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     if js_url_search_params_has(usp_thunk_receiver(closure), name) != 0.0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {
@@ -1073,7 +1083,11 @@ extern "C" fn usp_has_thunk(closure: *const crate::closure::ClosureHeader, name:
     }
 }
 
-extern "C" fn usp_delete_thunk(closure: *const crate::closure::ClosureHeader, name: f64) -> f64 {
+extern "C" fn usp_delete_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     js_url_search_params_delete(usp_thunk_receiver(closure), name);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

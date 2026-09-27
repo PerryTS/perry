@@ -1206,15 +1206,23 @@ fn dns_promise_reverse(args: i64) -> f64 {
     }
 }
 
-extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     undefined_value()
 }
 
-extern "C" fn dns_noop2_thunk(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn dns_noop2_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     undefined_value()
 }
 
-extern "C" fn dns_resolver_get_servers_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn dns_resolver_get_servers_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this_value = crate::object::js_implicit_this_get();
     let Some(obj) = resolver_object_from_value(this_value) else {
         return empty_array_value();
@@ -1224,6 +1232,7 @@ extern "C" fn dns_resolver_get_servers_thunk(_closure: *const ClosureHeader) -> 
 
 extern "C" fn dns_resolver_set_servers_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     servers_value: f64,
 ) -> f64 {
     let this_value = crate::object::js_implicit_this_get();

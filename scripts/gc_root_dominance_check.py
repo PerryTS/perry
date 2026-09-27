@@ -569,6 +569,9 @@ NONCOLLECTING = {
     "js_closure_unbox_callee_checked",
     # object/this_binding.rs:160 -- a thread-local cell swap
     "js_implicit_this_set", "js_implicit_this_get",
+    # object/this_binding.rs -- the stage-1 this-parameter witness (witness
+    # builds only): compares its argument with that same cell, two atomics.
+    "js_this_param_witness",
     # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
     # (:833). `_aware` is the same body behind an early return taken when
     # neither the new nor the old bits are pointer-bearing, so it does strictly

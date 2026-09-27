@@ -608,6 +608,7 @@ fn string_via_engine(receiver: f64, separator: f64, limit_value: f64) -> Result<
 
 pub(crate) extern "C" fn regexp_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     limit: f64,
 ) -> f64 {

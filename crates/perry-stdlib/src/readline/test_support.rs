@@ -15,7 +15,11 @@ pub(super) fn test_inject_chunk(chunk: &[u8]) {
     PENDING_DATA.lock().unwrap().push(chunk.to_vec());
 }
 
-extern "C" fn count_data_callback(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
+extern "C" fn count_data_callback(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _chunk: f64,
+) -> f64 {
     DATA_COUNT.with(|count| *count.borrow_mut() += 1);
     undefined()
 }
@@ -24,7 +28,10 @@ pub(super) fn data_counter_callback() -> i64 {
     js_closure_alloc(count_data_callback as *const u8, 0) as i64
 }
 
-extern "C" fn count_readable_callback(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn count_readable_callback(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     DATA_COUNT.with(|count| *count.borrow_mut() += 1);
     undefined()
 }
@@ -35,6 +42,7 @@ pub(super) fn readable_counter_callback() -> i64 {
 
 extern "C" fn record_keypress_callback(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _seq: f64,
     key_obj: f64,
 ) -> f64 {

@@ -916,11 +916,17 @@ pub(crate) fn make_dir_method(id: usize, func: *const u8) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
-pub(crate) extern "C" fn dir_read_sync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn dir_read_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     dir_read_next(dir_id_of(closure))
 }
 
-pub(crate) extern "C" fn dir_close_sync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn dir_close_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = dir_id_of(closure);
     match dir_close_sync_result(id) {
         Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -950,7 +956,10 @@ fn dir_clear_operation_pending(id: usize) {
     });
 }
 
-extern "C" fn dir_finish_read_promise_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_finish_read_promise_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = dir_id_of(closure);
     let promise =
         crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
@@ -982,7 +991,10 @@ fn dir_pending_read_promise(id: usize, result: Result<Option<f64>, f64>) -> f64 
     f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
 }
 
-extern "C" fn dir_finish_read_callback_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_finish_read_callback_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let id = dir_id_of(closure);
     let callback = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
@@ -1026,7 +1038,11 @@ fn dir_schedule_read_callback(
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
-pub(crate) extern "C" fn dir_read_impl(closure: *const ClosureHeader, callback: f64) -> f64 {
+pub(crate) extern "C" fn dir_read_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let id = dir_id_of(closure);
     let begin = dir_begin_async_operation(id);
@@ -1068,7 +1084,11 @@ pub(crate) extern "C" fn dir_read_impl(closure: *const ClosureHeader, callback: 
     }
 }
 
-pub(crate) extern "C" fn dir_close_impl(closure: *const ClosureHeader, callback: f64) -> f64 {
+pub(crate) extern "C" fn dir_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    callback: f64,
+) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let closed = dir_close_result(dir_id_of(closure));
     let cb = extract_closure_ptr(callback);
@@ -1121,7 +1141,10 @@ fn dir_iterator_result(value: f64, done: bool) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits())
 }
 
-extern "C" fn dir_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_iterator_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match dir_read_next_result(dir_iterator_id_of(closure)) {
         Ok(Some(value)) => promise_value_fs(dir_iterator_result(value, false)),
         Ok(None) => {
@@ -1135,7 +1158,10 @@ extern "C" fn dir_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn dir_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_iterator_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     dir_mark_closed(dir_iterator_id_of(closure));
     promise_value_fs(dir_iterator_result(
         f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -1143,25 +1169,40 @@ extern "C" fn dir_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
     ))
 }
 
-extern "C" fn dir_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_iterator_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     dir_iterator_self_value(closure)
 }
 
-extern "C" fn dir_entries_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_entries_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     unsafe { build_dir_iterator_object(dir_id_of(closure)) }
 }
 
-extern "C" fn dir_dispose_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_dispose_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     dir_mark_closed(dir_id_of(closure));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn dir_async_dispose_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_async_dispose_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     dir_mark_closed(dir_id_of(closure));
     promise_undefined_fs()
 }
 
-extern "C" fn dir_path_getter_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn dir_path_getter_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 

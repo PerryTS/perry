@@ -188,12 +188,18 @@ fn resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
-extern "C" fn bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bound_resolved_options_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", super::KIND_DISPLAY_NAMES);
     resolved_options_object(obj)
 }
 
-pub(super) extern "C" fn resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = this_intl_object("resolvedOptions", super::KIND_DISPLAY_NAMES);
     resolved_options_object(obj)
 }
@@ -339,17 +345,29 @@ fn of_value(obj: *const ObjectHeader, code_value: f64) -> f64 {
     }
 }
 
-extern "C" fn bound_of_thunk(closure: *const ClosureHeader, code: f64) -> f64 {
+extern "C" fn bound_of_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    code: f64,
+) -> f64 {
     let obj = captured_intl_object(closure, "of", super::KIND_DISPLAY_NAMES);
     of_value(obj, code)
 }
 
-pub(super) extern "C" fn of_thunk(_closure: *const ClosureHeader, code: f64) -> f64 {
+pub(super) extern "C" fn of_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    code: f64,
+) -> f64 {
     let obj = this_intl_object("of", super::KIND_DISPLAY_NAMES);
     of_value(obj, code)
 }
 
-pub(super) extern "C" fn constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn constructor_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     super::make_instance(
         closure,
         super::KIND_DISPLAY_NAMES,

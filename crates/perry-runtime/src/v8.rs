@@ -168,7 +168,10 @@ fn register_stop_trampoline_once() {
     });
 }
 
-extern "C" fn promise_hook_stop_trampoline(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_hook_stop_trampoline(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

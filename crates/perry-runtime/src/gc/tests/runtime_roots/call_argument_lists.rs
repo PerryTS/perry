@@ -31,6 +31,7 @@ fn seen() -> Vec<u64> {
 
 extern "C" fn record_this_and_six_args(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a0: f64,
     a1: f64,
     _a2: f64,
@@ -49,6 +50,7 @@ extern "C" fn record_this_and_six_args(
 
 extern "C" fn record_two_args(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a0: f64,
     a1: f64,
 ) -> f64 {
@@ -59,6 +61,7 @@ extern "C" fn record_two_args(
 #[allow(clippy::too_many_arguments)]
 extern "C" fn record_rest_and_arguments_after_16(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a0: f64,
     _a1: f64,
     _a2: f64,

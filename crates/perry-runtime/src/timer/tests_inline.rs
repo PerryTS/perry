@@ -145,7 +145,10 @@ mod mock_dispatch_own_pin_tests {
     /// the shared registry when the churn starts, so it is the very first one
     /// evicted once the churn passes the cap — and this callback observes its
     /// own eviction while it is still running.
-    extern "C" fn churn_then_check_self(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn churn_then_check_self(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let id = SELF_ID.load(Ordering::SeqCst);
         for _ in 0..(ref_states::TIMER_REF_STATES_CAP + 2_000) {
             // #340/#341: the producer returns the handle object; `clearTimeout`

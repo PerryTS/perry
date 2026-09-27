@@ -30,7 +30,10 @@
 
 use super::*;
 
-extern "C" fn test_bound_method_body(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn test_bound_method_body(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
 

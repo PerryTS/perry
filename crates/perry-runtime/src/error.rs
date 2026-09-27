@@ -1174,22 +1174,40 @@ fn throw_capture_stack_trace_target_type_error() -> ! {
 // .getFileName()` throws `(string).getFileName is not a function` and modules
 // like `next/dist/compiled/send` (bundled depd) crash at eager init.
 
-extern "C" fn callsite_undefined(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_undefined(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
-extern "C" fn callsite_null(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_null(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_NULL)
 }
-extern "C" fn callsite_zero(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_zero(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
-extern "C" fn callsite_false(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_false(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_FALSE)
 }
-extern "C" fn callsite_true(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_true(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_TRUE)
 }
-extern "C" fn callsite_to_string(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn callsite_to_string(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let s = js_string_from_bytes(b"<anonymous>".as_ptr(), 11);
     crate::value::js_nanbox_string(s as i64)
 }
@@ -1297,7 +1315,10 @@ unsafe fn compute_stack_value(receiver: f64) -> f64 {
 /// Lazy `stack` accessor installed by `Error.captureStackTrace`. Fires on read
 /// with `this` bound to the target object (V8 semantics: `prepareStackTrace` is
 /// consulted at access time, not capture time).
-extern "C" fn error_stack_lazy_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn error_stack_lazy_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let receiver = crate::object::js_implicit_this_get();
     unsafe { compute_stack_value(receiver) }
 }

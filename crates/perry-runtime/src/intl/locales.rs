@@ -27,6 +27,7 @@ pub(super) fn get_canonical_locales(locales: f64) -> f64 {
 
 pub(super) extern "C" fn get_canonical_locales_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     locales: f64,
 ) -> f64 {
     get_canonical_locales(locales)
@@ -151,6 +152,7 @@ fn supported_values_list(key: &str) -> Option<&'static [&'static str]> {
 
 pub(super) extern "C" fn supported_values_of_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     // Coerce `key` to String first (the spec's GetOption-like step), then a

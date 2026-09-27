@@ -6,7 +6,10 @@
 //! join is not vacuous), and checks the exiting thread's `Arena::drop`
 //! released it.
 
-extern "C" fn probe_thunk(_closure: *const perry_runtime::ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 

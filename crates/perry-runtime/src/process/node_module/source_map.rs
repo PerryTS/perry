@@ -97,7 +97,10 @@ fn source_map_method(name: &str, thunk: SourceMapThunk) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-extern "C" fn source_map_payload_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn source_map_payload_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = source_map_receiver();
     let scope = crate::gc::RuntimeHandleScope::new();
     let payload = scope.root_nanbox_f64(f64::from_bits(
@@ -106,7 +109,10 @@ extern "C" fn source_map_payload_getter(_closure: *const ClosureHeader) -> f64 {
     crate::builtins::js_structured_clone(payload.get_nanbox_f64())
 }
 
-extern "C" fn source_map_line_lengths_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn source_map_line_lengths_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = source_map_receiver();
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(
@@ -599,7 +605,11 @@ fn source_map_origin_object(
 /// decoded entry whose generated position is `<=` the query, shaped like
 /// Node's `{ generatedLine, generatedColumn, originalSource, originalLine,
 /// originalColumn, name? }`. Returns `{}` when no entry precedes the query.
-extern "C" fn source_map_find_entry_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn source_map_find_entry_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let _ = closure;
     let receiver = source_map_receiver();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -647,7 +657,11 @@ extern "C" fn source_map_find_entry_thunk(closure: *const ClosureHeader, rest: f
 /// not a finite number) and tags on the `name`/`fileName` of the entry at that
 /// generated position. The lone special case is a numeric `(0, 0)` query, for
 /// which Node returns an empty object.
-extern "C" fn source_map_find_origin_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn source_map_find_origin_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let _ = closure;
     let receiver = source_map_receiver();
     let scope = crate::gc::RuntimeHandleScope::new();

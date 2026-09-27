@@ -191,7 +191,12 @@ pub extern "C" fn js_import_meta_resolve(specifier: f64, parent: f64, fallback: 
     ))
 }
 
-extern "C" fn resolve_closure(closure: *mut ClosureHeader, specifier: f64, parent: f64) -> f64 {
+extern "C" fn resolve_closure(
+    closure: *mut ClosureHeader,
+    _this: crate::closure::JsThis,
+    specifier: f64,
+    parent: f64,
+) -> f64 {
     let fallback = js_closure_get_capture_f64(closure, 0);
     js_import_meta_resolve(specifier, parent, fallback)
 }

@@ -410,7 +410,10 @@ mod tests {
         );
     }
 
-    extern "C" fn listen_test_callback() -> f64 {
+    extern "C" fn listen_test_callback(
+        _closure: *const perry_ffi::RawClosureHeader,
+        _this: perry_ffi::JsThis,
+    ) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }
 

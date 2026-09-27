@@ -232,24 +232,35 @@ fn brand_type_error(method: &str) -> f64 {
 
 extern "C" fn array_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe { dispatch_on_implicit_this("next") }
 }
-extern "C" fn map_iterator_next_thunk(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn map_iterator_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     unsafe { dispatch_on_implicit_this("next") }
 }
-extern "C" fn set_iterator_next_thunk(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn set_iterator_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     unsafe { dispatch_on_implicit_this("next") }
 }
 extern "C" fn string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe { dispatch_on_implicit_this("next") }
 }
 extern "C" fn regexp_string_iterator_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe {
@@ -268,6 +279,7 @@ extern "C" fn regexp_string_iterator_next_thunk(
 /// a saved/bound canonical method must not re-enter a later `next` override.
 extern "C" fn iterator_helper_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     unsafe {
@@ -284,6 +296,7 @@ extern "C" fn iterator_helper_next_thunk(
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     super::js_implicit_this_get()
@@ -682,11 +695,17 @@ mod override_probe_allocation_tests {
 
     const PATCHED_SENTINEL: f64 = 4242.0;
 
-    extern "C" fn patched_next_thunk(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn patched_next_thunk(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         PATCHED_SENTINEL
     }
 
-    extern "C" fn accessor_getter_thunk(_closure: *const ClosureHeader) -> f64 {
+    extern "C" fn accessor_getter_thunk(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(TAG_UNDEFINED)
     }
 

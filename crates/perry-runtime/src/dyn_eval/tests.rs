@@ -444,7 +444,11 @@ fn generator_body_rejected_at_construction() {
 
 // ── host bridging: interpreted → host ──────────────────────────────────────
 
-extern "C" fn host_double_thunk(_closure: *const crate::closure::ClosureHeader, v: f64) -> f64 {
+extern "C" fn host_double_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    v: f64,
+) -> f64 {
     num(as_num_raw(v) * 2.0)
 }
 

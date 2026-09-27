@@ -762,6 +762,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_TYPED_FEEDBACK",
         "PERRY_TYPED_FEEDBACK_TRACE",
         "PERRY_CONCAT_SITE_CACHE",
+        "PERRY_THIS_WITNESS",
         "PERRY_FULL_OUTLINE_IC",
         "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
         "PERRY_OUTLINE_METHOD_DISPATCH",

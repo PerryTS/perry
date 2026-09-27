@@ -1574,8 +1574,7 @@ pub(super) fn emit_namespace_populator(
                         sanitize_member(source_local)
                     );
                     let arity = *param_count;
-                    let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
-                    wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
+                    let wrapper_params = crate::expr::body_call::js_body_param_types(arity);
                     ctx.pending_declares
                         .push((wrapper_name.clone(), DOUBLE, wrapper_params));
                     let blk = ctx.block();

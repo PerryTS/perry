@@ -27,10 +27,11 @@ use crate::nanbox::TAG_UNDEFINED;
 /// 3. **Identity functions** — `double(double)` functions that pass their
 ///    argument through unchanged. Used for `js_await_any_promise` and
 ///    similar pass-through points where the V8 runtime is not present.
-/// 4. **Closure-wrapper symbols** — `double(i64, double, double, double,
+/// 4. **Closure-wrapper symbols** — `double(i64, i64, double, double,
 ///    double, double, double)` functions returning NaN-boxed `TAG_UNDEFINED`.
-///    Match the closure-call ABI emitted by `expr.rs:~11783` for cross-
-///    module function-VALUE references (`__perry_wrap_perry_fn_<src>__<name>`).
+///    The JS body ABI (`perry_abi::JS_BODY_*`: callee, receiver, arguments)
+///    of the wrappers cross-module function-VALUE references name
+///    (`__perry_wrap_perry_fn_<src>__<name>`).
 ///    Used when a non-entry module fails to compile under `--allow-unimplemented`
 ///    so the link still succeeds; consumers that read the import as a closure
 ///    handle observe a singleton wrapping the undefined-return stub.
@@ -105,13 +106,12 @@ pub fn generate_stub_object_full(
         ));
     }
 
-    // 4. Closure-wrapper stubs — match the closure-call ABI emitted at
-    //    `crates/perry-codegen/src/expr.rs:~11783` for cross-module
-    //    function-VALUE references: `double name(i64 closure, double a0,
-    //    double a1, double a2, double a3, double a4)`. Return NaN-boxed
-    //    TAG_UNDEFINED. The 5-double arg list covers the max-arity 5
-    //    that `js_closure_call0..5` dispatches through; signature shape
-    //    matches the no-op variable/class branch at codegen.rs:~2750.
+    // 4. Closure-wrapper stubs — the JS body ABI of the wrappers
+    //    cross-module function-VALUE references name: `double name(i64
+    //    callee, i64 this, double a0, double a1, double a2, double a3,
+    //    double a4)`. Return NaN-boxed TAG_UNDEFINED. The stub reads no
+    //    argument, so its declared width is informational; it matches the
+    //    no-op variable/class wrappers in `codegen/export_value_wrappers.rs`.
     //
     //    Used by the failed-module stub block at
     //    `crates/perry/src/commands/compile.rs:~5518` so consumers that
@@ -126,7 +126,7 @@ pub fn generate_stub_object_full(
     //    Refs #903 / uuid `__perry_wrap_perry_fn_...sha1_js__default`.
     for name in wrapper_func_symbols {
         ll.push_str(&format!(
-            "define double @{}(i64 %0, double %1, double %2, double %3, double %4, double %5) {{\n  ret double {}\n}}\n\n",
+            "define double @{}(i64 %0, i64 %1, double %2, double %3, double %4, double %5, double %6) {{\n  ret double {}\n}}\n\n",
             name, undef_hex
         ));
     }

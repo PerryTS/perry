@@ -45,6 +45,7 @@ fn node_stream_duplex_from_source_chunks(source: f64) -> f64 {
 
 pub(super) extern "C" fn duplex_from_writable_write_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -58,6 +59,7 @@ pub(super) extern "C" fn duplex_from_writable_write_callback(
 
 pub(super) extern "C" fn duplex_from_writable_final_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -292,6 +294,7 @@ pub extern "C" fn js_node_stream_pipeline(args: *const crate::array::ArrayHeader
 
 pub(crate) extern "C" fn duplex_pair_write_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     cb: f64,
@@ -311,7 +314,11 @@ pub(crate) extern "C" fn duplex_pair_write_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(crate) extern "C" fn duplex_pair_final_callback(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn duplex_pair_final_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }

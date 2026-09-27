@@ -6,6 +6,7 @@ use super::*;
 
 extern "C" fn process_finalization_before_exit_listener(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _code: f64,
 ) -> f64 {
     js_process_run_finalization_before_exit();
@@ -191,6 +192,7 @@ pub fn scan_process_finalization_roots_mut(visitor: &mut crate::gc::RuntimeRootV
 
 extern "C" fn process_finalization_register_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     callback: f64,
 ) -> f64 {
@@ -199,6 +201,7 @@ extern "C" fn process_finalization_register_function(
 
 extern "C" fn process_finalization_register_before_exit_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
     callback: f64,
 ) -> f64 {
@@ -207,6 +210,7 @@ extern "C" fn process_finalization_register_before_exit_function(
 
 extern "C" fn process_finalization_unregister_function(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     obj: f64,
 ) -> f64 {
     process_finalization_unregister(obj)

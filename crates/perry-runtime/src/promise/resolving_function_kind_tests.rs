@@ -64,7 +64,11 @@ fn resolving_functions_answer_reflection_from_their_kind() {
     }
 }
 
-extern "C" fn unrelated_native_body(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn unrelated_native_body(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     value
 }
 

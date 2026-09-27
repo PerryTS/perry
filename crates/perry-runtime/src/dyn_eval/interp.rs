@@ -275,13 +275,18 @@ fn ensure_thunk_registered() {
 #[cfg(not(panic = "abort"))]
 extern "C-unwind" fn interp_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     raw_args: f64,
 ) -> f64 {
     interp_thunk_impl(closure, raw_args)
 }
 
 #[cfg(panic = "abort")]
-extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_args: f64) -> f64 {
+extern "C" fn interp_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    raw_args: f64,
+) -> f64 {
     interp_thunk_impl(closure, raw_args)
 }
 

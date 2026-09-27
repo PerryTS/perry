@@ -508,6 +508,7 @@ fn promise_from_assert_async_input(input: f64) -> AssertAsyncInput {
 
 extern "C" fn assert_rejects_fulfilled(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     let result =
@@ -527,6 +528,7 @@ extern "C" fn assert_rejects_fulfilled(
 
 extern "C" fn assert_rejects_rejected(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let result =
@@ -550,6 +552,7 @@ extern "C" fn assert_rejects_rejected(
 
 extern "C" fn assert_does_not_reject_fulfilled(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     let result =
@@ -560,6 +563,7 @@ extern "C" fn assert_does_not_reject_fulfilled(
 
 extern "C" fn assert_does_not_reject_rejected(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let result =

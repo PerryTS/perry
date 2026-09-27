@@ -110,6 +110,7 @@ fn settle_readable_from_promise_rejected(stream: f64, chunk: f64, reason: f64) {
 
 pub(super) extern "C" fn ns_readable_from_promise_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -123,6 +124,7 @@ pub(super) extern "C" fn ns_readable_from_promise_fulfilled(
 
 pub(super) extern "C" fn ns_readable_from_promise_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     if closure.is_null() {

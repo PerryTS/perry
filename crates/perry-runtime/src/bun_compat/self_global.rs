@@ -49,11 +49,15 @@ pub(super) fn install_once() {
     );
 }
 
-extern "C" fn get_self(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn get_self(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     crate::object::js_get_global_this()
 }
 
-extern "C" fn set_self(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn set_self(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     // Like Bun, even a borrowed setter replaces the current realm's property.
     // Once replaced, subsequent assignments are ordinary writable data stores.
     let _no_move = crate::gc::GcSuppressScope::new();
@@ -96,7 +100,7 @@ mod tests {
             global_value.to_bits()
         );
 
-        set_self(std::ptr::null(), 42.0);
+        set_self(std::ptr::null(), crate::closure::JsThis::current(), 42.0);
         assert!(crate::object::get_accessor_descriptor(global as usize, "self").is_none());
         super::super::js_set_bun_platform();
         assert_eq!(

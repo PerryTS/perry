@@ -390,7 +390,10 @@ fn process_channel_value() -> f64 {
     object_value(obj)
 }
 
-extern "C" fn process_channel_ref_fn(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_channel_ref_fn(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     process_ipc_ensure_initialized();
     let mut state = ipc_lock();
     if state.available && state.connected {
@@ -399,7 +402,10 @@ extern "C" fn process_channel_ref_fn(_closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn process_channel_unref_fn(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_channel_unref_fn(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     process_ipc_ensure_initialized();
     let mut state = ipc_lock();
     if state.available && state.connected {
@@ -408,12 +414,16 @@ extern "C" fn process_channel_unref_fn(_closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn process_ipc_disconnect_fn(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_ipc_disconnect_fn(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     process_ipc_disconnect_call()
 }
 
 extern "C" fn process_ipc_send_fn(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
     a2: f64,
     a3: f64,
@@ -562,7 +572,10 @@ fn defer_send_callback(cb: f64, ok: bool) {
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
 
-extern "C" fn process_ipc_send_callback_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_ipc_send_callback_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let cb = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     if crate::fs::extract_closure_ptr(cb).is_null() {
         return undefined_value();

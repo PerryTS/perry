@@ -284,6 +284,7 @@ pub(super) fn web_worker_global_handler(name: &str) -> Option<u64> {
 
 extern "C" fn web_worker_post_message(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     value: f64,
     _transfer: f64,
 ) -> f64 {
@@ -292,6 +293,7 @@ extern "C" fn web_worker_post_message(
 
 extern "C" fn web_worker_add_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
     _options: f64,
@@ -302,6 +304,7 @@ extern "C" fn web_worker_add_event_listener(
 
 extern "C" fn web_worker_remove_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -309,7 +312,10 @@ extern "C" fn web_worker_remove_event_listener(
     js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
 }
 
-extern "C" fn web_worker_close(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn web_worker_close(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(true));
     js_undefined()
 }
@@ -444,35 +450,70 @@ fn stream_remove_listener(event: f64, callback: f64) -> f64 {
     this
 }
 
-extern "C" fn stream_on(_closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn stream_on(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     stream_register(event, callback)
 }
 
-extern "C" fn stream_emit(_closure: *const ClosureHeader, event: f64, arg: f64) -> f64 {
+extern "C" fn stream_emit(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    arg: f64,
+) -> f64 {
     stream_emit_event(event, arg)
 }
 
-extern "C" fn stream_off(_closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn stream_off(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     stream_remove_listener(event, callback)
 }
 
-extern "C" fn stream_this0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_this0(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     stream_this()
 }
 
-extern "C" fn stream_this1(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn stream_this1(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     stream_this()
 }
 
-extern "C" fn stream_write(_closure: *const ClosureHeader, _chunk: f64, _encoding: f64) -> f64 {
+extern "C" fn stream_write(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _chunk: f64,
+    _encoding: f64,
+) -> f64 {
     js_bool(true)
 }
 
-extern "C" fn stream_read(_closure: *const ClosureHeader, _size: f64) -> f64 {
+extern "C" fn stream_read(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _size: f64,
+) -> f64 {
     js_null()
 }
 
-extern "C" fn stream_pipe(_closure: *const ClosureHeader, dest: f64) -> f64 {
+extern "C" fn stream_pipe(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    dest: f64,
+) -> f64 {
     dest
 }
 
@@ -532,6 +573,7 @@ fn worker_writable_stream_object() -> f64 {
 
 extern "C" fn worker_event_loop_utilization(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     util1: f64,
     util2: f64,
 ) -> f64 {
@@ -542,7 +584,10 @@ fn worker_profile_result(kind: &str) -> f64 {
     string_value(&format!("{{\"perryWorkerProfile\":\"{kind}\"}}"))
 }
 
-extern "C" fn worker_profile_stop(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_profile_stop(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let kind_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let kind = if kind_bits == 1 { "heap" } else { "cpu" };
     resolved_promise_value(worker_profile_result(kind))

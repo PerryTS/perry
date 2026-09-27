@@ -38,7 +38,10 @@ fn rejected_promise(reason: f64) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
 }
 
-extern "C" fn mkdtemp_disposable_remove_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mkdtemp_disposable_remove_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
     match remove_temp_dir_result(path_value) {
         Ok(()) => f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -46,7 +49,10 @@ extern "C" fn mkdtemp_disposable_remove_impl(closure: *const ClosureHeader) -> f
     }
 }
 
-extern "C" fn mkdtemp_disposable_async_remove_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn mkdtemp_disposable_async_remove_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let path_value = crate::closure::js_closure_get_capture_f64(closure, 0);
     match remove_temp_dir_result(path_value) {
         Ok(()) => resolved_promise(f64::from_bits(crate::value::TAG_UNDEFINED)),

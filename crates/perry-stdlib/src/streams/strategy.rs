@@ -15,12 +15,20 @@ use super::*;
 // node_submodules.
 
 /// `CountQueuingStrategy.prototype.size` — every chunk counts as 1.
-extern "C" fn count_queuing_strategy_size(_c: *const ClosureHeader, _chunk: f64) -> f64 {
+extern "C" fn count_queuing_strategy_size(
+    _c: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _chunk: f64,
+) -> f64 {
     1.0
 }
 
 /// `ByteLengthQueuingStrategy.prototype.size` — `chunk.byteLength`.
-extern "C" fn byte_length_queuing_strategy_size(_c: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn byte_length_queuing_strategy_size(
+    _c: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     // Mirror Node's `return chunk.byteLength`: the generic property getter
     // resolves `.byteLength` for both registered buffers/typed arrays and
     // plain `{ byteLength }` objects.
@@ -31,7 +39,7 @@ extern "C" fn byte_length_queuing_strategy_size(_c: *const ClosureHeader, chunk:
 /// is the raw JSValue bits read from the caller's options object.
 unsafe fn build_queuing_strategy(
     hwm_bits: u64,
-    size_fn: extern "C" fn(*const ClosureHeader, f64) -> f64,
+    size_fn: extern "C" fn(*const ClosureHeader, perry_runtime::closure::JsThis, f64) -> f64,
 ) -> f64 {
     let obj = js_object_alloc(0, 2);
     let keys = js_array_alloc(2);

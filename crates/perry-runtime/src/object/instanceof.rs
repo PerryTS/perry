@@ -462,6 +462,7 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
 /// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
 pub(crate) extern "C" fn function_prototype_has_instance_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let constructor = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));

@@ -295,12 +295,14 @@ fn string_value(ptr: *mut crate::string::StringHeader) -> f64 {
 
 pub(super) extern "C" fn number_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     number_receiver_or_throw("valueOf")
 }
 
 pub(super) extern "C" fn number_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     radix: f64,
 ) -> f64 {
     string_value(crate::value::js_jsvalue_to_string_radix(
@@ -311,6 +313,7 @@ pub(super) extern "C" fn number_proto_to_string_thunk(
 
 pub(super) extern "C" fn number_proto_to_fixed_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     decimals: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_fixed(
@@ -321,6 +324,7 @@ pub(super) extern "C" fn number_proto_to_fixed_thunk(
 
 pub(super) extern "C" fn number_proto_to_precision_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     precision: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_precision(
@@ -331,6 +335,7 @@ pub(super) extern "C" fn number_proto_to_precision_thunk(
 
 pub(super) extern "C" fn number_proto_to_exponential_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     decimals: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_exponential(
@@ -357,6 +362,7 @@ pub(super) extern "C" fn number_proto_to_exponential_thunk(
 /// (Intl builds a fresh instance per call; there is no formatter cache).
 pub(super) extern "C" fn number_proto_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let n = number_receiver_or_throw("toLocaleString");
@@ -379,12 +385,14 @@ pub(super) extern "C" fn number_proto_to_locale_string_thunk(
 
 pub(super) extern "C" fn boolean_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     boolean_receiver_or_throw("valueOf")
 }
 
 pub(super) extern "C" fn boolean_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let value = boolean_receiver_or_throw("toString");
     let bytes = if crate::value::JSValue::from_bits(value.to_bits()).as_bool() {
@@ -398,12 +406,14 @@ pub(super) extern "C" fn boolean_proto_to_string_thunk(
 
 pub(super) extern "C" fn symbol_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     symbol_receiver_or_throw("valueOf")
 }
 
 pub(super) extern "C" fn symbol_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let symbol = symbol_receiver_or_throw("toString");
     let s =
@@ -413,12 +423,14 @@ pub(super) extern "C" fn symbol_proto_to_string_thunk(
 
 pub(super) extern "C" fn bigint_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     bigint_receiver_or_throw("valueOf")
 }
 
 pub(super) extern "C" fn bigint_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     radix: f64,
 ) -> f64 {
     string_value(crate::value::js_jsvalue_to_string_radix(
@@ -429,6 +441,7 @@ pub(super) extern "C" fn bigint_proto_to_string_thunk(
 
 pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let value = bigint_receiver_or_throw("toLocaleString");
@@ -464,6 +477,7 @@ pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
 /// `TypeError` for any other receiver.
 pub(super) extern "C" fn string_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     string_receiver_or_throw("toString")
 }
@@ -472,6 +486,7 @@ pub(super) extern "C" fn string_proto_to_string_thunk(
 /// `toString()`: returns the [[StringData]] of the receiver.
 pub(super) extern "C" fn string_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     string_receiver_or_throw("valueOf")
 }

@@ -37,6 +37,7 @@ fn current_callback_record(index: usize) -> Option<NativeCallbackRecord> {
 
 extern "C" fn napi_callback_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arguments: f64,
 ) -> f64 {
     let env = current_env();

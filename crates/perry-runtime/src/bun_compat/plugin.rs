@@ -7,7 +7,11 @@ use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::value::{js_nanbox_pointer, JSValue};
 
-extern "C" fn ignore(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn ignore(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     undefined()
 }
 
@@ -132,12 +136,20 @@ mod tests {
         js_nanbox_pointer(js_closure_alloc(func as *const u8, 0) as i64)
     }
 
-    extern "C" fn loader(_closure: *const ClosureHeader, _args: f64) -> f64 {
+    extern "C" fn loader(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _args: f64,
+    ) -> f64 {
         LOADER_CALLS.fetch_add(1, Ordering::SeqCst);
         undefined()
     }
 
-    extern "C" fn setup(_closure: *const ClosureHeader, build: f64) -> f64 {
+    extern "C" fn setup(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        build: f64,
+    ) -> f64 {
         SETUP_CALLS.fetch_add(1, Ordering::SeqCst);
         let scope = RuntimeHandleScope::new();
         let build = scope.root_nanbox_f64(build);
@@ -193,7 +205,11 @@ mod tests {
         assert_eq!(LOADER_CALLS.load(Ordering::SeqCst), 0);
     }
 
-    extern "C" fn async_setup(_closure: *const ClosureHeader, _build: f64) -> f64 {
+    extern "C" fn async_setup(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _build: f64,
+    ) -> f64 {
         js_nanbox_pointer(crate::promise::js_promise_resolved(42.0) as i64)
     }
 

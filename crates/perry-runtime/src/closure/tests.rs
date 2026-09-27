@@ -1,6 +1,9 @@
 use super::*;
 
-extern "C" fn test_closure_func(closure: *const ClosureHeader) -> f64 {
+extern "C" fn test_closure_func(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let captured = js_closure_get_capture_f64(closure, 0);
     captured * 2.0
 }

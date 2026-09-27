@@ -207,9 +207,7 @@ pub(super) fn try_lower_imported_object_method_call(
     let key_index = ctx.strings.intern(property);
     let dispatch_global = ctx.strings.static_dispatch_global(key_index);
     let closure_symbol = method.target.clone();
-    let mut closure_params = Vec::with_capacity(method.param_count + 1);
-    closure_params.push(I64);
-    closure_params.extend(std::iter::repeat_n(DOUBLE, method.param_count));
+    let closure_params = crate::expr::body_call::js_body_param_types(method.param_count);
     ctx.pending_declares
         .push((closure_symbol.clone(), DOUBLE, closure_params));
 
@@ -244,10 +242,14 @@ pub(super) fn try_lower_imported_object_method_call(
         &closure_symbol,
         &fallback_label,
     );
+    // This direct call does not bind the implicit-`this` cell, so the body
+    // is handed the receiver the cell already holds (stage 1).
+    let this_bits = crate::expr::body_call::current_this_bits(ctx);
     let direct_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Symbol(&closure_symbol),
         &closure_handle,
+        &this_bits,
         &lowered_args,
     );
     let direct_end = ctx.block().label.clone();
@@ -381,9 +383,8 @@ pub(super) fn try_lower_dynamic_object_method_call(
             .cond_br(&receiver_matches, &cache_label, &miss_label);
 
         let closure_symbol = candidate.method.target.clone();
-        let mut closure_params = Vec::with_capacity(candidate.method.param_count + 1);
-        closure_params.push(I64);
-        closure_params.extend(std::iter::repeat_n(DOUBLE, candidate.method.param_count));
+        let closure_params =
+            crate::expr::body_call::js_body_param_types(candidate.method.param_count);
         ctx.pending_declares
             .push((closure_symbol.clone(), DOUBLE, closure_params));
         let closure_handle = emit_cached_own_method_guard(
@@ -397,10 +398,13 @@ pub(super) fn try_lower_dynamic_object_method_call(
             &closure_symbol,
             &miss_label,
         );
+        // As above: the cell is not bound here, the body gets its value.
+        let this_bits = crate::expr::body_call::current_this_bits(ctx);
         let direct_value = crate::expr::body_call::emit_js_body_call(
             ctx.block(),
             crate::expr::body_call::JsBody::Symbol(&closure_symbol),
             &closure_handle,
+            &this_bits,
             &lowered_args,
         );
         let direct_end = ctx.block().label.clone();

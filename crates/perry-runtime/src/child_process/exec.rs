@@ -459,6 +459,7 @@ pub extern "C" fn js_child_process_exec_file_sync(
 /// the error and reject with it. Arity 3. #4912/#1857.
 extern "C" fn cp_promise_settle_cb(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     stdout: f64,
     stderr: f64,
@@ -517,7 +518,12 @@ fn cp_promisified_run(
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
-extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, opts: f64) -> f64 {
+extern "C" fn cp_promisified_exec(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cmd_val: f64,
+    opts: f64,
+) -> f64 {
     validate::cp_validate_command(cmd_val, "command");
     let cmd = cp_value_to_string(cmd_val).unwrap_or_default();
     #[cfg(unix)]
@@ -549,6 +555,7 @@ extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, 
 
 extern "C" fn cp_promisified_exec_file(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     file_val: f64,
     args_val: f64,
 ) -> f64 {

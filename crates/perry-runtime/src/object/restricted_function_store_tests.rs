@@ -2,18 +2,21 @@
 
 extern "C" fn non_strict_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9525.0
 }
 
 extern "C" fn strict_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9526.0
 }
 
 extern "C" fn method_restricted_store_test_body(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     9527.0
 }

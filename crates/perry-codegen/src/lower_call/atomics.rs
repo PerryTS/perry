@@ -5,7 +5,6 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, PTR};
 
 fn is_global_this_atomics_expr(e: &Expr) -> bool {
     matches!(
@@ -60,9 +59,15 @@ pub fn try_lower_atomics_static_call(
         let _ = lower_expr(ctx, arg)?;
     }
 
-    let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(PTR, "null")];
-    for value in &lowered {
-        call_args.push((DOUBLE, value.as_str()));
-    }
-    Ok(Some(ctx.block().call(DOUBLE, runtime_fn, &call_args)))
+    // The `js_atomics_*` natives are JS bodies (the function objects
+    // `Atomics.load` &c. run): no environment, and this direct call does not
+    // bind the implicit-`this` cell, so they get the cell's receiver.
+    let this_bits = crate::expr::body_call::current_this_bits(ctx);
+    Ok(Some(crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Symbol(runtime_fn),
+        "0",
+        &this_bits,
+        &lowered,
+    )))
 }

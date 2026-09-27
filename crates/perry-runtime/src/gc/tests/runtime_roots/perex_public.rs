@@ -314,7 +314,10 @@ fn perex_public_throwing_lastindex_write_releases_native_scratch_and_roots() {
     );
 }
 
-extern "C" fn throw_on_coercion(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_on_coercion(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(731.0)
 }

@@ -71,7 +71,10 @@ fn take_exception(env: NapiEnv) -> NapiValue {
     exception
 }
 
-extern "C" fn plain_closure_body(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn plain_closure_body(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -557,7 +560,11 @@ thread_local! {
     static UNCAUGHT_CALLBACK_ERRORS: RefCell<usize> = const { RefCell::new(0) };
 }
 
-extern "C" fn count_uncaught_callback_error(_closure: *const ClosureHeader, _error: f64) -> f64 {
+extern "C" fn count_uncaught_callback_error(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _error: f64,
+) -> f64 {
     UNCAUGHT_CALLBACK_ERRORS.with(|count| *count.borrow_mut() += 1);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

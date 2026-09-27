@@ -182,6 +182,7 @@ pub(crate) fn date_time_format_range_parts_value(
 
 pub(crate) extern "C" fn date_time_format_range_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -194,6 +195,7 @@ pub(crate) extern "C" fn date_time_format_range_thunk(
 
 pub(crate) extern "C" fn date_time_format_bound_range_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -206,6 +208,7 @@ pub(crate) extern "C" fn date_time_format_bound_range_thunk(
 
 pub(crate) extern "C" fn date_time_format_range_to_parts_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -218,6 +221,7 @@ pub(crate) extern "C" fn date_time_format_range_to_parts_thunk(
 
 pub(crate) extern "C" fn date_time_format_bound_range_to_parts_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {

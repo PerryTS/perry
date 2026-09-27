@@ -48,6 +48,7 @@ unsafe fn finish_timerify_entry(name_value: f64, start_time: f64, histogram: f64
 
 extern "C" fn perf_timerify_settle(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     outcome: f64,
 ) -> f64 {
     unsafe {
@@ -64,6 +65,7 @@ extern "C" fn perf_timerify_settle(
 
 extern "C" fn perf_timerify_wrapper(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {

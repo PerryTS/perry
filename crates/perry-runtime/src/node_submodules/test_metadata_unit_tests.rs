@@ -1,6 +1,11 @@
 use super::*;
 
-extern "C" fn original_two_args(_closure: *const ClosureHeader, _first: f64, _second: f64) -> f64 {
+extern "C" fn original_two_args(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _first: f64,
+    _second: f64,
+) -> f64 {
     undefined_value()
 }
 

@@ -1339,6 +1339,7 @@ pub extern "C" fn js_async_resource_set_event_emitter(handle: i64, event_emitter
 /// the call-site `this` for a detached function.
 extern "C" fn async_resource_bind_method_trampoline(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -1626,7 +1627,11 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
 /// synthesized closure; receives the rest array of forwarded args and replays
 /// the call through `runInAsyncScope` so init/before/after/destroy fire with
 /// the bound resource's async id active.
-extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn async_resource_bind_trampoline(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -1782,6 +1787,7 @@ pub extern "C" fn js_async_resource_static_bind_direct(
 
 pub extern "C" fn js_async_resource_static_bind_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback_value: f64,
     type_value: f64,
     this_arg: f64,
@@ -1792,6 +1798,7 @@ pub extern "C" fn js_async_resource_static_bind_method(
 
 pub extern "C" fn js_async_local_storage_static_bind_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback_value: f64,
     _rest: f64,
 ) -> f64 {
@@ -1875,6 +1882,7 @@ fn call_callback_with_rest(callback_value: f64, this_arg: f64, rest: f64) -> f64
 
 extern "C" fn async_local_storage_snapshot_trampoline(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback_value: f64,
     rest: f64,
 ) -> f64 {
@@ -1914,6 +1922,7 @@ fn async_local_storage_static_snapshot_value() -> f64 {
 
 pub extern "C" fn js_async_local_storage_static_snapshot_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _rest: f64,
 ) -> f64 {
     async_local_storage_static_snapshot_value()

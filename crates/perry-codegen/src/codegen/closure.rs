@@ -140,12 +140,8 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
+    let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
     let _ = wf.create_block("entry");
 
@@ -169,10 +165,13 @@ fn emit_public_typed_closure_trampoline(
             emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
         },
         &mut |blk| {
+            // The generic body is this entry's own continuation: it gets the
+            // receiver this entry was given.
             crate::expr::body_call::emit_js_body_call(
                 blk,
                 crate::expr::body_call::JsBody::Symbol(generic_body_name),
-                "%this_closure",
+                crate::expr::body_call::JS_BODY_CALLEE,
+                crate::expr::body_call::JS_BODY_THIS,
                 &arg_names,
             )
         },
@@ -407,10 +406,12 @@ pub(super) fn compile_typed_i32_closure(
 
 /// Compile a closure body as a top-level LLVM function.
 ///
-/// Signature: `double perry_closure_<modprefix>__<func_id>(i64 this_closure,
-/// double arg0, double arg1, …)`. The first parameter is the closure
-/// pointer (raw i64); the remaining params are the closure's own
-/// declared parameters.
+/// Signature: the JS body ABI (`expr::body_call::js_body_params`),
+/// `double perry_closure_<modprefix>__<func_id>(i64 this_closure, i64
+/// js_this, double arg0, double arg1, …)`. The first parameter is the
+/// closure pointer (raw i64), the second the receiver bits (still read from
+/// the implicit-`this` cell, stage 1); the remaining params are the
+/// closure's own declared parameters.
 ///
 /// Inside the body, captured variables (`closure.captures`) are mapped
 /// to capture indices and accessed via the runtime
@@ -544,15 +545,26 @@ pub(super) fn compile_closure(
         ordinary_body_name
     };
 
-    // Param list: i64 this_closure, then each param as double. The private
-    // versioned-loop clone reuses its proven-unused first callback parameter
-    // for the caller's stack context, so its ABI and register footprint stay
-    // identical to the ordinary trusted clone.
-    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
-    llvm_params.push((I64, "%this_closure".to_string()));
-    for p in params {
-        llvm_params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
+    // Param list: the JS body ABI (`i64 %this_closure, i64 %js_this`), then
+    // each param as double. The private versioned-loop clone reuses its
+    // proven-unused first callback parameter for the caller's stack context,
+    // so its ABI and register footprint stay identical to the ordinary
+    // trusted clone.
+    let llvm_params =
+        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
+
+    // Stage-1 witness: a body that reads the implicit-`this` cell (it binds
+    // no lexical `this` of its own) checks, at entry, that its caller passed
+    // the cell's receiver as `%js_this`. Witness builds only.
+    let reads_this_cell = !captures_this
+        && enclosing_class.is_none()
+        && !is_arrow
+        && perry_hir::analysis::body_reads_dynamic_this(body);
+    let witness_site = if reads_this_cell {
+        crate::expr::body_call::this_witness_site(llmod, &llvm_name)
+    } else {
+        None
+    };
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -631,6 +643,10 @@ pub(super) fn compile_closure(
         crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
+    crate::expr::body_call::emit_this_param_witness(
+        lf.block_mut(0).expect("closure body has an entry block"),
+        witness_site.as_ref(),
+    );
 
     let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
         let scratch_param = params

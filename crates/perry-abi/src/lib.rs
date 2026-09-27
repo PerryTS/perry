@@ -37,23 +37,33 @@ pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
 pub const GC_HEADER_SIZE: usize = 8;
 
-
 /// The JS BODY calling convention. Every native body a function object runs —
 /// a compiled closure body, a value wrapper, a native builtin installed as a
 /// function object — is
 ///
 /// ```text
-/// double body(i64 callee, double a0, double a1, ...)
+/// double body(i64 callee, i64 this, double a0, double a1, ...)
 /// ```
 ///
-/// where `callee` is the function object (its captures follow the header).
+/// where `callee` is the function object (its captures follow the header) and
+/// `this` is the NaN-boxed receiver bits, passed in an INTEGER register so
+/// every floating-point argument register stays free for JS arguments (SysV
+/// x86-64 / AAPCS64; Win64 assigns positionally, which is equally correct).
 /// Passing more JS arguments than a body declares is safe (the caller owns
 /// the stack argument area); fewer is padded with `undefined` by the caller.
 /// The runtime calls bodies only through `closure/body_call.rs`; emitted code
 /// only through `expr::body_call::emit_js_body_call`.
+///
+/// While the implicit-`this` cell still exists (this-as-a-parameter stage 1),
+/// a caller passes exactly the receiver the cell holds for the call, so the
+/// parameter and the cell never disagree; bodies still read the cell.
 pub const JS_BODY_CALLEE_PARAM: usize = 0;
+/// Native parameter index of the receiver (`this`) bits.
+pub const JS_BODY_THIS_PARAM: usize = 1;
 /// Native parameter index of the first JS argument.
-pub const JS_BODY_FIRST_ARG_PARAM: usize = 1;
+pub const JS_BODY_FIRST_ARG_PARAM: usize = 2;
+/// Native parameters every JS body declares before its JS arguments.
+pub const JS_BODY_FIXED_PARAMS: usize = 2;
 /// `js_closure_call{N}(callee, a0..aN-1)` exists for `N <= JS_CLOSURE_CALL_MAX_ARGS`;
 /// wider calls use `js_closure_call_array`.
 pub const JS_CLOSURE_CALL_MAX_ARGS: usize = 16;

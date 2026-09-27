@@ -5,7 +5,10 @@ use super::{
     try_leave_resource_scope, AsyncResourceIds, RESOURCES,
 };
 
-extern "C" fn deferred_destroy_step(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn deferred_destroy_step(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let async_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u64;
     let remaining = crate::closure::js_closure_get_capture_f64(closure, 1) as u32;
     if remaining == 0 {

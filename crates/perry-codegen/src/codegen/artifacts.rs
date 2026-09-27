@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use crate::types::{LlvmType, DOUBLE, I64, VOID};
+use crate::types::{LlvmType, DOUBLE, VOID};
 
 use super::artifact_context::{ModuleArtifactsCtx, OptsView};
 use super::class_artifacts::{emit_class_artifacts, ClassArtifactsCtx};
@@ -304,9 +304,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
     // Methods have signature `perry_method_<...>(this_box, args...)`;
-    // the closure-call ABI is `(i64 closure, double a0, ...)` and
-    // doesn't carry a separate `this`. The receiver therefore comes from
-    // IMPLICIT_THIS, set by the dispatcher right before the call:
+    // the JS body ABI is `(i64 closure, i64 this, double a0, ...)`. The
+    // receiver still comes from IMPLICIT_THIS (stage 1 of this-as-a-parameter:
+    // the `this` parameter carries the same value, which witness builds
+    // check), set by the dispatcher right before the call:
     //   * A method-style invocation of a stored super-method value
     //     (`this._complete = super._complete; obj._complete()` — rxjs's
     //     `OperatorSubscriber` forwarding `complete`/`error`/`next` to the
@@ -331,13 +332,13 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 continue;
             }
             let arity = method.params.len();
-            let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
-            for i in 0..arity {
-                wrap_params.push((DOUBLE, format!("%a{}", i)));
-            }
+            let wrap_params =
+                crate::expr::body_call::js_body_params((0..arity).map(|i| format!("%a{}", i)));
+            let witness_site = crate::expr::body_call::this_witness_site(llmod, &wrap_name);
             let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
+            crate::expr::body_call::emit_this_param_witness(blk, witness_site.as_ref());
             // Forward the call-site receiver (IMPLICIT_THIS) as `this`,
             // then the args. See the block comment above (#5138).
             let this_box = blk.call(DOUBLE, "js_implicit_this_get", &[]);
@@ -380,14 +381,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         let wf = llmod.define_function(
             &wrap_name,
             DOUBLE,
-            vec![
-                (I64, "%this_closure".to_string()),
-                (DOUBLE, "%a0".to_string()),
-                (DOUBLE, "%a1".to_string()),
-                (DOUBLE, "%a2".to_string()),
-                (DOUBLE, "%a3".to_string()),
-                (DOUBLE, "%a4".to_string()),
-            ],
+            crate::expr::body_call::js_body_params((0..5).map(|i| format!("%a{i}"))),
         );
         // Fix #420 (v0.5.576): internal linkage keeps unsplit modules' copies
         // dead-code-eliminable. Split units promote the definition so calls
@@ -448,7 +442,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     let wrapper = llmod.define_function(
                         &wrapper_name,
                         DOUBLE,
-                        vec![(I64, "%this_closure".to_string())],
+                        crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
                     );
                     let _ = wrapper.create_block("entry");
                     let blk = wrapper.block_mut(0).unwrap();
@@ -465,7 +459,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     let wrapper = llmod.define_function(
                         &wrapper_name,
                         DOUBLE,
-                        vec![(I64, "%this_closure".to_string())],
+                        crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
                     );
                     let _ = wrapper.create_block("entry");
                     let blk = wrapper.block_mut(0).unwrap();
@@ -489,7 +483,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let wrapper = llmod.define_function(
                 &wrapper_name,
                 DOUBLE,
-                vec![(I64, "%this_closure".to_string())],
+                crate::expr::body_call::js_body_params(std::iter::empty::<String>()),
             );
             let _ = wrapper.create_block("entry");
             let blk = wrapper.block_mut(0).unwrap();

@@ -1,6 +1,9 @@
 use super::*;
 
-extern "C" fn test_current_async_id(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn test_current_async_id(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::async_hooks::execution_async_id_u64() as f64
 }
 

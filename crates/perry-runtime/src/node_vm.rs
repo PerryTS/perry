@@ -1467,6 +1467,7 @@ fn make_script(code: String, options: f64) -> f64 {
 
 extern "C" fn vm_script_create_cached_data_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _unused1: f64,
     _unused2: f64,
 ) -> f64 {
@@ -1482,6 +1483,7 @@ extern "C" fn vm_script_create_cached_data_method(
 
 extern "C" fn vm_script_run_in_this_context_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _options: f64,
     _unused: f64,
 ) -> f64 {
@@ -1502,6 +1504,7 @@ extern "C" fn vm_script_run_in_this_context_method(
 
 extern "C" fn vm_script_run_in_context_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     contextified_object: f64,
     _options: f64,
 ) -> f64 {
@@ -1521,6 +1524,7 @@ extern "C" fn vm_script_run_in_context_method(
 
 extern "C" fn vm_script_run_in_new_context_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     context_object: f64,
     options: f64,
 ) -> f64 {

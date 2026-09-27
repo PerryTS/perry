@@ -1,4 +1,9 @@
-extern "C" fn add(_closure: *const crate::closure::ClosureHeader, a: f64, b: f64) -> f64 {
+extern "C" fn add(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
     a + b
 }
 

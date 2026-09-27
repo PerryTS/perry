@@ -23,7 +23,11 @@ extern "C" fn test_direct_method(_this: f64, value: f64) -> f64 {
     value
 }
 
-extern "C" fn test_direct_closure(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn test_direct_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     TEST_DIRECT_CLOSURE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     arg
 }

@@ -641,7 +641,10 @@ mod tests {
         );
     }
 
-    extern "C" fn exact_factory(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn exact_factory(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let re = js_regexp_new_factory_site(
             string("x"),
             string("g"),
@@ -651,7 +654,10 @@ mod tests {
         crate::value::js_nanbox_pointer(re as i64)
     }
 
-    extern "C" fn replacement_factory(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn replacement_factory(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let object = crate::object::js_object_alloc(0, 0);
         crate::object::js_object_set_field_by_name(
             object,
@@ -662,11 +668,14 @@ mod tests {
     }
 
     #[inline(never)]
-    extern "C" fn nested_factory_wrapper(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn nested_factory_wrapper(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         // Keep this observably distinct from `exact_factory` under release
         // function merging while modeling a non-literal wrapper with effects.
         NESTED_WRAPPER_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        exact_factory(std::ptr::null())
+        exact_factory(std::ptr::null(), crate::closure::JsThis::current())
     }
 
     fn closure(function: *const u8) -> f64 {
@@ -802,7 +811,11 @@ mod tests {
         assert_eq!(TEST_DECLINED_CALLEE.with(std::cell::Cell::get), 1);
     }
 
-    extern "C" fn patched_test(_closure: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+    extern "C" fn patched_test(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _arg: f64,
+    ) -> f64 {
         f64::from_bits(crate::value::TAG_TRUE)
     }
 

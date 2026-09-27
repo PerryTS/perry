@@ -153,8 +153,20 @@ pub extern "C" fn js_closure_resolve_versioned_loop_direct_call(
 macro_rules! define_direct_call_site {
     (
         $(#[$meta:meta])*
-        $site:ident, $arity:literal, $slow:ident, $($arg:ident),+
+        $site:ident, $arity:literal, $entry:ident, $slow:ident, $($arg:ident),+
     ) => {
+        /// The fallback as a JS body: `$entry` is a call ENTRY (it takes no
+        /// receiver and reads the implicit-`this` cell itself), so the site
+        /// stores this adapter, which drops the receiver it is handed — the
+        /// same one the cell holds (stage 1 of this-as-a-parameter).
+        extern "C" fn $slow(
+            closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            $($arg: f64),+
+        ) -> f64 {
+            $entry(closure, $($arg),+)
+        }
+
         $(#[$meta])*
         #[derive(Clone, Copy)]
         pub struct $site(crate::closure::body_call::js_body_fn_ty!($($arg),+));
@@ -170,10 +182,11 @@ macro_rules! define_direct_call_site {
 
             /// Invoke with the CURRENT closure address (see the module docs on
             /// rooting). Falls back to the full dispatcher when the closure
-            /// did not resolve.
+            /// did not resolve. The body receives the receiver the
+            /// implicit-`this` cell holds, read at the call.
             #[inline]
             pub fn call(&self, closure: *const ClosureHeader, $($arg: f64),+) -> f64 {
-                (self.0)(closure, $($arg),+)
+                (self.0)(closure, crate::closure::JsThis::current(), $($arg),+)
             }
 
             /// Whether the direct target was resolved. Test-only: a "fast
@@ -195,6 +208,7 @@ define_direct_call_site!(
     DirectCall1,
     1,
     js_closure_call1,
+    direct_call1_fallback,
     arg0
 );
 
@@ -204,6 +218,7 @@ define_direct_call_site!(
     DirectCall2,
     2,
     js_closure_call2,
+    direct_call2_fallback,
     arg0,
     arg1
 );
@@ -215,6 +230,7 @@ define_direct_call_site!(
     DirectCall3,
     3,
     js_closure_call3,
+    direct_call3_fallback,
     arg0,
     arg1,
     arg2
@@ -226,6 +242,7 @@ define_direct_call_site!(
     DirectCall4,
     4,
     js_closure_call4,
+    direct_call4_fallback,
     arg0,
     arg1,
     arg2,
@@ -238,35 +255,75 @@ mod tests {
 
     // A capture-less body behind a real `ClosureHeader`, the same way
     // `array/tests.rs` and `array/typed_array_receiver_tests.rs` build theirs.
-    extern "C" fn add3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn add3(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+        c: f64,
+    ) -> f64 {
         a * 100.0 + b * 10.0 + c
     }
 
-    extern "C" fn sum2(_c: *const ClosureHeader, a: f64, b: f64) -> f64 {
+    extern "C" fn sum2(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+    ) -> f64 {
         a + b
     }
 
-    extern "C" fn ordinary3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn ordinary3(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+        c: f64,
+    ) -> f64 {
         a + b + c
     }
 
-    extern "C" fn rest_body(_c: *const ClosureHeader, _a: f64, _rest: f64) -> f64 {
+    extern "C" fn rest_body(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        _a: f64,
+        _rest: f64,
+    ) -> f64 {
         0.0
     }
 
-    extern "C" fn trusted_add3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn trusted_add3(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+        c: f64,
+    ) -> f64 {
         a * 100.0 + b * 10.0 + c
     }
 
-    extern "C" fn boxed1(_c: *const ClosureHeader, value: f64) -> f64 {
+    extern "C" fn boxed1(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        value: f64,
+    ) -> f64 {
         value
     }
 
-    extern "C" fn trusted_boxed1(_c: *const ClosureHeader, value: f64) -> f64 {
+    extern "C" fn trusted_boxed1(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        value: f64,
+    ) -> f64 {
         value
     }
 
-    extern "C" fn versioned_source(_c: *const ClosureHeader, value: f64) -> f64 {
+    extern "C" fn versioned_source(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        value: f64,
+    ) -> f64 {
         value
     }
 

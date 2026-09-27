@@ -263,6 +263,7 @@ pub fn on_background_receive(callback: f64) {
 #[no_mangle]
 unsafe extern "C" fn perry_ios_notification_completion_trampoline(
     closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0);

@@ -138,7 +138,10 @@ fn pipe_state_from_capture(closure: *const ClosureHeader) -> PipeState {
     }
 }
 
-extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_stream_pipe_to_microtask(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let r_id = capture_f64(closure, 0) as usize;
         let w_id = capture_f64(closure, 1) as usize;
@@ -150,6 +153,7 @@ extern "C" fn readable_stream_pipe_to_microtask(closure: *const ClosureHeader) -
 
 extern "C" fn readable_stream_pipe_to_read_fulfilled(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     result: f64,
 ) -> f64 {
     unsafe {
@@ -171,6 +175,7 @@ extern "C" fn readable_stream_pipe_to_read_fulfilled(
 
 extern "C" fn readable_stream_pipe_to_write_fulfilled(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _value: f64,
 ) -> f64 {
     unsafe {
@@ -187,6 +192,7 @@ extern "C" fn readable_stream_pipe_to_write_fulfilled(
 
 extern "C" fn readable_stream_pipe_to_close_fulfilled(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _value: f64,
 ) -> f64 {
     unsafe {
@@ -206,6 +212,7 @@ extern "C" fn readable_stream_pipe_to_close_fulfilled(
 
 extern "C" fn readable_stream_pipe_to_read_rejected(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     reason: f64,
 ) -> f64 {
     unsafe {
@@ -228,6 +235,7 @@ extern "C" fn readable_stream_pipe_to_read_rejected(
 
 extern "C" fn readable_stream_pipe_to_write_rejected(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     reason: f64,
 ) -> f64 {
     unsafe {
@@ -248,7 +256,10 @@ extern "C" fn readable_stream_pipe_to_write_rejected(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn readable_stream_pipe_to_aborted(closure: *const ClosureHeader) -> f64 {
+extern "C" fn readable_stream_pipe_to_aborted(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let promise = promise_from_capture(closure, 2);
         if perry_runtime::promise::js_promise_state(promise) != 0 {
@@ -427,6 +438,7 @@ unsafe fn cancel_source_and_reject(
 
 extern "C" fn readable_stream_pipe_to_shutdown_fulfilled(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     _value: f64,
 ) -> f64 {
     unsafe {
@@ -447,6 +459,7 @@ extern "C" fn readable_stream_pipe_to_shutdown_fulfilled(
 
 extern "C" fn readable_stream_pipe_to_shutdown_rejected(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     reason: f64,
 ) -> f64 {
     unsafe {
@@ -869,7 +882,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
             state.abort_listener,
         );
         if perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
-            readable_stream_pipe_to_aborted(listener);
+            readable_stream_pipe_to_aborted(listener, perry_runtime::closure::JsThis::current());
             return promise;
         }
     }
@@ -934,7 +947,11 @@ mod tests {
     use super::*;
     use crate::streams::{alloc_readable, alloc_writable};
 
-    extern "C" fn pending_abort_action(closure: *const ClosureHeader, _reason: f64) -> f64 {
+    extern "C" fn pending_abort_action(
+        closure: *const ClosureHeader,
+        _this: perry_runtime::closure::JsThis,
+        _reason: f64,
+    ) -> f64 {
         let promise =
             perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
         box_promise(promise)

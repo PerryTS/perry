@@ -885,7 +885,11 @@ fn run_custom_extension(path: &std::path::Path, record: f64, filename: &str) {
     }
 }
 
-extern "C" fn require_thunk(closure: *const ClosureHeader, id: f64) -> f64 {
+extern "C" fn require_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    id: f64,
+) -> f64 {
     let specifier = value_to_string(id, "id");
     if specifier.is_empty() {
         let message = "The argument 'id' must be a non-empty string";
@@ -907,7 +911,12 @@ extern "C" fn require_thunk(closure: *const ClosureHeader, id: f64) -> f64 {
     }
 }
 
-extern "C" fn resolve_thunk(closure: *const ClosureHeader, request: f64, _options: f64) -> f64 {
+extern "C" fn resolve_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    request: f64,
+    _options: f64,
+) -> f64 {
     let specifier = value_to_string(request, "request");
     if let Some(resolved) = resolve_builtin(&specifier) {
         return string_value(resolved);
@@ -920,7 +929,11 @@ extern "C" fn resolve_thunk(closure: *const ClosureHeader, request: f64, _option
     }
 }
 
-extern "C" fn resolve_paths_thunk(closure: *const ClosureHeader, request: f64) -> f64 {
+extern "C" fn resolve_paths_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    request: f64,
+) -> f64 {
     let specifier = value_to_string(request, "request");
     if supported_require_builtin(&specifier).is_some() {
         return null();
@@ -1512,7 +1525,7 @@ static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambien
 /// Returns the required value directly (no Promise).
 #[no_mangle]
 pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
-    require_thunk(std::ptr::null(), spec)
+    require_thunk(std::ptr::null(), crate::closure::JsThis::current(), spec)
 }
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-only

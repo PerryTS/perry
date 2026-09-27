@@ -58,7 +58,7 @@ fn young_promise_root() -> *mut Promise {
 /// The listener-registration FFIs take raw NaN-box bits and validate that the
 /// value is a closure. Allocate a real closure and return its NaN-boxed bits
 /// as i64; the sentinel function pointer is never invoked in these tests.
-extern "C" fn noop_listener(_c: *const RawClosureHeader) -> f64 {
+extern "C" fn noop_listener(_c: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 

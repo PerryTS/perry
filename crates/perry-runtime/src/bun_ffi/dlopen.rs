@@ -214,7 +214,11 @@ unsafe fn invoke_from_closure(closure: *const ClosureHeader, js_args: &[f64]) ->
 
 macro_rules! sym_thunk {
     ($name:ident $(, $a:ident)*) => {
-        extern "C" fn $name(closure: *const ClosureHeader $(, $a: f64)*) -> f64 {
+        extern "C" fn $name(
+            closure: *const ClosureHeader,
+            _this: crate::closure::JsThis
+            $(, $a: f64)*
+        ) -> f64 {
             let args = [$($a),*];
             unsafe { invoke_from_closure(closure, &args) }
         }
@@ -341,7 +345,7 @@ fn sym_thunk_for(arity: usize) -> *const u8 {
     }
 }
 
-extern "C" fn close_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn close_thunk(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let lib_index = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
     close_library_index(lib_index);
     super::undefined()
@@ -374,7 +378,10 @@ fn index_closure(func: *const u8, index: usize, arity: u32, name: &str) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-extern "C" fn noop_close_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn noop_close_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     super::undefined()
 }
 
@@ -1041,6 +1048,7 @@ unsafe fn parse_node_definition(
 
 extern "C" fn node_register_callback_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     signature: f64,
     callback: f64,
 ) -> f64 {
@@ -1048,7 +1056,11 @@ extern "C" fn node_register_callback_thunk(
     unsafe { super::callback::node_register_callback_value(lib, signature, callback) }
 }
 
-extern "C" fn node_unregister_callback_thunk(_closure: *const ClosureHeader, pointer: f64) -> f64 {
+extern "C" fn node_unregister_callback_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    pointer: f64,
+) -> f64 {
     unsafe { super::callback::node_unregister_callback_value(pointer) }
 }
 

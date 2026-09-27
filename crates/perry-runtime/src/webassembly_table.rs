@@ -57,7 +57,11 @@ pub(super) fn wasm_function_external(value: f64) -> *mut c_void {
     crate::closure::js_closure_get_capture_f64(closure, 6) as usize as *mut c_void
 }
 
-extern "C" fn js_wasm_table_get(closure: *const crate::closure::ClosureHeader, index: f64) -> f64 {
+extern "C" fn js_wasm_table_get(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    index: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let (external, inst, name, table) = table_method_context(&scope, closure);
     let values = scope.root_nanbox_f64(table_values(table.get_nanbox_f64()));
@@ -120,6 +124,7 @@ extern "C" fn js_wasm_table_get(closure: *const crate::closure::ClosureHeader, i
 
 extern "C" fn js_wasm_table_set(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     index: f64,
     value: f64,
 ) -> f64 {
@@ -163,6 +168,7 @@ extern "C" fn js_wasm_table_set(
 
 extern "C" fn js_wasm_table_grow(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     delta: f64,
     value: f64,
 ) -> f64 {

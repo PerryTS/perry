@@ -964,6 +964,7 @@ mod tests {
 
     extern "C" fn record_cb_thunk(
         _closure: *const perry_runtime::ClosureHeader,
+        _this: perry_runtime::closure::JsThis,
         err: f64,
         value: f64,
     ) -> f64 {

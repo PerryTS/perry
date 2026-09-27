@@ -956,6 +956,7 @@ unsafe fn invoke_create_socket(
 /// small handle on some codegen paths).
 unsafe extern "C" fn http_create_socket_cb(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     err: f64,
     socket: f64,
 ) -> f64 {

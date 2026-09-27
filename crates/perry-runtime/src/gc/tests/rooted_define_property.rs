@@ -77,7 +77,10 @@ fn addr_of(value: f64) -> usize {
 /// receiver `js_object_define_property` is holding — and then allocates the
 /// payload string, so the retired from-space bytes are reused before the caller
 /// reads its locals again.
-extern "C" fn moving_value_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_value_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     GETTER_COPIED_OBJECTS.with(|c| c.set(c.get() + trace.copying_nursery.copied_objects));
     string_value("payload")
@@ -252,7 +255,10 @@ fn desc_view_field_values_are_rooted() {
     }
 }
 
-extern "C" fn moving_writable_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_writable_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     GETTER_COPIED_OBJECTS.with(|c| c.set(c.get() + trace.copying_nursery.copied_objects));
     f64::from_bits(crate::value::TAG_TRUE)

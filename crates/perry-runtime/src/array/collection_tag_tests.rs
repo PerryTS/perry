@@ -355,6 +355,7 @@ thread_local! {
 
 extern "C" fn record_first_arg(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _index: f64,
     _receiver: f64,

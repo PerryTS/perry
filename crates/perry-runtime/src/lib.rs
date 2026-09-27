@@ -359,7 +359,7 @@ pub mod win_console;
 pub use array::ArrayHeader;
 pub use bigint::BigIntHeader;
 pub use buffer::BufferHeader;
-pub use closure::ClosureHeader;
+pub use closure::{ClosureHeader, JsThis};
 pub use map::MapHeader;
 pub use object::ObjectHeader;
 pub use object::{object_live_slot_count, perry_object_header_abi_revision};

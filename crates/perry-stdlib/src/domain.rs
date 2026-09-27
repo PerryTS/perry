@@ -459,7 +459,11 @@ pub extern "C" fn js_domain_exit(handle: Handle) -> f64 {
     undefined()
 }
 
-extern "C" fn domain_bound_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn domain_bound_wrapper(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as Handle;
         let callback = perry_runtime::closure::js_closure_get_capture_f64(closure, 1);
@@ -469,7 +473,11 @@ extern "C" fn domain_bound_wrapper(closure: *const ClosureHeader, rest: f64) -> 
     }
 }
 
-extern "C" fn domain_intercept_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn domain_intercept_wrapper(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as Handle;
         let callback = perry_runtime::closure::js_closure_get_capture_f64(closure, 1);

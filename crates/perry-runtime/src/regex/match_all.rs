@@ -141,6 +141,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64) -> Result<f64, EngineError> {
 
 pub(crate) extern "C" fn regexp_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     argument: f64,
 ) -> f64 {
     api::finish(regexp(crate::object::js_implicit_this_get(), argument))

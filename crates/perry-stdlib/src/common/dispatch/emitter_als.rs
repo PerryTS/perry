@@ -48,6 +48,7 @@ fn async_local_storage_method_name_static(property: &str) -> Option<&'static [u8
 
 extern "C" fn async_local_storage_unbound_method_thunk(
     closure: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {

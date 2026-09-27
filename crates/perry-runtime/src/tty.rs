@@ -620,6 +620,7 @@ fn validate_color_count(count: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_get_color_depth(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     env: f64,
 ) -> f64 {
     let jsval = JSValue::from_bits(env.to_bits());
@@ -635,6 +636,7 @@ pub extern "C" fn js_tty_write_stream_get_color_depth(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_has_colors(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     count: f64,
     env: f64,
 ) -> f64 {
@@ -908,6 +910,7 @@ pub(crate) fn is_tty_stream_instance(value: f64, class_name: &str) -> bool {
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_set_raw_mode(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     mode: f64,
 ) -> f64 {
     let enabled = crate::value::js_is_truthy(mode) != 0;
@@ -969,6 +972,7 @@ fn write_control_sequence(sequence: String) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_cursor_to(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     x: f64,
     y: f64,
     _callback: f64,
@@ -987,6 +991,7 @@ pub extern "C" fn js_tty_write_stream_cursor_to(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_move_cursor(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     dx: f64,
     dy: f64,
     _callback: f64,
@@ -1010,6 +1015,7 @@ pub extern "C" fn js_tty_write_stream_move_cursor(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_line(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     dir: f64,
     _callback: f64,
 ) -> f64 {
@@ -1024,6 +1030,7 @@ pub extern "C" fn js_tty_write_stream_clear_line(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_screen_down(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _callback: f64,
 ) -> f64 {
     write_control_sequence("\x1b[0J".to_string())
@@ -1046,7 +1053,10 @@ pub(crate) fn tty_write_stream_dimension(property: &str) -> Option<f64> {
 }
 
 #[no_mangle]
-pub extern "C" fn js_tty_write_stream_get_window_size(_closure: *const ClosureHeader) -> f64 {
+pub extern "C" fn js_tty_write_stream_get_window_size(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let fd = current_fd(1);
     let arr = crate::array::js_array_alloc(2);
     let (cols, rows) = winsize_value(fd).unwrap_or((0, 0));
@@ -1066,7 +1076,10 @@ pub extern "C" fn js_tty_write_stream_get_window_size(_closure: *const ClosureHe
 }
 
 #[no_mangle]
-pub extern "C" fn js_tty_write_stream_refresh_size(_closure: *const ClosureHeader) -> f64 {
+pub extern "C" fn js_tty_write_stream_refresh_size(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = winsize_value(current_fd(1));
     TAG_UNDEFINED_F64
 }
@@ -1083,6 +1096,7 @@ fn register_resize_callback(callback: i64) {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_on(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1098,6 +1112,7 @@ pub extern "C" fn js_tty_write_stream_on(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_listener(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     _callback: f64,
 ) -> f64 {
@@ -1110,6 +1125,7 @@ pub extern "C" fn js_tty_write_stream_remove_listener(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_all_listeners(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let event_js = JSValue::from_bits(event.to_bits());

@@ -24,7 +24,10 @@ fn caught_error_code(f: impl FnOnce() -> f64) -> &'static str {
         .expect("error should have a registered Node code")
 }
 
-extern "C" fn allocating_true_option(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn allocating_true_option(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = js_object_alloc(0, 0);
     f64::from_bits(crate::value::TAG_TRUE)
 }

@@ -276,6 +276,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // and reads globalThis, which allocates.
         | "js_implicit_this_set"
         | "js_implicit_this_get"
+        // Witness builds only (`PERRY_THIS_WITNESS=1`): compares its argument
+        // with the same cell `_get` reads, bumps two atomics and may write
+        // stderr. No Perry allocation, no re-entry into generated code.
+        | "js_this_param_witness"
         | "js_new_target_get"
         | "js_new_target_set"
         // #8596: TDZ-suppression window depth (`box.rs`). Each is a single

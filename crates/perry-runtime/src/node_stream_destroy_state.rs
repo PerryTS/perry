@@ -9,7 +9,10 @@ use super::{
     stream_value_from_handle, this_value, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
-pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_destroy_error_microtask(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -25,7 +28,11 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_destroy_option_done(closure: *const ClosureHeader, err: f64) -> f64 {
+extern "C" fn ns_destroy_option_done(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -78,7 +85,11 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     queue_destroy_events(stream, err);
 }
 
-pub(super) extern "C" fn ns_destroy1(closure: *const ClosureHeader, err: f64) -> f64 {
+pub(super) extern "C" fn ns_destroy1(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
     let stream = this_value(closure);
     destroy_stream(stream, err);
     stream

@@ -11,7 +11,10 @@
 //! Only reachable with perry-runtime built as an ordinary dependency: its own
 //! unit tests keep freed blocks mapped and make these tables per-thread.
 
-extern "C" fn probe_thunk(_closure: *const perry_runtime::ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 

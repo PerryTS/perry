@@ -83,7 +83,11 @@ fn register_events_on_arities() {
 
 /// The queue listener fired for each emitted event. Resolves a blocked `next()`
 /// Promise immediately if one is waiting, otherwise buffers the `[arg]` array.
-extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64) -> f64 {
+extern "C" fn events_on_queue_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    arg0: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
@@ -115,7 +119,10 @@ extern "C" fn events_on_queue_listener(closure: *const ClosureHeader, arg0: f64)
 
 /// `next()` — drain a buffered event, reject on abort, finish when done, or
 /// return a pending Promise the listener will resolve on the next event.
-extern "C" fn events_on_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_on_next(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
@@ -151,7 +158,10 @@ extern "C" fn events_on_next(closure: *const ClosureHeader) -> f64 {
 
 /// `return()` — end iteration: mark done, detach the listener, settle any
 /// blocked `next()` with `{ done: true }`.
-extern "C" fn events_on_return(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_on_return(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
@@ -191,13 +201,19 @@ extern "C" fn events_on_return(closure: *const ClosureHeader) -> f64 {
     events_resolved_iter_promise(f64::from_bits(TAG_UNDEFINED_F64_BITS), true)
 }
 
-extern "C" fn events_on_aiter_self(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_on_aiter_self(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     perry_runtime::closure::js_closure_get_capture_f64(closure, 0)
 }
 
 /// `queue[Symbol.asyncIterator]()` — build a fresh `{ next, return }` iterator
 /// object bound to the shared state.
-extern "C" fn events_on_async_iterator(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_on_async_iterator(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
 
     let state = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
@@ -250,7 +266,10 @@ unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader, state: *mut 
     );
 }
 
-extern "C" fn events_on_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_on_abort_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let handle = js_closure_get_capture_ptr(closure, 0) as Handle;

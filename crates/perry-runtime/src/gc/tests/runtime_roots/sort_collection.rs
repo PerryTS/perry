@@ -1,7 +1,12 @@
 use super::*;
 use crate::closure::ClosureHeader;
 
-extern "C" fn captured_direction(closure: *const ClosureHeader, a: f64, b: f64) -> f64 {
+extern "C" fn captured_direction(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
     // Model generated capture loads: no forwarding lookup can repair a stale
     // closure argument. The getter changes only the relocated capture.
     let direction = unsafe {
@@ -10,7 +15,10 @@ extern "C" fn captured_direction(closure: *const ClosureHeader, a: f64, b: f64) 
     direction * (a - b)
 }
 
-extern "C" fn collecting_getter(closure: *const ClosureHeader) -> f64 {
+extern "C" fn collecting_getter(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let getter = scope.root_raw_const_ptr(closure);
     gc_collect_minor();
@@ -25,11 +33,19 @@ extern "C" fn collecting_getter(closure: *const ClosureHeader) -> f64 {
     3.0
 }
 
-extern "C" fn accept_sorted_value(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn accept_sorted_value(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn collecting_index_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn collecting_index_setter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     gc_collect_minor();
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

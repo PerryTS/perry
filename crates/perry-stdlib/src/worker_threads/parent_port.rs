@@ -63,6 +63,7 @@ pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectH
 
 extern "C" fn worker_parent_port_add_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -72,6 +73,7 @@ extern "C" fn worker_parent_port_add_event_listener(
 
 extern "C" fn worker_parent_port_remove_event_listener(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -79,12 +81,17 @@ extern "C" fn worker_parent_port_remove_event_listener(
     js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
 }
 
-extern "C" fn worker_parent_port_post_message(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn worker_parent_port_post_message(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
     js_worker_threads_post_message(value)
 }
 
 extern "C" fn worker_parent_port_on(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -94,6 +101,7 @@ extern "C" fn worker_parent_port_on(
 
 extern "C" fn worker_parent_port_off(
     _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     _callback: f64,
 ) -> f64 {

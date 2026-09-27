@@ -340,12 +340,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dedupes against any later same-TU `define` (`module.rs:67-69`
             // comment) so this is safe for the same-module case too. The
             // signature is informational only (runtime dispatches via
-            // ClosureHeader's func_ptr); use the same `(i64)` + 0 doubles
-            // shape the imported-function-ref site at `expr/mod.rs:12331`
-            // uses for unknown-arity imports.
+            // ClosureHeader's func_ptr); use the JS body ABI with 0 doubles,
+            // the shape the imported-function-ref sites use for
+            // unknown-arity imports.
             let wrap_name = format!("__perry_wrap_{}", fn_name);
-            ctx.pending_declares
-                .push((wrap_name.clone(), DOUBLE, vec![I64]));
+            ctx.pending_declares.push((
+                wrap_name.clone(),
+                DOUBLE,
+                crate::expr::body_call::js_body_param_types(0),
+            ));
             let blk = ctx.block();
             let wrap_ptr = format!("@{}", wrap_name);
             let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);

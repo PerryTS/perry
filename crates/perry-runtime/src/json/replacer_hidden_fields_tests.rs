@@ -1,6 +1,11 @@
 use super::*;
 
-extern "C" fn identity(_closure: *const crate::ClosureHeader, _key: f64, value: f64) -> f64 {
+extern "C" fn identity(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _key: f64,
+    value: f64,
+) -> f64 {
     value
 }
 

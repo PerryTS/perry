@@ -167,6 +167,7 @@ fn is_callable(value: f64) -> bool {
 /// TypeError if either slot is already set (executor called twice).
 extern "C" fn capability_executor_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     resolve: f64,
     reject: f64,
 ) -> f64 {
@@ -392,6 +393,7 @@ fn dec_remaining(state: *mut crate::array::ArrayHeader) -> bool {
 /// Promise.all Resolve Element Function.
 extern "C" fn all_resolve_element_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let guard = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
@@ -414,6 +416,7 @@ extern "C" fn all_resolve_element_fn(
 /// Promise.allSettled Resolve Element Function → `{status:"fulfilled", value}`.
 extern "C" fn settled_fulfill_element_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     settled_element(closure, value, true)
@@ -422,6 +425,7 @@ extern "C" fn settled_fulfill_element_fn(
 /// Promise.allSettled Reject Element Function → `{status:"rejected", reason}`.
 extern "C" fn settled_reject_element_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     settled_element(closure, reason, false)
@@ -471,6 +475,7 @@ fn settled_element(
 /// AggregateError once all reject.
 extern "C" fn any_reject_element_fn(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let guard = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
@@ -1331,6 +1336,7 @@ mod fast_arm_tests {
 
     extern "C" fn own_then_fn(
         closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
         on_fulfilled: f64,
         _on_rejected: f64,
     ) -> f64 {

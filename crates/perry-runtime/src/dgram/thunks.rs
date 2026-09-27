@@ -8,42 +8,75 @@ use super::*;
 
 use crate::closure::ClosureHeader;
 
-pub(crate) extern "C" fn dgram_send_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_send_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     send_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_sendto_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_sendto_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     sendto_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_bind_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_bind_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     bind_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_close_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_close_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     close_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_address_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_address_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     address_impl(this_value(closure))
 }
 
 pub(crate) extern "C" fn dgram_remote_address_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _rest: f64,
 ) -> f64 {
     remote_address_impl(this_value(closure))
 }
 
-pub(crate) extern "C" fn dgram_connect_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_connect_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     connect_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_disconnect_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_disconnect_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     disconnect_impl(this_value(closure))
 }
 
-pub(crate) extern "C" fn dgram_on_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_on_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let socket = this_value(closure);
     let args = collect_rest_args(rest);
     let event = args.first().copied().unwrap_or_else(undefined_value);
@@ -52,7 +85,11 @@ pub(crate) extern "C" fn dgram_on_thunk(closure: *const ClosureHeader, rest: f64
     socket
 }
 
-pub(crate) extern "C" fn dgram_once_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_once_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let socket = this_value(closure);
     let args = collect_rest_args(rest);
     let event = args.first().copied().unwrap_or_else(undefined_value);
@@ -63,6 +100,7 @@ pub(crate) extern "C" fn dgram_once_thunk(closure: *const ClosureHeader, rest: f
 
 pub(crate) extern "C" fn dgram_remove_listener_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let socket = this_value(closure);
@@ -73,7 +111,11 @@ pub(crate) extern "C" fn dgram_remove_listener_thunk(
     socket
 }
 
-pub(crate) extern "C" fn dgram_emit_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_emit_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let socket = this_value(closure);
     let args = collect_rest_args(rest);
     let event = args.first().copied().unwrap_or_else(undefined_value);
@@ -83,6 +125,7 @@ pub(crate) extern "C" fn dgram_emit_thunk(closure: *const ClosureHeader, rest: f
 
 pub(crate) extern "C" fn dgram_listener_count_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let args = collect_rest_args(rest);
@@ -90,12 +133,17 @@ pub(crate) extern "C" fn dgram_listener_count_thunk(
     listener_snapshot(this_value(closure), event).len() as f64
 }
 
-pub(crate) extern "C" fn dgram_event_names_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_event_names_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     event_names_impl(this_value(closure))
 }
 
 pub(crate) extern "C" fn dgram_add_membership_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     membership_impl(
@@ -107,6 +155,7 @@ pub(crate) extern "C" fn dgram_add_membership_thunk(
 
 pub(crate) extern "C" fn dgram_drop_membership_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     membership_impl(
@@ -118,6 +167,7 @@ pub(crate) extern "C" fn dgram_drop_membership_thunk(
 
 pub(crate) extern "C" fn dgram_add_source_membership_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     source_membership_impl(
@@ -129,6 +179,7 @@ pub(crate) extern "C" fn dgram_add_source_membership_thunk(
 
 pub(crate) extern "C" fn dgram_drop_source_membership_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     source_membership_impl(
@@ -140,6 +191,7 @@ pub(crate) extern "C" fn dgram_drop_source_membership_thunk(
 
 pub(crate) extern "C" fn dgram_set_broadcast_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_broadcast_impl(this_value(closure), &collect_rest_args(rest))
@@ -147,6 +199,7 @@ pub(crate) extern "C" fn dgram_set_broadcast_thunk(
 
 pub(crate) extern "C" fn dgram_set_multicast_ttl_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_multicast_ttl_impl(this_value(closure), &collect_rest_args(rest))
@@ -154,6 +207,7 @@ pub(crate) extern "C" fn dgram_set_multicast_ttl_thunk(
 
 pub(crate) extern "C" fn dgram_set_multicast_loopback_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_multicast_loopback_impl(this_value(closure), &collect_rest_args(rest))
@@ -161,17 +215,23 @@ pub(crate) extern "C" fn dgram_set_multicast_loopback_thunk(
 
 pub(crate) extern "C" fn dgram_set_multicast_interface_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_multicast_interface_impl(this_value(closure), &collect_rest_args(rest))
 }
 
-pub(crate) extern "C" fn dgram_set_ttl_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_set_ttl_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     set_ttl_impl(this_value(closure), &collect_rest_args(rest))
 }
 
 pub(crate) extern "C" fn dgram_set_recv_buffer_size_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_buffer_size_impl(
@@ -184,6 +244,7 @@ pub(crate) extern "C" fn dgram_set_recv_buffer_size_thunk(
 
 pub(crate) extern "C" fn dgram_set_send_buffer_size_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     set_buffer_size_impl(
@@ -196,6 +257,7 @@ pub(crate) extern "C" fn dgram_set_send_buffer_size_thunk(
 
 pub(crate) extern "C" fn dgram_get_recv_buffer_size_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _rest: f64,
 ) -> f64 {
     get_buffer_size_impl(
@@ -207,6 +269,7 @@ pub(crate) extern "C" fn dgram_get_recv_buffer_size_thunk(
 
 pub(crate) extern "C" fn dgram_get_send_buffer_size_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _rest: f64,
 ) -> f64 {
     get_buffer_size_impl(
@@ -216,14 +279,26 @@ pub(crate) extern "C" fn dgram_get_send_buffer_size_thunk(
     )
 }
 
-pub(crate) extern "C" fn dgram_ref_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_ref_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     ref_impl(this_value(closure), true)
 }
 
-pub(crate) extern "C" fn dgram_unref_thunk(closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_unref_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     ref_impl(this_value(closure), false)
 }
 
-pub(crate) extern "C" fn dgram_zero_thunk(_closure: *const ClosureHeader, _rest: f64) -> f64 {
+pub(crate) extern "C" fn dgram_zero_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _rest: f64,
+) -> f64 {
     0.0
 }

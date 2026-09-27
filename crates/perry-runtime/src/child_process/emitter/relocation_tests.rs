@@ -2,7 +2,11 @@ use super::*;
 
 /// Simulate the runtime-root rewrite performed by a moving collection inside
 /// the first listener, without requiring a native stack map in a Rust test.
-extern "C" fn relocate(closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn relocate(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     for pair in 0..2 {
         let source = js_closure_get_capture_ptr(closure, pair * 2) as *mut u8;
         let destination = js_closure_get_capture_ptr(closure, pair * 2 + 1) as *mut u8;
@@ -16,7 +20,11 @@ extern "C" fn relocate(closure: *const ClosureHeader, _arg: f64) -> f64 {
     cp_undefined()
 }
 
-extern "C" fn observe(_closure: *const ClosureHeader, arg: f64) -> f64 {
+extern "C" fn observe(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     let target = crate::object::js_implicit_this_get();
     cp_set_field(target, b"seen", arg);
     cp_undefined()

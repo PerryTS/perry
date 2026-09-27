@@ -125,7 +125,10 @@ thread_local! {
 /// The form object's `toString`: forces a real copying minor — the moving
 /// collection a user `toString`'s loop back-edge polls would run — then
 /// returns the form name.
-extern "C" fn normalize_form_force_minor_gc(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn normalize_form_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     NORMALIZE_FORM_COERCIONS.with(|c| c.set(c.get() + 1));
     let _ = crate::gc::gc_collect_minor();
     test_string_value(b"NFC")

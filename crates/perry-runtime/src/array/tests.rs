@@ -10,6 +10,7 @@ mod strict_dense;
 
 extern "C" fn test_map_to_string(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _element: f64,
     _index: f64,
 ) -> f64 {
@@ -21,6 +22,7 @@ static DIRECT_SOME_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 extern "C" fn direct_some_is_two(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     element: f64,
     index: f64,
     _array: f64,

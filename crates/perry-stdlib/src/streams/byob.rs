@@ -432,7 +432,11 @@ pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handl
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
 }
 
-extern "C" fn byob_request_respond(closure: *const ClosureHeader, bytes_written: f64) -> f64 {
+extern "C" fn byob_request_respond(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    bytes_written: f64,
+) -> f64 {
     unsafe {
         let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let n = JSValue::from_bits(bytes_written.to_bits()).to_number();
@@ -503,7 +507,11 @@ extern "C" fn byob_request_respond(closure: *const ClosureHeader, bytes_written:
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn byob_request_respond_with_new_view(closure: *const ClosureHeader, view: f64) -> f64 {
+extern "C" fn byob_request_respond_with_new_view(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    view: f64,
+) -> f64 {
     unsafe {
         let stream_id = perry_runtime::closure::js_closure_get_capture_f64(closure, 0) as usize;
         let view_bits = view.to_bits();

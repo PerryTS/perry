@@ -390,6 +390,7 @@ pub extern "C" fn js_perry_tui_use_state_set(slot_idx: f64, value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn perry_tui_state_setter_trampoline(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     if closure.is_null() {

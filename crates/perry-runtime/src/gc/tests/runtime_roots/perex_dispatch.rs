@@ -67,18 +67,34 @@ fn test(receiver: &RuntimeHandle<'_>, input: &RuntimeHandle<'_>) -> bool {
     input.with_const_ptr(|input| crate::regex::js_regexp_test(raw, input)) != 0
 }
 
-extern "C" fn return_this(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn return_this(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     crate::object::js_implicit_this_get()
 }
-extern "C" fn return_null(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn return_null(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     f64::from_bits(TAG_NULL)
 }
-extern "C" fn read_answer(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn read_answer(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     api::finish(dispatch::get(&receiver, b"answer"))
 }
-extern "C" fn collect_and_echo(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn collect_and_echo(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let argument = scope.root_nanbox_f64(arg);
@@ -86,18 +102,25 @@ extern "C" fn collect_and_echo(_: *const crate::closure::ClosureHeader, arg: f64
     put(&receiver, b"seen", &argument);
     receiver.get_nanbox_f64()
 }
-extern "C" fn collecting_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collecting_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     let fp = collect_and_echo as *const u8;
     crate::closure::js_register_closure_arity(fp, 1);
     js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(fp) as i64)
 }
-extern "C" fn collect_missing_apply(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collect_missing_apply(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     f64::from_bits(TAG_UNDEFINED)
 }
 extern "C" fn echo_apply(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _target: f64,
     receiver: f64,
     args: f64,
@@ -115,23 +138,40 @@ extern "C" fn echo_apply(
     put(&receiver, b"seen", &value);
     receiver.get_nanbox_f64()
 }
-extern "C" fn throw_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn throw_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(843.0)
 }
-extern "C" fn throw_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(844.0)
 }
-extern "C" fn ordered_string(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_string(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ORDER.with(|n| n.set(n.get() * 10 + 1));
     js_nanbox_string(crate::string::js_string_from_bytes(b"x".as_ptr(), 1) as i64)
 }
-extern "C" fn ordered_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn ordered_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     ORDER.with(|n| n.set(n.get() * 10 + 3));
     js_nanbox_pointer(crate::array::js_array_alloc(0) as i64)
 }
-extern "C" fn ordered_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ORDER.with(|n| n.set(n.get() * 10 + 2));
     let fp = ordered_exec as *const u8;
     crate::closure::js_register_closure_arity(fp, 1);

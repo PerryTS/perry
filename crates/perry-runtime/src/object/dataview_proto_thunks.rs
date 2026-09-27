@@ -67,6 +67,7 @@ fn undef() -> f64 {
 
 extern "C" fn dataview_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let addr = require_dataview_receiver();
     let buf = addr as *const crate::buffer::BufferHeader;
@@ -77,13 +78,17 @@ extern "C" fn dataview_byte_length_getter_thunk(
 
 extern "C" fn dataview_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let addr = require_dataview_receiver();
     let offset = crate::buffer::buffer_byte_offset(addr);
     f64::from_bits(crate::value::JSValue::number(offset as f64).bits())
 }
 
-extern "C" fn dataview_buffer_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn dataview_buffer_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let addr = require_dataview_receiver();
     let backing = crate::buffer::buffer_backing_array_buffer(addr);
     f64::from_bits(crate::value::js_nanbox_pointer(backing as i64).to_bits())
@@ -133,6 +138,7 @@ macro_rules! dataview_get_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             offset: f64,
             rest: f64,
         ) -> f64 {
@@ -145,6 +151,7 @@ macro_rules! dataview_set_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
             offset: f64,
             value: f64,
             rest: f64,

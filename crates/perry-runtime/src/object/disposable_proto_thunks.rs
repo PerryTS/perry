@@ -55,6 +55,7 @@ fn stack_receiver_or_throw(want_async: bool, method: &str) -> *mut ObjectHeader 
 
 pub(super) extern "C" fn ds_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
     let stack = stack_receiver_or_throw(false, "use");
@@ -63,6 +64,7 @@ pub(super) extern "C" fn ds_proto_use_thunk(
 
 pub(super) extern "C" fn ds_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
@@ -72,24 +74,32 @@ pub(super) extern "C" fn ds_proto_adopt_thunk(
 
 pub(super) extern "C" fn ds_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
     let stack = stack_receiver_or_throw(false, "defer");
     js_disposable_stack_defer(stack, on_dispose)
 }
 
-pub(super) extern "C" fn ds_proto_dispose_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn ds_proto_dispose_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stack = stack_receiver_or_throw(false, "dispose");
     js_disposable_stack_dispose(stack)
 }
 
-pub(super) extern "C" fn ds_proto_move_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn ds_proto_move_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stack = stack_receiver_or_throw(false, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let stack = stack_receiver_or_throw(false, "disposed");
     js_disposable_stack_disposed(stack)
@@ -99,6 +109,7 @@ pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
 
 pub(super) extern "C" fn ads_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
     let stack = stack_receiver_or_throw(true, "use");
@@ -107,6 +118,7 @@ pub(super) extern "C" fn ads_proto_use_thunk(
 
 pub(super) extern "C" fn ads_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
@@ -116,6 +128,7 @@ pub(super) extern "C" fn ads_proto_adopt_thunk(
 
 pub(super) extern "C" fn ads_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
     let stack = stack_receiver_or_throw(true, "defer");
@@ -124,18 +137,23 @@ pub(super) extern "C" fn ads_proto_defer_thunk(
 
 pub(super) extern "C" fn ads_proto_dispose_async_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let stack = stack_receiver_or_throw(true, "disposeAsync");
     js_async_disposable_stack_dispose_async(stack)
 }
 
-pub(super) extern "C" fn ads_proto_move_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn ads_proto_move_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stack = stack_receiver_or_throw(true, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ads_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let stack = stack_receiver_or_throw(true, "disposed");
     js_disposable_stack_disposed(stack)

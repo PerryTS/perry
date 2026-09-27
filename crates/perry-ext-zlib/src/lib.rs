@@ -492,6 +492,7 @@ mod tests {
 
     extern "C" fn record_dispatch_callback(
         _closure: *const RawClosureHeader,
+        _this: perry_ffi::JsThis,
         err: f64,
         value: f64,
     ) -> f64 {
@@ -593,7 +594,12 @@ mod tests {
 
     #[test]
     fn external_dispatch_accepts_options_and_honors_level_zero() {
-        extern "C" fn callback(_closure: *const RawClosureHeader, err: f64, output: f64) -> f64 {
+        extern "C" fn callback(
+            _closure: *const RawClosureHeader,
+            _this: perry_ffi::JsThis,
+            err: f64,
+            output: f64,
+        ) -> f64 {
             assert_eq!(err.to_bits(), JsValue::NULL.bits());
             let bytes = read_buffer_bytes(
                 JsValue::from_bits(output.to_bits()).as_pointer::<BufferHeader>(),

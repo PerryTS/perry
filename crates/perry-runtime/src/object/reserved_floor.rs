@@ -238,7 +238,11 @@ mod tests {
     /// path `for…of`'s fused `js_for_of_next` takes).
     #[test]
     fn own_next_shadows_the_builtin_advance() {
-        extern "C" fn patched_next(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+        extern "C" fn patched_next(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            _arg: f64,
+        ) -> f64 {
             unsafe { crate::iter_result::make_iter_result(JSValue::number(777.0), false) }
         }
         unsafe {

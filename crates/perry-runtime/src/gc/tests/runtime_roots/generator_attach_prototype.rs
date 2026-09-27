@@ -36,7 +36,11 @@ use super::*;
 
 /// A function pointer to register in the generator-function registry. Never
 /// called — only its address is used.
-extern "C" fn fake_generator_body(_c: *const crate::closure::ClosureHeader, _a: f64) -> f64 {
+extern "C" fn fake_generator_body(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _a: f64,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

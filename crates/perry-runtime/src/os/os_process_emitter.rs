@@ -148,6 +148,7 @@ fn listener_lookup_ptr(listener_bits: i64) -> *const crate::closure::ClosureHead
 
 extern "C" fn process_once_raw_wrapper(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest_args: f64,
 ) -> f64 {
     if closure.is_null() {

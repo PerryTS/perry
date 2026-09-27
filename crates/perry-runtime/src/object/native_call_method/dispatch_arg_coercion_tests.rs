@@ -103,6 +103,7 @@ fn pad_start_coerces_target_and_defaults_the_fill() {
 
 extern "C" fn undef_replacer(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _matched: f64,
     _offset: f64,
     _whole: f64,

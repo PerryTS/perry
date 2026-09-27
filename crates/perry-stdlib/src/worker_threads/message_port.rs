@@ -97,7 +97,12 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
 }
 
 /// port.postMessage(value) — deliver to the peer port's inbox (#3157).
-extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _transfer: f64) -> f64 {
+extern "C" fn port_post_message(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+    _transfer: f64,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
         return js_worker_threads_post_message(value);
@@ -127,12 +132,22 @@ extern "C" fn port_post_message(closure: *const ClosureHeader, value: f64, _tran
 }
 
 /// port.on(event, callback) / addListener (#3157).
-extern "C" fn port_on(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn port_on(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     port_add_node_listener(closure, event, callback, false)
 }
 
 /// port.once(event, callback) (#6763).
-extern "C" fn port_once(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn port_once(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     port_add_node_listener(closure, event, callback, true)
 }
 
@@ -199,7 +214,12 @@ fn port_add_node_listener(
 }
 
 /// port.off(event) / removeListener (#3157).
-extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn port_off(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
@@ -237,7 +257,11 @@ extern "C" fn port_off(closure: *const ClosureHeader, event: f64, callback: f64)
     js_undefined()
 }
 
-extern "C" fn port_listener_count(closure: *const ClosureHeader, event: f64) -> f64 {
+extern "C" fn port_listener_count(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let event_name = string_value_to_string(event).unwrap_or_default();
     MESSAGE_PORTS.with(|ports| {
@@ -264,6 +288,7 @@ extern "C" fn port_listener_count(closure: *const ClosureHeader, event: f64) -> 
 /// port.addEventListener(event, callback) (#3598).
 extern "C" fn port_add_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
     options: f64,
@@ -318,6 +343,7 @@ extern "C" fn port_add_event_listener(
 /// port.removeEventListener(event, callback) (#3598).
 extern "C" fn port_remove_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -351,7 +377,10 @@ extern "C" fn port_remove_event_listener(
 }
 
 /// port.start() — enable delivery of queued messages to the listener (#3157).
-extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_start(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
@@ -361,7 +390,10 @@ extern "C" fn port_start(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
-extern "C" fn port_ref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_ref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         ports
@@ -380,7 +412,10 @@ extern "C" fn port_ref(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
-extern "C" fn port_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_unref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         ports
@@ -399,7 +434,10 @@ extern "C" fn port_unref(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
-extern "C" fn port_has_ref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_has_ref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let has_handler = MESSAGE_PORTS.with(|ports| {
         let ports = ports.borrow();
@@ -422,7 +460,10 @@ extern "C" fn port_has_ref(closure: *const ClosureHeader) -> f64 {
 }
 
 /// port.close() — mark closed and queue `close` events on both ends (#3157).
-extern "C" fn port_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_close(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let port_id = port_id_from_closure(closure);
     let peer_id = MESSAGE_PORTS.with(|ports| ports.borrow().get(&port_id).map(|state| state.peer));
     MESSAGE_PORTS.with(|ports| {

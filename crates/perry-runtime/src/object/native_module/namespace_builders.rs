@@ -327,6 +327,7 @@ unsafe fn global_agent_build_name(options: f64, is_https: bool) -> String {
 
 extern "C" fn global_agent_get_name_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
 ) -> f64 {
@@ -339,6 +340,7 @@ extern "C" fn global_agent_get_name_thunk(
 
 extern "C" fn global_agent_keep_socket_alive_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _socket: f64,
 ) -> f64 {
     f64::from_bits(JSValue::bool(true).bits())
@@ -346,6 +348,7 @@ extern "C" fn global_agent_keep_socket_alive_thunk(
 
 extern "C" fn global_agent_reuse_socket_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _socket: f64,
     _request: f64,
 ) -> f64 {
@@ -354,6 +357,7 @@ extern "C" fn global_agent_reuse_socket_thunk(
 
 extern "C" fn global_agent_listener_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -395,12 +399,16 @@ extern "C" fn global_agent_listener_thunk(
     }
 }
 
-extern "C" fn global_agent_destroy_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn global_agent_destroy_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
 extern "C" fn global_agent_add_request_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,

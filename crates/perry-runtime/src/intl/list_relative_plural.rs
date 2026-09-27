@@ -204,6 +204,7 @@ pub(crate) fn list_format_instance_parts(
 
 pub(crate) extern "C" fn list_format_format_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("format", KIND_LIST_FORMAT);
@@ -217,6 +218,7 @@ pub(crate) extern "C" fn list_format_format_thunk(
 
 pub(crate) extern "C" fn list_format_bound_format_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "format", KIND_LIST_FORMAT);
@@ -230,6 +232,7 @@ pub(crate) extern "C" fn list_format_bound_format_thunk(
 
 pub(crate) extern "C" fn list_format_to_parts_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("formatToParts", KIND_LIST_FORMAT);
@@ -238,6 +241,7 @@ pub(crate) extern "C" fn list_format_to_parts_thunk(
 
 pub(crate) extern "C" fn list_format_bound_to_parts_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "formatToParts", KIND_LIST_FORMAT);
@@ -264,13 +268,17 @@ pub(crate) fn list_format_resolved_options_object(obj: *const ObjectHeader) -> f
     js_nanbox_pointer(out as i64)
 }
 
-pub(crate) extern "C" fn list_format_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn list_format_resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_LIST_FORMAT);
     list_format_resolved_options_object(obj)
 }
 
 pub(crate) extern "C" fn list_format_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_LIST_FORMAT);
     list_format_resolved_options_object(obj)
@@ -585,6 +593,7 @@ fn rtf_parts_to_js_array(parts: &[(&'static str, String)], unit: &str) -> f64 {
 
 pub(crate) extern "C" fn rtf_format_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
@@ -599,6 +608,7 @@ pub(crate) extern "C" fn rtf_format_thunk(
 
 pub(crate) extern "C" fn rtf_bound_format_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
@@ -613,6 +623,7 @@ pub(crate) extern "C" fn rtf_bound_format_thunk(
 
 pub(crate) extern "C" fn rtf_to_parts_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
@@ -623,6 +634,7 @@ pub(crate) extern "C" fn rtf_to_parts_thunk(
 
 pub(crate) extern "C" fn rtf_bound_to_parts_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
@@ -658,12 +670,18 @@ pub(crate) fn rtf_resolved_options_object(obj: *const ObjectHeader) -> f64 {
     js_nanbox_pointer(out as i64)
 }
 
-pub(crate) extern "C" fn rtf_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn rtf_resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_RELATIVE_TIME);
     rtf_resolved_options_object(obj)
 }
 
-pub(crate) extern "C" fn rtf_bound_resolved_options_thunk(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn rtf_bound_resolved_options_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_RELATIVE_TIME);
     rtf_resolved_options_object(obj)
 }
@@ -987,6 +1005,7 @@ mod plural_category_tests {
 
 pub(crate) extern "C" fn plural_rules_select_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("select", KIND_PLURAL_RULES);
@@ -995,6 +1014,7 @@ pub(crate) extern "C" fn plural_rules_select_thunk(
 
 pub(crate) extern "C" fn plural_rules_bound_select_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "select", KIND_PLURAL_RULES);
@@ -1003,6 +1023,7 @@ pub(crate) extern "C" fn plural_rules_bound_select_thunk(
 
 pub(crate) extern "C" fn plural_rules_select_range_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -1103,6 +1124,7 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
 
 pub(crate) extern "C" fn plural_rules_resolved_options_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_PLURAL_RULES);
     plural_rules_resolved_options_object(obj)
@@ -1110,6 +1132,7 @@ pub(crate) extern "C" fn plural_rules_resolved_options_thunk(
 
 pub(crate) extern "C" fn plural_rules_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_PLURAL_RULES);
     plural_rules_resolved_options_object(obj)

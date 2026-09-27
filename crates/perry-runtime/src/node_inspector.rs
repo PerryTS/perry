@@ -1108,7 +1108,10 @@ fn promise_value(result: Result<f64, f64>) -> f64 {
     boxed_pointer(promise as *const u8)
 }
 
-extern "C" fn endpoint_dispose(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn endpoint_dispose(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_node_inspector_close()
 }
 
@@ -1180,6 +1183,7 @@ fn inspector_console_emit(kind: &str, first: f64, second: f64, third: f64) -> f6
 
 extern "C" fn inspector_console_log(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1189,6 +1193,7 @@ extern "C" fn inspector_console_log(
 
 extern "C" fn inspector_console_info(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1198,6 +1203,7 @@ extern "C" fn inspector_console_info(
 
 extern "C" fn inspector_console_debug(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1207,6 +1213,7 @@ extern "C" fn inspector_console_debug(
 
 extern "C" fn inspector_console_warn(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1216,6 +1223,7 @@ extern "C" fn inspector_console_warn(
 
 extern "C" fn inspector_console_error(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     first: f64,
     second: f64,
     third: f64,
@@ -1347,23 +1355,33 @@ pub extern "C" fn js_node_inspector_wait_for_debugger() -> f64 {
     undefined()
 }
 
-extern "C" fn session_connect_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn session_connect_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_connect(raw_ptr_from_value(this) as i64)
 }
 
-extern "C" fn session_connect_main_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn session_connect_main_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_connect_to_main_thread(raw_ptr_from_value(this) as i64)
 }
 
-extern "C" fn session_disconnect_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn session_disconnect_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_disconnect(raw_ptr_from_value(this) as i64)
 }
 
 extern "C" fn session_post_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     method: f64,
     params: f64,
     callback: f64,
@@ -1374,6 +1392,7 @@ extern "C" fn session_post_thunk(
 
 extern "C" fn promises_session_post_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     method: f64,
     params: f64,
     callback: f64,
@@ -1387,28 +1406,48 @@ extern "C" fn promises_session_post_thunk(
     )
 }
 
-extern "C" fn session_on_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+extern "C" fn session_on_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_on(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_once_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+extern "C" fn session_once_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_once(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_off_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
+extern "C" fn session_off_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_off(raw_ptr_from_value(this) as i64, event, listener)
 }
 
-extern "C" fn session_listener_count_thunk(_closure: *const ClosureHeader, event: f64) -> f64 {
+extern "C" fn session_listener_count_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    event: f64,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     js_node_inspector_session_listener_count(raw_ptr_from_value(this) as i64, event)
 }
 
 extern "C" fn session_remove_all_listeners_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();

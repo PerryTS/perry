@@ -809,6 +809,7 @@ pub(crate) fn is_worker_instance_value(value: f64) -> bool {
 
 extern "C" fn cluster_worker_send(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
     a2: f64,
     a3: f64,
@@ -817,34 +818,62 @@ extern "C" fn cluster_worker_send(
     if is_self_worker_value(crate::object::js_implicit_this_get()) {
         return crate::process::process_ipc_send_call(message, a2, a3, a4);
     }
-    crate::child_process::cp_method_send(std::ptr::null(), message, a2, a3, a4)
+    crate::child_process::cp_method_send(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        message,
+        a2,
+        a3,
+        a4,
+    )
 }
 
-extern "C" fn cluster_worker_kill(_closure: *const ClosureHeader, signal: f64) -> f64 {
+extern "C" fn cluster_worker_kill(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    signal: f64,
+) -> f64 {
     if is_self_worker_value(crate::object::js_implicit_this_get()) {
         let _ = crate::os::js_process_kill(crate::os::js_process_pid(), signal);
         return TAG_UNDEFINED_F64;
     }
-    let _ = crate::child_process::cp_method_kill(std::ptr::null(), signal);
+    let _ = crate::child_process::cp_method_kill(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+        signal,
+    );
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_worker_destroy(_closure: *const ClosureHeader, signal: f64) -> f64 {
-    cluster_worker_kill(std::ptr::null(), signal)
+extern "C" fn cluster_worker_destroy(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    signal: f64,
+) -> f64 {
+    cluster_worker_kill(std::ptr::null(), crate::closure::JsThis::current(), signal)
 }
 
-extern "C" fn cluster_worker_disconnect(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_worker_disconnect(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let worker = crate::object::js_implicit_this_get();
     set_field(worker, b"exitedAfterDisconnect", TAG_TRUE_F64);
     if is_self_worker_value(worker) {
         let _ = crate::process::process_ipc_disconnect_call();
     } else {
-        let _ = crate::child_process::cp_method_disconnect(std::ptr::null());
+        let _ = crate::child_process::cp_method_disconnect(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+        );
     }
     worker
 }
 
-extern "C" fn cluster_worker_is_connected(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_worker_is_connected(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let worker = crate::object::js_implicit_this_get();
     let connected = if is_self_worker_value(worker) {
         crate::process::ipc::process_ipc_property("connected").unwrap_or(TAG_FALSE_F64)
@@ -858,7 +887,10 @@ extern "C" fn cluster_worker_is_connected(_closure: *const ClosureHeader) -> f64
     }
 }
 
-extern "C" fn cluster_worker_is_dead(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_worker_is_dead(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if is_worker_dead(crate::object::js_implicit_this_get()) {
         TAG_TRUE_F64
     } else {
@@ -950,7 +982,10 @@ fn apply_setup_primary(settings_arg: f64) {
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
 
-extern "C" fn cluster_setup_emit_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_setup_emit_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let settings = js_closure_get_capture_f64(closure, 0);
     cluster_emit_event("setup", &[settings]);
     TAG_UNDEFINED_F64
@@ -962,7 +997,10 @@ fn defer_cluster_fork_event(worker: f64) {
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
 
-extern "C" fn cluster_fork_emit_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_fork_emit_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let worker = js_closure_get_capture_f64(closure, 0);
     cluster_emit_event("fork", &[worker]);
     TAG_UNDEFINED_F64
@@ -1316,7 +1354,10 @@ fn drain_disconnect_callbacks_if_idle() {
     }
 }
 
-extern "C" fn cluster_callback_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_callback_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let callback = f64::from_bits(crate::closure::js_closure_get_capture_ptr(closure, 0) as u64);
     unsafe {
         let _ = crate::closure::js_native_call_value(callback, std::ptr::null(), 0);
@@ -1324,17 +1365,27 @@ extern "C" fn cluster_callback_thunk(closure: *const ClosureHeader) -> f64 {
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_internal_online(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_internal_online(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     mark_worker_online(closure_this(closure));
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_internal_disconnect(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_internal_disconnect(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     mark_worker_disconnected(closure_this(closure));
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_internal_message(closure: *const ClosureHeader, message: f64) -> f64 {
+extern "C" fn cluster_internal_message(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    message: f64,
+) -> f64 {
     cluster_emit_event("message", &[closure_this(closure), message]);
     TAG_UNDEFINED_F64
 }
@@ -1355,13 +1406,21 @@ fn mark_worker_disconnected(worker: f64) {
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
 
-extern "C" fn cluster_disconnect_emit_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_disconnect_emit_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let worker = js_closure_get_capture_f64(closure, 0);
     cluster_emit_event("disconnect", &[worker]);
     TAG_UNDEFINED_F64
 }
 
-extern "C" fn cluster_internal_exit(closure: *const ClosureHeader, code: f64, signal: f64) -> f64 {
+extern "C" fn cluster_internal_exit(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    code: f64,
+    signal: f64,
+) -> f64 {
     let worker = closure_this(closure);
     if JSValue::from_bits(get_field(worker, b"exitedAfterDisconnect").to_bits()).is_undefined() {
         set_field(worker, b"exitedAfterDisconnect", TAG_FALSE_F64);
@@ -1400,7 +1459,10 @@ fn invoke_disconnect_callbacks_if_idle() {
     }
 }
 
-extern "C" fn cluster_exit_emit_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cluster_exit_emit_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let worker = js_closure_get_capture_f64(closure, 0);
     let code = js_closure_get_capture_f64(closure, 1);
     let signal = js_closure_get_capture_f64(closure, 2);

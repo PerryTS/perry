@@ -648,7 +648,10 @@ fn set_error_string_prop(error: *mut crate::error::ErrorHeader, name: &str, valu
 
 static WARNED_PROCESS_WARNING_TRACE_HINT: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn process_warning_callback(closure: *const ClosureHeader) -> f64 {
+extern "C" fn process_warning_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     use std::io::Write;
 
     if closure.is_null() {

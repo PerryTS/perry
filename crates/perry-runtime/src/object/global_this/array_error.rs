@@ -17,6 +17,7 @@ pub(crate) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
 
 pub(crate) extern "C" fn function_prototype_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     this_arg: f64,
     rest: f64,
 ) -> f64 {
@@ -63,6 +64,7 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
 /// hit exactly this: `Reflect.apply(bind, call, [fn])` yielded `undefined`.
 pub(crate) extern "C" fn function_prototype_bind_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     this_arg: f64,
     rest: f64,
 ) -> f64 {
@@ -75,6 +77,7 @@ pub(crate) extern "C" fn function_prototype_bind_thunk(
 
 pub(crate) extern "C" fn global_this_set_timeout_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     delay: f64,
     rest: f64,
@@ -97,6 +100,7 @@ pub(crate) extern "C" fn global_this_set_timeout_thunk(
 
 pub(crate) extern "C" fn global_this_clear_timeout_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     crate::timer::js_clear_timeout_value(arg);
@@ -105,6 +109,7 @@ pub(crate) extern "C" fn global_this_clear_timeout_thunk(
 
 pub(crate) extern "C" fn global_this_set_interval_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     delay: f64,
     rest: f64,
@@ -127,6 +132,7 @@ pub(crate) extern "C" fn global_this_set_interval_thunk(
 
 pub(crate) extern "C" fn global_this_clear_interval_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     crate::timer::js_clear_interval_value(arg);
@@ -135,6 +141,7 @@ pub(crate) extern "C" fn global_this_clear_interval_thunk(
 
 pub(crate) extern "C" fn global_this_set_immediate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
@@ -151,6 +158,7 @@ pub(crate) extern "C" fn global_this_set_immediate_thunk(
 
 pub(crate) extern "C" fn global_this_clear_immediate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     crate::timer::js_clear_immediate_value(arg);
@@ -159,6 +167,7 @@ pub(crate) extern "C" fn global_this_clear_immediate_thunk(
 
 pub(crate) extern "C" fn global_this_queue_microtask_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     let callback = unsafe { crate::timer::js_timer_validate_callback(callback, 3) };
@@ -182,6 +191,7 @@ pub(crate) extern "C" fn global_this_queue_microtask_thunk(
 /// `undefined`, so the `.call` access threw before the IIFE body ran.
 pub(crate) extern "C" fn object_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Delegate to the canonical `js_object_to_string` so this callable form
     // (`const f = Object.prototype.toString; f.call(x)`) shares the full brand
@@ -195,6 +205,7 @@ pub(crate) extern "C" fn object_prototype_to_string_thunk(
 
 pub(crate) extern "C" fn object_prototype_is_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -248,6 +259,7 @@ pub(crate) fn is_native_error_subclass_constructor(name: &str) -> bool {
 
 pub(crate) extern "C" fn date_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     // ECMA-262 21.4.4.41 Date.prototype.toString does `thisTimeValue(this)`,
@@ -263,6 +275,7 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
 
 pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -271,6 +284,7 @@ pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
 
 pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -282,6 +296,7 @@ pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
 // not just the direct `o.__defineGetter__(...)` native-dispatch path.
 pub(crate) extern "C" fn object_prototype_define_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
     getter: f64,
 ) -> f64 {
@@ -291,6 +306,7 @@ pub(crate) extern "C" fn object_prototype_define_getter_thunk(
 
 pub(crate) extern "C" fn object_prototype_define_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
     setter: f64,
 ) -> f64 {
@@ -300,6 +316,7 @@ pub(crate) extern "C" fn object_prototype_define_setter_thunk(
 
 pub(crate) extern "C" fn object_prototype_lookup_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -308,6 +325,7 @@ pub(crate) extern "C" fn object_prototype_lookup_getter_thunk(
 
 pub(crate) extern "C" fn object_prototype_lookup_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -316,6 +334,7 @@ pub(crate) extern "C" fn object_prototype_lookup_setter_thunk(
 
 pub(crate) extern "C" fn error_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     let this_jsv = crate::value::JSValue::from_bits(this_value.to_bits());
@@ -381,6 +400,7 @@ unsafe fn string_header_to_owned(ptr: *const crate::StringHeader) -> String {
 
 pub(crate) extern "C" fn object_prototype_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     unsafe { super::super::js_object_default_value_of(this_value) }
@@ -388,6 +408,7 @@ pub(crate) extern "C" fn object_prototype_value_of_thunk(
 
 pub(crate) extern "C" fn object_prototype_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     unsafe { super::super::js_object_prototype_to_locale_string(this_value) }
@@ -570,6 +591,7 @@ pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array
 
 pub(crate) extern "C" fn function_prototype_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     this_arg: f64,
     args_array: f64,
 ) -> f64 {
@@ -605,6 +627,7 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
 /// `Object.prototype.toString` (which keeps its own real thunk).
 pub(crate) extern "C" fn function_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
     let this_jsv = JSValue::from_bits(this_bits);
@@ -662,6 +685,7 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
 /// `Cannot read properties of undefined (reading 'call')` at module init.
 pub(crate) extern "C" fn array_prototype_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     start_val: f64,
     end_val: f64,
 ) -> f64 {
@@ -738,6 +762,7 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
 /// iterate the receiver they are given.
 pub(crate) extern "C" fn array_prototype_values_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -746,6 +771,7 @@ pub(crate) extern "C" fn array_prototype_values_thunk(
 
 pub(crate) extern "C" fn array_prototype_flat_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     depth: f64,
 ) -> f64 {
     crate::array::js_arraylike_flat(crate::object::js_implicit_this_get(), depth)
@@ -753,6 +779,7 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
 
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -760,6 +787,7 @@ pub(crate) extern "C" fn array_prototype_pop_thunk(
 }
 pub(crate) extern "C" fn array_prototype_shift_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -767,6 +795,7 @@ pub(crate) extern "C" fn array_prototype_shift_thunk(
 }
 pub(crate) extern "C" fn array_prototype_reverse_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -774,6 +803,7 @@ pub(crate) extern "C" fn array_prototype_reverse_thunk(
 }
 pub(crate) extern "C" fn array_prototype_push_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -782,6 +812,7 @@ pub(crate) extern "C" fn array_prototype_push_thunk(
 }
 pub(crate) extern "C" fn array_prototype_unshift_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -790,6 +821,7 @@ pub(crate) extern "C" fn array_prototype_unshift_thunk(
 }
 pub(crate) extern "C" fn array_prototype_splice_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -798,6 +830,7 @@ pub(crate) extern "C" fn array_prototype_splice_thunk(
 }
 pub(crate) extern "C" fn array_prototype_sort_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     comparator: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -814,6 +847,7 @@ pub(crate) extern "C" fn array_prototype_sort_thunk(
 /// the `end` params the spec resolves `undefined` to `len`).
 pub(crate) extern "C" fn array_prototype_fill_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -832,6 +866,7 @@ pub(crate) extern "C" fn array_prototype_fill_thunk(
 }
 pub(crate) extern "C" fn array_prototype_copy_within_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -858,7 +893,11 @@ pub(crate) extern "C" fn array_prototype_copy_within_thunk(
 macro_rules! array_proto_arraylike_cb_thunk {
     ($name:ident, $engine:path) => {
         #[allow(non_snake_case)] // thunk name mirrors JS API surface
-        pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+        pub(crate) extern "C" fn $name(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            rest: f64,
+        ) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);
             let a = |i: usize| {
@@ -895,7 +934,11 @@ array_proto_arraylike_cb_thunk!(
 macro_rules! array_proto_arraylike_optarg_thunk {
     ($name:ident, $engine:path) => {
         #[allow(non_snake_case)] // thunk name mirrors JS API surface
-        pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+        pub(crate) extern "C" fn $name(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            rest: f64,
+        ) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);
             let a = |i: usize| {
@@ -921,7 +964,11 @@ fn reduce_right_engine(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
 macro_rules! array_proto_arraylike_search_thunk {
     ($name:ident, $engine:path) => {
         #[allow(non_snake_case)] // thunk name mirrors JS API surface
-        pub(crate) extern "C" fn $name(_c: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+        pub(crate) extern "C" fn $name(
+            _c: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            rest: f64,
+        ) -> f64 {
             let this = crate::object::js_implicit_this_get();
             let args = global_this_rest_array_values(rest);
             let a = |i: usize| {
@@ -948,6 +995,7 @@ array_proto_arraylike_search_thunk!(
 
 pub(crate) extern "C" fn array_proto_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     idx: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -955,6 +1003,7 @@ pub(crate) extern "C" fn array_proto_at_thunk(
 }
 pub(crate) extern "C" fn array_proto_join_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     sep: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -968,6 +1017,7 @@ pub(crate) extern "C" fn array_proto_join_thunk(
 /// receiver semantics; rewriting it to `x.toString()` loses the Array method.
 pub(crate) extern "C" fn array_prototype_to_string_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     crate::value::array_prototype_to_string(this)
@@ -975,6 +1025,7 @@ pub(crate) extern "C" fn array_prototype_to_string_thunk(
 
 pub(crate) extern "C" fn array_prototype_concat_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();

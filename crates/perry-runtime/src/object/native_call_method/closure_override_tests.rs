@@ -1,11 +1,19 @@
 //! #10045: own callable properties must beat Function.prototype fast paths.
 use crate::{closure, gc::RuntimeHandleScope, value};
 
-extern "C" fn original(_closure: *const closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn original(
+    _closure: *const closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     -1.0
 }
 
-extern "C" fn own_method(_closure: *const closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn own_method(
+    _closure: *const closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     crate::object::js_implicit_this_get()
 }
 

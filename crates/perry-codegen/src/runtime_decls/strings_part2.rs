@@ -11,6 +11,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // by a `PERRY_RECV_ROUTE_COUNT=1` build; declared unconditionally so the
     // declaration set does not depend on a diagnostic knob.
     module.declare_function("js_recv_route_note", VOID, &[I32]);
+    // This-as-a-parameter stage-1 witness (`expr/body_call.rs`): emitted only
+    // by a `PERRY_THIS_WITNESS=1` build; declared unconditionally for the same
+    // reason.
+    module.declare_function("js_this_param_witness", VOID, &[I64, PTR, I64]);
     // RegExp exec
     module.declare_function("js_regexp_exec", I64, &[I64, I64]);
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);

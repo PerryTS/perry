@@ -1242,10 +1242,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .copied()
                             .unwrap_or(0)
                             .min(5);
-                        let mut wrap_param_types: Vec<crate::types::LlvmType> = vec![I64];
-                        for _ in 0..param_count {
-                            wrap_param_types.push(DOUBLE);
-                        }
+                        let wrap_param_types =
+                            crate::expr::body_call::js_body_param_types(param_count);
                         ctx.pending_declares
                             .push((wrap_name.clone(), DOUBLE, wrap_param_types));
                         let blk = ctx.block();

@@ -77,7 +77,10 @@ unsafe fn error_subclass_stack_head(receiver: f64) -> String {
 /// reports `"E: m"`, and the assignment happens after `super()` returns. A
 /// user `Error.prepareStackTrace` still wins, same as `captureStackTrace`'s
 /// getter.
-extern "C" fn error_subclass_stack_getter(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn error_subclass_stack_getter(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let receiver = crate::object::js_implicit_this_get();
     unsafe {
         if let Some(prep) = error_prepare_stack_trace_override() {
@@ -122,6 +125,7 @@ extern "C" fn error_subclass_stack_getter(closure: *const crate::closure::Closur
 /// enumerability, different reflection — a deliberate simplification.)
 extern "C" fn error_subclass_stack_setter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let receiver = crate::object::js_implicit_this_get();

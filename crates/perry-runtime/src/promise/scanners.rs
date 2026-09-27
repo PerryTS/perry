@@ -1056,6 +1056,7 @@ pub(crate) unsafe fn test_store_with_resolvers_result_fields(
 
 extern "C" fn with_resolvers_resolve_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let promise_box = crate::closure::js_closure_get_capture_f64(closure, 0);
@@ -1066,6 +1067,7 @@ extern "C" fn with_resolvers_resolve_handler(
 
 extern "C" fn with_resolvers_reject_handler(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let promise_box = crate::closure::js_closure_get_capture_f64(closure, 0);

@@ -2,7 +2,13 @@
 use super::*;
 use perry_ffi::{alloc_closure, closure_capture_f64, set_closure_capture_f64, RawClosureHeader};
 
-extern "C" fn observe(closure: *const RawClosureHeader, req: f64, socket: f64, head: f64) -> f64 {
+extern "C" fn observe(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    req: f64,
+    socket: f64,
+    head: f64,
+) -> f64 {
     unsafe {
         let count = closure_capture_f64(closure, 0);
         set_closure_capture_f64(closure as *mut _, 0, count + 1.0);

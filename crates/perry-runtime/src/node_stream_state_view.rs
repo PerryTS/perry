@@ -232,7 +232,10 @@ fn captured_field(closure: *const ClosureHeader) -> Option<(usize, &'static str)
     field_name(id as usize)
 }
 
-extern "C" fn stream_state_get(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_state_get(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let Some((kind, field)) = captured_field(closure) else {
         return f64::from_bits(TAG_UNDEFINED);
     };
@@ -248,7 +251,11 @@ extern "C" fn stream_state_get(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn stream_state_set(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn stream_state_set(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     let Some((_, field)) = captured_field(closure) else {
         return f64::from_bits(TAG_UNDEFINED);
     };

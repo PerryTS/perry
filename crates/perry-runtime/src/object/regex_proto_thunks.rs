@@ -89,47 +89,56 @@ fn flag_getter(getter: &str, flag: char) -> f64 {
 
 pub(super) extern "C" fn regex_proto_global_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("global", 'g')
 }
 pub(super) extern "C" fn regex_proto_ignore_case_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("ignoreCase", 'i')
 }
 pub(super) extern "C" fn regex_proto_multiline_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("multiline", 'm')
 }
 pub(super) extern "C" fn regex_proto_dot_all_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("dotAll", 's')
 }
 pub(super) extern "C" fn regex_proto_sticky_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("sticky", 'y')
 }
 pub(super) extern "C" fn regex_proto_unicode_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("unicode", 'u')
 }
 pub(super) extern "C" fn regex_proto_unicode_sets_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("unicodeSets", 'v')
 }
 pub(super) extern "C" fn regex_proto_has_indices_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     flag_getter("hasIndices", 'd')
 }
 
 pub(super) extern "C" fn regex_proto_source_getter(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match regex_receiver_or_throw("source") {
         RegexReceiver::Regex(re) => {
@@ -147,7 +156,10 @@ pub(super) extern "C" fn regex_proto_source_getter(
 /// `get RegExp.prototype.flags` — spec 22.2.6.4. Reads each flag property off
 /// the (generic) receiver via `Get` + `ToBoolean` and assembles in canonical
 /// order `d g i m s u v y`. Throws `TypeError` only if `this` is not an Object.
-pub(super) extern "C" fn regex_proto_flags_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
+pub(super) extern "C" fn regex_proto_flags_getter(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     #[cfg(feature = "regex-engine")]
     {
         let value = crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(
@@ -230,6 +242,7 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8)
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_exec_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     let re = regex_instance_or_throw("exec");
@@ -263,6 +276,7 @@ pub(crate) fn is_builtin_regexp_exec(value: f64) -> bool {
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_test_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_value(
@@ -282,6 +296,7 @@ pub(super) extern "C" fn regex_proto_test_thunk(
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_compile_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     pattern: f64,
     flags: f64,
 ) -> f64 {
@@ -295,6 +310,7 @@ pub(super) extern "C" fn regex_proto_compile_thunk(
 /// `RegExp.prototype.toString.call({ source: "x", flags: "g" })` works.
 pub(super) extern "C" fn regex_proto_to_string_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     if !receiver.is_pointer()

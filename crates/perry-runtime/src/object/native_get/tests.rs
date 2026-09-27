@@ -95,7 +95,10 @@ fn prototype_data_mutation_shadow_delete_and_freeze_match_forced_slow() {
 
 static GETTER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-extern "C" fn getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     GETTER_CALLS.fetch_add(1, Ordering::Relaxed);
     47.0
 }

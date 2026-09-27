@@ -119,12 +119,16 @@ fn array_slot_enumeration_walks_the_heap() {
 
 extern "C" fn species_destination(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _length: f64,
 ) -> f64 {
     crate::closure::js_closure_get_capture_f64(closure, 0)
 }
 
-extern "C" fn interrupt_species_copy(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn interrupt_species_copy(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(9983.0)
 }
 

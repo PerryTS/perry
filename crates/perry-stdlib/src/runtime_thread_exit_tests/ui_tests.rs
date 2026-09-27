@@ -13,11 +13,16 @@ use perry_runtime::closure::js_closure_alloc;
 use perry_runtime::gc::RuntimeHandleScope;
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue};
 
-extern "C" fn thunk0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn thunk0(_closure: *const ClosureHeader, _this: perry_runtime::closure::JsThis) -> f64 {
     0.0
 }
 
-extern "C" fn thunk2(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn thunk2(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     0.0
 }
 

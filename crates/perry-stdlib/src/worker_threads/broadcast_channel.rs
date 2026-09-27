@@ -8,7 +8,11 @@
 
 use super::*;
 
-extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn broadcast_post_message(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     let channel_name = BROADCAST_CHANNELS.with(|channels| {
         channels
@@ -34,7 +38,10 @@ extern "C" fn broadcast_post_message(closure: *const ClosureHeader, value: f64) 
     js_undefined()
 }
 
-extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn broadcast_close(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     BROADCAST_CHANNELS.with(|channels| {
         if let Some(state) = channels.borrow_mut().get_mut(&channel_id) {
@@ -46,7 +53,10 @@ extern "C" fn broadcast_close(closure: *const ClosureHeader) -> f64 {
     js_undefined()
 }
 
-extern "C" fn broadcast_ref_or_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn broadcast_ref_or_unref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let channel_id = port_id_from_closure(closure);
     BROADCAST_CHANNELS.with(|channels| match channels.borrow().get(&channel_id) {
         Some(state) => f64::from_bits(state.object_bits),
@@ -56,6 +66,7 @@ extern "C" fn broadcast_ref_or_unref(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn broadcast_add_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
     options: f64,
@@ -86,6 +97,7 @@ extern "C" fn broadcast_add_event_listener(
 
 extern "C" fn broadcast_remove_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {

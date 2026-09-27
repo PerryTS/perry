@@ -139,7 +139,10 @@ mod platform_impl {
         val
     }
 
-    extern "C" fn pty_disposable_dispose(closure: *const ClosureHeader) -> f64 {
+    extern "C" fn pty_disposable_dispose(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         let this = cp_this(closure);
         let target = cp_get_field(this, b"__ptyTarget");
         let cb = cp_get_field(this, b"__ptyCb");
@@ -165,19 +168,31 @@ mod platform_impl {
 
     // ----- IPty method bodies (slot 0 of each closure = the IPty object) ----
 
-    extern "C" fn pty_method_on_data(closure: *const ClosureHeader, cb: f64) -> f64 {
+    extern "C" fn pty_method_on_data(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cb: f64,
+    ) -> f64 {
         let this = cp_this(closure);
         pty_register(this, "data", cb);
         pty_make_disposable(this, "data", cb)
     }
 
-    extern "C" fn pty_method_on_exit(closure: *const ClosureHeader, cb: f64) -> f64 {
+    extern "C" fn pty_method_on_exit(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cb: f64,
+    ) -> f64 {
         let this = cp_this(closure);
         pty_register(this, "exit", cb);
         pty_make_disposable(this, "exit", cb)
     }
 
-    extern "C" fn pty_method_write(closure: *const ClosureHeader, data: f64) -> f64 {
+    extern "C" fn pty_method_write(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        data: f64,
+    ) -> f64 {
         let this = cp_this(closure);
         if let Some(handle) = pty_handle_of(this) {
             let bytes = cp_value_to_bytes(data);
@@ -188,7 +203,12 @@ mod platform_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_resize(closure: *const ClosureHeader, cols: f64, rows: f64) -> f64 {
+    extern "C" fn pty_method_resize(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cols: f64,
+        rows: f64,
+    ) -> f64 {
         let this = cp_this(closure);
         let cols_i = pty_arg_i32(cols);
         let rows_i = pty_arg_i32(rows);
@@ -208,7 +228,11 @@ mod platform_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_kill(closure: *const ClosureHeader, signal: f64) -> f64 {
+    extern "C" fn pty_method_kill(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        signal: f64,
+    ) -> f64 {
         let this = cp_this(closure);
         if let Some(handle) = pty_handle_of(this) {
             reactor::pty_live_kill(handle, pty_parse_kill_signal(signal));
@@ -216,14 +240,20 @@ mod platform_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_pause(closure: *const ClosureHeader) -> f64 {
+    extern "C" fn pty_method_pause(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         if let Some(handle) = pty_handle_of(cp_this(closure)) {
             reactor::pty_live_set_paused(handle, true);
         }
         cp_undefined()
     }
 
-    extern "C" fn pty_method_resume(closure: *const ClosureHeader) -> f64 {
+    extern "C" fn pty_method_resume(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         if let Some(handle) = pty_handle_of(cp_this(closure)) {
             reactor::pty_live_set_paused(handle, false);
         }
@@ -233,9 +263,12 @@ mod platform_impl {
     /// opencode's `Pty` wrapper calls `dispose()`; node-pty's UnixTerminal
     /// exposes the equivalent `destroy()`. Both are "hang up the terminal":
     /// kill with the default SIGHUP.
-    extern "C" fn pty_method_dispose(closure: *const ClosureHeader) -> f64 {
-        pty_method_resume(closure);
-        pty_method_kill(closure, cp_undefined())
+    extern "C" fn pty_method_dispose(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        pty_method_resume(closure, crate::closure::JsThis::current());
+        pty_method_kill(closure, crate::closure::JsThis::current(), cp_undefined())
     }
 
     /// `kill([signal])` — node-pty defaults to `SIGHUP` (a hangup is how a
@@ -430,14 +463,22 @@ mod platform_impl {
         /// runner can't interleave their pumps.
         static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-        extern "C" fn test_data_listener(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+        extern "C" fn test_data_listener(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            chunk: f64,
+        ) -> f64 {
             if let Some(s) = cp_value_to_string(chunk) {
                 DATA_SINK.lock().unwrap().push_str(&s);
             }
             cp_undefined()
         }
 
-        extern "C" fn test_exit_listener(_closure: *const ClosureHeader, payload: f64) -> f64 {
+        extern "C" fn test_exit_listener(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            payload: f64,
+        ) -> f64 {
             let code = cp_get_field(payload, b"exitCode");
             let signal = cp_get_field(payload, b"signal");
             *EXIT_SINK.lock().unwrap() = Some((code, signal));

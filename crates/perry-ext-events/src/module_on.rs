@@ -156,7 +156,10 @@ pub unsafe extern "C" fn js_events_on(
     (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader
 }
 
-extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_abort_listener_dispose(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let signal_ptr = js_closure_get_capture_ptr(closure, 0);
         let callback_ptr = js_closure_get_capture_ptr(closure, 1);

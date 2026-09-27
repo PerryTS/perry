@@ -105,7 +105,11 @@ fn generic_end(dest: f64) {
     }
 }
 
-extern "C" fn pipe_data_forward(closure: *const RawClosureHeader, chunk: f64) -> f64 {
+extern "C" fn pipe_data_forward(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    chunk: f64,
+) -> f64 {
     if !closure.is_null() {
         let dest = unsafe { closure_capture_f64(closure, 0) };
         generic_write(dest, chunk);
@@ -113,7 +117,7 @@ extern "C" fn pipe_data_forward(closure: *const RawClosureHeader, chunk: f64) ->
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
-extern "C" fn pipe_end_forward(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn pipe_end_forward(closure: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
     if !closure.is_null() {
         let dest = unsafe { closure_capture_f64(closure, 0) };
         let end_on_finish = unsafe { closure_capture_f64(closure, 1) };

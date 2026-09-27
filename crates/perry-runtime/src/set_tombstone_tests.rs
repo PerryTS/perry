@@ -9,6 +9,7 @@ crate::perry_thread_local! {
 
 extern "C" fn delete_current_set_value(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _value_again: f64,
     collection: f64,
@@ -21,6 +22,7 @@ extern "C" fn delete_current_set_value(
 
 extern "C" fn delete_earlier_set_value(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _value_again: f64,
     collection: f64,
@@ -397,6 +399,7 @@ fn clear_truncates_the_squeeze_history() {
 
 extern "C" fn delete_earlier_then_live_read(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _value_again: f64,
     collection: f64,

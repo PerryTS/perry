@@ -956,7 +956,10 @@ mod view_mode_tests {
         );
     }
 
-    extern "C" fn patched_test_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn patched_test_thunk(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         f64::from_bits(JSValue::bool(true).bits())
     }
 

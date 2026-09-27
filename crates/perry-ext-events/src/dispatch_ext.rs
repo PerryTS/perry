@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use perry_ffi::alloc_string;
 
-    extern "C" fn noop_listener(_c: *const RawClosureHeader) -> f64 {
+    extern "C" fn noop_listener(_c: *const RawClosureHeader, _this: perry_ffi::JsThis) -> f64 {
         undefined_value()
     }
 

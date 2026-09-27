@@ -804,6 +804,7 @@ fn require_text_brand(value: f64, class_id: u32, message: &[u8]) {
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_decode_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -819,6 +820,7 @@ pub(crate) extern "C" fn text_decoder_decode_thunk(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     require_text_brand(
@@ -833,6 +835,7 @@ pub(crate) extern "C" fn text_decoder_encoding_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_fatal_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     require_text_brand(
@@ -846,6 +849,7 @@ pub(crate) extern "C" fn text_decoder_fatal_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     require_text_brand(
@@ -859,6 +863,7 @@ pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encoding_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     require_text_brand(
@@ -873,6 +878,7 @@ pub(crate) extern "C" fn text_encoder_encoding_getter(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -887,6 +893,7 @@ pub(crate) extern "C" fn text_encoder_encode_thunk(
 #[cfg(feature = "global-text")]
 pub(crate) extern "C" fn text_encoder_encode_into_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
     dest: f64,
 ) -> f64 {

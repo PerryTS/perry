@@ -47,7 +47,11 @@ use super::*;
 // surface as no-op thrower thunks the same way the other submodules do —
 // real-tracing semantics are a follow-up under #793.
 
-pub(crate) extern "C" fn thunk_diag_noop(_closure: *const ClosureHeader, _arg: f64) -> f64 {
+pub(crate) extern "C" fn thunk_diag_noop(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     f64::from_bits(crate::value::JSValue::undefined().bits())
 }
 
@@ -631,129 +635,10 @@ pub enum ErrUserProp {
     Bits(u64),
 }
 
-unsafe fn error_user_prop_string(value: f64) -> String {
-    let ptr = crate::value::js_jsvalue_to_string(value);
-    if ptr.is_null() {
-        return String::new();
-    }
-    let len = (*ptr).byte_len as usize;
-    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-}
-
-/// Record a user-assigned own property on an `Error` object. `error_ptr` is
-/// the `ErrorHeader` pointer (the NaN-box pointer payload). Called from the
-/// `GC_TYPE_ERROR` branch of `js_object_set_field_by_name`.
-pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
-    if error_ptr == 0 {
-        return;
-    }
-    // #6759 phase 1: the property bag now hangs off the error's own metadata
-    // record instead of a table keyed by its address, so it moves with the
-    // error, dies with it, and cannot be inherited by a later tenant of a
-    // recycled address. Insertion order comes free from the bag object's
-    // `keys_array`.
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_ensure(error_ptr) else {
-            return;
-        };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::js_object_set_field_by_name(bag, key_ptr, value);
-    }
-}
-
-/// Look up a user-assigned own property on an `Error` object, materialising it
-/// back into a NaN-boxed `f64`. Returns `None` if no such property was set.
-/// Called from the `GC_TYPE_ERROR` branch of `js_object_get_field_by_name`.
-pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
-    if error_ptr == 0 {
-        return None;
-    }
-    unsafe {
-        let bag = crate::object::cell_expando_get(error_ptr)?;
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        // Distinguish "absent" from "present and undefined": a bare get would
-        // return `undefined` for both, and the caller uses `None` to mean the
-        // error has no such own property at all.
-        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
-        if !crate::object::obj_value_has_own_key(
-            crate::value::js_nanbox_pointer(bag as i64),
-            key_boxed,
-        ) {
-            return None;
-        }
-        Some(f64::from_bits(
-            crate::object::js_object_get_field_by_name(bag, key_ptr).bits(),
-        ))
-    }
-}
-
-/// Remove a user-assigned own property from an Error object. Returns true
-/// when the property existed (used by `delete err.prop` and data↔accessor
-/// descriptor conversions).
-pub fn remove_error_user_prop(error_ptr: usize, key: &str) -> bool {
-    if error_ptr == 0 {
-        return false;
-    }
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
-            return false;
-        };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
-        if !crate::object::obj_value_has_own_key(
-            crate::value::js_nanbox_pointer(bag as i64),
-            key_boxed,
-        ) {
-            return false;
-        }
-        crate::object::js_object_delete_field(bag, key_ptr);
-        true
-    }
-}
-
-/// Return user-assigned own properties on an Error object as materialized JS
-/// values so util.inspect/console formatting can show them.
-pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
-    if error_ptr == 0 {
-        return Vec::new();
-    }
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
-            return Vec::new();
-        };
-        // The bag is an ordinary object, so its `keys_array` already holds the
-        // keys in ECMA-262 insertion order — no sort, and no ordering of our
-        // own to keep in step with node's.
-        let keys_view = crate::object::object_keys(bag);
-        let keys = keys_view.arr();
-        if keys.is_null() {
-            return Vec::new();
-        }
-        let len = keys_view.count() as usize;
-        let mut out = Vec::with_capacity(len);
-        for i in 0..len {
-            let key_val = crate::array::js_array_get_f64(keys, i as u32);
-            // A tombstoned key slot (#9029) reads back as undefined through
-            // the hole canonicalization (#323); stringifying it would mint a
-            // phantom "undefined" prop. Undefined is never a legal key.
-            if key_val.to_bits() == crate::value::TAG_UNDEFINED {
-                continue;
-            }
-            let name_ptr = crate::value::js_jsvalue_to_string(key_val);
-            if name_ptr.is_null() {
-                continue;
-            }
-            let name = error_user_prop_string(f64::from_bits(
-                crate::js_nanbox_string(name_ptr as i64).to_bits(),
-            ));
-            let value =
-                f64::from_bits(crate::object::js_object_get_field_by_name(bag, name_ptr).bits());
-            out.push((name, value));
-        }
-        out
-    }
-}
+mod user_props;
+pub use user_props::{
+    error_user_prop, error_user_props, remove_error_user_prop, set_error_user_prop,
+};
 
 pub(crate) fn throw_invalid_arg() -> ! {
     let msg = b"The argument is invalid";
@@ -849,7 +734,10 @@ pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
 
 // #854: diagnostics_channel captured-error helper retained for the subsystem
 #[allow(dead_code)]
-pub(crate) extern "C" fn throw_captured_error(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn throw_captured_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     crate::exception::js_throw(err)
 }
@@ -1236,6 +1124,7 @@ pub(crate) fn run_store_wrapped(
 
 pub(crate) extern "C" fn diag_channel_subscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     subscriber: f64,
 ) -> f64 {
     add_subscriber(method_id(closure), subscriber);
@@ -1244,18 +1133,24 @@ pub(crate) extern "C" fn diag_channel_subscribe(
 
 pub(crate) extern "C" fn diag_channel_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     subscriber: f64,
 ) -> f64 {
     bool_value(remove_subscriber(method_id(closure), subscriber))
 }
 
-pub(crate) extern "C" fn diag_channel_publish(closure: *const ClosureHeader, data: f64) -> f64 {
+pub(crate) extern "C" fn diag_channel_publish(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     publish_channel(method_id(closure), data);
     undefined()
 }
 
 pub(crate) extern "C" fn diag_channel_bind_store(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     store: f64,
     transform: f64,
 ) -> f64 {
@@ -1298,6 +1193,7 @@ pub(crate) extern "C" fn diag_channel_bind_store(
 
 pub(crate) extern "C" fn diag_channel_unbind_store(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     store: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1347,7 +1243,10 @@ pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
     js_closure_call2(closure_ptr(run), context, next)
 }
 
-pub(crate) extern "C" fn store_next_thunk(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn store_next_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_ptr(closure, 0);
     let data = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let fn_value = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
@@ -1360,7 +1259,10 @@ pub(crate) extern "C" fn store_next_thunk(closure: *const ClosureHeader) -> f64 
     run_store_wrapped(id, data, fn_value, this_arg, &args)
 }
 
-pub(crate) extern "C" fn store_chain_thunk(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn store_chain_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let store = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let context = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let next = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
@@ -1425,6 +1327,7 @@ fn unbox_arg_array(arr_value: f64) -> Vec<f64> {
 
 pub(crate) extern "C" fn diag_channel_run_stores(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     all_args: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1493,13 +1396,18 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     suppress_uncaught_drain(|| js_closure_call0(closure_ptr(next_value)))
 }
 
-pub(crate) extern "C" fn thunk_diag_channel(closure: *const ClosureHeader, name: f64) -> f64 {
+pub(crate) extern "C" fn thunk_diag_channel(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    name: f64,
+) -> f64 {
     let _ = closure;
     channel_obj(ensure_channel(name))
 }
 
 pub(crate) extern "C" fn thunk_diag_subscribe(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     subscriber: f64,
 ) -> f64 {
@@ -1510,6 +1418,7 @@ pub(crate) extern "C" fn thunk_diag_subscribe(
 
 pub(crate) extern "C" fn thunk_diag_unsubscribe(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
     subscriber: f64,
 ) -> f64 {
@@ -1519,6 +1428,7 @@ pub(crate) extern "C" fn thunk_diag_unsubscribe(
 
 pub(crate) extern "C" fn thunk_diag_has_subscribers(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
 ) -> f64 {
     let key = match channel_key(name) {
@@ -1576,7 +1486,11 @@ pub(crate) fn channel_from_object_property(obj_value: f64, prop: &str) -> i64 {
     })
 }
 
-pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, handlers: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_subscribe(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    handlers: f64,
+) -> f64 {
     let id = method_id(closure);
     let events = DIAG_TRACES.with(|m| m.borrow().get(&id).map(|t| t.events).unwrap_or([0; 5]));
     for (idx, name) in ["start", "end", "asyncStart", "asyncEnd", "error"]
@@ -1604,6 +1518,7 @@ pub(crate) extern "C" fn diag_trace_subscribe(closure: *const ClosureHeader, han
 
 pub(crate) extern "C" fn diag_trace_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     handlers: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -1637,6 +1552,7 @@ pub(crate) fn call_fn_value(fn_value: f64, this_arg: f64, args: &[f64]) -> f64 {
 
 pub(crate) extern "C" fn diag_trace_sync(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -1683,6 +1599,7 @@ pub(crate) extern "C" fn diag_trace_sync(
 
 pub(crate) extern "C" fn diag_trace_promise(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     fn_value: f64,
     context: f64,
     this_arg: f64,
@@ -1762,6 +1679,7 @@ pub(crate) extern "C" fn diag_trace_promise(
 /// (#3086). `arguments[0]` is `err`, `arguments[1]` is `res`.
 pub(crate) extern "C" fn diag_trace_wrapped_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     all_args: f64,
 ) -> f64 {
     let callback = js_closure_get_capture_f64(closure, 0);
@@ -1804,7 +1722,11 @@ fn throw_trace_callback_not_function() -> ! {
     crate::exception::js_throw(boxed_ptr(err))
 }
 
-pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_args: f64) -> f64 {
+pub(crate) extern "C" fn diag_trace_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    all_args: f64,
+) -> f64 {
     // Synthetic-arguments rest array: [fn, position, context, thisArg, ...args]
     // (#3086). `position` defaults to -1 (the last trailing arg), the callback
     // lives at `args[position]`, and the wrapped callback is spliced in at that
@@ -1902,6 +1824,7 @@ pub(crate) extern "C" fn diag_trace_callback(closure: *const ClosureHeader, all_
 
 pub(crate) extern "C" fn thunk_diag_tracing_channel(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name_or_channels: f64,
 ) -> f64 {
     let id = next_diag_id();

@@ -159,11 +159,17 @@ fn new_module_base(kind: &str, status: &str, identifier: String) -> *mut ObjectH
     module
 }
 
-extern "C" fn module_namespace_getter(closure: *const ClosureHeader) -> f64 {
+extern "C" fn module_namespace_getter(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_vm_module_namespace(crate::closure::js_closure_get_capture_f64(closure, 0))
 }
 
-extern "C" fn module_error_getter(closure: *const ClosureHeader) -> f64 {
+extern "C" fn module_error_getter(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_vm_module_error(crate::closure::js_closure_get_capture_f64(closure, 0))
 }
 

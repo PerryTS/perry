@@ -72,7 +72,11 @@ pub(crate) fn create_client_once_wrapper(
     wrapper.get()
 }
 
-extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -> f64 {
+extern "C" fn client_once_wrapper(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
         let event_value = perry_ffi::closure_capture_f64(closure, 1);

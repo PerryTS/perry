@@ -296,12 +296,18 @@ fn perex_recompile_publishes_after_success_before_throwing_lastindex_write() {
     );
 }
 
-extern "C" fn flags_collect_then_throw(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn flags_collect_then_throw(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(812.0)
 }
 
-extern "C" fn flags_collect_then_return(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn flags_collect_then_return(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     js_nanbox_string(crate::string::js_string_from_bytes(b"g".as_ptr(), 1) as i64)
 }

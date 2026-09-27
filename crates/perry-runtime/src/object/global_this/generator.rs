@@ -397,36 +397,42 @@ fn generator_proto_method(method: &[u8], arg: f64, is_async: bool) -> f64 {
 
 extern "C" fn generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"next", arg, false)
 }
 extern "C" fn generator_proto_return_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"return", arg, false)
 }
 extern "C" fn generator_proto_throw_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"throw", arg, false)
 }
 extern "C" fn async_generator_proto_next_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"next", arg, true)
 }
 extern "C" fn async_generator_proto_return_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"return", arg, true)
 }
 extern "C" fn async_generator_proto_throw_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     generator_proto_method(b"throw", arg, true)
@@ -438,6 +444,7 @@ extern "C" fn async_generator_proto_throw_thunk(
 /// iterator and either throws or silently produces nothing.
 extern "C" fn async_generator_proto_async_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     crate::object::js_implicit_this_get()
@@ -448,6 +455,7 @@ extern "C" fn async_generator_proto_async_iterator_thunk(
 /// note in `build_generator_tower` for why the sync prototype now carries this.
 extern "C" fn generator_proto_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     crate::object::js_implicit_this_get()

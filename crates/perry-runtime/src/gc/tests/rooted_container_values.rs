@@ -141,6 +141,7 @@ thread_local! {
 /// already-collected `(key, item)` pairs goes stale.
 extern "C" fn group_by_moving_callback(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _item: f64,
     index: f64,
 ) -> f64 {

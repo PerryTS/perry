@@ -1690,6 +1690,7 @@ fn schedule_flush() {
 #[no_mangle]
 pub extern "C" fn js_perf_observer_flush_all(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     FLUSH_SCHEDULED.with(|f| f.set(false));
     let work: Vec<(u64, u64, Vec<PerfEntry>)> = OBSERVERS.with(|o| {

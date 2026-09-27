@@ -125,7 +125,10 @@ fn test_typed_shape_descriptor_dynamic_pointer_mutation_falls_back_to_unknown_la
     clear_mark_seeds();
 }
 
-extern "C" fn layout_mask_test_closure(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn layout_mask_test_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
 

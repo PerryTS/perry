@@ -7,7 +7,10 @@
 
 use perry_runtime::ClosureHeader;
 
-extern "C" fn probe_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 

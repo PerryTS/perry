@@ -163,8 +163,10 @@ fn object_prototype_builtin_invokes_to_string_without_self_redispatch() {
     // thunk again and overflowed the native stack before reaching `toString`.
     let receiver = crate::object::builtin_prototype_value("Object");
     let previous = crate::object::js_implicit_this_set(receiver);
-    let result =
-        crate::object::global_this::object_prototype_to_locale_string_thunk(std::ptr::null());
+    let result = crate::object::global_this::object_prototype_to_locale_string_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::current(),
+    );
     crate::object::js_implicit_this_set(previous);
 
     let ptr = crate::value::js_get_string_pointer_unified(result) as *const crate::StringHeader;

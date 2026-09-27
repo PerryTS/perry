@@ -3,6 +3,7 @@ use std::cell::Cell;
 
 extern "C" fn module_cjs_extension_noop_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _module: f64,
     _filename: f64,
 ) -> f64 {
@@ -187,6 +188,7 @@ pub(crate) fn module_constants_value() -> f64 {
 
 extern "C" fn module_wrap_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
 ) -> f64 {
     let value = JSValue::from_bits(source.to_bits());
@@ -243,6 +245,7 @@ fn module_wrapper_value() -> f64 {
 
 extern "C" fn module_prototype_method_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _c: f64,
@@ -252,6 +255,7 @@ extern "C" fn module_prototype_method_thunk(
 
 extern "C" fn module_prototype_load_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     filename: f64,
     _b: f64,
     _c: f64,
@@ -261,6 +265,7 @@ extern "C" fn module_prototype_load_thunk(
 
 extern "C" fn module_prototype_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     specifier: f64,
     _b: f64,
     _c: f64,
@@ -291,6 +296,7 @@ fn module_prototype_method(name: &str, length: u32) -> f64 {
 
 extern "C" fn module_prototype_constructor_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     // Resolve through the canonical callable cache at access time. Capturing
     // the constructor while its own attach was still in progress preserved a
@@ -301,18 +307,23 @@ extern "C" fn module_prototype_constructor_getter(
     bound_native_callable_export_value("module", "Module")
 }
 
-extern "C" fn module_prototype_false_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn module_prototype_false_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     native_bool_value(false)
 }
 
 extern "C" fn module_prototype_parent_getter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn module_prototype_parent_setter(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)

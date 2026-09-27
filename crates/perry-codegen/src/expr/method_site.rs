@@ -419,10 +419,14 @@ pub(crate) fn emit_method_site(
     let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let pad = crate::runtime_abi::method_site_padded_argc(lowered_args.len()) - lowered_args.len();
     call_args.extend(std::iter::repeat_n(undefined, pad));
+    // The body gets the receiver as its `this` parameter — the same value
+    // bound in the cell above, which bodies still read (stage 1).
+    let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
     let hit_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Pointer(&fptr),
         &handle,
+        &recv_bits,
         &call_args,
     );
     match &cell {

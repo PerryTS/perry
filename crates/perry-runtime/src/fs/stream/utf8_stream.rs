@@ -754,7 +754,11 @@ fn utf8_stream_write_by_id(id: usize, data: f64) -> f64 {
     bool_value(len_after < high_water_mark)
 }
 
-pub(crate) extern "C" fn utf8_stream_write_impl(closure: *const ClosureHeader, data: f64) -> f64 {
+pub(crate) extern "C" fn utf8_stream_write_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     utf8_stream_write_by_id(stream_id_of(closure), data)
 }
 
@@ -839,6 +843,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_stream_flush_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     utf8_stream_flush_by_id(stream_id_of(closure), callback)
@@ -879,7 +884,10 @@ fn utf8_stream_flush_sync_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_flush_sync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_flush_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_flush_sync_by_id(stream_id_of(closure))
 }
 
@@ -898,7 +906,10 @@ fn utf8_emit_close_events(id: usize, emit_finish: bool) {
     utf8_emit_event0(id, "close");
 }
 
-pub(crate) extern "C" fn utf8_close_events_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_close_events_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let emit_finish = js_closure_get_capture_ptr(closure, 1) != 0;
     utf8_emit_close_events(id, emit_finish);
@@ -970,7 +981,10 @@ fn utf8_stream_end_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_end_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_end_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_end_by_id(stream_id_of(closure))
 }
 
@@ -992,7 +1006,10 @@ fn utf8_stream_destroy_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_destroy_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_destroy_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_destroy_by_id(stream_id_of(closure))
 }
 
@@ -1085,6 +1102,7 @@ fn utf8_stream_reopen_by_id(id: usize, file_value: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_stream_reopen_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     file_value: f64,
 ) -> f64 {
     utf8_stream_reopen_by_id(stream_id_of(closure), file_value)
@@ -1100,6 +1118,7 @@ pub extern "C" fn js_fs_utf8_stream_reopen(stream_value: f64, file_value: f64) -
 
 pub(crate) extern "C" fn utf8_stream_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1110,6 +1129,7 @@ pub(crate) extern "C" fn utf8_stream_on_impl(
 
 pub(crate) extern "C" fn utf8_stream_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1120,6 +1140,7 @@ pub(crate) extern "C" fn utf8_stream_once_impl(
 
 pub(crate) extern "C" fn utf8_stream_off_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1129,6 +1150,7 @@ pub(crate) extern "C" fn utf8_stream_off_impl(
 
 pub(crate) extern "C" fn utf8_stream_remove_all_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1146,6 +1168,7 @@ pub(crate) extern "C" fn utf8_stream_remove_all_impl(
 
 pub(crate) extern "C" fn utf8_stream_listener_count_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1162,6 +1185,7 @@ pub(crate) extern "C" fn utf8_stream_listener_count_impl(
 
 pub(crate) extern "C" fn utf8_stream_emit_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
@@ -1260,7 +1284,10 @@ pub extern "C" fn js_fs_utf8_stream_emit(stream_value: f64, event: f64, arg: f64
     utf8_stream_emit_value(stream_value, event, arg).unwrap_or_else(|| bool_value(false))
 }
 
-pub(crate) extern "C" fn utf8_periodic_flush_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_periodic_flush_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let destroyed = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
@@ -1369,6 +1396,7 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_async_open_done_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     fd_value: f64,
 ) -> f64 {
@@ -1406,6 +1434,7 @@ fn utf8_custom_open(id: usize) -> bool {
 
 pub(crate) extern "C" fn utf8_async_mkdir_done_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1497,7 +1526,10 @@ pub(crate) fn utf8_start_async_open(id: usize) {
     utf8_schedule_native_open(id);
 }
 
-extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let Some(file) = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
@@ -1517,7 +1549,10 @@ extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(closure: *const Clos
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_async_open_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_async_open_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let Some(file) = UTF8_STREAM_REGISTRY.with(|registry| {
         registry

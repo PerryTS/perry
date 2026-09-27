@@ -599,7 +599,12 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                return crate::object::global_this_blob_thunk(std::ptr::null(), parts, options);
+                return crate::object::global_this_blob_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    parts,
+                    options,
+                );
             }
             #[cfg(feature = "global-webfetch")]
             "File" => {
@@ -617,6 +622,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_file_thunk(
                     std::ptr::null(),
+                    crate::closure::JsThis::current(),
                     parts,
                     name,
                     options,
@@ -646,7 +652,11 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .first()
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                return crate::object::global_this_headers_thunk(std::ptr::null(), init);
+                return crate::object::global_this_headers_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    init,
+                );
             }
             #[cfg(feature = "global-webfetch")]
             "Request" => {
@@ -658,7 +668,12 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                return crate::object::global_this_request_thunk(std::ptr::null(), input, init);
+                return crate::object::global_this_request_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    input,
+                    init,
+                );
             }
             #[cfg(feature = "global-webfetch")]
             "Response" => {
@@ -670,7 +685,12 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
-                return crate::object::global_this_response_thunk(std::ptr::null(), body, init);
+                return crate::object::global_this_response_thunk(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                    body,
+                    init,
+                );
             }
             "Event" => {
                 let event_type = args
@@ -849,7 +869,10 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 return crate::messaging::js_message_port_constructor_error();
             }
             "Storage" => {
-                return crate::web_storage::storage_constructor_illegal(std::ptr::null());
+                return crate::web_storage::storage_constructor_illegal(
+                    std::ptr::null(),
+                    crate::closure::JsThis::current(),
+                );
             }
             "BroadcastChannel" => {
                 let name = args
@@ -1897,9 +1920,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
 /// the `new <LocalGet>(args)` widened path here in
 /// `js_new_function_construct` needs to gate the constructor dispatch
 /// on a real closure to avoid SIGSEGV'ing on non-callable callees
-/// (`new someObject()`, `new someStringVar()`, etc.). Uses the
-/// `_reserved` magic word `crate::closure::CLOSURE_MAGIC` that every
-/// `js_closure_alloc*` site stamps on allocation.
+/// (`new someObject()`, `new someStringVar()`, etc.). The kind is the GC
+/// header's type byte (`closure_kind_probe`), not a payload magic word.
 pub(crate) fn is_callable_function_value(value: f64) -> bool {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(value.to_bits());
@@ -1940,43 +1962,5 @@ pub(super) fn is_arrow_function_value(value: f64) -> bool {
     crate::closure::closure_is_arrow(ptr)
 }
 
-/// Lookup helper: returns the registered prototype-method value for
-/// `(class_id, name)`, or None if no assignment matched. Walks the
-/// parent-class chain so methods registered on a base class are found
-/// via subclass instances.
-pub(crate) fn lookup_own_prototype_method(class_id: u32, name: &str) -> Option<f64> {
-    if class_is_key_deleted(class_id, name) {
-        return None;
-    }
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        let guard = table.read().ok()?;
-        let bits = guard.as_ref()?.get(&class_id)?.get(name)?;
-        Some(f64::from_bits(*bits))
-    })
-}
-
-pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        let guard = table.read().ok()?;
-        let map = guard.as_ref()?;
-        let mut cid = class_id;
-        let mut depth = 0usize;
-        while depth < 32 {
-            if !class_is_key_deleted(cid, name) {
-                if let Some(per_class) = map.get(&cid) {
-                    if let Some(&bits) = per_class.get(name) {
-                        return Some(f64::from_bits(bits));
-                    }
-                }
-            }
-            match crate::object::class_generic_origin(cid).or_else(|| get_parent_class_id(cid)) {
-                Some(p) if p != 0 && p != cid => {
-                    cid = p;
-                    depth += 1;
-                }
-                _ => break,
-            }
-        }
-        None
-    })
-}
+mod prototype_methods;
+pub(crate) use prototype_methods::{lookup_own_prototype_method, lookup_prototype_method};

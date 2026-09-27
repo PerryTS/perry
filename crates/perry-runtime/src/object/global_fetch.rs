@@ -673,6 +673,7 @@ pub(super) fn call_global_response_static_error() -> f64 {
 
 pub(super) extern "C" fn global_this_fetch_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     rest: f64,
 ) -> f64 {

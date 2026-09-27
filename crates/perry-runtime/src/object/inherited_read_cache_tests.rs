@@ -803,7 +803,10 @@ fn a_null_prototype_receiver_never_primes() {
     }
 }
 
-extern "C" fn forty_two_getter(_c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn forty_two_getter(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     42.0
 }
 

@@ -43,7 +43,11 @@ pub extern "C" fn js_literal_shape_initialize(
 mod tests {
     use super::*;
 
-    extern "C" fn collecting_setter(_closure: *const crate::ClosureHeader, _value: f64) -> f64 {
+    extern "C" fn collecting_setter(
+        _closure: *const crate::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _value: f64,
+    ) -> f64 {
         crate::gc::gc_collect_minor();
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }

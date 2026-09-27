@@ -33,7 +33,10 @@ pub(super) unsafe fn call_net_socket_method(handle: i64, name: &str, args: &[f64
     )
 }
 
-extern "C" fn events_abort_listener_dispose(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_abort_listener_dispose(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let signal_ptr = js_closure_get_capture_ptr(closure, 0);

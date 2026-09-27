@@ -492,6 +492,7 @@ fn throw_requires_new(what: &str) -> ! {
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_compile_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bytes: f64,
 ) -> f64 {
     crate::webassembly::js_webassembly_compile(bytes)
@@ -500,6 +501,7 @@ extern "C" fn webassembly_compile_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_compile_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _bytes: f64,
 ) -> f64 {
     wasm_unsupported_rejection("WebAssembly.compile")
@@ -508,6 +510,7 @@ extern "C" fn webassembly_compile_thunk(
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bytes: f64,
     imports: f64,
 ) -> f64 {
@@ -517,6 +520,7 @@ extern "C" fn webassembly_instantiate_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_instantiate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _bytes: f64,
     _imports: f64,
 ) -> f64 {
@@ -526,6 +530,7 @@ extern "C" fn webassembly_instantiate_thunk(
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_validate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bytes: f64,
 ) -> f64 {
     crate::webassembly::js_webassembly_validate(bytes)
@@ -534,6 +539,7 @@ extern "C" fn webassembly_validate_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_validate_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _bytes: f64,
 ) -> f64 {
     f64::from_bits(crate::value::JSValue::bool(false).bits())
@@ -543,6 +549,7 @@ extern "C" fn webassembly_validate_thunk(
 /// has no streaming path either, so these reject under both cfgs.
 extern "C" fn webassembly_compile_streaming_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _source: f64,
 ) -> f64 {
     wasm_unsupported_rejection("WebAssembly.compileStreaming")
@@ -550,6 +557,7 @@ extern "C" fn webassembly_compile_streaming_thunk(
 
 extern "C" fn webassembly_instantiate_streaming_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _source: f64,
 ) -> f64 {
     wasm_unsupported_rejection("WebAssembly.instantiateStreaming")
@@ -558,6 +566,7 @@ extern "C" fn webassembly_instantiate_streaming_thunk(
 /// `WebAssembly.promising` (JSPI) — kept as an existing-but-inert function.
 extern "C" fn webassembly_unsupported_static_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     undefined()
@@ -569,6 +578,7 @@ extern "C" fn webassembly_unsupported_static_thunk(
 
 extern "C" fn webassembly_module_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     bytes: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
@@ -591,6 +601,7 @@ extern "C" fn webassembly_module_ctor_thunk(
 
 extern "C" fn webassembly_instance_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     module: f64,
     imports: f64,
 ) -> f64 {
@@ -614,6 +625,7 @@ extern "C" fn webassembly_instance_ctor_thunk(
 
 extern "C" fn webassembly_table_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     descriptor: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
@@ -635,6 +647,7 @@ extern "C" fn webassembly_table_ctor_thunk(
 
 extern "C" fn webassembly_global_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     descriptor: f64,
     initial: f64,
 ) -> f64 {
@@ -732,6 +745,7 @@ fn wasm_memory_new_buffer(pages: u32) -> f64 {
 
 extern "C" fn webassembly_memory_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     descriptor: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
@@ -859,6 +873,7 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
 
 extern "C" fn webassembly_memory_grow_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     delta: f64,
 ) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
@@ -879,6 +894,7 @@ extern "C" fn webassembly_memory_grow_thunk(
 
 extern "C" fn webassembly_compile_error_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     wasm_error_from_message_value(b"CompileError", message)
@@ -886,6 +902,7 @@ extern "C" fn webassembly_compile_error_ctor_thunk(
 
 extern "C" fn webassembly_link_error_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     wasm_error_from_message_value(b"LinkError", message)
@@ -893,6 +910,7 @@ extern "C" fn webassembly_link_error_ctor_thunk(
 
 extern "C" fn webassembly_runtime_error_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     message: f64,
 ) -> f64 {
     wasm_error_from_message_value(b"RuntimeError", message)
@@ -903,6 +921,7 @@ extern "C" fn webassembly_runtime_error_ctor_thunk(
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_module_exports_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     module: f64,
 ) -> f64 {
     crate::webassembly::js_webassembly_module_exports(module)
@@ -911,6 +930,7 @@ extern "C" fn webassembly_module_exports_thunk(
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_module_imports_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     module: f64,
 ) -> f64 {
     crate::webassembly::js_webassembly_module_imports(module)
@@ -919,6 +939,7 @@ extern "C" fn webassembly_module_imports_thunk(
 #[cfg(feature = "wasm-host")]
 extern "C" fn webassembly_module_custom_sections_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     module: f64,
     name: f64,
 ) -> f64 {
@@ -930,6 +951,7 @@ extern "C" fn webassembly_module_custom_sections_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_module_exports_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _module: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(
@@ -940,6 +962,7 @@ extern "C" fn webassembly_module_exports_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_module_imports_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _module: f64,
 ) -> f64 {
     super::super::object_ops::throw_object_type_error(
@@ -950,6 +973,7 @@ extern "C" fn webassembly_module_imports_thunk(
 #[cfg(not(feature = "wasm-host"))]
 extern "C" fn webassembly_module_custom_sections_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _module: f64,
     _name: f64,
 ) -> f64 {
@@ -1475,19 +1499,32 @@ mod tests {
     fn async_members_reject_with_compile_error() {
         let closure = std::ptr::null();
         assert_rejected_with_compile_error(
-            webassembly_compile_thunk(closure, undefined()),
+            webassembly_compile_thunk(closure, crate::closure::JsThis::current(), undefined()),
             "WebAssembly.compile",
         );
         assert_rejected_with_compile_error(
-            webassembly_instantiate_thunk(closure, undefined(), undefined()),
+            webassembly_instantiate_thunk(
+                closure,
+                crate::closure::JsThis::current(),
+                undefined(),
+                undefined(),
+            ),
             "WebAssembly.instantiate",
         );
         assert_rejected_with_compile_error(
-            webassembly_compile_streaming_thunk(closure, undefined()),
+            webassembly_compile_streaming_thunk(
+                closure,
+                crate::closure::JsThis::current(),
+                undefined(),
+            ),
             "WebAssembly.compileStreaming",
         );
         assert_rejected_with_compile_error(
-            webassembly_instantiate_streaming_thunk(closure, undefined()),
+            webassembly_instantiate_streaming_thunk(
+                closure,
+                crate::closure::JsThis::current(),
+                undefined(),
+            ),
             "WebAssembly.instantiateStreaming",
         );
     }
@@ -1495,7 +1532,11 @@ mod tests {
     #[cfg(not(feature = "wasm-host"))]
     #[test]
     fn validate_reports_false() {
-        let result = webassembly_validate_thunk(std::ptr::null(), undefined());
+        let result = webassembly_validate_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            undefined(),
+        );
         assert_eq!(
             result.to_bits(),
             crate::value::JSValue::bool(false).bits(),
@@ -1506,17 +1547,29 @@ mod tests {
     #[test]
     fn error_constructors_build_branded_error_objects() {
         let message = string_value("boom");
-        let compile_err = webassembly_compile_error_ctor_thunk(std::ptr::null(), message);
+        let compile_err = webassembly_compile_error_ctor_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            message,
+        );
         assert_eq!(error_name_bytes(compile_err), b"CompileError".to_vec());
         assert_eq!(error_message_string(compile_err), "boom");
         assert_eq!(value_gc_type(compile_err), Some(crate::gc::GC_TYPE_ERROR));
 
         // Message coercion mirrors `new Error(v)`.
-        let numbered = webassembly_link_error_ctor_thunk(std::ptr::null(), 42.0);
+        let numbered = webassembly_link_error_ctor_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            42.0,
+        );
         assert_eq!(error_name_bytes(numbered), b"LinkError".to_vec());
         assert_eq!(error_message_string(numbered), "42");
 
-        let bare = webassembly_runtime_error_ctor_thunk(std::ptr::null(), undefined());
+        let bare = webassembly_runtime_error_ctor_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            undefined(),
+        );
         assert_eq!(error_name_bytes(bare), b"RuntimeError".to_vec());
         assert_eq!(error_message_string(bare), "");
     }
@@ -1528,8 +1581,16 @@ mod tests {
         let link_ctor = ns_field(ns, b"LinkError");
         let runtime_ctor = ns_field(ns, b"RuntimeError");
 
-        let compile_err = webassembly_compile_error_ctor_thunk(std::ptr::null(), string_value("x"));
-        let link_err = webassembly_link_error_ctor_thunk(std::ptr::null(), string_value("x"));
+        let compile_err = webassembly_compile_error_ctor_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            string_value("x"),
+        );
+        let link_err = webassembly_link_error_ctor_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::current(),
+            string_value("x"),
+        );
 
         assert_eq!(
             webassembly_error_ctor_instanceof(compile_err, compile_ctor),

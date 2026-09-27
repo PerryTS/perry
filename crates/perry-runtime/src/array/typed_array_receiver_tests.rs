@@ -242,6 +242,7 @@ fn typed_read_back(ta: *mut ArrayHeader, len: usize) -> Vec<f64> {
 /// `ClosureHeader`, which is what `DirectCall2::resolve` expects.
 extern "C" fn descending_cmp(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
 ) -> f64 {
@@ -773,6 +774,7 @@ fn record(value: f64, index: f64, receiver: f64) {
 /// `(element, index, receiver) -> element * 2` — records, then doubles.
 extern "C" fn cb_double(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     index: f64,
     receiver: f64,
@@ -785,6 +787,7 @@ extern "C" fn cb_double(
 /// answer "true" for the garbage reads, so it must not be used.
 extern "C" fn cb_is_three_or_two(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     index: f64,
     receiver: f64,
@@ -796,6 +799,7 @@ extern "C" fn cb_is_three_or_two(
 /// Truthy only for the literal `1`.
 extern "C" fn cb_is_one(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     index: f64,
     receiver: f64,
@@ -808,6 +812,7 @@ extern "C" fn cb_is_one(
 /// predicate. A `x > 0` predicate here is VACUOUS (see the header comment).
 extern "C" fn cb_is_a_source_byte(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     index: f64,
     receiver: f64,
@@ -819,6 +824,7 @@ extern "C" fn cb_is_a_source_byte(
 /// `(accumulator, element, index, receiver) -> accumulator + element`.
 extern "C" fn cb_sum(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     accumulator: f64,
     value: f64,
     index: f64,

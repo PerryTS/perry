@@ -5,7 +5,10 @@ thread_local! {
     static REENTRANT_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-extern "C" fn reentrant_implementation(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn reentrant_implementation(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let recurse = REENTRANT_ACTIVE.with(|active| !active.replace(true));
     if recurse {
         let mock = REENTRANT_MOCK.with(Cell::get);
@@ -15,11 +18,11 @@ extern "C" fn reentrant_implementation(_closure: *const ClosureHeader) -> f64 {
     10.0
 }
 
-extern "C" fn return_twenty(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn return_twenty(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     20.0
 }
 
-extern "C" fn return_thirty(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn return_thirty(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     30.0
 }
 

@@ -69,26 +69,45 @@ fn bytes(value: f64) -> Vec<u8> {
     let (data, n) = crate::string::str_bytes_from_jsvalue(value, &mut short).unwrap();
     unsafe { std::slice::from_raw_parts(data, n as usize).to_vec() }
 }
-extern "C" fn identity(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn identity(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     arg
 }
-extern "C" fn throw_string(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_string(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(901.0)
 }
-extern "C" fn search_override(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn search_override(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     gc_collect_minor();
     api::finish(dispatch::set_last_index(&receiver, 7.0));
     receiver.get_nanbox_f64()
 }
-extern "C" fn search_throw(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn search_throw(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     api::finish(dispatch::set_last_index(&receiver, 7.0));
     crate::exception::js_throw(902.0)
 }
-extern "C" fn global_override(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn global_override(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     gc_collect_minor();
@@ -106,7 +125,10 @@ extern "C" fn global_override(_: *const crate::closure::ClosureHeader, _: f64) -
     put(&receiver, b"0", &capture);
     receiver.get_nanbox_f64()
 }
-extern "C" fn collecting_flags(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collecting_flags(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     js_nanbox_string(crate::string::js_string_from_bytes(b"gu".as_ptr(), 2) as i64)
 }

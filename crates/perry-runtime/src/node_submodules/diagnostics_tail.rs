@@ -99,7 +99,10 @@ fn install_dispose(obj: *mut ObjectHeader, method: f64) {
     }
 }
 
-pub(crate) extern "C" fn diag_store_scope_dispose(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn diag_store_scope_dispose(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope_id = js_closure_get_capture_ptr(closure, 0);
     let handles = DIAG_STORE_SCOPES.with(|m| {
         let mut m = m.borrow_mut();
@@ -120,6 +123,7 @@ pub(crate) extern "C" fn diag_store_scope_dispose(closure: *const ClosureHeader)
 
 pub(crate) extern "C" fn diag_channel_with_store_scope(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     data: f64,
 ) -> f64 {
     let id = method_id(closure);
@@ -208,6 +212,7 @@ pub(crate) fn update_all_bounded_active() {
 
 pub(crate) extern "C" fn diag_bounded_subscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     handlers: f64,
 ) -> f64 {
     let events = bounded_events(method_id(closure));
@@ -227,6 +232,7 @@ pub(crate) extern "C" fn diag_bounded_subscribe(
 
 pub(crate) extern "C" fn diag_bounded_unsubscribe(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     handlers: f64,
 ) -> f64 {
     let events = bounded_events(method_id(closure));
@@ -240,7 +246,11 @@ pub(crate) extern "C" fn diag_bounded_unsubscribe(
     bool_value(ok)
 }
 
-pub(crate) extern "C" fn diag_bounded_run(closure: *const ClosureHeader, all_args: f64) -> f64 {
+pub(crate) extern "C" fn diag_bounded_run(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    all_args: f64,
+) -> f64 {
     let all = unbox_arg_array(all_args);
     let undef = undefined();
     let context = all.first().copied().unwrap_or(undef);
@@ -268,7 +278,10 @@ pub(crate) extern "C" fn diag_bounded_run(closure: *const ClosureHeader, all_arg
     }
 }
 
-pub(crate) extern "C" fn diag_bounded_scope_dispose(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn diag_bounded_scope_dispose(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if js_closure_get_capture_ptr(closure, 2) != 0 {
         return undefined();
     }
@@ -281,6 +294,7 @@ pub(crate) extern "C" fn diag_bounded_scope_dispose(closure: *const ClosureHeade
 
 pub(crate) extern "C" fn diag_bounded_with_scope(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     context: f64,
 ) -> f64 {
     let events = bounded_events(method_id(closure));
@@ -306,6 +320,7 @@ fn bounded_run_method_closure(id: i64) -> f64 {
 
 pub(crate) extern "C" fn thunk_diag_bounded_channel(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     name_or_channels: f64,
 ) -> f64 {
     if is_symbol_value(name_or_channels) {

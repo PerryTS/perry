@@ -641,7 +641,10 @@ fn listener_once(options: f64) -> bool {
     perry_runtime::value::js_is_truthy(get_object_field(options, "once")) != 0
 }
 
-extern "C" fn worker_threads_noop0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_threads_noop0(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     js_undefined()
 }
 
@@ -754,7 +757,10 @@ fn queue_worker_threads_microtask() {
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
-extern "C" fn worker_threads_channels_microtask(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_threads_channels_microtask(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     js_worker_threads_channels_process_pending();
     js_undefined()
 }
@@ -1023,11 +1029,21 @@ fn push_parent_event(parent: AgentId, event: WorkerEvent) {
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
-extern "C" fn worker_on(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn worker_on(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     worker_add_listener(captured_worker_id(closure), event, callback, false, false)
 }
 
-extern "C" fn worker_once(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn worker_once(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     worker_add_listener(captured_worker_id(closure), event, callback, true, false)
 }
 
@@ -1036,6 +1052,7 @@ extern "C" fn worker_once(closure: *const ClosureHeader, event: f64, callback: f
 /// `MessageEvent` (with `.data`) for "message" events.
 extern "C" fn worker_add_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1045,10 +1062,16 @@ extern "C" fn worker_add_event_listener(
 /// `worker.removeEventListener(type, listener)`.
 extern "C" fn worker_remove_event_listener(
     closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    worker_off(closure, event, callback)
+    worker_off(
+        closure,
+        perry_runtime::closure::JsThis::current(),
+        event,
+        callback,
+    )
 }
 
 fn worker_add_listener(
@@ -1077,7 +1100,12 @@ fn worker_add_listener(
     js_undefined()
 }
 
-extern "C" fn worker_off(closure: *const ClosureHeader, event: f64, callback: f64) -> f64 {
+extern "C" fn worker_off(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
     let worker_id = captured_worker_id(closure);
     let Some(event) = event_name(event) else {
         return js_undefined();
@@ -1092,7 +1120,11 @@ extern "C" fn worker_off(closure: *const ClosureHeader, event: f64, callback: f6
     js_undefined()
 }
 
-extern "C" fn worker_post_message(closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn worker_post_message(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
     let worker_id = captured_worker_id(closure);
     let message = unsafe { serialize_nanbox_for_thread(value.to_bits()) };
     let sender = WORKERS
@@ -1106,11 +1138,17 @@ extern "C" fn worker_post_message(closure: *const ClosureHeader, value: f64) -> 
     js_undefined()
 }
 
-extern "C" fn worker_terminate(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_terminate(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_terminate_by_id(captured_worker_id(closure))
 }
 
-extern "C" fn worker_reload(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_reload(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_reload_by_id(captured_worker_id(closure))
 }
 
@@ -1127,7 +1165,10 @@ fn worker_reload_by_id(worker_id: u64) -> f64 {
     js_undefined()
 }
 
-extern "C" fn worker_ref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_ref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_ref_by_id(captured_worker_id(closure))
 }
 
@@ -1139,7 +1180,10 @@ fn worker_ref_by_id(worker_id: u64) -> f64 {
     js_undefined()
 }
 
-extern "C" fn worker_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_unref(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_unref_by_id(captured_worker_id(closure))
 }
 
@@ -1151,7 +1195,10 @@ fn worker_unref_by_id(worker_id: u64) -> f64 {
     js_undefined()
 }
 
-extern "C" fn worker_get_heap_statistics(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_get_heap_statistics(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_get_heap_statistics_by_id(captured_worker_id(closure))
 }
 
@@ -1159,7 +1206,11 @@ fn worker_get_heap_statistics_by_id(_worker_id: u64) -> f64 {
     resolved_promise_value(unsafe { js_v8_get_heap_statistics() })
 }
 
-extern "C" fn worker_cpu_usage(closure: *const ClosureHeader, prior: f64) -> f64 {
+extern "C" fn worker_cpu_usage(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    prior: f64,
+) -> f64 {
     worker_cpu_usage_by_id(captured_worker_id(closure), prior)
 }
 
@@ -1167,7 +1218,11 @@ fn worker_cpu_usage_by_id(_worker_id: u64, prior: f64) -> f64 {
     resolved_promise_value(unsafe { js_process_cpu_usage(prior) })
 }
 
-extern "C" fn worker_get_heap_snapshot(closure: *const ClosureHeader, options: f64) -> f64 {
+extern "C" fn worker_get_heap_snapshot(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    options: f64,
+) -> f64 {
     worker_get_heap_snapshot_by_id(captured_worker_id(closure), options)
 }
 
@@ -1175,7 +1230,10 @@ fn worker_get_heap_snapshot_by_id(_worker_id: u64, _options: f64) -> f64 {
     resolved_promise_value(worker_readable_stream_object())
 }
 
-extern "C" fn worker_start_cpu_profile(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_start_cpu_profile(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_start_cpu_profile_by_id(captured_worker_id(closure))
 }
 
@@ -1183,7 +1241,10 @@ fn worker_start_cpu_profile_by_id(_worker_id: u64) -> f64 {
     resolved_promise_value(worker_profile_handle(0))
 }
 
-extern "C" fn worker_start_heap_profile(closure: *const ClosureHeader) -> f64 {
+extern "C" fn worker_start_heap_profile(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     worker_start_heap_profile_by_id(captured_worker_id(closure))
 }
 

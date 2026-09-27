@@ -114,6 +114,7 @@ fn direct_templates_match_the_ordinary_loop() {
 
 extern "C" fn describe(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     capture: f64,
     position: f64,
@@ -197,6 +198,7 @@ fn direct_callbacks_receive_the_ordinary_arguments() {
 
 extern "C" fn meddle(
     c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     _position: f64,
     _input: f64,
@@ -212,7 +214,11 @@ extern "C" fn meddle(
     matched.get_nanbox_f64()
 }
 
-extern "C" fn never_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn never_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     f64::from_bits(crate::value::TAG_NULL)
 }
 
@@ -229,7 +235,11 @@ fn a_replacer_cannot_change_which_matches_are_replaced() {
     assert_eq!(last, 0.0);
 }
 
-extern "C" fn counting_exec(c: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn counting_exec(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     put(&state, b"calls", get(&state, b"calls") + 1.0);

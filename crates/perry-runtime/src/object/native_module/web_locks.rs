@@ -542,6 +542,7 @@ fn web_locks_release(id: u64) {
 
 extern "C" fn worker_threads_locks_release_fulfill(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
@@ -554,6 +555,7 @@ extern "C" fn worker_threads_locks_release_fulfill(
 
 extern "C" fn worker_threads_locks_release_reject(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
@@ -566,6 +568,7 @@ extern "C" fn worker_threads_locks_release_reject(
 
 extern "C" fn worker_threads_locks_request(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name_value: f64,
     options_or_callback: f64,
     maybe_callback: f64,
@@ -657,18 +660,22 @@ pub extern "C" fn js_worker_threads_locks_request(
 ) -> f64 {
     worker_threads_locks_request(
         std::ptr::null(),
+        crate::closure::JsThis::current(),
         name_value,
         options_or_callback,
         maybe_callback,
     )
 }
 
-extern "C" fn worker_threads_locks_query(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn worker_threads_locks_query(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let snapshot = web_locks_query_snapshot();
     web_locks_object_value(crate::promise::js_promise_resolved(snapshot))
 }
 
 #[no_mangle]
 pub extern "C" fn js_worker_threads_locks_query() -> f64 {
-    worker_threads_locks_query(std::ptr::null())
+    worker_threads_locks_query(std::ptr::null(), crate::closure::JsThis::current())
 }

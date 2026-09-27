@@ -151,7 +151,11 @@ impl Drop for Directory {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
-extern "C" fn exclude(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn exclude(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let arg = scope.root_nanbox_f64(arg);
     gc_collect_minor();
@@ -164,7 +168,11 @@ extern "C" fn exclude(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 
         TAG_FALSE
     })
 }
-extern "C" fn throw_exclude(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn throw_exclude(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(991.0)
 }

@@ -61,6 +61,7 @@ fn date_arg_to_clipped_ms(value: f64) -> f64 {
 
 pub(crate) extern "C" fn date_time_format_bound_format_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "format", KIND_DATE_TIME);
@@ -78,6 +79,7 @@ pub(crate) extern "C" fn date_time_format_bound_format_thunk(
 /// construction with name `""` and length 1).
 pub(crate) extern "C" fn date_time_format_format_getter_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = this_intl_object("format", KIND_DATE_TIME);
     get_field(obj, KEY_DTF_BOUND_FORMAT)
@@ -85,6 +87,7 @@ pub(crate) extern "C" fn date_time_format_format_getter_thunk(
 
 pub(crate) extern "C" fn date_time_format_to_parts_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("formatToParts", KIND_DATE_TIME);
@@ -96,6 +99,7 @@ pub(crate) extern "C" fn date_time_format_to_parts_thunk(
 
 pub(crate) extern "C" fn date_time_format_bound_to_parts_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "formatToParts", KIND_DATE_TIME);
@@ -1381,6 +1385,7 @@ pub(crate) use range::*;
 
 pub(crate) extern "C" fn date_time_format_resolved_options_thunk(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_DATE_TIME);
     date_time_format_resolved_options_object(obj)
@@ -1388,6 +1393,7 @@ pub(crate) extern "C" fn date_time_format_resolved_options_thunk(
 
 pub(crate) extern "C" fn date_time_format_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_DATE_TIME);
     date_time_format_resolved_options_object(obj)
@@ -1687,6 +1693,7 @@ pub(super) fn validate_collator_options(options: f64) {
 
 pub(crate) extern "C" fn collator_bound_compare_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     left: f64,
     right: f64,
 ) -> f64 {
@@ -1697,7 +1704,10 @@ pub(crate) extern "C" fn collator_bound_compare_thunk(
 /// `get Intl.Collator.prototype.compare` — validate the receiver and return its
 /// stable [[BoundCompare]] function. The constructor gives that function the
 /// anonymous built-in shape required by ECMA-402 (`name: ""`, `length: 2`).
-pub(crate) extern "C" fn collator_compare_getter_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn collator_compare_getter_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = this_intl_object("compare", KIND_COLLATOR);
     get_field(obj, KEY_COL_BOUND_COMPARE)
 }
@@ -1765,13 +1775,17 @@ pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right
     }
 }
 
-pub(crate) extern "C" fn collator_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn collator_resolved_options_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_COLLATOR);
     collator_resolved_options_object(obj)
 }
 
 pub(crate) extern "C" fn collator_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_COLLATOR);
     collator_resolved_options_object(obj)

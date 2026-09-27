@@ -35,7 +35,10 @@ fn require_date_timestamp() -> f64 {
 
 macro_rules! date_getter_thunk {
     ($name:ident, $rt:path) => {
-        extern "C" fn $name(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        extern "C" fn $name(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+        ) -> f64 {
             $rt(require_date_timestamp())
         }
     };
@@ -75,7 +78,10 @@ date_getter_thunk!(
 /// (`Date.prototype.toISOString.call(x)`) reaches here: brand-check `this`
 /// (TypeError on a non-Date receiver), then format-or-throw (RangeError when
 /// the time value is `NaN`).
-extern "C" fn date_to_iso_string(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_to_iso_string(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
@@ -87,7 +93,10 @@ extern "C" fn date_to_iso_string(_closure: *const crate::closure::ClosureHeader)
 /// `Date.prototype.toUTCString` (and its legacy `toGMTString` alias)
 /// reflective thunk: brand-check `this` (TypeError on a non-Date receiver),
 /// then format as "Sun, 23 Mar 2014 00:00:00 GMT" (or "Invalid Date").
-extern "C" fn date_to_utc_string(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_to_utc_string(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
@@ -97,13 +106,19 @@ extern "C" fn date_to_utc_string(_closure: *const crate::closure::ClosureHeader)
 }
 
 #[cfg(feature = "temporal")]
-extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_to_temporal_instant(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let timestamp = require_date_timestamp();
     crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
 }
 
 #[cfg(not(feature = "temporal"))]
-extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_to_temporal_instant(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -114,7 +129,10 @@ extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureH
 /// otherwise return `Invoke(this, "toISOString")`. So it works for a real Date
 /// (Invalid → `null`), a plain object carrying its own `toISOString`, and a
 /// `Number(-Infinity)` wrapper (→ `null`).
-extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_to_json(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     date_to_json_value(this)
 }
@@ -214,7 +232,7 @@ pub(crate) fn date_to_json_value(this: f64) -> f64 {
 
 #[cfg(test)]
 pub(crate) fn test_date_to_json_current_this() -> f64 {
-    date_to_json(std::ptr::null())
+    date_to_json(std::ptr::null(), crate::closure::JsThis::current())
 }
 
 /// True iff `value` is an ECMAScript Object (`Type(O) is Object`). Objects are
@@ -245,7 +263,11 @@ fn value_is_object(value: f64) -> bool {
 /// The `hint` comparison is against the primitive String value only: a
 /// `new String("number")` wrapper or any non-string is an invalid hint
 /// (TypeError), matching test262 `hint-invalid.js`.
-extern "C" fn date_to_primitive(_closure: *const crate::closure::ClosureHeader, hint: f64) -> f64 {
+extern "C" fn date_to_primitive(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    hint: f64,
+) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     // Step 1: brand-check `Type(O) is Object` (throws for undefined/null/86/''/true).
     if !value_is_object(this) {
@@ -375,18 +397,29 @@ pub(crate) fn install_date_proto_to_primitive(proto_obj: *mut ObjectHeader) {
 // `getOwnPropertyDescriptor(Date, "UTC")`).
 
 /// `Date.now()` — current time in milliseconds.
-extern "C" fn date_now_static(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_now_static(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::date::js_date_now()
 }
 
 /// `Date.parse(string)` — ToString the argument, then parse to a ms timestamp.
-extern "C" fn date_parse_static(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn date_parse_static(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     let s = crate::value::js_jsvalue_to_string(arg);
     crate::date::js_date_parse(s as *const crate::string::StringHeader)
 }
 
 /// `Date.UTC(year, month?, day?, …)` — variadic; forwards to `js_date_utc`.
-extern "C" fn date_utc_static(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+extern "C" fn date_utc_static(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     let vals = super::global_this::global_this_rest_array_values(rest);
     crate::date::js_date_utc(vals.as_ptr(), vals.len() as i32)
 }
@@ -428,7 +461,10 @@ pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::Closur
 }
 
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
-extern "C" fn date_get_year(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn date_get_year(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let fy = crate::date::js_date_get_full_year(require_date_timestamp());
     if fy.is_nan() {
         fy
@@ -533,7 +569,11 @@ fn require_date_this() -> f64 {
 /// rebuild.
 macro_rules! date_setter_thunk {
     ($name:ident, $is_utc:expr, $field:expr) => {
-        extern "C" fn $name(_closure: *const crate::closure::ClosureHeader, rest: f64) -> f64 {
+        extern "C" fn $name(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+            rest: f64,
+        ) -> f64 {
             let this = require_date_this();
             let args = super::global_this::global_this_rest_array_values(rest);
             crate::date::js_date_apply_setter(
@@ -613,6 +653,7 @@ fn date_to_locale_opts_impl(rest: f64, ctx: crate::intl::TemporalLocaleCtx) -> f
 
 extern "C" fn date_to_locale_string_opts(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDateTime)
@@ -620,6 +661,7 @@ extern "C" fn date_to_locale_string_opts(
 
 extern "C" fn date_to_locale_date_string_opts(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDate)
@@ -627,6 +669,7 @@ extern "C" fn date_to_locale_date_string_opts(
 
 extern "C" fn date_to_locale_time_string_opts(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainTime)

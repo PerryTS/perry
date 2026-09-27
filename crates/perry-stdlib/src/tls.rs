@@ -1165,7 +1165,12 @@ unsafe fn failed_server_socket(server_handle: i64, servername: Option<String>) -
     socket_id
 }
 
-extern "C" fn tls_sni_completion(closure: *const ClosureHeader, error: f64, context: f64) -> f64 {
+extern "C" fn tls_sni_completion(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    error: f64,
+    context: f64,
+) -> f64 {
     unsafe {
         let server_handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as i64;
         let hostname = value_to_string(perry_runtime::closure::js_closure_get_capture_f64(

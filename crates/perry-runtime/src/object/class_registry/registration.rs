@@ -206,7 +206,10 @@ pub(crate) fn class_own_static_accessor_ptrs(class_id: u32, name: &str) -> Optio
 /// Trampoline giving a raw vtable getter func_ptr (`fn(this) -> f64`) the
 /// closure calling convention. The receiver comes from `IMPLICIT_THIS`, set
 /// by the method-call dispatch the closure value travels through.
-extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn class_accessor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
     if raw == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -219,6 +222,7 @@ extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::Closur
 /// Trampoline for a raw vtable setter func_ptr (`fn(this, value) -> f64`).
 extern "C" fn class_accessor_setter_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;

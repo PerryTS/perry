@@ -60,6 +60,21 @@ pub(crate) fn hot_addr() -> *mut u8 {
     &PERRY_AGENT_PTRS as *const AgentPtrs as *mut u8
 }
 
+/// This agent's implicit-`this` bits, read through the published slot — a
+/// direct `#[thread_local]` access and one load, no `thread_local!` accessor —
+/// publishing the slot on this agent's first read.
+#[inline(always)]
+pub(crate) fn implicit_this_bits() -> u64 {
+    let mut cell = PERRY_AGENT_PTRS.0[AGENT_PTR_IMPLICIT_THIS].get();
+    if cell.is_null() {
+        cell = perry_implicit_this_cell();
+    }
+    // SAFETY: a published slot points at this agent's live `HotTls` cell (a
+    // slot is cleared before the state it points into is freed); `Cell<u64>`
+    // has `u64`'s layout.
+    unsafe { *(cell as *const u64) }
+}
+
 /// The address of this agent's implicit-`this` cell, published into slot
 /// [`AGENT_PTR_IMPLICIT_THIS`] for emitted code that binds `this` around a
 /// direct method call. A leaf: one TLS read and one store.

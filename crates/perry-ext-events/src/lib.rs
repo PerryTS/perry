@@ -891,7 +891,11 @@ unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i6
     wrapper as i64
 }
 
-extern "C" fn event_emitter_once_wrapper(closure: *const RawClosureHeader, rest: f64) -> f64 {
+extern "C" fn event_emitter_once_wrapper(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let event_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const StringHeader;
@@ -1158,6 +1162,7 @@ unsafe fn call_emitter_listener(handle: Handle, callback: i64, args: &[f64]) -> 
 
 extern "C" fn events_capture_rejection_handler(
     closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
     reason: f64,
 ) -> f64 {
     unsafe {

@@ -303,7 +303,11 @@ fn set_trace_enabled(id: i64, enabled: bool) {
     }
 }
 
-extern "C" fn trace_tracing_constructor(_closure: *const ClosureHeader, categories: f64) -> f64 {
+extern "C" fn trace_tracing_constructor(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    categories: f64,
+) -> f64 {
     if crate::object::js_new_target_get().to_bits() == crate::value::TAG_UNDEFINED {
         throw_type_error_no_code(b"Class constructor Tracing cannot be invoked without 'new'");
     }
@@ -313,17 +317,26 @@ extern "C" fn trace_tracing_constructor(_closure: *const ClosureHeader, categori
     create_trace(categories_handle.get_nanbox_f64(), category_names)
 }
 
-extern "C" fn trace_tracing_enable(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn trace_tracing_enable(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     set_trace_enabled(this_trace_id(), true);
     undefined()
 }
 
-extern "C" fn trace_tracing_disable(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn trace_tracing_disable(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     set_trace_enabled(this_trace_id(), false);
     undefined()
 }
 
-extern "C" fn trace_categories_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn trace_categories_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = this_trace_id();
     let categories = trace_state_value(id, |state| state.categories);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -331,7 +344,10 @@ extern "C" fn trace_categories_getter(_closure: *const ClosureHeader) -> f64 {
     string_value(&categories_from_array(categories.get_nanbox_f64()).join(","))
 }
 
-extern "C" fn trace_enabled_getter(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn trace_enabled_getter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = this_trace_id();
     trace_state_value(id, |state| bool_value(state.enabled))
 }
@@ -445,6 +461,7 @@ fn create_trace(categories: f64, source_categories: Vec<String>) -> f64 {
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_createTracing(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     init_trace_events_runtime();
@@ -456,6 +473,7 @@ pub(crate) extern "C" fn thunk_trace_events_createTracing(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_trace_events_getEnabledCategories(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     init_trace_events_runtime();

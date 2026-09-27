@@ -286,6 +286,7 @@ pub unsafe extern "C" fn js_array_subclass_init_args(
 /// Legacy shape-carried compatibility closure for `Array.prototype.fill`.
 pub(super) extern "C" fn ns_array_fill(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     start: f64,
     end: f64,

@@ -779,11 +779,21 @@ fn register_plugin_hook(
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
-extern "C" fn bun_on_resolve(closure: *const RawClosureHeader, options: f64, callback: f64) -> f64 {
+extern "C" fn bun_on_resolve(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    options: f64,
+    callback: f64,
+) -> f64 {
     register_plugin_hook(closure, options, callback, true)
 }
 
-extern "C" fn bun_on_load(closure: *const RawClosureHeader, options: f64, callback: f64) -> f64 {
+extern "C" fn bun_on_load(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    options: f64,
+    callback: f64,
+) -> f64 {
     register_plugin_hook(closure, options, callback, false)
 }
 
@@ -1284,7 +1294,10 @@ fn array_from_values(values: impl IntoIterator<Item = JsValue>) -> JsValue {
     JsValue::from_object_ptr(array.get() as *mut ArrayHeader)
 }
 
-extern "C" fn bun_build_output_text(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn bun_build_output_text(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     let scope = TransientRootScope::enter();
     let contents = scope.root_nanbox(unsafe { closure_capture_f64(closure, 0) });
     let promise = JsPromise::new();

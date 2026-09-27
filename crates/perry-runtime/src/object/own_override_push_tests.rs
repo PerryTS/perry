@@ -28,7 +28,11 @@ unsafe fn push_or_own(arr: *mut ArrayHeader, value: f64) -> (u64, u32) {
     (bits, own)
 }
 
-extern "C" fn own_push_fixture(_closure: *const crate::closure::ClosureHeader, x: f64) -> f64 {
+extern "C" fn own_push_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+) -> f64 {
     x * 10.0
 }
 

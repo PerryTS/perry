@@ -606,7 +606,10 @@ fn cp_register_live_child_parts(
     handle
 }
 
-extern "C" fn cp_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cp_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let handle = js_closure_get_capture_ptr(closure, 0) as u64;
     cp_push_event(CpEvent::Abort { handle });
     cp_undefined()
@@ -1018,7 +1021,10 @@ pub extern "C" fn js_child_process_spawn_streams(
 
 /// Deferred single-`error` emit for the spawn/fork failure path. Slot 0
 /// captures the ChildProcess value.
-pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn cp_emit_spawn_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(cp_this(closure));
     let err = scope.root_nanbox_f64(cp_get_field(cp.get_nanbox_f64(), b"__cpError"));
@@ -1029,7 +1035,10 @@ pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f
     cp_undefined()
 }
 
-pub(super) extern "C" fn cp_emit_spawn_close(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn cp_emit_spawn_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(cp_this(closure));
     super::failed_spawn::finish_outputs(cp.get_nanbox_f64());
@@ -1332,7 +1341,10 @@ pub(super) fn cp_defer_exec_callback(cb_val: f64, err: f64, stdout: f64, stderr:
 
 /// The deferred-callback thunk: slots 0..4 capture `cb`, `err`, `stdout`,
 /// `stderr`. Takes no JS args.
-extern "C" fn cp_exec_cb_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn cp_exec_cb_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let cb = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let err = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     let out = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);

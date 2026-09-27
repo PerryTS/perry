@@ -64,7 +64,7 @@ pub(crate) unsafe fn dispatch_wide_abi(
             padded!($slots, [$($i,)+ $($i + $step),+], $step * 2, $($more)*)
         };
         ($slots:ident, [$($i:expr),+], $step:expr,) => {{
-            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure $(, $slots[$i])+)
+            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure, crate::closure::JsThis::current() $(, $slots[$i])+)
         }};
     }
         macro_rules! fill {
@@ -126,6 +126,7 @@ mod tests {
 
     extern "C" fn body_40(
         _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
         a0: f64,
         a1: f64,
         a2: f64,
@@ -231,6 +232,7 @@ mod tests {
 
     extern "C" fn rest_after_16(
         _: *const ClosureHeader,
+        _this: crate::closure::JsThis,
         a0: f64,
         a1: f64,
         a2: f64,

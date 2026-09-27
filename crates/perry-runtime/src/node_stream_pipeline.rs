@@ -15,7 +15,10 @@ pub(super) struct PipelineOptions {
     pub(super) signal: Option<f64>,
 }
 
-pub(super) extern "C" fn pipeline_success_callback(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn pipeline_success_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -30,7 +33,11 @@ pub(super) extern "C" fn pipeline_success_callback(closure: *const ClosureHeader
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(super) extern "C" fn pipeline_error_callback(closure: *const ClosureHeader, err: f64) -> f64 {
+pub(super) extern "C" fn pipeline_error_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -47,7 +54,10 @@ pub(super) extern "C" fn pipeline_error_callback(closure: *const ClosureHeader, 
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(super) extern "C" fn pipeline_close_callback(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn pipeline_close_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -527,7 +537,11 @@ pub(super) fn fail_collected_pipeline(stages: &[f64], callback: f64, err: f64) {
     }
 }
 
-extern "C" fn collected_pipeline_error_noop(_closure: *const ClosureHeader, _err: f64) -> f64 {
+extern "C" fn collected_pipeline_error_noop(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _err: f64,
+) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -890,6 +904,7 @@ fn fail_composed_duplex(composite: f64, source: f64, stages: f64, err: f64) {
 
 pub(super) extern "C" fn compose_stage_error_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -904,6 +919,7 @@ pub(super) extern "C" fn compose_stage_error_callback(
 
 pub(super) extern "C" fn compose_source_data_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -922,7 +938,10 @@ pub(super) extern "C" fn compose_source_data_callback(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(super) extern "C" fn compose_source_end_callback(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn compose_source_end_callback(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -940,6 +959,7 @@ pub(super) extern "C" fn compose_source_end_callback(closure: *const ClosureHead
 
 pub(super) extern "C" fn compose_source_error_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -954,6 +974,7 @@ pub(super) extern "C" fn compose_source_error_callback(
 
 pub(super) extern "C" fn compose_duplex_write_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     cb: f64,
@@ -979,6 +1000,7 @@ pub(super) extern "C" fn compose_duplex_write_callback(
 
 pub(super) extern "C" fn compose_duplex_final_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
     if closure.is_null() {

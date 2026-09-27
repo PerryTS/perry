@@ -747,12 +747,14 @@ pub(super) fn old_page_dirty_for(page: usize) -> bool {
 
 pub(super) extern "C" fn test_no_capture_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }
 
 pub(super) extern "C" fn test_captured_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }

@@ -200,7 +200,10 @@ pub unsafe fn dispatch_node_sqlite_database_property(
     }
 }
 
-pub(crate) extern "C" fn sql_tag_store_constructor_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn sql_tag_store_constructor_thunk(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     throw_illegal_constructor()
 }
 

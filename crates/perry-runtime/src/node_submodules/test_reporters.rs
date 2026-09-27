@@ -15,23 +15,43 @@ fn reporter_with_kind(kind: i32, source: f64) -> f64 {
     readable_from_text(output)
 }
 
-pub(crate) extern "C" fn thunk_reporter_spec(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_spec(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_SPEC, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_tap(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_tap(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_TAP, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_dot(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_dot(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_DOT, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_junit(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_junit(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_JUNIT, source)
 }
 
-pub(crate) extern "C" fn thunk_reporter_lcov(_closure: *const ClosureHeader, source: f64) -> f64 {
+pub(crate) extern "C" fn thunk_reporter_lcov(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    source: f64,
+) -> f64 {
     reporter_with_kind(REPORTER_LCOV, source)
 }
 
@@ -49,6 +69,7 @@ fn reporter_transform(kind: i32) -> f64 {
 
 extern "C" fn reporter_transform_chunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     callback: f64,

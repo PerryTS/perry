@@ -422,10 +422,10 @@ mod tests {
         closure_set_dynamic_prop, closure_set_static_prototype, js_closure_alloc,
     };
 
-    extern "C" fn plain_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn plain_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         1.0
     }
-    extern "C" fn async_body(_c: *const ClosureHeader) -> f64 {
+    extern "C" fn async_body(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
         2.0
     }
 
@@ -571,7 +571,13 @@ mod tests {
         assert!(crate::closure::is_closure_ptr(fresh(plain_body) as usize));
     }
 
-    extern "C" fn three_arg_body(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+    extern "C" fn three_arg_body(
+        _c: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        a: f64,
+        b: f64,
+        c: f64,
+    ) -> f64 {
         a + b + c
     }
 

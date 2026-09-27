@@ -107,11 +107,19 @@ unsafe fn helper_over(values: &[f64]) -> f64 {
 /// The closure the combinator tests map with. Perry closures are invoked with
 /// the argument in the first `f64` slot; `js_closure_alloc` + a registered
 /// arity is the runtime-side equivalent of a compiled arrow function.
-extern "C" fn double_it(_c: *const crate::closure::ClosureHeader, x: f64) -> f64 {
+extern "C" fn double_it(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+) -> f64 {
     f64::from_bits(JSValue::number(f64::from_bits(x.to_bits()) * 2.0).bits())
 }
 
-extern "C" fn is_even(_c: *const crate::closure::ClosureHeader, x: f64) -> f64 {
+extern "C" fn is_even(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+) -> f64 {
     let v = f64::from_bits(x.to_bits());
     f64::from_bits(if v as i64 % 2 == 0 {
         crate::value::TAG_TRUE
@@ -121,13 +129,22 @@ extern "C" fn is_even(_c: *const crate::closure::ClosureHeader, x: f64) -> f64 {
 }
 
 /// `(x) => [x, x * 10]`, for `flatMap`.
-extern "C" fn pair_with_ten_times(_c: *const crate::closure::ClosureHeader, x: f64) -> f64 {
+extern "C" fn pair_with_ten_times(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+) -> f64 {
     let v = f64::from_bits(x.to_bits());
     unsafe { number_array(&[v, v * 10.0]) }
 }
 
 /// `(acc, v) => acc + v`, for `reduce`.
-extern "C" fn add(_c: *const crate::closure::ClosureHeader, a: f64, b: f64) -> f64 {
+extern "C" fn add(
+    _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
     let sum = f64::from_bits(a.to_bits()) + f64::from_bits(b.to_bits());
     f64::from_bits(JSValue::number(sum).bits())
 }
@@ -499,7 +516,11 @@ fn an_own_next_method_is_called_with_the_iterator_as_this() {
     /// Bits of the `this` the last `next()` observed.
     static OBSERVED_THIS: AtomicU64 = AtomicU64::new(0);
 
-    extern "C" fn next_recording_this(_c: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+    extern "C" fn next_recording_this(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _arg: f64,
+    ) -> f64 {
         let this = crate::object::js_implicit_this_get();
         OBSERVED_THIS.store(this.to_bits(), Ordering::SeqCst);
         unsafe { crate::iter_result::make_iter_result(JSValue::undefined(), true) }

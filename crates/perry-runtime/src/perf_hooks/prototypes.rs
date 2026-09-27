@@ -28,7 +28,10 @@ fn invalid_perf_receiver(class_name: &str) -> ! {
     )
 }
 
-extern "C" fn perf_entry_field_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn perf_entry_field_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     unsafe {
         let this = crate::object::js_implicit_this_get();
         let Some(obj) = as_object_ptr(this) else {
@@ -52,7 +55,10 @@ extern "C" fn perf_entry_field_getter_thunk(closure: *const crate::closure::Clos
     }
 }
 
-extern "C" fn perf_entry_to_json_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn perf_entry_to_json_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     unsafe {
         let this = crate::object::js_implicit_this_get();
         let Some(obj) = as_object_ptr(this) else {
@@ -65,12 +71,16 @@ extern "C" fn perf_entry_to_json_thunk(_closure: *const crate::closure::ClosureH
     }
 }
 
-extern "C" fn perf_time_origin_getter_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn perf_time_origin_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     time_origin_ms()
 }
 
 extern "C" fn perf_supported_entry_types_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     perf_supported_entry_types_value()
 }
@@ -83,6 +93,7 @@ pub(crate) fn perf_supported_entry_types_value() -> f64 {
 
 extern "C" fn perf_observer_observe_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -94,6 +105,7 @@ extern "C" fn perf_observer_observe_thunk(
 
 extern "C" fn perf_observer_disconnect_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     if !is_perf_observer_value(this) {
@@ -104,6 +116,7 @@ extern "C" fn perf_observer_disconnect_thunk(
 
 extern "C" fn perf_observer_take_records_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
     if !is_perf_observer_value(this) {
@@ -112,7 +125,10 @@ extern "C" fn perf_observer_take_records_thunk(
     js_perf_observer_take_records(this)
 }
 
-extern "C" fn perf_list_get_entries_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn perf_list_get_entries_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let this = crate::object::js_implicit_this_get();
     if !is_perf_observer_list_value(this) {
         invalid_perf_receiver("PerformanceObserverEntryList");
@@ -122,6 +138,7 @@ extern "C" fn perf_list_get_entries_thunk(_closure: *const crate::closure::Closu
 
 extern "C" fn perf_list_get_by_type_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     entry_type: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();
@@ -133,6 +150,7 @@ extern "C" fn perf_list_get_by_type_thunk(
 
 extern "C" fn perf_list_get_by_name_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     name: f64,
 ) -> f64 {
     let this = crate::object::js_implicit_this_get();

@@ -673,9 +673,9 @@ pub(crate) fn lower(
         // 3, 4)`), wrap it in a heap closure so the receiver can call
         // it via `js_closure_callN`. The wrapper function
         // `__perry_wrap_<name>` is emitted by `compile_module` for
-        // every user function and has the closure-call ABI: it takes
-        // `(closure_ptr, arg0, arg1, ...)` and forwards to the
-        // underlying function.
+        // every user function and has the JS body ABI: it takes
+        // `(closure_ptr, this, arg0, arg1, ...)` and forwards the
+        // arguments to the underlying function.
         Expr::FuncRef(id) => {
             let wrap_name = ctx.func_names.get(id).map_or_else(
                 || crate::codegen::helpers::unknown_func_wrapper_name(ctx.strings.module_prefix()),

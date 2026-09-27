@@ -114,12 +114,17 @@ fn namespace_object(fields: &[(&[u8], f64)]) -> f64 {
 // Object-valued exports
 // ---------------------------------------------------------------------------
 
-extern "C" fn yaml_parse_closure(_closure: *const ClosureHeader, input: f64) -> f64 {
+extern "C" fn yaml_parse_closure(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+) -> f64 {
     yaml_parse(input)
 }
 
 extern "C" fn yaml_stringify_closure(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     replacer: f64,
     space: f64,
@@ -137,7 +142,11 @@ pub fn js_bun_yaml() -> f64 {
     ])
 }
 
-extern "C" fn toml_parse_closure(_closure: *const ClosureHeader, input: f64) -> f64 {
+extern "C" fn toml_parse_closure(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+) -> f64 {
     let source = value_to_string(input);
     match toml_parse_result(&source) {
         Ok(value) => value,
@@ -185,7 +194,12 @@ fn normalize_semver_version(input: &str) -> &str {
         .unwrap_or_else(|| input.trim())
 }
 
-extern "C" fn semver_order_closure(_closure: *const ClosureHeader, left: f64, right: f64) -> f64 {
+extern "C" fn semver_order_closure(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    left: f64,
+    right: f64,
+) -> f64 {
     let left_source = value_to_string(left);
     let right_source = value_to_string(right);
     let left = match node_semver::Version::parse(normalize_semver_version(&left_source)) {
@@ -211,6 +225,7 @@ extern "C" fn semver_order_closure(_closure: *const ClosureHeader, left: f64, ri
 
 extern "C" fn semver_satisfies_closure(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     version: f64,
     range: f64,
 ) -> f64 {
@@ -241,6 +256,7 @@ pub fn js_bun_semver() -> f64 {
 
 extern "C" fn jsonl_parse_chunk_closure(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     input: f64,
     start: f64,
     end: f64,
@@ -563,7 +579,12 @@ pub extern "C" fn js_bun_zstd_decompress(input: f64) -> f64 {
     }
 }
 
-extern "C" fn xxhash64_closure(_closure: *const ClosureHeader, input: f64, seed: f64) -> f64 {
+extern "C" fn xxhash64_closure(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+    seed: f64,
+) -> f64 {
     let bytes = payload_bytes(input).unwrap_or_default();
     let hash = xxhash_rust::xxh64::xxh64(&bytes, super::hash_seed(seed));
     let bigint = crate::bigint::js_bigint_from_u64(hash);

@@ -38,7 +38,10 @@ unsafe fn remove_stream_or_socket_once_listener(
     }
 }
 
-extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_once_abort_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
@@ -58,7 +61,11 @@ extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn events_once_stream_resolve_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -77,7 +84,11 @@ extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader,
     undefined_value()
 }
 
-extern "C" fn events_once_stream_reject_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn events_once_stream_reject_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -115,7 +126,11 @@ fn first_rest_arg_or_undefined(rest: f64) -> f64 {
     }
 }
 
-extern "C" fn events_once_event_target_listener(closure: *const ClosureHeader, arg0: f64) -> f64 {
+extern "C" fn events_once_event_target_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    arg0: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;

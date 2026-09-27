@@ -163,6 +163,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
 /// own method name off the closure. Args arrive as a rest array.
 pub(super) extern "C" fn string_proto_generic_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     // Copy the method name to an owned String — `string_this_or_throw` may run
@@ -270,6 +271,7 @@ fn string_this_or_throw(method: &str) -> *mut crate::string::StringHeader {
 
 pub(super) extern "C" fn string_proto_char_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
     let s = string_this_or_throw("charAt");
@@ -280,6 +282,7 @@ pub(super) extern "C" fn string_proto_char_at_thunk(
 
 pub(super) extern "C" fn string_proto_char_code_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
     let s = string_this_or_throw("charCodeAt");
@@ -289,6 +292,7 @@ pub(super) extern "C" fn string_proto_char_code_at_thunk(
 
 pub(super) extern "C" fn string_proto_code_point_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     pos: f64,
 ) -> f64 {
     let s = string_this_or_throw("codePointAt");
@@ -298,6 +302,7 @@ pub(super) extern "C" fn string_proto_code_point_at_thunk(
 
 pub(super) extern "C" fn string_proto_at_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
     let s = string_this_or_throw("at");
@@ -307,23 +312,33 @@ pub(super) extern "C" fn string_proto_at_thunk(
 
 pub(super) extern "C" fn string_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let s = string_this_or_throw("[Symbol.iterator]");
     crate::string::string_values_iter(s)
 }
 
 #[cfg(feature = "regex-engine")]
-extern "C" fn string_proto_match_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn string_proto_match_thunk(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     crate::regex::js_string_match_js(crate::object::js_implicit_this_get(), arg)
 }
 #[cfg(feature = "regex-engine")]
-extern "C" fn string_proto_search_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn string_proto_search_thunk(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     crate::regex::js_string_search_js(crate::object::js_implicit_this_get(), arg)
 }
 
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_match_all_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     crate::regex::js_string_match_all_js(crate::object::js_implicit_this_get(), arg)
@@ -332,6 +347,7 @@ extern "C" fn string_proto_match_all_thunk(
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_replace_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     search: f64,
     replacement: f64,
 ) -> f64 {
@@ -340,6 +356,7 @@ extern "C" fn string_proto_replace_thunk(
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_replace_all_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     search: f64,
     replacement: f64,
 ) -> f64 {
@@ -353,6 +370,7 @@ extern "C" fn string_proto_replace_all_thunk(
 #[cfg(feature = "regex-engine")]
 extern "C" fn string_proto_split_thunk(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     separator: f64,
     limit: f64,
 ) -> f64 {

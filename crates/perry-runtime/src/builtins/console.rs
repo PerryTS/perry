@@ -117,11 +117,11 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
 
 /// Thunk for `console.log` exposed as a real callable closure value
 /// (#236). Lets `Promise.resolve(x).then(console.log)` actually call into
-/// `js_console_log_dynamic` instead of being a no-op sentinel; the call
-/// signature `extern "C" fn(*const ClosureHeader, f64) -> f64` matches
-/// what `js_closure_call1` invokes through.
+/// `js_console_log_dynamic` instead of being a no-op sentinel; it is a JS
+/// body (`perry_abi::JS_BODY_*`: callee, receiver, one argument).
 extern "C" fn console_log_callable_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     js_console_log_dynamic(value);
@@ -552,12 +552,16 @@ fn console_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
-extern "C" fn console_context_method_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn console_context_method_noop(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     console_undefined()
 }
 
 extern "C" fn console_task_run(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     if !console_is_callable(callback) {

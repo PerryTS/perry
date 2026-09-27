@@ -5,7 +5,7 @@ clearImmediate	void	i64
 clearInterval	void	i64
 clearTimeout	void	i64
 gc_check_trigger_export	void	
-global_this_builtin_noop_thunk	f64	ptr,f64
+global_this_builtin_noop_thunk	f64	ptr,i64,f64
 js_abort_controller_abort	void	ptr
 js_abort_controller_abort_reason	void	ptr,f64
 js_abort_controller_new	ptr	
@@ -289,19 +289,19 @@ js_async_resource_trigger_async_id	f64	i64
 js_async_step_chain	ptr	f64,ptr
 js_async_step_done	ptr	f64,ptr
 js_atob	ptr	f64
-js_atomics_add	f64	ptr,f64,f64,f64
-js_atomics_and	f64	ptr,f64,f64,f64
-js_atomics_compare_exchange	f64	ptr,f64,f64,f64,f64
-js_atomics_exchange	f64	ptr,f64,f64,f64
-js_atomics_is_lock_free	f64	ptr,f64
-js_atomics_load	f64	ptr,f64,f64
-js_atomics_notify	f64	ptr,f64,f64,f64
-js_atomics_or	f64	ptr,f64,f64,f64
-js_atomics_store	f64	ptr,f64,f64,f64
-js_atomics_sub	f64	ptr,f64,f64,f64
-js_atomics_wait	f64	ptr,f64,f64,f64,f64
-js_atomics_wait_async	f64	ptr,f64,f64,f64,f64
-js_atomics_xor	f64	ptr,f64,f64,f64
+js_atomics_add	f64	ptr,i64,f64,f64,f64
+js_atomics_and	f64	ptr,i64,f64,f64,f64
+js_atomics_compare_exchange	f64	ptr,i64,f64,f64,f64,f64
+js_atomics_exchange	f64	ptr,i64,f64,f64,f64
+js_atomics_is_lock_free	f64	ptr,i64,f64
+js_atomics_load	f64	ptr,i64,f64,f64
+js_atomics_notify	f64	ptr,i64,f64,f64,f64
+js_atomics_or	f64	ptr,i64,f64,f64,f64
+js_atomics_store	f64	ptr,i64,f64,f64,f64
+js_atomics_sub	f64	ptr,i64,f64,f64,f64
+js_atomics_wait	f64	ptr,i64,f64,f64,f64,f64
+js_atomics_wait_async	f64	ptr,i64,f64,f64,f64,f64
+js_atomics_xor	f64	ptr,i64,f64,f64,f64
 js_aux_has_active	i32s	
 js_await_any_promise	f64	f64
 js_await_js_promise	f64	f64
@@ -2759,7 +2759,7 @@ js_perf_measure	f64	f64,f64,f64
 js_perf_monitor_event_loop_delay	f64	f64
 js_perf_node_timing	f64	
 js_perf_observer_disconnect	f64	f64
-js_perf_observer_flush_all	f64	ptr
+js_perf_observer_flush_all	f64	ptr,i64
 js_perf_observer_new	f64	f64
 js_perf_observer_observe	f64	f64,f64
 js_perf_observer_take_records	f64	f64
@@ -3699,6 +3699,7 @@ js_text_encoder_encode_llvm	i64	f64
 js_text_encoder_new	i64	
 js_text_encoder_stream_new	f64	
 js_text_encoding_stream_new	f64	
+js_this_param_witness	void	i64,ptr,i64
 js_thread_has_pending	i32s	
 js_thread_parallel_filter	f64	f64,f64
 js_thread_parallel_map	f64	f64,f64
@@ -3808,20 +3809,20 @@ js_try_end	void
 js_try_push	ptr	
 js_tty_isatty	f64	f64
 js_tty_read_stream_new	f64	f64
-js_tty_read_stream_set_raw_mode	f64	ptr,f64
+js_tty_read_stream_set_raw_mode	f64	ptr,i64,f64
 js_tty_resize_drain	i32s	
-js_tty_write_stream_clear_line	f64	ptr,f64,f64
-js_tty_write_stream_clear_screen_down	f64	ptr,f64
-js_tty_write_stream_cursor_to	f64	ptr,f64,f64,f64
-js_tty_write_stream_get_color_depth	f64	ptr,f64
-js_tty_write_stream_get_window_size	f64	ptr
-js_tty_write_stream_has_colors	f64	ptr,f64,f64
-js_tty_write_stream_move_cursor	f64	ptr,f64,f64,f64
+js_tty_write_stream_clear_line	f64	ptr,i64,f64,f64
+js_tty_write_stream_clear_screen_down	f64	ptr,i64,f64
+js_tty_write_stream_cursor_to	f64	ptr,i64,f64,f64,f64
+js_tty_write_stream_get_color_depth	f64	ptr,i64,f64
+js_tty_write_stream_get_window_size	f64	ptr,i64
+js_tty_write_stream_has_colors	f64	ptr,i64,f64,f64
+js_tty_write_stream_move_cursor	f64	ptr,i64,f64,f64,f64
 js_tty_write_stream_new	f64	f64
-js_tty_write_stream_on	f64	ptr,f64,f64
-js_tty_write_stream_refresh_size	f64	ptr
-js_tty_write_stream_remove_all_listeners	f64	ptr,f64
-js_tty_write_stream_remove_listener	f64	ptr,f64,f64
+js_tty_write_stream_on	f64	ptr,i64,f64,f64
+js_tty_write_stream_refresh_size	f64	ptr,i64
+js_tty_write_stream_remove_all_listeners	f64	ptr,i64,f64
+js_tty_write_stream_remove_listener	f64	ptr,i64,f64,f64
 js_typed_array_at	f64	ptr,f64
 js_typed_array_copy_within	ptr	ptr,f64,f64,f64
 js_typed_array_every	f64	ptr,ptr
@@ -4153,12 +4154,12 @@ js_vm_synthetic_module_set_export	f64	i64,f64,f64
 js_wait_for_event	void	
 js_wasi_constructor_call	f64	f64
 js_wasi_emit_warning	f64	
-js_wasi_finalize_bindings	f64	ptr,f64,f64
-js_wasi_get_import_object	f64	ptr
-js_wasi_import_stub	f64	ptr,f64,f64,f64,f64
-js_wasi_initialize	f64	ptr,f64
+js_wasi_finalize_bindings	f64	ptr,i64,f64,f64
+js_wasi_get_import_object	f64	ptr,i64
+js_wasi_import_stub	f64	ptr,i64,f64,f64,f64,f64
+js_wasi_initialize	f64	ptr,i64,f64
 js_wasi_new	f64	f64
-js_wasi_start	f64	ptr,f64
+js_wasi_start	f64	ptr,i64,f64
 js_weak_collection_subclass_init	f64	f64,i32s,f64
 js_weak_throw_primitive	f64	
 js_weakmap_delete	f64	f64,f64
@@ -4673,7 +4674,7 @@ perry_string_header_abi_revision	i32u
 perry_stub_warn_ffi	void	ptr,ptr,ptr
 perry_thread_exit_probe_object_prototype_recorded	bool	usize
 perry_transition_cache_base	ptr	
-perry_tui_state_setter_trampoline	f64	ptr,f64
+perry_tui_state_setter_trampoline	f64	ptr,i64,f64
 perry_update_notify_startup	void	ptr,i32s
 perry_updater_check_headers	ptr	f64
 perry_updater_check_url	ptr	f64

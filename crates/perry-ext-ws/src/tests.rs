@@ -198,19 +198,28 @@ fn server_clients_is_a_stable_set_that_tracks_connections() {
 static FIRST_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SECOND_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-extern "C" fn count_second(_c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+extern "C" fn count_second(
+    _c: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     SECOND_CALLS.fetch_add(1, Ordering::SeqCst);
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
-extern "C" fn count_first(_c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+extern "C" fn count_first(
+    _c: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     FIRST_CALLS.fetch_add(1, Ordering::SeqCst);
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
 /// Counts its calls and registers a `count_second` listener, from inside
 /// this callback, on the server handle in its capture slot 0.
-extern "C" fn count_first_and_register(c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+extern "C" fn count_first_and_register(
+    c: *const perry_runtime::closure::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     FIRST_CALLS.fetch_add(1, Ordering::SeqCst);
     let server = perry_runtime::closure::js_closure_get_capture_f64(c, 0) as Handle;
     on_listening(server, closure_of(count_second));
@@ -230,7 +239,12 @@ fn on_listening(server: Handle, listener: i64) {
     unsafe { js_ws_on(server, event.as_raw(), listener.get()) };
 }
 
-fn closure_of(f: extern "C" fn(*const perry_runtime::closure::ClosureHeader) -> f64) -> i64 {
+fn closure_of(
+    f: extern "C" fn(
+        *const perry_runtime::closure::ClosureHeader,
+        perry_runtime::closure::JsThis,
+    ) -> f64,
+) -> i64 {
     perry_runtime::closure::js_closure_alloc(f as *const u8, 0) as i64
 }
 

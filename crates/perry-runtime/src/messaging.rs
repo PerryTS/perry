@@ -103,19 +103,28 @@ fn closure_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-extern "C" fn noop0(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn noop0(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     js_undefined()
 }
 
-extern "C" fn noop1(_closure: *const ClosureHeader, _arg0: f64) -> f64 {
+extern "C" fn noop1(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg0: f64,
+) -> f64 {
     js_undefined()
 }
 
-extern "C" fn noop2(_closure: *const ClosureHeader, _arg0: f64, _arg1: f64) -> f64 {
+extern "C" fn noop2(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg0: f64,
+    _arg1: f64,
+) -> f64 {
     js_undefined()
 }
 
-extern "C" fn has_ref(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn has_ref(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     js_bool(false)
 }
 
@@ -327,7 +336,11 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
 /// Macrotask body: deliver exactly one queued message to `port_box`'s port.
 /// Scheduled via `setImmediate`, so the event loop pumps it; chains naturally
 /// because a handler that posts again schedules a fresh macrotask.
-extern "C" fn deliver_one_message(_closure: *const ClosureHeader, port_box: f64) -> f64 {
+extern "C" fn deliver_one_message(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    port_box: f64,
+) -> f64 {
     let port_ptr = crate::value::js_nanbox_get_pointer(port_box) as usize;
     if port_ptr == 0 {
         return js_undefined();
@@ -378,7 +391,12 @@ fn schedule_delivery(port_ptr: usize) {
 }
 
 /// `port.postMessage(data[, transferList])`.
-extern "C" fn port_post_message(_closure: *const ClosureHeader, data: f64, _transfer: f64) -> f64 {
+extern "C" fn port_post_message(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+    _transfer: f64,
+) -> f64 {
     let self_ptr = this_port_ptr();
     if self_ptr == 0 {
         return js_undefined();
@@ -423,12 +441,12 @@ fn start_port(self_ptr: usize) {
     }
 }
 
-extern "C" fn port_start(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_start(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     start_port(this_port_ptr());
     js_undefined()
 }
 
-extern "C" fn port_close(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_close(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     let self_ptr = this_port_ptr();
     if self_ptr != 0 {
         with_port_states(|map| {
@@ -457,7 +475,10 @@ extern "C" fn port_close(_closure: *const ClosureHeader) -> f64 {
 }
 
 /// `port.onmessage` getter — return the stored handler (null if unset).
-extern "C" fn port_onmessage_get(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn port_onmessage_get(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let self_ptr = this_port_ptr();
     if self_ptr == 0 {
         return js_null();
@@ -467,7 +488,11 @@ extern "C" fn port_onmessage_get(_closure: *const ClosureHeader) -> f64 {
 
 /// `port.onmessage` setter — store the handler and (per HTML) implicitly
 /// start the port, flushing any queued messages.
-extern "C" fn port_onmessage_set(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn port_onmessage_set(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     let self_ptr = this_port_ptr();
     if self_ptr == 0 {
         return js_undefined();
@@ -481,6 +506,7 @@ extern "C" fn port_onmessage_set(_closure: *const ClosureHeader, value: f64) -> 
 
 extern "C" fn port_add_event_listener(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     type_value: f64,
     listener: f64,
 ) -> f64 {
@@ -512,6 +538,7 @@ extern "C" fn port_add_event_listener(
 
 extern "C" fn port_remove_event_listener(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     type_value: f64,
     listener: f64,
 ) -> f64 {
@@ -644,6 +671,7 @@ fn same_thread_message_channel_new() -> f64 {
 
 pub(crate) extern "C" fn js_message_channel_constructor_call_error(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     throw_constructor_call_error()
 }
@@ -682,6 +710,7 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
 
 pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     throw_constructor_call_error()
@@ -689,6 +718,7 @@ pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(
 
 pub(crate) extern "C" fn js_message_port_constructor_call_error(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     throw_constructor_call_error()
 }

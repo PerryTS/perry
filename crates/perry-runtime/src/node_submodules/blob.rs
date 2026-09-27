@@ -88,23 +88,33 @@ fn blob_reader_promise_rejected(reason: f64) -> f64 {
     })
 }
 
-extern "C" fn blob_text_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_text_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_text_value(&bytes))
 }
 
-extern "C" fn blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_array_buffer_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_array_buffer_value(&bytes))
 }
 
-extern "C" fn blob_bytes_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_bytes_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_uint8_array_value(&bytes))
 }
 
 extern "C" fn blob_slice_method(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
     content_type: f64,
@@ -129,26 +139,38 @@ extern "C" fn blob_slice_method(
     blob_value_from_bytes_and_type(&bytes[lo as usize..hi as usize], &content_type)
 }
 
-extern "C" fn blob_stream_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_stream_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     crate::node_stream::js_node_stream_readable_from(bytes_to_uint8_array_value(&bytes))
 }
 
-extern "C" fn file_blob_text_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_text_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_text_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
-extern "C" fn file_blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_array_buffer_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_array_buffer_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
-extern "C" fn file_blob_bytes_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_bytes_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_uint8_array_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
@@ -157,6 +179,7 @@ extern "C" fn file_blob_bytes_method(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn file_blob_slice_method(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
     content_type: f64,
@@ -193,11 +216,17 @@ extern "C" fn file_blob_slice_method(
     blob_value_from_file_state(child)
 }
 
-extern "C" fn file_blob_stream_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     file_blob_stream_value(captured_file_blob_id(closure))
 }
 
-extern "C" fn file_blob_stream_get_reader_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_get_reader_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     let obj = js_object_alloc(0, 4);
     set_named_value(
@@ -223,11 +252,17 @@ extern "C" fn file_blob_stream_get_reader_method(closure: *const ClosureHeader) 
     object_value(obj)
 }
 
-extern "C" fn file_blob_stream_next_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_next_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     file_blob_stream_next(captured_file_blob_stream_id(closure))
 }
 
-extern "C" fn file_blob_stream_return_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_return_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     FILE_BLOB_STREAMS.with(|streams| {
         if let Some(state) = streams.borrow_mut().get_mut(&stream_id) {
@@ -237,20 +272,34 @@ extern "C" fn file_blob_stream_return_method(closure: *const ClosureHeader) -> f
     resolved_iterator_promise(f64::from_bits(crate::value::TAG_UNDEFINED), true)
 }
 
-extern "C" fn file_blob_stream_values_method(closure: *const ClosureHeader, _options: f64) -> f64 {
+extern "C" fn file_blob_stream_values_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _options: f64,
+) -> f64 {
     let _ = closure;
     crate::object::js_implicit_this_get()
 }
 
-extern "C" fn file_blob_stream_async_iterator_method(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_async_iterator_method(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::object::js_implicit_this_get()
 }
 
-extern "C" fn file_blob_stream_undefined_method(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_undefined_method(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn file_blob_stream_cancel_method(closure: *const ClosureHeader, _reason: f64) -> f64 {
+extern "C" fn file_blob_stream_cancel_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _reason: f64,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     FILE_BLOB_STREAMS.with(|streams| {
         if let Some(state) = streams.borrow_mut().get_mut(&stream_id) {

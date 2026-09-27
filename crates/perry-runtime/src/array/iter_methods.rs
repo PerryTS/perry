@@ -1014,6 +1014,7 @@ pub extern "C" fn js_array_some_captureless(
             };
             let result = callback(
                 std::ptr::null(),
+                crate::closure::JsThis::current(),
                 element,
                 i as f64,
                 array_receiver_value(arr),

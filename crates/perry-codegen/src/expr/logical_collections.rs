@@ -315,15 +315,22 @@ fn lower_captureless_some_inline(
             let elem = blk.bitcast_i64_to_double(&elem_bits);
             let i_double = blk.uitofp(I32, &i, DOUBLE);
             let recv = nanbox_pointer_inline(blk, &raw);
-            let mut args: Vec<(crate::types::LlvmType, &str)> =
-                vec![(I64, "0"), (DOUBLE, elem.as_str())];
+            let mut args: Vec<String> = vec![elem.clone()];
             if param_count >= 2 {
-                args.push((DOUBLE, i_double.as_str()));
+                args.push(i_double.clone());
             }
             if param_count >= 3 {
-                args.push((DOUBLE, recv.as_str()));
+                args.push(recv.clone());
             }
-            let result = blk.call(DOUBLE, callback_func.trim_start_matches('@'), &args);
+            // A captureless arrow: no environment (callee 0) and lexical
+            // `this`, so the receiver parameter is unread.
+            let result = crate::expr::body_call::emit_js_body_call(
+                blk,
+                crate::expr::body_call::JsBody::Symbol(callback_func.trim_start_matches('@')),
+                "0",
+                crate::expr::body_call::JS_THIS_UNDEFINED,
+                &args,
+            );
             let bits = blk.bitcast_double_to_i64(&result);
             let is_true = blk.icmp_eq(I64, &bits, TAG_TRUE_I64);
             blk.cond_br(&is_true, &found_l, &slow_l);

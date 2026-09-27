@@ -25,6 +25,7 @@ fn array_buffer_brand_error() -> ! {
 
 pub(crate) extern "C" fn array_buffer_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match array_buffer_receiver_addr() {
         Some(addr) => {
@@ -60,6 +61,7 @@ fn shared_array_buffer_receiver_addr() -> Option<usize> {
 
 pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match shared_array_buffer_receiver_addr() {
         Some(addr) => {
@@ -81,6 +83,7 @@ pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
 /// is shared with the instance dispatch in `buffer_dispatch`.
 pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -97,6 +100,7 @@ pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
 
 pub(crate) extern "C" fn array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
@@ -130,6 +134,7 @@ fn array_buffer_method_via_dispatch(method: &'static str, arg: f64, brand_error:
 
 pub(crate) extern "C" fn array_buffer_resize_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
@@ -141,6 +146,7 @@ pub(crate) extern "C" fn array_buffer_resize_thunk(
 
 pub(crate) extern "C" fn array_buffer_transfer_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
@@ -152,6 +158,7 @@ pub(crate) extern "C" fn array_buffer_transfer_thunk(
 
 pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
@@ -191,18 +198,21 @@ fn array_buffer_flag_getter(key: &[u8]) -> f64 {
 
 pub(crate) extern "C" fn array_buffer_resizable_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     array_buffer_flag_getter(b"resizable")
 }
 
 pub(crate) extern "C" fn array_buffer_max_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     array_buffer_flag_getter(b"maxByteLength")
 }
 
 pub(crate) extern "C" fn array_buffer_detached_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     array_buffer_flag_getter(b"detached")
 }
@@ -292,6 +302,7 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
 
 pub(crate) extern "C" fn array_buffer_is_view_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     // #11239: the same classifier `util.types.isArrayBufferView` and the
@@ -416,6 +427,7 @@ fn typed_array_buffer_value(receiver: TypedArrayAccessorReceiver) -> f64 {
 /// `%TypedArray%.prototype.length` getter — element count of the receiver.
 extern "C" fn typed_array_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match typed_array_receiver() {
         Some(receiver) => {
@@ -428,6 +440,7 @@ extern "C" fn typed_array_length_getter_thunk(
 /// `%TypedArray%.prototype.byteLength` getter — `length * BYTES_PER_ELEMENT`.
 extern "C" fn typed_array_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match typed_array_receiver() {
         Some(receiver) => {
@@ -440,6 +453,7 @@ extern "C" fn typed_array_byte_length_getter_thunk(
 /// `%TypedArray%.prototype.byteOffset` getter.
 extern "C" fn typed_array_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match typed_array_receiver() {
         Some(receiver) => {
@@ -453,6 +467,7 @@ extern "C" fn typed_array_byte_offset_getter_thunk(
 /// identity as the direct property path.
 extern "C" fn typed_array_buffer_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     match typed_array_receiver() {
         Some(receiver) => typed_array_buffer_value(receiver),
@@ -470,6 +485,7 @@ extern "C" fn typed_array_buffer_getter_thunk(
 /// `Cannot read properties of undefined (reading 'get')`.
 extern "C" fn typed_array_to_string_tag_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
     match crate::object::typed_array_to_string_tag_name(this) {

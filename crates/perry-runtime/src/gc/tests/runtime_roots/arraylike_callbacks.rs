@@ -13,6 +13,7 @@ use super::super::support::*;
 
 extern "C" fn collect_then_double(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _index: f64,
     _recv: f64,

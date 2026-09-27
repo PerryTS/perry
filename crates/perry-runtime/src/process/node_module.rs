@@ -57,6 +57,7 @@ pub extern "C" fn js_module_constants() -> f64 {
 
 extern "C" fn module_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     specifier: f64,
 ) -> f64 {
     js_module_instance_require(specifier)
@@ -872,7 +873,10 @@ fn module_hook_member(value: f64, name: &str) -> f64 {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-extern "C" fn module_hooks_deregister(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn module_hooks_deregister(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as u64;
     // 2026-07-09 GC audit wave 2: deregister used to only flip `active`,
     // leaving the resolve/load closures strongly rooted by
@@ -962,6 +966,7 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
 
 extern "C" fn module_loader_next_resolve(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     specifier: f64,
     _context: f64,
 ) -> f64 {
@@ -973,6 +978,7 @@ extern "C" fn module_loader_next_resolve(
 
 extern "C" fn module_loader_next_load(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _url: f64,
     _context: f64,
 ) -> f64 {
@@ -1030,6 +1036,7 @@ fn module_loader_result_url(result: f64, fallback: f64) -> f64 {
 
 extern "C" fn module_loader_hook_chain(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     context: f64,
 ) -> f64 {
