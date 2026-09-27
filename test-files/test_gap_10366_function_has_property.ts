@@ -2,12 +2,13 @@ function report(label: string, fn: any) {
   console.log(label, "call" in fn, "apply" in fn, "bind" in fn, "toString" in fn, "length" in fn, "absent10366" in fn);
 }
 function ordinary() {}
+// Exercise lazy generator initialization before reading Function.prototype.
+report("generator", function* () { yield 1; });
+report("async-generator", async function* () { yield 1; });
 report("ordinary", ordinary);
 report("arrow", () => 1);
 report("bound", ordinary.bind(null));
 report("async", async function () {});
-report("generator", function* () { yield 1; });
-report("async-generator", async function* () { yield 1; });
 for (const fn of [function* () {}, async function* () {}]) {
   const proto = Object.getPrototypeOf(fn);
   console.log("generator-parents", Object.getPrototypeOf(proto) === Function.prototype,

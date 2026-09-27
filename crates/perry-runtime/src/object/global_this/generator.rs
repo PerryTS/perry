@@ -77,6 +77,9 @@ fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
 pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     if is_plain_async_function(closure_ptr) {
         ensure_generator_intrinsics();
+        // Bootstrap also wires the Function parents. A lazy tower alone has
+        // no such links yet when this is the program's first reflection.
+        let _ = builtin_prototype_value("Function");
         return intrinsic_pointer_value(
             crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         );
@@ -86,6 +89,9 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     // program that reflects on a generator without ever touching `globalThis`
     // would otherwise see null. Build lazily (idempotent) on first use.
     ensure_generator_intrinsics();
+    // Bootstrap also wires the Function parents. A lazy tower alone has
+    // no such links yet when this is the program's first reflection.
+    let _ = builtin_prototype_value("Function");
     let slot = match kind {
         GeneratorKind::Sync => crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         GeneratorKind::Async => {
