@@ -949,6 +949,8 @@ pub fn run_with_parse_cache(
         format,
     )?;
 
+    collect_modules::collect_declared_addons(&mut ctx, args.target.as_deref())?;
+
     // "Just works" transparency (#466 follow-up): when perry auto-preferred a
     // bundled PARTIAL well-known binding over a `node_modules/<pkg>` copy the
     // user actually installed, say so once per package. The build still
@@ -1147,6 +1149,11 @@ pub fn run_with_parse_cache(
         found
     });
     perry_codegen::set_program_has_worker(program_has_worker);
+    // #11394: every method name the program writes onto a builtin prototype;
+    // codegen routes those calls through a lookup-first runtime entry.
+    perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
+        &ctx.patched_builtins,
+    ));
     if program_has_worker && verbose > 0 {
         eprintln!(
             "  #10399: program constructs a worker_threads Worker — \

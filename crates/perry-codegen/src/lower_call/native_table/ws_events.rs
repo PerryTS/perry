@@ -34,7 +34,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_on",
         args: &[NA_STR, NA_PTR],
-        ret: NR_I32,
+        ret: NR_HANDLE_ID,
     },
     // `ws.send(data)` takes the VALUE, not a string: `ws` frames a string as
     // text and anything buffer-shaped as binary, and `NA_STR` could express
@@ -140,7 +140,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_server_emit",
         args: &[NA_STR, NA_F64, NA_F64],
-        ret: NR_BOOL,
+        ret: NR_BOOL_I32,
     },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`

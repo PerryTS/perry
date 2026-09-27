@@ -240,6 +240,10 @@ pub extern "C" fn js_typed_array_reduce(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
+    // #11419: the callback runs with `this` undefined, not the receiver of
+    // whatever method dispatch encloses this call.
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         if has_initial != 0 {
@@ -296,6 +300,10 @@ pub extern "C" fn js_typed_array_reduce_right(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
+    // #11419: the callback runs with `this` undefined, not the receiver of
+    // whatever method dispatch encloses this call.
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         if has_initial != 0 {

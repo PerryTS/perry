@@ -29,6 +29,7 @@ mod glob;
 mod jsc;
 mod platform;
 mod plugin;
+mod self_global;
 mod spawn;
 mod string_width;
 mod width_tables;

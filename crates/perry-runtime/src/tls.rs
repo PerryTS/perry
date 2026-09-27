@@ -96,6 +96,21 @@ fn client_metadata() -> &'static Mutex<HashMap<i64, TlsClientMetadata>> {
     crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || Mutex::new(HashMap::new()))
 }
 
+/// #11471: drop every client record whose `checkServerIdentity` closure lives
+/// in an exiting thread's arena. The map is process-global while
+/// `tls.connect` can run on any thread, and closing a socket keeps its record,
+/// so a left-behind entry would be rooted as a dangling address and called by a
+/// late `js_tls_client_check_identity`.
+pub(crate) fn release_tls_client_metadata_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if let Some(map) = TLS_CLIENT_METADATA.get() {
+        map.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, metadata| !freed.holds_i64(metadata.check_server_identity));
+    }
+}
+
 pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
     client_metadata().lock().ok()?.get(&handle).cloned()
 }

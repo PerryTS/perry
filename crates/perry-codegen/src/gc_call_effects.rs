@@ -150,6 +150,17 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `typed_feedback.rs`: counters/registries only. This intentionally
         // does not include feedback wrappers that perform the actual object
         // get/set operation.
+        //
+        // #11523: these, the layout helpers above (via `layout_mark_unknown`
+        // -> `invalidate_representation_change`) and the closure capture
+        // setters below take the typed-feedback registry's
+        // `GcRootRegistryGuard` — the only root-registry lock any entry in
+        // this table reaches. An ordinary guard's release flushes a GC request
+        // deferred under it, which runs a collection. The typed-feedback
+        // registry therefore uses `lock_gc_root_registry_noncollecting`: its
+        // release never flushes, and a request raised inside the region panics
+        // under `debug_assertions`/tests (`gc/tests/noncollecting_root_lock.rs`).
+        // Any new registry lock reachable from an entry here must use it too.
         | "js_typed_feedback_record_guard_pass"
         | "js_typed_feedback_record_guard_fail"
         | "js_typed_feedback_record_fallback_call"
@@ -193,6 +204,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `clean_arr_ptr` on a raw head: reads headers and the forwarding
         // registry, allocates nothing, never re-enters generated code.
         | "js_array_live_head"
+        // #11522 `.length` fast lane (`array/indexing.rs`,
+        // `array_length_fast_lane`): tag strip, address-class and arena
+        // generation probes, then a GC-header and `ArrayHeader` read. No
+        // allocation, no side-table write, no user code; every receiver it
+        // cannot serve answers -1 and the emitted code takes the collecting
+        // `js_array_length` call (`expr::array_length`).
+        | "js_array_length_leaf"
         // #9480 dispatch probes. `js_object_get_class_id` performs only
         // address checks, Set/Map registry membership reads, validated GC
         // header reads, and a scalar class-id load. `js_object_get_own_field_
@@ -201,8 +219,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // walk deliberately does NOT call the generic array accessors: their
         // lazy/exotic/accessor paths would invalidate this certification.
         // Neither call graph allocates in the Perry heap, polls, throws, or
-        // re-enters generated JS. Rust/TLS table initialization is system
-        // allocation and cannot arm Perry GC; both exports are `extern "C"`
+        // re-enters generated JS (the own-field walk was re-checked to the
+        // leaves for #11522: `object_keys`, `js_string_key_matches_bytes`,
+        // `key_is_accessor_at`, `object_live_slot_count`, `js_object_get_
+        // field` and `overflow_get` are header, slab and RefCell reads, and an
+        // accessor key answers undefined instead of calling its getter).
+        // Rust/TLS table initialization is system allocation and cannot arm
+        // Perry GC; both exports are `extern "C"`
         // with no explicit panic path, so no unwind edge returns to generated
         // code. Kept in the dominance checker and root-reload authorities.
         | "js_object_get_class_id"
@@ -279,16 +302,39 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_bool_box_scope_release" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
-        // and accessor dispatch — none present, and none takes a receiver
-        // that could route through user code (`js_array_length` takes a
-        // typed `*const ArrayHeader`, not a JSValue). The forced-evacuation
-        // probe gates backstop the audit.
+        // and accessor dispatch — none present. The forced-evacuation probe
+        // gates backstop the audit.
+        //
+        // `js_array_length` is deliberately ABSENT (#11522). It was listed
+        // here on the grounds that it "takes a typed `*const ArrayHeader`,
+        // not a JSValue" — but the parameter type is no barrier: its #5135
+        // arm resolves a Proxy id through `js_proxy_get` (the user's `get`
+        // trap) and its array-like-object arm calls
+        // `js_object_get_field_by_name_f64` (getters) and `js_number_coerce`
+        // (`valueOf`). Its plain-array fast lane is the separate
+        // `js_array_length_leaf` above; `js_array_length` itself is Unknown.
         "js_closure_alloc_singleton"
+        // Re-audited for #11522 by walking the whole call graph, not just the
+        // body: `object_alloc_class_inline_keys_impl` → `alloc_instance_
+        // keeping_keys` (arena bump, then the rooted collecting allocator),
+        // plus the shape stamp / `set_object_keys_with_live` /
+        // `layout_init_pointer_free` bookkeeping, which touches only Rust
+        // tables and header bits. No getter, trap, coercion or closure call is
+        // reachable. The only collections are the arena slow path's
+        // `gc_check_trigger` arms (old-reclaim, slack valve, budgeted assist)
+        // and `reserve_arena_block`'s emergency reclaim; each runs under
+        // `force_full_scan` and none moves, which is this class's contract.
+        // FinalizationRegistry callbacks are only enqueued by a collection.
         | "js_object_alloc_class_inline_keys"
         | "js_object_alloc_class_inline_keys_stamped"
-        | "js_array_push_f64"
+        // `js_array_push_f64` is deliberately ABSENT for the same reason as
+        // `js_array_length` (found while testing #11522): its #5135 Proxy arm
+        // runs `get("length")` and two `set` traps (`proxy_array_length`,
+        // `proxy_set_str_key`), and its array-like-object arm calls
+        // `array_object_method(recv, "push", …)`. The u31 entry below stays:
+        // it answers null for exactly those receivers and the emitted code
+        // takes the full push behind that test.
         | "js_array_push_u31_with_length"
-        | "js_array_length"
         | "js_array_slice_values"
         // Second audit round (2026-08-01): ctor-return semantics check
         // (inspects the returned value, calls nothing), strict-equality
@@ -949,11 +995,28 @@ mod tests {
         }
     }
 
+    /// #11522: `js_array_length` runs the Proxy `get` trap and, for an
+    /// array-like object, getters plus `valueOf` — so it must stay a
+    /// safepoint in every mode. Only its header-read fast lane is a leaf.
+    #[test]
+    fn array_length_is_split_into_a_leaf_lane_and_a_collecting_call() {
+        assert_eq!(
+            classify_direct_callee("js_array_length"),
+            GcCallEffect::Unknown,
+            "js_array_length reaches js_proxy_get / js_number_coerce"
+        );
+        assert_eq!(
+            classify_direct_callee("js_array_length_leaf"),
+            GcCallEffect::CannotCollect
+        );
+        assert!(!external_callee_cannot_collect("js_array_length"));
+        assert!(external_callee_cannot_collect("js_array_length_leaf"));
+    }
+
     #[test]
     fn audited_alloc_helpers_are_contract_only_non_safepoints() {
         for name in [
             "js_closure_alloc_singleton",
-            "js_array_push_f64",
             "js_array_push_u31_with_length",
             "js_ctor_return_override",
             "js_array_indexOf_jsvalue",
@@ -969,6 +1032,9 @@ mod tests {
         // Both length helpers can reach js_object_get_field_by_name_f64 for
         // plain objects; js_array_get_f64 has hole/accessor paths.
         for name in [
+            // #11522: Proxy traps and `array_object_method` behind both.
+            "js_array_length",
+            "js_array_push_f64",
             "js_value_length_f64",
             "js_value_length_property_f64",
             "js_value_length_property_ic_f64",

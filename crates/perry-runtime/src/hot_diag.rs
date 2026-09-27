@@ -252,18 +252,17 @@ pub struct RegexDiag {
     pub new_site_verify_bytes: u64,
     /// Address-keyed side-table inserts performed per construction. This was
     /// two (`REGEX_POINTERS` plus the source table) before the header's string
-    /// slots became traced edges; only `REGEX_POINTERS` remains.
+    /// slots became traced edges, then one (`REGEX_SOURCE_TABLE`), and is zero
+    /// since #11503 made RegExp identity the header's own GC kind and magic.
     pub new_side_table_inserts: u64,
-    /// Split of the above by table. The source counters are retained as zeroed
-    /// before/after controls for the #9908 measurement; `REGEX_POINTERS` is
-    /// still the registry the copied-minor finaliser enumerates.
+    /// Split of the above by table, plus the death and evacuation sides. All
+    /// are retained as zeroed after-controls for the #9908 measurement: no
+    /// RegExp construction, death or move touches an address-keyed owner
+    /// table any more.
     pub pointer_table_inserts: u64,
     pub source_table_inserts: u64,
-    /// The death side. `source_table_removals` is the zeroed after-control;
-    /// `regex_header_clear_dead_for_gc` now removes only `REGEX_POINTERS`.
     pub pointer_table_removals: u64,
     pub source_table_removals: u64,
-    /// Evacuation rekeys of the remaining pointer registry.
     pub side_table_rekeys: u64,
     /// Constructions answered from the LITERAL-SITE table — identity by the
     /// compiler-emitted site global's address, so neither the pattern's

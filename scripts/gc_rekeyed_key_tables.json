@@ -74,12 +74,6 @@
       "why": "One registered prune retains all three tables on !is_dead_owner (node_vm.rs:1420-1434)."
     },
     {
-      "site": "crates/perry-runtime/src/object/arguments.rs::scan_arguments_object_roots_mut",
-      "table": "ARGUMENTS_OBJECTS",
-      "death": "dead_owner:prune_dead_arguments_object_entries",
-      "why": "Registered prune retains on !is_dead_owner over the arguments-object owner (object/arguments.rs:79-86)."
-    },
-    {
       "site": "crates/perry-runtime/src/object/class_registry/gc_roots.rs::visit_metadata_nanbox_key",
       "table": "FUNCTION_CLASS_IDS",
       "death": "dead_owner:prune_dead_function_class_id_keys",

@@ -258,6 +258,7 @@ thread_local! {
 }
 
 fn ensure_gc_scanner_registered() {
+    ensure_stdin_listener_thread_exit_hook_registered();
     READLINE_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -268,6 +269,51 @@ fn ensure_gc_scanner_registered() {
         );
         registered.set(true);
     });
+}
+
+/// #11471: the shared stdin listener lists hold closure pointers of whichever
+/// thread called `process.stdin.on(...)`. Both insert paths call this first.
+fn ensure_stdin_listener_thread_exit_hook_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        use perry_runtime::arena::thread_exit::register_thread_exit_range_hook as register;
+        register(release_stdin_listeners_in_freed_ranges)
+    });
+}
+
+/// Thread-exit hook (#11471): drop the exiting thread's stdin listener closures
+/// as `removeListener` would (clearing the flowing / pull-mode mirrors when a
+/// list empties). Process-global locks only, one at a time.
+fn release_stdin_listeners_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let prune = |list: &Mutex<Vec<i64>>| -> bool {
+        let mut list = list.lock().unwrap_or_else(|p| p.into_inner());
+        let before = list.len();
+        list.retain(|cb| !freed.holds_i64(*cb));
+        list.len() != before && list.is_empty()
+    };
+    if prune(&DATA_CALLBACKS) {
+        STDIN_DATA_FLOWING.store(false, Ordering::Release);
+    }
+    if prune(&READABLE_CALLBACKS) {
+        STDIN_PULL_MODE.store(false, Ordering::Release);
+    }
+    prune(&KEYPRESS_CALLBACKS);
+    prune(&STDIN_END_CALLBACKS);
+}
+
+/// #11471 test probes: the readline test lock, and "is `cb` listening on `event`?".
+#[cfg(test)]
+pub(crate) fn thread_exit_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    test_support::reset()
+}
+#[cfg(test)]
+pub(crate) fn stdin_listener_registered_for_test(event: &str, cb: i64) -> bool {
+    let lists = [&DATA_CALLBACKS, &KEYPRESS_CALLBACKS, &READABLE_CALLBACKS];
+    let i = ["data", "keypress", "readable"]
+        .iter()
+        .position(|e| *e == event);
+    let list = i.map_or(&STDIN_END_CALLBACKS, |i| lists[i]);
+    list.lock().unwrap().contains(&cb)
 }
 
 fn scan_readline_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {

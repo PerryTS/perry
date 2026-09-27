@@ -120,6 +120,13 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         // as a body) has no byte payload and is not a real heap object — don't
         // deref it via ToString (that was the crash path); fall through instead.
         if !perry_runtime::value::addr_class::is_handle_band(addr) {
+            // An async iterable (e.g. an async generator) is a streamed body,
+            // not a ToString one. The consumer converts it; see
+            // `PENDING_FETCH_BODY_ITERABLE`.
+            if unsafe { crate::streams::has_async_iterator(value) } {
+                set_pending_fetch_body_iterable(value);
+                return 0;
+            }
             return js_jsvalue_to_string(value) as i64;
         }
     }

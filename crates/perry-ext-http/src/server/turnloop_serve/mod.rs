@@ -48,7 +48,7 @@ use std::sync::{Mutex, OnceLock};
 use perry_ffi::turnloop_net as tl;
 
 mod conn;
-mod wire;
+pub(crate) mod wire;
 
 #[cfg(test)]
 #[path = "tests.rs"]

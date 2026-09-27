@@ -486,6 +486,11 @@ pub(super) fn emit_string_pool(
     } else {
         "js_register_function_source"
     };
+    let register_class_source_fn = if strings_outlive_registry {
+        "js_register_class_source_static"
+    } else {
+        "js_register_class_source"
+    };
 
     // Register display names for top-level user functions so
     // `console.log(myFn)` prints `[Function: myFn]` instead of
@@ -1302,14 +1307,15 @@ pub(super) fn emit_string_pool(
     }
     // #9413: mirror each class's retained source text into the runtime so
     // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
-    // ClosureHeader) answers with the class source. Same shape as the
-    // `js_register_function_source_static` loop above.
+    // ClosureHeader) answers with the class source. Same shape, and the same
+    // output-kind spelling choice, as the function-source loop above (#11501:
+    // an executable lends its rodata instead of copying every class body).
     for (cid, source) in &class_source_constants {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let const_ref = source.pointer(blk);
         blk.call_void(
-            "js_register_class_source",
+            register_class_source_fn,
             &[
                 (crate::types::I32, &cid.to_string()),
                 (crate::types::PTR, &const_ref),

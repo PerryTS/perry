@@ -34,6 +34,18 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "CONSOLE_CHANNEL_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread cache of five diagnostics_channel ids (i64 keys into the thread-local DIAG_CHANNELS table, minted by NEXT_DIAG_ID) for console.log/info/debug/error/warn; integers, never a NaN-boxed value. #11471 made these per-thread."
+    },
+    {
+      "file": "crates/perry-runtime/src/value/nanbox.rs",
+      "name": "FFI_SSO_RING",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11430: a per-thread ring of NON-GC StringHeader-shaped slots that js_ffi_arg_ptr copies an SSO argument's inline bytes into for the duration of one native call. The slots are owned Box memory, never GC-allocated, and hold only a length header and the copied ASCII bytes \u2014 no pointer into the GC heap."
+    },
+    {
       "file": "crates/perry-ext-http/src/lib.rs",
       "name": "HTTP_PENDING_EVENTS",
       "verdict": "not_a_gc_pointer",
@@ -200,6 +212,12 @@
       "classification": "not_a_gc_pointer",
       "verdict": "not_a_gc_pointer",
       "why": "Records only the smallest and largest address ever inserted into the sibling thread-local buffer registry, as a conservative min/max filter in front of that registry's hash lookup (#9176). The two usizes are compared (`addr >= lo && addr <= hi`) and never dereferenced, never handed out, and never used to reach an object; a value outside the range is rejected, a value inside falls through to the lookup that was already there. The range only ever widens, so it cannot go stale in the unsafe direction: a bound that no longer matches reality can only admit more addresses to the real lookup, never deny a registered one."
+    },
+    {
+      "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
+      "name": "INSTALLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Cell<bool> recording whether Bun realm bootstrap installed its replaceable self accessor. Only false/true are stored; the actual global and accessor closures live in the existing traced global object and descriptor storage."
     },
     {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
@@ -1035,13 +1053,6 @@
       "name": "PTY_REFED_COUNT",
       "verdict": "not_a_gc_pointer",
       "why": "Atomic count of live PTY handles that currently keep the event loop active. It stores only a scalar count; PTY JS values live in PTY_LIVE and are visited by pty_reactor_scan_roots_mut."
-    },
-    {
-      "file": "crates/perry-runtime/src/regex.rs",
-      "name": "REGEX_SOURCE_TABLE",
-      "verdict": "covered_elsewhere",
-      "scanner": "regex::regex_header_moved_for_gc (called from gc/types.rs on relocation), regex::regex_header_finalize_for_gc (gc/types.rs per-object finalize), regex::finalize_dead_copied_minor_from_space_regexps (gc/copying_phase.rs) and regex::collect_dead_registered_regexps_post_trace / finalize_collected_dead_regexp (gc/oldgen.rs)",
-      "why": "Address-KEYED owner set, not a root, and the successor of REGEX_POINTERS under the single engine: its map is `usize` header address -> `RegexMetadata { registered_owner: bool }`, so the VALUE holds no heap address at all (source and flags live only in the header's traced string edges, and the compiled program is a traced GC child of the header). The key is rekeyed by `regex_header_moved_for_gc` when a RegExpHeader moves and removed on death by the finalize hook, the copying-minor from-space walk and the full-cycle post-trace walk; it never keeps a header alive. Reached from those GC hooks rather than a registered scanner, so the walk misses it."
     },
     {
       "file": "crates/perry-runtime/src/regex/perex_dispatch.rs",

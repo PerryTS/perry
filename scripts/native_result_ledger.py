@@ -116,8 +116,19 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `js_mongodb_db_collection`); the two `connect` rows were NR_PROMISE and
 # never counted. 294 -> 282 rows and 260 -> 248 providers; each figure is
 # what the script reports on the resolved tree, not arithmetic.
-EXPECTED_ROWS = 282
-EXPECTED_PROVIDERS = 248
+#
+# -6 +1 rows / -3 +1 providers (#11482, native ABI mismatch fixes for #11408):
+# the six `http.Agent` getter rows (`js_http_agent_sockets`, `..._free_sockets`,
+# `..._requests`, each on the http and https specifiers) were declared
+# NR_JS_VALUE but the runtime returns a NaN-boxed double, so they are now
+# NR_F64 and leave this pointer-kind ledger (their 3 providers with them);
+# `js_ws_on` was declared NR_I32
+# but returns the socket handle id, so it is now NR_HANDLE_ID and enters it,
+# with its provider classified in the ledger TSV.
+# 282 -> 277 rows, 248 -> 246 providers; each figure is what the script reports on
+# the resolved tree, not arithmetic.
+EXPECTED_ROWS = 277
+EXPECTED_PROVIDERS = 246
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

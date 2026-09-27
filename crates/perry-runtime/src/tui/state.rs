@@ -175,6 +175,38 @@ pub(super) fn state_set_by_id(id: i64, value: f64) {
     }
 }
 
+/// Thread-exit release (#11471): reset to `undefined` every state slot whose
+/// value lies in the exiting thread's freed arena blocks. Slots are addressed
+/// by index, so they are cleared in place rather than removed. Nothing in
+/// `perry/tui` restricts `state()` / `.set()` to the render thread, and a slot
+/// left holding a recycled address would be rewritten by the root scanner and
+/// returned by `.get()` as a different object.
+///
+/// Runs in the exiting thread's TLS destructor: a plain poison-tolerant lock
+/// (not `lock_gc_root_registry`, which touches a thread-local), and
+/// `STATE_DIRTY` is deliberately left alone.
+pub(crate) fn release_tui_state_slots_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut slots = SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for bits in slots.iter_mut() {
+        if freed.holds_bits(*bits) {
+            *bits = 0x7FFC_0000_0000_0001; // TAG_UNDEFINED
+        }
+    }
+}
+
+/// Test probe (#11471): does any state slot hold exactly `bits`?
+#[doc(hidden)]
+pub fn tui_state_slots_hold_bits_for_test(bits: u64) -> bool {
+    SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&bits)
+}
+
 #[cfg(test)]
 pub(crate) fn test_reset_state_slots() {
     crate::gc::lock_gc_root_registry(&SLOTS).clear();

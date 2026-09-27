@@ -839,9 +839,7 @@ pub(crate) fn lower_array_method(
                     let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
                     emit_grow_mutator_writeback(ctx, *array_id, &new_box)?;
                 }
-                let len_i32 = ctx
-                    .block()
-                    .call(I32, "js_array_length", &[(I64, &new_handle)]);
+                let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
                 Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE))
             }
             // Issue #655 (chained-receiver path): without this arm, a

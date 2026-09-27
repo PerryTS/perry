@@ -571,10 +571,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             );
         }
     }
-    // The hidden `%AsyncFunction%` tower is allocated before the constructor
-    // loop, but its two parents are the `Function` values installed by that
+    // The hidden async/generator towers are allocated before the constructor
+    // loop, but their parents are the `Function` values installed by that
     // loop. Complete those links now that both are available.
-    wire_async_function_intrinsic_parents();
+    wire_function_intrinsic_parents();
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
@@ -848,6 +848,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // same function object as `Array.prototype.toString`. Alias it now that
     // both the Array constructor and the TypedArray intrinsic are set up.
     alias_typed_array_proto_to_string(singleton());
+    // #10497: memoize the intrinsic prototype identities while every
+    // `globalThis.<Builtin>` still names its intrinsic — before any user code
+    // can reassign the writable `globalThis.Function`.
+    crate::array::prime_prototype_addr_cache();
     // The bootstrap's own cost, and the evidence that the `ImmortalLayoutScope`
     // above actually did its job. `slot_masks`/`typed` are the live entry
     // counts of the two per-object layout side tables: they must still read

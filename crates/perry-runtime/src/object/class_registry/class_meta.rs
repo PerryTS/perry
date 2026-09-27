@@ -1,6 +1,7 @@
 use super::*;
 use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use crate::object::class_image::ImageTable;
+use std::borrow::Cow;
 use std::sync::RwLock;
 
 /// Register a class id so `js_value_typeof` can distinguish class refs
@@ -66,24 +67,44 @@ pub fn class_name_for_id(class_id: u32) -> Option<String> {
 }
 
 /// #9413: `class_id → the class's original source text`. Populated by codegen
-/// via `js_register_class_source`, exactly as `js_register_function_source`
-/// does for functions (#4101). A class ref is an INT32 immediate rather than a
-/// heap Function object, so `Function.prototype.toString` cannot recover its
-/// source from a `ClosureHeader` — this side table is the only record. Kept
-/// out of the heap image (unlike `CLASS_NAMES`) because nothing but
+/// via `js_register_class_source_static` (or the copying
+/// `js_register_class_source` for an image that can be unloaded), exactly as
+/// `js_register_function_source{,_static}` does for functions (#4101, #9188).
+/// A class ref is an INT32 immediate rather than a heap Function object, so
+/// `Function.prototype.toString` cannot recover its source from a
+/// `ClosureHeader` — this side table is the only record. Kept out of the heap
+/// image (unlike `CLASS_NAMES`) because nothing but
 /// `Function.prototype.toString` reads it.
+///
+/// Borrowed and owned text share ONE map, unlike the function registries: they
+/// split the two because an enum costs 8 bytes on each of ~60,000 borrowed
+/// entries, and a bundle carries orders of magnitude fewer classes than
+/// functions, so a second table would buy nothing here.
 fn class_source_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<u32, std::sync::Arc<str>>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<u32, RegisteredClassSource>> {
     static REGISTRY: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<u32, std::sync::Arc<str>>>,
+        std::sync::Mutex<std::collections::HashMap<u32, RegisteredClassSource>>,
     > = std::sync::OnceLock::new();
     crate::once_init::get_or_init(&REGISTRY, || {
         std::sync::Mutex::new(std::collections::HashMap::new())
     })
 }
 
-/// Register the original source text of a class. Idempotent — last write wins,
-/// matching `js_register_class_name`.
+/// One class's retained source text, by who owns the bytes.
+enum RegisteredClassSource {
+    /// Borrowed from the program image by `js_register_class_source_static`.
+    /// Stored unvalidated and decoded on read, as function source is (#9187),
+    /// so module init does not fault in every class body just to check it.
+    Image(&'static [u8]),
+    /// Copied by `js_register_class_source`; validated at registration.
+    Owned(std::sync::Arc<str>),
+}
+
+/// Register the original source text of a class. The registry COPIES the
+/// bytes. Idempotent — last write wins, matching `js_register_class_name`.
+///
+/// Codegen calls this only for an image that can be unloaded (`dylib` /
+/// `staticlib`); executables use [`js_register_class_source_static`].
 ///
 /// # Safety
 ///
@@ -99,27 +120,64 @@ pub unsafe extern "C" fn js_register_class_source(class_id: u32, src_ptr: *const
         return;
     };
     if let Ok(mut map) = class_source_registry().lock() {
-        map.insert(class_id, std::sync::Arc::from(text));
+        map.insert(
+            class_id,
+            RegisteredClassSource::Owned(std::sync::Arc::from(text)),
+        );
+    }
+}
+
+/// Codegen-facing entry point: like [`js_register_class_source`], but the
+/// registry BORROWS the bytes rather than copying them. Codegen registers the
+/// source of every class a bundle contains, to serve a
+/// `Function.prototype.toString()` most programs never call, so the copy was
+/// dirty heap duplicating text the image already held read-only.
+///
+/// # Safety
+///
+/// `src_ptr..src_ptr + src_len` must point at bytes valid for the REST OF THE
+/// PROCESS, not merely for the duration of the call — the registry keeps the
+/// pointer. Codegen satisfies this with a `private unnamed_addr constant`
+/// global in an image nothing unloads (`codegen/string_pool.rs`); anything
+/// else must use [`js_register_class_source`]. `class_id` is used only as a
+/// map key.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_source_static(
+    class_id: u32,
+    src_ptr: *const u8,
+    src_len: u32,
+) {
+    if class_id == 0 || src_ptr.is_null() || src_len == 0 {
+        return;
+    }
+    // SAFETY: the caller's contract is process lifetime.
+    let image: &'static [u8] = std::slice::from_raw_parts(src_ptr, src_len as usize);
+    if let Ok(mut map) = class_source_registry().lock() {
+        map.insert(class_id, RegisteredClassSource::Image(image));
     }
 }
 
 /// The retained source text of a registered class, or `None` when codegen
-/// registered none (a builtin, or a class synthesized at runtime).
-pub fn class_source_for_id(class_id: u32) -> Option<String> {
+/// registered none (a builtin, or a class synthesized at runtime) or the
+/// borrowed bytes are not UTF-8. Image text comes back BORROWED — no copy.
+pub fn class_source_for_id(class_id: u32) -> Option<Cow<'static, str>> {
     let map = class_source_registry().lock().ok()?;
-    map.get(&class_id).map(|text| text.to_string())
+    match map.get(&class_id)? {
+        RegisteredClassSource::Image(bytes) => std::str::from_utf8(bytes).ok().map(Cow::Borrowed),
+        RegisteredClassSource::Owned(text) => Some(Cow::Owned(text.to_string())),
+    }
 }
 
 /// `Function.prototype.toString` for a class REF: the retained class source
 /// when codegen registered it, otherwise the NativeFunction placeholder Node
 /// uses for callables with no recoverable source. Mirrors
 /// `builtins::function_source_for_func_ptr` for the INT32 class-ref encoding.
-pub fn class_ref_to_string(class_id: u32) -> String {
+pub fn class_ref_to_string(class_id: u32) -> Cow<'static, str> {
     if let Some(src) = class_source_for_id(class_id) {
         return src;
     }
     let name = class_name_for_id(class_id).unwrap_or_default();
-    format!("function {name}() {{ [native code] }}")
+    Cow::Owned(format!("function {name}() {{ [native code] }}"))
 }
 
 /// #9413: Node's `util.inspect` / `console.log` rendering of a class
@@ -744,6 +802,99 @@ mod anon_shape_collision_tests {
         assert!(
             !declared_class_outranks_anon_shape(class_id),
             "an unnamed, vtable-less anon shape must not be treated as declared"
+        );
+    }
+}
+
+#[cfg(test)]
+mod class_source_tests {
+    use super::*;
+
+    /// Fake class ids, distinct per test so these cases stay independent of
+    /// each other and of anything else in the process-global registry.
+    const CID_STATIC: u32 = 0x1150_1001;
+    const CID_COPIED: u32 = 0x1150_1002;
+    const CID_REPLACED: u32 = 0x1150_1003;
+
+    /// The point of #11501: the codegen entry point must hand back the very
+    /// bytes it was given, not a heap copy of them. A copy would still
+    /// compare equal as text, so compare the ADDRESS.
+    #[test]
+    fn static_class_source_borrows_the_callers_bytes() {
+        static SOURCE: &str = "class Borrowed { m() { return 1; } }";
+        unsafe {
+            js_register_class_source_static(CID_STATIC, SOURCE.as_ptr(), SOURCE.len() as u32);
+        }
+
+        let text = class_source_for_id(CID_STATIC).expect("registered class source");
+        assert_eq!(&*text, SOURCE);
+        assert!(
+            matches!(text, Cow::Borrowed(_)),
+            "image text must be returned borrowed, not re-allocated on read"
+        );
+        assert_eq!(
+            text.as_ptr(),
+            SOURCE.as_ptr(),
+            "js_register_class_source_static must borrow: the registry returned \
+             a copy of the caller's bytes"
+        );
+
+        let rendered = class_ref_to_string(CID_STATIC);
+        assert_eq!(
+            rendered.as_ptr(),
+            SOURCE.as_ptr(),
+            "Function.prototype.toString on a class ref must not copy image text"
+        );
+    }
+
+    /// The copying entry point stays for callers that can only promise the
+    /// bytes outlive the call (a `dylib` plugin that `dlclose` unmaps). Prove
+    /// it copies without writing the use-after-free: keep the buffer alive
+    /// and overwrite it. A stored borrow would read the new contents.
+    #[test]
+    fn copying_class_source_owns_its_bytes() {
+        let mut buffer = b"class Copied { m() { return 1; } }".to_vec();
+        unsafe {
+            js_register_class_source(CID_COPIED, buffer.as_ptr(), buffer.len() as u32);
+        }
+        buffer.copy_from_slice(b"class Clobbr { m() { return 2; } }");
+
+        assert_eq!(
+            class_source_for_id(CID_COPIED).as_deref(),
+            Some("class Copied { m() { return 1; } }"),
+            "js_register_class_source must copy: the registry returned the \
+             caller's post-registration buffer contents, i.e. it kept a borrow"
+        );
+    }
+
+    /// Both spellings write the same map, so the last registration wins
+    /// whichever kind it is, and an unregistered class keeps the Node
+    /// NativeFunction placeholder.
+    #[test]
+    fn last_registration_wins_across_ownership_kinds() {
+        static IMAGE: &str = "class Replaced { fromImage() {} }";
+        let owned = b"class Replaced { fromRuntime() {} }".to_vec();
+        let name = "Replaced";
+        unsafe {
+            js_register_class_name(CID_REPLACED, name.as_ptr(), name.len() as u32);
+        }
+        assert_eq!(
+            class_ref_to_string(CID_REPLACED),
+            "function Replaced() { [native code] }"
+        );
+
+        unsafe {
+            js_register_class_source(CID_REPLACED, owned.as_ptr(), owned.len() as u32);
+            js_register_class_source_static(CID_REPLACED, IMAGE.as_ptr(), IMAGE.len() as u32);
+        }
+        assert_eq!(class_ref_to_string(CID_REPLACED).as_ptr(), IMAGE.as_ptr());
+
+        unsafe {
+            js_register_class_source(CID_REPLACED, owned.as_ptr(), owned.len() as u32);
+        }
+        assert_eq!(
+            class_ref_to_string(CID_REPLACED),
+            "class Replaced { fromRuntime() {} }"
         );
     }
 }

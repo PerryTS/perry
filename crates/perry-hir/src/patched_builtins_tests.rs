@@ -58,7 +58,70 @@ fn prototype_writes_are_not_namespace_patches() {
         Object.defineProperty(String.prototype, "trim", { value: () => "" });
         "#,
     );
+    assert!(!s.contains(&pair("Array", "join")), "{s:?}");
+    assert!(!s.contains(&pair("Array", ANY_MEMBER)), "{s:?}");
+    assert!(!s.iter().any(|(ns, _)| ns.starts_with("String")), "{s:?}");
+}
+
+#[test]
+fn scans_builtin_prototype_method_writes() {
+    let s = scan(
+        r#"
+        Array.prototype.push = function () { return 0; };
+        (Map.prototype as any)["get"] = () => 1;
+        globalThis.Function.prototype.bind = function () { return this; };
+        Object.defineProperty(Set.prototype, "add", { value: () => 0 });
+        String.prototype.trim = () => "";
+        class Foo {}
+        (Foo.prototype as any).push = () => 0;
+        "#,
+    );
+    assert!(s.contains(&pair("Array.prototype", "push")));
+    assert!(s.contains(&pair("Map.prototype", "get")));
+    assert!(s.contains(&pair("Function.prototype", "bind")));
+    assert!(s.contains(&pair("Set.prototype", "add")));
+    assert_eq!(s.len(), 4, "{s:?}");
+    assert_eq!(
+        patched_prototype_methods(&s),
+        vec!["add", "bind", "get", "push"]
+    );
+}
+
+#[test]
+fn write_through_a_prototype_alias_is_a_patch() {
+    let s = scan(
+        r#"
+        const AP: any = Array.prototype;
+        AP.push = function () { return 0; };
+        const o: any = {};
+        o.pop = () => 0;
+        "#,
+    );
+    assert!(s.contains(&pair("Array.prototype", "push")), "{s:?}");
+    assert_eq!(s.len(), 1, "{s:?}");
+}
+
+#[test]
+fn numeric_key_prototype_write_is_an_index_not_every_method() {
+    let s = scan(
+        r#"
+        Object.defineProperty(Array.prototype, 7, { get() { return 1; }, configurable: true });
+        (Array.prototype as any)[3] = 1;
+        "#,
+    );
     assert!(s.is_empty(), "{s:?}");
+}
+
+#[test]
+fn dynamic_key_prototype_write_patches_every_method() {
+    let s = scan(
+        r#"
+        const k = "push";
+        (Array.prototype as any)[k] = () => 0;
+        "#,
+    );
+    assert!(s.contains(&pair("Array.prototype", ANY_MEMBER)), "{s:?}");
+    assert_eq!(patched_prototype_methods(&s), vec![ANY_MEMBER]);
 }
 
 #[test]
@@ -158,4 +221,36 @@ fn patched_console_call_lowers_dynamically() {
         "{last}"
     );
     assert!(!last.contains("NativeMethodCall"), "{last}");
+}
+
+#[test]
+fn patched_prototype_method_call_lowers_dynamically() {
+    let m = lower_with_patches(
+        r#"
+        (Array.prototype as any).push = function () { return 0; };
+        const a: number[] = [1];
+        const r = a.push(2);
+        const mp = new Map<string, number>();
+        const g = mp.get("k");
+        "#,
+    );
+    let r = init_of(&m, 1);
+    assert!(is_dynamic_member_call(&r, "push"), "{r}");
+    let g = init_of(&m, 3);
+    assert!(
+        g.starts_with("MapGet"),
+        "an unpatched method keeps its intrinsic: {g}"
+    );
+}
+
+#[test]
+fn unpatched_program_keeps_array_push_intrinsic() {
+    let m = lower_with_patches(
+        r#"
+        const a: number[] = [1];
+        const r = a.push(2);
+        "#,
+    );
+    let r = init_of(&m, 1);
+    assert!(r.starts_with("ArrayPush"), "{r}");
 }

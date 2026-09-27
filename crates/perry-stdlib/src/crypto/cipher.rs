@@ -589,7 +589,7 @@ pub(super) unsafe fn create_cipher_handle(
     } else {
         0
     };
-    let handle: Handle = register_handle(CipherHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(CipherHandle {
         state: std::sync::Mutex::new(CipherState {
             kind,
             encrypt,
@@ -725,7 +725,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     decode_string_bytes_with_tag(&str_bytes, in_tag)
                 }
                 None => {
-                    let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let ptr = arg_ptr(args[0]);
                     bytes_from_ptr(ptr)
                 }
             };
@@ -1160,7 +1160,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             if state.encrypt || !state.kind.is_gcm() {
                 return nanbox_undefined();
             }
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let ptr = arg_ptr(args[0]);
             let tag = bytes_from_ptr(ptr);
             state.auth_tag = Some(tag);
             nanbox_pointer_f64(handle as usize)
@@ -1172,7 +1172,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             if args.is_empty() {
                 state.aad.clear();
             } else {
-                let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let ptr = arg_ptr(args[0]);
                 state.aad = bytes_from_ptr(ptr);
             }
             nanbox_pointer_f64(handle as usize)

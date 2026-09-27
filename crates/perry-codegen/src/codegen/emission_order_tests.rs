@@ -596,18 +596,32 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                 "source range/length/strictness changed: {call}"
             );
         }
+        // #11501: class source follows the same output-kind spelling as
+        // function source — borrowed by an executable, copied by an image
+        // `dlclose` can unmap.
+        let class_register = if output_type == "executable" {
+            "js_register_class_source_static"
+        } else {
+            "js_register_class_source"
+        };
         let class_calls: Vec<_> = emitted
             .lines()
-            .filter(|line| line.contains("call void @js_register_class_source("))
+            .filter(|line| line.contains("call void @js_register_class_source"))
             .collect();
         assert_eq!(class_calls.len(), 1);
+        assert!(
+            class_calls[0].contains(&format!("@{class_register}(")),
+            "{output_type} registered class source with the wrong ownership \
+             contract: {}",
+            class_calls[0]
+        );
         assert!(
             class_calls[0].contains(&format!(
                 "(i32 3, ptr {}, i32 {})",
                 pointer(&class),
                 class.len()
             )),
-            "class source must retain its copying API: {}",
+            "class source range/length changed: {}",
             class_calls[0]
         );
     }

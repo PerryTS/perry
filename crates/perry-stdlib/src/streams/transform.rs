@@ -66,6 +66,7 @@ unsafe fn alloc_transform_stream_with_strategies(
     (r_hwm, r_size_cb): (f64, i64),
 ) -> f64 {
     ensure_gc_registered();
+    ensure_streams_thread_exit_hook();
 
     // Allocate the readable side empty (controller is its own handle).
     let readable_id = alloc_readable_with_strategy(0, 0, 0, r_hwm, false, r_size_cb);
@@ -404,6 +405,81 @@ pub(super) static TRANSFORM_BACKPRESSURED_JOBS: std::sync::LazyLock<
 /// deferred until the pending write jobs above drain.
 pub(super) static TRANSFORM_PENDING_CLOSE: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// #11471: the transform side tables' part of
+/// `release_web_streams_in_freed_ranges` (streams.rs). A readable id whose
+/// parked write promises or deferred write jobs, or a writable id whose
+/// deferred close promise, lie in the exiting thread's freed blocks is dead;
+/// `TRANSFORM_PAIRS` contributes its writable <-> transform links so deadness
+/// reaches the whole transform.
+pub(super) fn dead_ids_in_freed_ranges(
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+    dead: &mut std::collections::HashSet<usize>,
+    links: &mut Vec<(usize, usize)>,
+) {
+    use std::sync::PoisonError;
+    links.extend(
+        TRANSFORM_PAIRS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(&writable, &transform)| (writable, transform)),
+    );
+    for table in [&TRANSFORM_WRITE_RELEASES, &TRANSFORM_BACKPRESSURED_JOBS] {
+        let g = table.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&readable_id, addrs) in g.iter() {
+            if addrs.iter().any(|&addr| freed.contains(addr)) {
+                dead.insert(readable_id);
+            }
+        }
+    }
+    let g = TRANSFORM_PENDING_CLOSE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    for (&writable_id, &addr) in g.iter() {
+        if freed.contains(addr) {
+            dead.insert(writable_id);
+        }
+    }
+}
+
+/// #11471: drop every transform side-table entry keyed by (or, for
+/// `TRANSFORM_PAIRS`, naming) a dead id. Unlike quarantine eviction this also
+/// clears `TRANSFORM_PENDING_CLOSE` / `TRANSFORM_PENDING_WRITES`: the jobs that
+/// would have drained them lived on the dead thread's microtask queue.
+pub(super) fn evict_dead_ids(dead: &std::collections::HashSet<usize>) {
+    use std::sync::PoisonError;
+    TRANSFORM_PAIRS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|writable, transform| !dead.contains(writable) && !dead.contains(transform));
+    for table in [&TRANSFORM_WRITE_RELEASES, &TRANSFORM_BACKPRESSURED_JOBS] {
+        table
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| !dead.contains(id));
+    }
+    for table in [&TRANSFORM_PENDING_CLOSE, &TRANSFORM_PENDING_WRITES] {
+        table
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| !dead.contains(id));
+    }
+}
+
+/// #11471 test probe: does any transform side table hold an entry for `id`?
+#[cfg(test)]
+pub(crate) fn transform_side_tables_hold_for_test(id: usize) -> bool {
+    TRANSFORM_PAIRS.lock().unwrap().contains_key(&id)
+        || TRANSFORM_PAIRS.lock().unwrap().values().any(|&t| t == id)
+        || TRANSFORM_WRITE_RELEASES.lock().unwrap().contains_key(&id)
+        || TRANSFORM_BACKPRESSURED_JOBS
+            .lock()
+            .unwrap()
+            .contains_key(&id)
+        || TRANSFORM_PENDING_CLOSE.lock().unwrap().contains_key(&id)
+        || TRANSFORM_PENDING_WRITES.lock().unwrap().contains_key(&id)
+}
 
 /// #6607: a queued transform write job finished delivering its chunk. When the
 /// last pending job for the writable drains, run any close request that

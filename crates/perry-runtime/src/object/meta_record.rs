@@ -189,6 +189,19 @@ pub struct ObjectMeta {
     /// Placed before `native_state` so every codegen-addressed offset above is
     /// unchanged and `native_state` stays the last word (#340/#341).
     pub proto_serial: u64,
+    /// #11506: an `arguments` object's exotic state, NaN-boxed; 0 on every
+    /// other object. `TAG_TRUE` marks an unmapped object with the restricted
+    /// `callee`, `TAG_FALSE` a sloppy one with no parameter alias, and a
+    /// `POINTER_TAG`-boxed `GC_TYPE_ARRAY` a sloppy MAPPED one, whose element
+    /// `i` is the box parameter `i` aliases (see `object/arguments.rs`).
+    ///
+    /// It replaces `ARGUMENTS_OBJECTS`, a thread-local table keyed by the
+    /// owner's ADDRESS that cost a hash insert per call, a rekey per move and
+    /// a dead-owner prune per collection. The mapped array is a traced child
+    /// edge exactly like `expando`: it lives, moves and dies with this record.
+    ///
+    /// Placed before `native_state` for the same reason as `proto_serial`.
+    pub arguments: u64,
     /// #340/#341 honest tags: packed state for a runtime class whose instances
     /// are ORDINARY objects rather than small registry handles
     /// (`TextEncoder` / `TextDecoder` today; the other twelve families follow).

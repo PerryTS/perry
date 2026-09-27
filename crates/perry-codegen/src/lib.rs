@@ -102,6 +102,10 @@ pub use collectors::CjsPreambleCensus;
 pub use collectors::segview::{
     segview_diag_enabled, segview_lowering_enabled, segview_rewrite_module, SegViewDiag,
 };
+// #11394: whole-program set of methods written onto a builtin prototype.
+pub use lower_call::property_get::patched_proto::{
+    program_patched_proto_methods, set_program_patched_proto_methods,
+};
 
 /// Return the guarded proven-`this` method-clone capabilities a native module
 /// may safely publish to importing codegen units. The first map contains all

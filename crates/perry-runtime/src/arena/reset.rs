@@ -1246,8 +1246,13 @@ impl OldArenaReclaimDeadBlocksState {
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
             // #7437: this block's bytes are being recycled; any swept hole
-            // recorded inside it must not be handed out again.
-            crate::gc::old_free_filter_range(base, size);
+            // recorded inside it must not be handed out again. #11505: the
+            // list is threaded through those holes, so they are unlinked
+            // here, before anything reuses or releases the bytes. Only a
+            // block the last rebuild listed a hole in can hold one.
+            if std::mem::take(&mut block.old_free_holes) {
+                crate::gc::old_free_filter_range(base, size);
+            }
 
             if used != 0 {
                 stats.reset_blocks = stats.reset_blocks.saturating_add(1);
@@ -1335,8 +1340,13 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
             // #7437: this block's bytes are being recycled; any swept hole
-            // recorded inside it must not be handed out again.
-            crate::gc::old_free_filter_range(base, size);
+            // recorded inside it must not be handed out again. #11505: the
+            // list is threaded through those holes, so they are unlinked
+            // here, before anything reuses or releases the bytes. Only a
+            // block the last rebuild listed a hole in can hold one.
+            if std::mem::take(&mut block.old_free_holes) {
+                crate::gc::old_free_filter_range(base, size);
+            }
 
             if used != 0 {
                 stats.reset_blocks = stats.reset_blocks.saturating_add(1);
@@ -1437,8 +1447,13 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
             let pages: Vec<usize> = (first_page..=last_page).collect();
             unregister_old_block_pages(&pages);
             // #7437: this block's bytes are being recycled; any swept hole
-            // recorded inside it must not be handed out again.
-            crate::gc::old_free_filter_range(base, size);
+            // recorded inside it must not be handed out again. #11505: the
+            // list is threaded through those holes, so they are unlinked
+            // here, before anything reuses or releases the bytes. Only a
+            // block the last rebuild listed a hole in can hold one.
+            if std::mem::take(&mut block.old_free_holes) {
+                crate::gc::old_free_filter_range(base, size);
+            }
 
             if used != 0 {
                 stats.reset_blocks = stats.reset_blocks.saturating_add(1);

@@ -1867,6 +1867,10 @@ pub unsafe extern "C" fn js_json_stringify_full(
                 );
             });
         }
+    } else if !use_pretty
+        && super::stringify_object::try_stringify_plain_root(value.to_bits(), &mut buf)
+    {
+        // No replacer, compact, and a root no `toJSON` can reach (#10696).
     } else {
         // No replacer. Pre-resolve the ROOT value's own `toJSON` here (same
         // `apply_to_json_keyed` the function-replacer branch above uses) so a
@@ -1877,9 +1881,10 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // value-tojson-result's `arr.toJSON = () => {}` case). Arm the
         // one-shot suppression guard so the walk below doesn't re-invoke
         // `toJSON` on the same (already-resolved) root value.
-        let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-        let empty_key_f64 = nanbox_string_f64(empty_str);
-        let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
+        // The root's `toJSON` key is the empty String; it is only ever read
+        // back as bytes, so no string needs to be allocated to carry it.
+        reset_to_json_key();
+        let value_after_to_json = apply_to_json(value);
         let after_bits = value_after_to_json.to_bits();
         if after_bits == TAG_UNDEFINED
             || is_closure_value(after_bits)

@@ -241,7 +241,9 @@ const NON_COLLECTING: &[&str] = &[
     "js_array_note_numeric_write",
     "js_array_declare_all_pointer_elements",
     "js_array_live_head",
-    "js_array_length",
+    // #11522: only the leaf fast lane. `js_array_length` itself runs Proxy
+    // traps, getters and `valueOf`, so it must reload roots like any call.
+    "js_array_length_leaf",
     // #9480 dispatch probes: validated header/registry/shape/slot reads only.
     // Their keys walk bypasses the generic array accessors; neither helper
     // allocates in the Perry heap, polls, throws, or re-enters generated JS.

@@ -1145,3 +1145,20 @@ fn the_emitted_leaf_hit_never_runs_a_getter() {
         ));
     }
 }
+
+/// #11507: the table is zero-allocated rather than filled with `EMPTY_ENTRY`,
+/// so a thread's first view of it must be `EMPTY_ENTRY` in every slot.
+#[test]
+fn fresh_thread_cache_reads_empty_everywhere() {
+    std::thread::spawn(|| {
+        INHERITED_READ_CACHE.with(|cell| {
+            let cache = unsafe { &*cell.get() };
+            assert_eq!(cache.len(), CACHE_SIZE);
+            for entry in cache.iter() {
+                assert_eq!(*entry, EMPTY_ENTRY);
+            }
+        });
+    })
+    .join()
+    .unwrap();
+}

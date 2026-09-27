@@ -36,6 +36,9 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
+/// v6 (#11508): function fields are i32 offsets from their blob's first byte
+/// instead of absolute addresses, so the section needs no load-time fixups.
+///
 /// v5: the function table is followed by a `u32 stream_offset` per function,
 /// so ONE function's records can be found without decoding every function
 /// before it. The record stream and the instruction-offset array are byte for
@@ -53,7 +56,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// after a move. Version mismatch still fails closed (the parser returns
 /// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 5;
+const GC_MAP_VERSION: u8 = 6;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
@@ -852,12 +855,19 @@ fn build_stack_map_index() -> StackMapIndex {
     if sections.is_empty() {
         return StackMapIndex::default();
     }
-    build_index_from_sections(sections, index_mode())
+    let origins: Vec<usize> = sections.iter().map(|s| s.as_ptr() as usize).collect();
+    build_index_from_sections(sections, &origins, index_mode())
 }
 
 /// Build the index from already-located sections. Shared with the tests, so
-/// what they exercise is the path the collector takes.
-fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> StackMapIndex {
+/// what they exercise is the path the collector takes. `origins[i]` is the
+/// address `sections[i]` is mapped at — v6 function fields are relative to it.
+/// A loaded image passes `as_ptr()`; a test passes whatever its blob encoded.
+fn build_index_from_sections(
+    sections: Vec<&'static [u8]>,
+    origins: &[usize],
+    mode: IndexMode,
+) -> StackMapIndex {
     // A section that exists but does not decode is a different thing
     // entirely, and it must never degrade to "no roots". The two failure
     // shapes are indistinguishable downstream — both yield an empty index
@@ -872,7 +882,8 @@ fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> S
         let section_index = u16::try_from(index).unwrap_or_else(|_| {
             panic!("perry: {} loaded images carry a GC map section; the index addresses them with a u16", sections.len())
         });
-        if lazy::parse_function_table(section_index, section, &mut functions).is_none() {
+        let origin = origins[index];
+        if lazy::parse_function_table(section_index, section, origin, &mut functions).is_none() {
             undecodable_section(section.len());
         }
     }
@@ -884,7 +895,7 @@ fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> S
 
     let eager = match mode {
         IndexMode::Lazy => None,
-        IndexMode::BuildBoth | IndexMode::CrossCheck => Some(build_eager_index(&sections)),
+        IndexMode::BuildBoth | IndexMode::CrossCheck => Some(build_eager_index(&sections, origins)),
     };
     StackMapIndex {
         mode,
@@ -897,15 +908,17 @@ fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> S
 /// The default-configuration build, for tests that only need the lazy index.
 #[cfg(test)]
 fn build_index_from_sections_lazy(sections: Vec<&'static [u8]>) -> StackMapIndex {
-    build_index_from_sections(sections, IndexMode::Lazy)
+    let origins = vec![0; sections.len()];
+    build_index_from_sections(sections, &origins, IndexMode::Lazy)
 }
 
-fn build_eager_index(sections: &[&'static [u8]]) -> EagerIndex {
+fn build_eager_index(sections: &[&'static [u8]], origins: &[usize]) -> EagerIndex {
     let mut records = Vec::new();
     let mut roots = Vec::new();
     let mut derived = Vec::new();
-    for section in sections {
-        if append_gc_map_section(&mut records, &mut roots, &mut derived, section).is_none() {
+    for (section, &origin) in sections.iter().zip(origins) {
+        if append_gc_map_section(&mut records, &mut roots, &mut derived, section, origin).is_none()
+        {
             undecodable_section(section.len());
         }
     }
@@ -930,8 +943,9 @@ fn append_gc_map_section(
     roots: &mut Vec<StackMapLocation>,
     derived: &mut Vec<StackMapDerived>,
     section: &[u8],
+    origin: usize,
 ) -> Option<()> {
-    let (mut section_records, section_roots, section_derived) = parse_gc_map(section)?;
+    let (mut section_records, section_roots, section_derived) = parse_gc_map(section, origin)?;
     let root_base = u32::try_from(roots.len()).ok()?;
     let derived_base = u32::try_from(derived.len()).ok()?;
     for record in &mut section_records {

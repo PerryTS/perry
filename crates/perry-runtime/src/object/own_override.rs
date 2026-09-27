@@ -209,10 +209,32 @@ unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize)
     if name_ptr.is_null() || name_len == 0 {
         return 1;
     }
-    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    let key = method_key(name_ptr, name_len);
     if key.is_null() {
         return 1;
     }
+    authoritative_has_own_key(recv, key)
+}
+
+/// This call's method name as a property key: the thread's canonical interned
+/// header (#10957's runtime half). It used to be minted with
+/// `js_string_from_bytes` — a fresh string, i.e. an arena allocation and a
+/// copy, on every dispatched call that reached the own-override check, and
+/// again for the `Get` that followed. The interned header is allocated once
+/// per thread per name and is a registered root (`scan_intern_table_roots_mut`).
+///
+/// # Safety
+/// `name_ptr`/`name_len` describe live UTF-8 bytes.
+#[inline]
+unsafe fn method_key(name_ptr: *const u8, name_len: usize) -> *mut crate::StringHeader {
+    crate::string::canonical_key(std::slice::from_raw_parts(name_ptr, name_len))
+}
+
+/// [`authoritative_has_own`] for a key already in hand.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value; `key` is a live, non-null string header.
+unsafe fn authoritative_has_own_key(recv: f64, key: *mut crate::StringHeader) -> i32 {
     let key_value = f64::from_bits(crate::JSValue::string_ptr(key).bits());
     // The authoritative predicate — the one behind `Object.hasOwn` — which
     // already answers correctly for every cell kind (the `hasOwn` rows of
@@ -274,13 +296,24 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
                 kind, addr, name,
             )?),
             None => {
-                if authoritative_has_own(recv.get_nanbox_f64(), name.as_ptr(), name.len()) == 0 {
+                // Mint (or find) the key BEFORE reading the receiver out of its
+                // root: a first-use intern allocates, and the receiver passed
+                // below must be the post-collection address.
+                let key = method_key(name.as_ptr(), name.len());
+                if key.is_null() {
                     return None;
                 }
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let key =
+                    scope.root_nanbox_f64(f64::from_bits(crate::JSValue::string_ptr(key).bits()));
+                let key_ptr = || {
+                    (key.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut crate::StringHeader
+                };
+                if authoritative_has_own_key(recv.get_nanbox_f64(), key_ptr()) == 0 {
+                    return None;
+                }
                 let raw = (recv.get_nanbox_u64() & crate::value::POINTER_MASK)
                     as *const crate::object::ObjectHeader;
-                crate::object::js_object_get_field_by_name_f64(raw, key)
+                crate::object::js_object_get_field_by_name_f64(raw, key_ptr())
             }
         };
     // The borrowed-builtin classifier below allocates its key. Keep a callable
@@ -324,11 +357,25 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
 /// `IMPLICIT_THIS` is bound across the call and restored after it, because the
 /// callee reads its receiver from there when it has no lexical `this`.
 ///
+/// `recv` and `args` are READERS, not values: resolving the method can run an
+/// own accessor's getter and allocate, so the receiver and arguments handed to
+/// the call must be re-read from the caller's roots AFTER it. They are also
+/// only read when there is an own user method to call — the overwhelmingly
+/// common "no own method" answer no longer builds the argument vector the
+/// dispatcher then discarded on every call (#10502).
+///
 /// # Safety
-/// `recv` is any NaN-boxed value; `args` are NaN-boxed values live at the call.
-pub(crate) unsafe fn call_own_user_method(recv: f64, name: &str, args: &[f64]) -> Option<f64> {
-    let own = own_user_method_value(recv, name)?;
-    Some(invoke_own_user_method(own, recv, args))
+/// `recv` yields a NaN-boxed value and `args` NaN-boxed values, both read from
+/// the caller's live roots.
+pub(crate) unsafe fn call_own_user_method(
+    recv: impl Fn() -> f64,
+    name: &str,
+    args: impl FnOnce() -> Vec<f64>,
+) -> Option<f64> {
+    let own = own_user_method_value(recv(), name)?;
+    // Neither reader allocates on the GC heap, so `own` is still live here;
+    // `invoke_own_user_method` roots it before anything that can collect.
+    Some(invoke_own_user_method(own, recv(), &args()))
 }
 
 /// The Call half of [`call_own_user_method`], for a method value already

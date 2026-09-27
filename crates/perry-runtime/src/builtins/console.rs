@@ -150,6 +150,13 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
     let closure_ptr = if cached != 0 {
         cached as *mut crate::closure::ClosureHeader
     } else {
+        // #11471: the hook must exist before the slot can hold an address.
+        static REGISTER_THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
+        REGISTER_THREAD_EXIT_HOOK.call_once(|| {
+            crate::arena::thread_exit::register_thread_exit_range_hook(
+                release_console_log_singleton_in_freed_ranges,
+            );
+        });
         let fresh = crate::closure::js_closure_alloc(console_log_callable_thunk as *const u8, 0);
         // CAS so concurrent first-use callers don't leak a closure.
         // The loser's allocation is unreachable by any user code path
@@ -167,6 +174,21 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
         }
     };
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
+}
+
+/// #11471: the singleton is allocated in the arena of whichever thread first
+/// reads `console.log` as a value, but cached process-wide. When that thread
+/// exits, clear the slot (only if it still holds that thread's closure), so
+/// the next reader allocates a fresh one on its own heap instead of being
+/// handed a freed (or reused) address. Registered from the allocation path
+/// rather than called from `release_freed_ranges`, because this module is
+/// private to `builtins`.
+fn release_console_log_singleton_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    let cached = CONSOLE_LOG_SINGLETON.load(Ordering::Acquire);
+    if cached != 0 && freed.holds_i64(cached) {
+        let _ =
+            CONSOLE_LOG_SINGLETON.compare_exchange(cached, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
 }
 
 /// `console[dynamicKey]` — resolve a console method by a RUNTIME key string,

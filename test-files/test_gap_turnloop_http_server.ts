@@ -74,8 +74,7 @@ async function main() {
       // `setHeader` + `end(body)` rather than `writeHead`: Node only computes
       // a `Content-Length` while the header block is still open at `end()`
       // time, and falls back to chunked once `writeHead` has committed it.
-      // Perry length-frames both shapes — a pre-existing difference (hyper
-      // framed it the same way), and not what this file is about.
+      // Both forms are covered by test_gap_10343_writehead_framing.ts.
       res.setHeader('Content-Type', 'text/plain');
       res.end('hello');
       return;

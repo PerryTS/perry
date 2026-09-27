@@ -35,11 +35,16 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     if value.is_nan() || value.is_infinite() {
         // JSON has no NaN/Infinity literal; the spec serializes them as null.
         buf.push_str("null");
-    } else if value.fract() == 0.0 && value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
+    } else if value.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
+        && (value as i64) as f64 == value
+    {
         // Fast path for in-range integers (the overwhelming majority of JSON
         // numbers); identical to ECMAScript NumberToString below 2^53. Above it
         // the exact integer can carry more digits than the shortest round-trip
         // (`2**58`), so those use shortest-round-trip formatting below (#6127).
+        // The integer test is the conversion round trip rather than `fract()`,
+        // which is a libm `trunc` call on the baseline x86-64 target; both
+        // spell either zero as "0".
         let mut itoa_buf = itoa::Buffer::new();
         super::stringify_copy::push_str(buf, itoa_buf.format(value as i64));
     } else if write_compact_decimal(buf, value) {

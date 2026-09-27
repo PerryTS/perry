@@ -123,188 +123,27 @@ pub use match_string::{
     js_string_match_js, js_string_match_value, js_string_search_js, js_string_search_value,
 };
 
-/// Local owner registration. Source and flags live only in the header's
-/// traced string edges; metadata never keeps native copies of either string.
-struct RegexMetadata {
-    registered_owner: bool,
-}
-
 crate::perry_thread_local! {
     #[cfg(feature = "regex-engine")]
     static LAST_EXEC_INDEX: RefCell<f64> = const { RefCell::new(0.0) };
 
     static LAST_EXEC_GROUPS: RefCell<*mut ObjectHeader> = const { RefCell::new(ptr::null_mut()) };
-
-    /// Headers constructed in this runtime participate in collector owner
-    /// walks. The historical table name remains while legacy callers migrate.
-    static REGEX_SOURCE_TABLE: RefCell<crate::fast_hash::PtrHashMap<usize, RegexMetadata>> = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-/// Check whether `ptr` is a RegExpHeader pointer that was allocated in
-/// this thread. Called by `js_string_split` to detect the `s.split(re)`
-/// case without a separate runtime FFI entry point.
+/// Check whether `ptr` is a RegExpHeader pointer. Called by `js_string_split`
+/// to detect the `s.split(re)` case without a separate runtime FFI entry point.
+///
+/// Identity is the header alone: a `GC_TYPE_REGEXP` GcHeader carrying the
+/// `RegExpHeader.magic` sentinel (see [`regex_header_has_magic`]). There is no
+/// address-keyed owner registry to consult — #11503 deleted
+/// `REGEX_SOURCE_TABLE`, whose only payload was a `registered_owner: bool` that
+/// every live header's own GcHeader already answers, and which cost an insert
+/// per construction, a rekey per evacuation and a walk per collection.
 pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     if ptr.is_null() || (ptr as usize) < 0x1000 {
         return false;
     }
-    // Wall 18: check the header-resident magic FIRST so identity survives a
-    // duplicate-runtime thread-local split (see `RegExpHeader.magic`). A
-    // RegExp is a GC-tracked `GC_TYPE_REGEXP` allocation, so it always carries
-    // a preceding GcHeader; only read the magic field when the GC header says
-    // this is an object of sufficient size to actually contain it.
-    if regex_header_has_magic(ptr as *const RegExpHeader) {
-        return true;
-    }
-    regex_pointers_contains(ptr as usize)
-}
-
-/// Monotone "this process has ever constructed a `RegExp`" latch.
-///
-/// The three owner-registration probes all reach the thread-local table only
-/// *after* the header-magic check misses — which is the common case, since they
-/// are asked about ordinary objects on the generic property-dispatch path
-/// (`object::exotic_expando::exotic_expando_kind`) and from `String.prototype`
-/// dispatch. A program with no regex answers from one atomic load.
-/// See `crate::registry_latch` for the ordering rule.
-static REGEX_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
-    crate::registry_latch::RegistryLatch::new();
-
-#[inline]
-fn regex_pointers_contains(addr: usize) -> bool {
-    if REGEX_EVER_REGISTERED.is_idle() {
-        return false;
-    }
-    REGEX_SOURCE_TABLE.with(|table| {
-        table
-            .borrow()
-            .get(&addr)
-            .is_some_and(|entry| entry.registered_owner)
-    })
-}
-
-/// Rekey every address-owned RegExp table after payload evacuation. Header
-/// child slots are rewritten separately by the RegExp GC descriptor; this
-/// hook handles the owner keys that a slot visitor cannot see.
-pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
-    if old_addr == new_addr {
-        return;
-    }
-    REGEX_SOURCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        if let Some(mut metadata) = table.remove(&old_addr) {
-            match table.entry(new_addr) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    // The former set retained destination registration too;
-                    // the source metadata still comes from the moved owner.
-                    metadata.registered_owner |= entry.get().registered_owner;
-                    entry.insert(metadata);
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(metadata);
-                }
-            }
-        }
-    });
-    crate::object::exotic_expando::exotic_expando_owner_moved(old_addr, new_addr);
-}
-
-/// Remove address-owned RegExp metadata when the cell is proven dead.
-pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
-    REGEX_SOURCE_TABLE.with(|table| {
-        table.borrow_mut().remove(&addr);
-    });
-    crate::object::exotic_expando::exotic_expando_owner_clear_dead(addr);
-}
-
-/// Remove a dead header's address-owned metadata. Its program and strings are
-/// ordinary traced GC children and are reclaimed by the collector.
-pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
-    if !re.is_null() {
-        regex_header_clear_dead_for_gc(re as usize);
-    }
-}
-
-/// Finalize the RegExp headers that died in from-space during a copied minor.
-///
-/// The copying minor's from-space flip runs no per-object finalize hooks, so
-/// a nursery header that was neither evacuated nor pinned would otherwise keep
-/// its source/registration metadata and expando
-/// entries forever. Same shape as `map::finalize_dead_copied_minor_from_space_maps`:
-/// walk the registry after the flip, collect the provably-dead addresses, then
-/// finalize each (the finalizer removes its own registry entries, which is why
-/// the walk and the removal are two passes).
-///
-/// Cost: O(registry) = O(live headers + headers allocated since the last
-/// minor) — the same order as the malloc sweep this replaces, and
-/// proportional to allocation, not to program history.
-pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
-    let dead: Vec<usize> = REGEX_SOURCE_TABLE.with(|table| {
-        let table = table.borrow();
-        let owners = table
-            .iter()
-            .filter_map(|(&addr, entry)| entry.registered_owner.then_some(addr));
-        crate::gc::prefetch::prefetch_gc_owner_headers(owners)
-            .filter(|&addr| {
-                crate::gc::owner_is_dead_copied_minor_from_space_of_type(
-                    addr,
-                    crate::gc::GC_TYPE_REGEXP,
-                )
-            })
-            .collect()
-    });
-    let count = dead.len();
-    for addr in crate::gc::prefetch::prefetch_gc_owner_headers(dead.iter().copied()) {
-        unsafe { regex_header_finalize_for_gc(addr as *mut RegExpHeader) };
-    }
-    count
-}
-
-/// Sweep-entry twin of the above for the non-copying cycle kinds (fallback
-/// minor / full mark-sweep): a dead header in the ACTIVE nursery allocation
-/// block is never object-walked by any sweeper, so it is collected from the
-/// registry right after trace instead (#6010, mirroring Map/Set/Buffer).
-/// Deadness: unmarked ∧ not pinned ∧ not forwarded, and for a minor trace also
-/// not tenured and physically in the nursery.
-pub(crate) fn collect_dead_registered_regexps_post_trace(full_trace: bool) -> Vec<usize> {
-    REGEX_SOURCE_TABLE.with(|table| {
-        table
-            .borrow()
-            .iter()
-            .filter_map(|(&addr, entry)| entry.registered_owner.then_some(addr))
-            .filter(|&addr| unsafe { registered_regexp_is_dead_post_trace(addr, full_trace) })
-            .collect()
-    })
-}
-
-/// Finalize one collected-dead RegExp (budget-chunked by the sweep state).
-pub(crate) fn finalize_collected_dead_regexp(addr: usize) {
-    unsafe { regex_header_finalize_for_gc(addr as *mut RegExpHeader) };
-}
-
-unsafe fn registered_regexp_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return false;
-    };
-    if header.obj_type != crate::gc::GC_TYPE_REGEXP {
-        return false;
-    }
-    let flags = header.gc_flags;
-    if flags
-        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
-        != 0
-    {
-        return false;
-    }
-    if full_trace {
-        return true;
-    }
-    if flags & crate::gc::GC_FLAG_TENURED != 0 {
-        return false;
-    }
-    matches!(
-        crate::arena::classify_heap_generation(addr),
-        crate::arena::HeapGeneration::Nursery
-    )
+    regex_header_has_magic(ptr as *const RegExpHeader)
 }
 
 /// Test support: construct a RegExp through the PRODUCTION path
@@ -347,26 +186,10 @@ pub(crate) fn test_regexp_program_address(re: *const RegExpHeader) -> usize {
     unsafe { (*re).perex_program as usize }
 }
 
-#[cfg(test)]
-pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
-    REGEX_SOURCE_TABLE.with(|table| {
-        table
-            .borrow()
-            .get(&addr)
-            .is_some_and(|entry| entry.registered_owner)
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn test_regex_source_entry_exists(addr: usize) -> bool {
-    REGEX_SOURCE_TABLE.with(|table| table.borrow().contains_key(&addr))
-}
-
 /// Build a minimal nursery-resident RegExp payload for the copying collector's
-/// relocation contract test. Production construction currently chooses the
-/// malloc-backed arm of `ArenaOrMalloc`; this exercises the same registered GC
-/// type through its arena arm so future allocator routing cannot silently
-/// strand the address-owned tables.
+/// relocation contract tests, without compiling a program. Identity is the
+/// header's own `GC_TYPE_REGEXP` kind plus [`REGEXP_MAGIC`], exactly as for a
+/// production header, so nothing beyond the allocation needs registering.
 #[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *mut RegExpHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -394,16 +217,6 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         (*ptr).has_indices = flags.contains('d');
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
         (*ptr).magic = REGEXP_MAGIC;
-
-        REGEX_EVER_REGISTERED.arm();
-        REGEX_SOURCE_TABLE.with(|table| {
-            table.borrow_mut().insert(
-                ptr as usize,
-                RegexMetadata {
-                    registered_owner: true,
-                },
-            );
-        });
         ptr
     }
 }
@@ -581,8 +394,8 @@ pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
 }
 
 /// Check if a RegExpHeader pointer is legitimate — it must point to a
-/// header we allocated via `js_regexp_new` (recorded as a registered owner).
-/// The LLVM backend's `new RegExp(pat, flags)` currently falls through
+/// header we allocated via `js_regexp_new` (a `GC_TYPE_REGEXP` cell carrying
+/// [`REGEXP_MAGIC`]). The LLVM backend's `new RegExp(pat, flags)` currently falls through
 /// to the generic `lower_new` path which allocates an empty object and
 /// NaN-boxes it as a regex; subsequent `.exec()` / `.test()` calls would
 /// read garbage from that object if we didn't gate them on this check.
@@ -590,14 +403,7 @@ pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
 pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
     #[cfg(test)]
     REGEX_PTR_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if !is_valid_ptr(p) {
-        return false;
-    }
-    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
-    if regex_header_has_magic(p) {
-        return true;
-    }
-    regex_pointers_contains(p as usize)
+    is_valid_ptr(p) && regex_header_has_magic(p)
 }
 
 #[cfg(test)]
@@ -614,14 +420,10 @@ pub(crate) fn test_regex_ptr_validation_calls() -> u64 {
 /// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
 /// Used by the console/`util.inspect` formatter to print regex literals
 /// as `/source/flags` instead of `{}` (they're GC_TYPE_REGEXP allocations
-/// with no enumerable string keys). Registry-gated so a generic object
-/// is never mis-read as a RegExpHeader.
+/// with no enumerable string keys). Header-gated (GC kind + size + magic) so a
+/// generic object is never mis-read as a RegExpHeader.
 pub fn is_registered_regex(addr: usize) -> bool {
-    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
-    if regex_header_has_magic(addr as *const RegExpHeader) {
-        return true;
-    }
-    regex_pointers_contains(addr)
+    regex_header_has_magic(addr as *const RegExpHeader)
 }
 
 /// Internal helper: Get string data from StringHeader

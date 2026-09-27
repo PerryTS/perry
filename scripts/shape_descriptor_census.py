@@ -941,15 +941,19 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if not regexp_info_match:
         raise CensusError("shape descriptor authority surface missing: RegExp type metadata")
     regexp_info = regexp_info_match.group(0)
+    # #11503: a RegExp's only address-keyed state is its exotic expando entry,
+    # rekeyed by the shared expando-owner move hook and dropped on death by the
+    # dead-owner fan-out. Identity is the GcHeader kind plus header magic, so no
+    # RegExp-specific registry may be reintroduced behind a bespoke hook.
     require_code(
         regexp_info,
-        r"GcMoveHookKind::RegExpSideTables",
-        "RegExp address-owned relocation hook",
+        r"GcMoveHookKind::ExoticExpandoOwner",
+        "RegExp expando-owner relocation hook",
     )
     require_code(
         regexp_info,
-        r"GcFinalizeHookKind::RegExpSideTables",
-        "RegExp malloc-finalize side-table hook",
+        r"GcFinalizeHookKind::None",
+        "RegExp needs no per-object finalize hook",
     )
     if "OBJ_FLAG_CLASS_OBJECT" in gc_types + class_guard + element_guard + write_pics:
         raise CensusError("class kind reintroduced a GcHeader layout-bit alias")

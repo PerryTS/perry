@@ -1522,17 +1522,12 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
                 crate::server::turnloop_serve::finish_body(conn, seq, &trailers);
                 return;
             }
+            let auto_content_length = sr.ensure_content_length();
             let body = std::mem::take(&mut sr.buffered_body);
             // `snapshot_headers` expands array-valued headers (e.g.
             // Set-Cookie) into one entry per element so they emit a separate
             // wire line each (#4826).
-            let mut headers = sr.snapshot_headers();
-            let auto_content_length = !sr.headers.contains_key("content-length")
-                && !sr.headers.contains_key("transfer-encoding")
-                && sr.trailers.is_empty();
-            if auto_content_length {
-                headers.push(("Content-Length".to_string(), body.len().to_string()));
-            }
+            let headers = sr.snapshot_headers();
             let shape = ResponseShape {
                 status: sr.status_code,
                 status_message: sr.status_message.clone(),

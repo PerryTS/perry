@@ -62,7 +62,7 @@ use import_helpers::{
 };
 use import_meta_require::rewrite_import_meta_require_addons;
 use json_module::synthesize_json_module;
-pub(super) use native_addon::package_has_unsupported_node_addon;
+pub(super) use native_addon::{collect_declared_addons, package_has_unsupported_node_addon};
 use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires_with_bunfs;

@@ -5,7 +5,7 @@
 //! well-known Symbol hooks, Object.groupBy, JSX runtime adapter.
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_core(module: &mut LlModule) {
     // ========== Date ==========
@@ -79,11 +79,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_number_is_finite", DOUBLE, &[DOUBLE]);
 
     // ========== JSON ==========
-    module.declare_function("js_json_get_bool", DOUBLE, &[I64, I64]);
+    module.declare_function("js_json_get_bool", I1, &[I64, I64]);
     module.declare_function("js_json_get_number", DOUBLE, &[I64, I64]);
     module.declare_function("js_json_get_string", I64, &[I64, I64]);
     module.declare_function("js_json_is_valid", DOUBLE, &[I64]);
-    module.declare_function("js_json_stringify_bool", I64, &[DOUBLE]);
+    module.declare_function("js_json_stringify_bool", I64, &[I1]);
     module.declare_function("js_json_stringify_null", I64, &[]);
     module.declare_function("js_json_stringify_number", I64, &[DOUBLE]);
     module.declare_function("js_json_stringify_string", I64, &[I64]);

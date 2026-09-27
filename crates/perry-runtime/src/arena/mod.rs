@@ -25,6 +25,8 @@ mod promote;
 mod quarantine;
 mod reset;
 mod stats;
+/// #11471: thread-exit release of process-global address-keyed tables.
+pub mod thread_exit;
 mod walk;
 pub(crate) use map_allocations::walk_map_allocations;
 
@@ -104,10 +106,12 @@ pub use walk::{
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
-    general_block_sizes, old_arena_walk_all_headers_filtered, young_allocation_census,
+    general_block_sizes, old_arena_walk_all_headers_listing_holes, young_allocation_census,
     young_block_count, ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder,
     ArenaTelemetrySnapshot, ArenaWalkOrder,
 };
+#[cfg(test)]
+pub(crate) use walk::{old_arena_block_for_test, old_arena_note_listed_hole_for_test};
 
 // reset.rs
 pub(crate) use reset::{

@@ -139,7 +139,7 @@ const DARWIN_FRAME: Frame = Frame {
     fp_to_sp: 96,
 };
 
-/// The index the walkers get, built from a real v5 blob rather than from
+/// The index the walkers get, built from a real v6 blob rather than from
 /// hand-made records.
 ///
 /// This used to construct `StackMapIndex` directly from a `StackMapRecord`.
@@ -151,14 +151,26 @@ const DARWIN_FRAME: Frame = Frame {
 fn index_for(frame: Frame, return_address: usize, offset: i32) -> StackMapIndex {
     let instruction_offset = u32::try_from(return_address - frame.function_address)
         .expect("the probe's return address is inside its own function");
-    let blob = super::lazy::test_blob(
-        frame.function_address as u64,
-        frame.stack_size as u32,
-        &[(instruction_offset, vec![(DWARF_REG_SP_AARCH64, offset)])],
+    // v6 function fields are offsets from the section's mapped address. The
+    // probe is real code and the blob lives on the heap, possibly further
+    // apart than an i32 reaches, so the blob is told it is mapped at the probe
+    // itself — the offset is 0 and the decoded address is the probe's.
+    let origin = frame.function_address;
+    let blob = super::lazy::test_blob_multi_at(
+        origin as u64,
+        &[(
+            frame.function_address as u64,
+            frame.stack_size as u32,
+            vec![(instruction_offset, vec![(DWARF_REG_SP_AARCH64, offset)])],
+        )],
     );
     // Leaked on purpose: the index holds `&'static` section slices because the
     // real sections are parts of loaded images, which outlive every collection.
-    super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())])
+    super::build_index_from_sections(
+        vec![Box::leak(blob.into_boxed_slice())],
+        &[origin],
+        super::IndexMode::Lazy,
+    )
 }
 
 /// One resolved slot, sampled WHILE THE PROBE FRAME IS STILL LIVE.

@@ -178,11 +178,46 @@ fn module_wrapper_registry_used() -> &'static std::sync::atomic::AtomicBool {
     &USED
 }
 
+/// #11471: thread-exit release for both wrapper registries. The move/death
+/// hooks keep entries aligned with evacuation and GC death, but `Arena::drop`
+/// runs neither, so an exiting thread's wrapper addresses would stay branded
+/// and a fresh object at a reused address would read as a genuine wrapper
+/// carrying the dead thread's host handle. Host handles are process-global
+/// engine objects, so they are dropped from the map, not freed here (the same
+/// as the death hook). Runs from a TLS destructor: process-global locks, one
+/// at a time, no thread-locals, no GC. Only the wasm-host inserters (and
+/// tests) register it; without them the registries stay empty.
+#[cfg(any(test, feature = "wasm-host"))]
+fn release_wasm_wrapper_registries_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    if !module_wrapper_registry_used().load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    module_wrappers()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|&wrapper, _| !freed.contains(wrapper));
+    extern_wrappers()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|&wrapper, _| !freed.contains(wrapper));
+}
+
+#[cfg(any(test, feature = "wasm-host"))]
+fn register_thread_exit_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_wasm_wrapper_registries_in_freed_ranges,
+        )
+    });
+}
+
 /// Bind a genuine wrapper object identity to its private host module handle.
 /// Public `__wasm*` properties are compatibility data, never the brand.
 #[cfg(any(test, feature = "wasm-host"))]
 pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
     if wrapper != 0 && host_handle != 0 {
+        register_thread_exit_hook();
         if let Ok(mut wrappers) = module_wrappers().lock() {
             wrappers.insert(wrapper, host_handle);
             module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);
@@ -198,6 +233,7 @@ pub(crate) fn register_module_wrapper(wrapper: usize, host_handle: usize) {
 #[cfg(feature = "wasm-host")]
 pub(crate) fn register_extern_wrapper(wrapper: usize, kind: &'static [u8], host_handle: usize) {
     if wrapper != 0 && host_handle != 0 {
+        register_thread_exit_hook();
         if let Ok(mut wrappers) = extern_wrappers().lock() {
             wrappers.insert(wrapper, (kind, host_handle));
             module_wrapper_registry_used().store(true, std::sync::atomic::Ordering::Release);

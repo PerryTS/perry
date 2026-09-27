@@ -31,16 +31,14 @@ struct JmpBuf {
 }
 
 impl JmpBuf {
-    const fn new() -> Self {
-        JmpBuf {
-            data: [0; JMP_BUF_SIZE],
-        }
-    }
-
     fn as_mut_ptr(&mut self) -> *mut i32 {
         self.data.as_mut_ptr()
     }
 }
+
+// SAFETY: plain `i32`s, and a slot is armed by
+// `setjmp` before it is ever jumped through.
+unsafe impl crate::zeroed_cache::ZeroEmpty for JmpBuf {}
 
 mod savepoints;
 use savepoints::CatchSavepoint;
@@ -95,7 +93,8 @@ impl ExceptionState {
         Self {
             // Build the fixed slabs directly on the heap, without large TLS
             // initializers or native-stack temporaries (arm64_32).
-            jump_buffers: vec![JmpBuf::new(); MAX_TRY_DEPTH].into_boxed_slice(),
+            // Zeroed (#11507): 256 KiB that a slot's `setjmp` arms before use.
+            jump_buffers: crate::zeroed_cache::new_zeroed_cache(MAX_TRY_DEPTH),
             handler_kinds: vec![HandlerKind::Setjmp; MAX_TRY_DEPTH].into_boxed_slice(),
             // Each push writes a complete snapshot before incrementing try_depth.
             // Inactive slots are never read or scanned. Avoid touching every
@@ -731,6 +730,22 @@ mod tests {
         js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_set, shadow_stack_depth,
         RuntimeHandleScope,
     };
+
+    /// #11507: the jump-buffer slab is zero-allocated rather than filled.
+    #[test]
+    fn fresh_thread_jump_buffers_start_zeroed() {
+        std::thread::spawn(|| {
+            with_exception_state(|state| {
+                let state = unsafe { &*state };
+                assert_eq!(state.jump_buffers.len(), MAX_TRY_DEPTH);
+                for buf in state.jump_buffers.iter() {
+                    assert!(buf.data.iter().all(|&word| word == 0));
+                }
+            });
+        })
+        .join()
+        .unwrap();
+    }
 
     // Issue #1830: js_try_push must capture a shadow-stack savepoint, and the
     // unwind path (js_throw, here replayed without the longjmp) must restore

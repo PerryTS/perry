@@ -3,6 +3,7 @@
 use perry_runtime::{string::str_bytes_from_jsvalue, value::JSValue, StringHeader};
 
 pub mod handle;
+mod handle_lifecycle;
 pub(crate) mod thread_config;
 // The promise bridge — the main-thread settle queue and pump, and the only
 // async bridge perry-stdlib has (tokio was removed from the workspace).

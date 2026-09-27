@@ -306,6 +306,7 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
     }
     if let Some(request) = REQUEST_REGISTRY.lock().unwrap().get(&id) {
         edges.push(request.signal.to_bits());
+        edges.extend(request.body_error.map(f64::to_bits));
         if let Some(headers) = request.cached_headers_id {
             edges.push(handle_to_f64(headers).to_bits());
         }

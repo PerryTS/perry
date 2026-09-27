@@ -548,6 +548,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             signal,
             redirect,
         } => {
+            // Drop BodyInit state a throwing operand could leave behind.
+            ctx.block().call(DOUBLE, "js_response_body_init_reset", &[]);
             // Lower `init.signal` / `init.redirect` (when present) with the
             // other operands so they can be stashed for
             // `js_fetch_with_options` right before the call below.
@@ -655,7 +657,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // place it can be correct (slice 1b's `BufferSlice` finding).
                     let url_handle = blk.call(I64, "js_fetch_input_ptr", &[(DOUBLE, &vals[0])]);
                     let method_handle = unbox_to_i64(blk, &vals[1]);
-                    let body_handle = unbox_to_i64(blk, &vals[2]);
+                    // The shared BodyInit classifier: a stream or async-iterable
+                    // body is handed to `js_fetch_with_options` out of band.
+                    let body_handle =
+                        blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &vals[2])]);
                     // Stash the AbortSignal so `js_fetch_with_options` can cancel
                     // the request when it aborts (`controller.abort()` /
                     // `AbortSignal.timeout`).

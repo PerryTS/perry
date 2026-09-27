@@ -29,6 +29,7 @@ mod imported_object;
 mod map_set;
 mod number_string;
 pub(crate) mod own_override_guard;
+pub(crate) mod patched_proto;
 mod promise_chain;
 mod static_dispatch;
 
@@ -139,6 +140,11 @@ pub fn try_lower_property_get_method_call(
     // `js_set_call_location` from this captured value, immediately before the
     // throwing dispatch. `0` (and the default build) → no emission.
     let call_byte_offset = ctx.strings.pending_call_offset();
+    // #11394: a method the program writes onto a builtin prototype must be
+    // looked up before ANY arm below binds the call to a native builtin.
+    if patched_proto::guards(ctx, object, property) {
+        return patched_proto::lower(ctx, object, property, args, call_byte_offset).map(Some);
+    }
     // #10943: an own property BEATS a builtin, and proving the receiver's KIND
     // proves nothing about that. The chain below is ORDERED, and every proven
     // receiver is claimed by an arm above the only one that can branch at

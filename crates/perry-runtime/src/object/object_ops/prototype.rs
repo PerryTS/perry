@@ -1,4 +1,5 @@
 //! `Object.create`, `Object.getPrototypeOf`, and the globalThis-builtin lookup.
+use super::super::native_module::native_module_namespace_default_prototype as namespace_default_prototype;
 use super::*;
 
 /// Look up the canonical NaN-boxed value of a built-in constructor /
@@ -82,7 +83,17 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
-    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    let born = js_object_alloc(0, 0);
+    // `OrdinaryObjectCreate(proto)`: the result is an ORDINARY object, and its
+    // [[Prototype]] becomes a fact of its shape in the link below (#11342).
+    // So it is born ordinary like every other ordinary birth site
+    // (`mark_object_plain_ordinary`): the store sites' receiver-kind test then
+    // admits it on its ShapeId alone, exactly as it admits a literal or a
+    // class instance. Unmarked, a class-less receiver fails that test on every
+    // store and takes the full `[[Set]]` walk (#11166 moved Object.create off
+    // its synthetic class id, which had been admitting it).
+    unsafe { crate::object::mark_object_plain_ordinary(born) };
+    let obj = scope.root_raw_mut_ptr(born);
     // The link is a self-rooting entry point: it roots the owner and the
     // prototype before its meta-record allocation, so the handle is re-read
     // afterwards for the post-collection address.
@@ -696,11 +707,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // memory growth, no `✓ Ready`). Return Object.prototype so the
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
-                    let proto = crate::object::builtin_prototype_value("Object");
-                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                        return proto;
-                    }
-                    return f64::from_bits(TAG_NULL);
+                    return namespace_default_prototype();
                 }
             }
             return obj_value;
@@ -832,11 +839,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // memory growth, no `✓ Ready`). Return Object.prototype so the
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
-                    let proto = crate::object::builtin_prototype_value("Object");
-                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                        return proto;
-                    }
-                    return f64::from_bits(TAG_NULL);
+                    return namespace_default_prototype();
                 }
             }
         }

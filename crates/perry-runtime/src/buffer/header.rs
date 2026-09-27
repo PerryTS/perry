@@ -64,6 +64,34 @@ pub fn is_external_buffer(addr: usize) -> bool {
             .unwrap_or(false)
 }
 
+/// Test probe (#11547): is `addr` in each of the three PROCESS-GLOBAL
+/// external registries (`EXTERNAL_BUFFER_REGISTRY`,
+/// `EXTERNAL_UINT8ARRAY_REGISTRY`, `EXTERNAL_CRYPTO_KEY_META_REGISTRY`)?
+///
+/// Unlike `is_uint8array_buffer` / `crypto_key_meta`, which consult this
+/// thread's registries first, it touches no thread-local, so a thread-exit
+/// range hook may call it from a TLS destructor. Plain locks, no allocation.
+#[doc(hidden)]
+pub fn external_registries_hold_for_test(addr: usize) -> [bool; 3] {
+    use std::sync::PoisonError;
+    let in_set = |set: &OnceLock<Mutex<HashSet<usize>>>| {
+        set.get().is_some_and(|s| {
+            s.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&addr)
+        })
+    };
+    [
+        in_set(&EXTERNAL_BUFFER_REGISTRY),
+        in_set(&EXTERNAL_UINT8ARRAY_REGISTRY),
+        EXTERNAL_CRYPTO_KEY_META_REGISTRY.get().is_some_and(|m| {
+            m.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&addr)
+        }),
+    ]
+}
+
 fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
     crate::once_init::get_or_init(&EXTERNAL_UINT8ARRAY_REGISTRY, || Mutex::new(HashSet::new()))
 }
@@ -662,8 +690,61 @@ pub fn mark_as_uint8array(addr: usize) {
     });
 }
 
+/// #11471: thread-exit release for the process-global external-buffer
+/// registries and the `PERRY_U8_INLINE_CACHE` admission cache.
+///
+/// Their only removal sites are the dead-buffer finalizer and
+/// `register_buffer` on a re-issued address; `Arena::drop` runs neither, so a
+/// webcrypto buffer registered on an exiting thread would keep answering
+/// `is_registered_buffer` / `is_uint8array_buffer` / `crypto_key_meta` for
+/// whatever another thread later allocates at that address, and a stale cache
+/// slot would let codegen's inline guard read the new tenant's words as
+/// (length, bytes). Runs from a TLS destructor: process-global locks taken
+/// one at a time, atomics, no thread-locals, no GC. The thread-local
+/// registries die with the thread. perry-stdlib's `CRYPTO_KEY_REGISTRY`
+/// carries its own hook, so `notify_crypto_key_death` is not called here.
+fn release_external_buffer_registries_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    use std::sync::atomic::Ordering;
+    use std::sync::PoisonError;
+    for slot in PERRY_U8_INLINE_CACHE.iter() {
+        let old = slot.load(Ordering::Relaxed);
+        if old != 0 && freed.contains(old as usize) {
+            let _ = slot.compare_exchange(old, 0, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+    if let Some(set) = EXTERNAL_BUFFER_REGISTRY.get() {
+        set.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|&addr| !freed.contains(addr));
+    }
+    if let Some(set) = EXTERNAL_UINT8ARRAY_REGISTRY.get() {
+        set.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|&addr| !freed.contains(addr));
+    }
+    if let Some(map) = EXTERNAL_CRYPTO_KEY_META_REGISTRY.get() {
+        map.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|&addr, _| !freed.contains(addr));
+    }
+}
+
+/// Register [`release_external_buffer_registries_in_freed_ranges`] before the
+/// first insert into any table it clears.
+fn register_thread_exit_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_external_buffer_registries_in_freed_ranges,
+        )
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn js_buffer_register_external(addr: usize) {
+    register_thread_exit_hook();
     register_buffer(addr as *const BufferHeader);
     // Latch BEFORE the insert: a concurrent `is_registered_buffer` that
     // observed the latch after the insert-but-before-the-store window would
@@ -699,6 +780,7 @@ pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
 /// precisely so an address registered on one thread is visible from another,
 /// and the thread-local set that would otherwise cover it is not.
 fn register_external_uint8array(addr: usize) {
+    register_thread_exit_hook();
     // Both of this function's callers also call `mark_as_uint8array(addr)`,
     // which admits the same address — but that is an enumeration of callers,
     // and this is the funnel the doc comment above promises is authoritative.
@@ -765,6 +847,7 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     usages: u32,
     bit_length: u32,
 ) {
+    register_thread_exit_hook();
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
     mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages, bit_length);
@@ -829,7 +912,8 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
     }
 }
 
-/// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
+/// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec (P-256), 3 ed25519,
+/// 4 x25519, 5 ec (P-384), 6 ec (P-521).
 pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
     ASYMMETRIC_KEY_EVER_MARKED.arm();
     ASYMMETRIC_KEY_REGISTRY.with(|r| {
@@ -901,6 +985,7 @@ pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
         && foreign_backing(addr).is_none()
         && super::view::lookup(addr).is_none()
     {
+        register_thread_exit_hook();
         PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)]
             .store(addr as u64, std::sync::atomic::Ordering::Relaxed);
     }

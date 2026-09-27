@@ -187,6 +187,83 @@ pub(crate) fn scan_hook_slot_roots_mut_step(
     state.index >= slots.len()
 }
 
+/// Thread-exit release (#11471): reset every hook-slot edge that lies in the
+/// exiting thread's freed arena blocks. Slots are addressed by hook index, so
+/// they are cleared in place: a `State`/`Ref` value becomes `undefined`, a
+/// `Memo` is marked uncomputed (it recomputes on the next render), a `Ref`
+/// handle object is forgotten (the next `useRef` at that index mints a new
+/// one), and an `Effect` cleanup pointer is zeroed. Nothing in `perry/tui`
+/// restricts setters / `ref.current =` to the render thread, and a slot left
+/// holding a recycled address would be rewritten by the root scanner and read
+/// back by the next render as a different object.
+///
+/// Runs in the exiting thread's TLS destructor: a plain poison-tolerant lock
+/// (not `lock_gc_root_registry`, which touches a thread-local), and
+/// `STATE_DIRTY` is deliberately left alone.
+pub(crate) fn release_tui_hook_slots_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut slots = SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for slot in slots.iter_mut() {
+        match slot {
+            HookSlot::State { value_bits } => {
+                if freed.holds_bits(*value_bits) {
+                    *value_bits = TAG_UNDEFINED;
+                }
+            }
+            HookSlot::Memo {
+                value_bits,
+                computed,
+                last_deps_hash: _,
+            } => {
+                if freed.holds_bits(*value_bits) {
+                    *value_bits = TAG_UNDEFINED;
+                    *computed = false;
+                }
+            }
+            HookSlot::Ref {
+                value_bits,
+                handle_bits,
+            } => {
+                if freed.holds_bits(*value_bits) {
+                    *value_bits = TAG_UNDEFINED;
+                }
+                if freed.holds_bits(*handle_bits) {
+                    *handle_bits = 0;
+                }
+            }
+            HookSlot::Effect { cleanup, .. } => {
+                if freed.holds_i64(*cleanup) {
+                    *cleanup = 0;
+                }
+            }
+            HookSlot::Focus { .. } => {}
+        }
+    }
+}
+
+/// Test probe (#11471): does any hook slot hold exactly `bits` as a value or
+/// handle?
+#[doc(hidden)]
+pub fn tui_hook_slots_hold_bits_for_test(bits: u64) -> bool {
+    SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|slot| match slot {
+            HookSlot::State { value_bits } | HookSlot::Memo { value_bits, .. } => {
+                *value_bits == bits
+            }
+            HookSlot::Ref {
+                value_bits,
+                handle_bits,
+            } => *value_bits == bits || *handle_bits == bits,
+            HookSlot::Effect { .. } | HookSlot::Focus { .. } => false,
+        })
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_hook_slot_roots(value_bits: u64) {
     let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);

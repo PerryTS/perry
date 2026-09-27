@@ -55,6 +55,12 @@ Within the **pr** tier the changed-file list narrows the plan further:
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,
   …) → additionally the `security-audit` reusable workflow.
 
+Within `cargo-test`, runtime changes also select `perry-stdlib` unit tests:
+those tests exercise runtime GC, arenas, closures, promises and the event loop.
+The `perry-ext-*` crates remain excluded from dependency fan-out unless directly
+changed. `scripts/ci_test_scope.py` owns this policy, with regression tests in
+`lint`.
+
 `e2e-scoped` runs integration suites selected by the diff, but its
 `SUITE_EXCLUSIONS` check is deliberately not scoped: whenever that list is
 nonempty, every core PR reruns each excluded exact test and fails if it no

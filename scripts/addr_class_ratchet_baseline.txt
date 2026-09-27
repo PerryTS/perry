@@ -121,9 +121,9 @@ handle-floor | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 6
 handle-floor | crates/perry-runtime/src/object/field_set_by_name/write_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/ctor_thunks.rs | 1
-handle-floor | crates/perry-runtime/src/object/global_this/typed_array.rs | 4
+handle-floor | crates/perry-runtime/src/object/global_this/typed_array.rs | 3
 handle-floor | crates/perry-runtime/src/object/instanceof.rs | 2
-handle-floor | crates/perry-runtime/src/object/instanceof/static_dispatch.rs | 4
+handle-floor | crates/perry-runtime/src/object/instanceof/static_dispatch.rs | 3
 handle-floor | crates/perry-runtime/src/object/mod.rs | 1
 handle-floor | crates/perry-runtime/src/object/native_call_method.rs | 3
 handle-floor | crates/perry-runtime/src/object/native_call_method/collection_methods.rs | 2
@@ -246,11 +246,11 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/has_own.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/object_ops/keys_array.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/polymorphic_index.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/prototype_chain.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/object/util_types.rs | 4
+lone-valid-obj-ptr | crates/perry-runtime/src/object/util_types.rs | 3
 lone-valid-obj-ptr | crates/perry-runtime/src/process/env_misc.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/proxy.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/symbol/get.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/symbol/properties.rs | 3
+lone-valid-obj-ptr | crates/perry-runtime/src/symbol/properties.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/typed_feedback.rs | 6
 lone-valid-obj-ptr | crates/perry-runtime/src/typedarray/access.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/url/url_class.rs | 1

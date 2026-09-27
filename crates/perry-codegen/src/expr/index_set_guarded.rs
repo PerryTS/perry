@@ -393,8 +393,13 @@ mod tests {
         .unwrap()
     }
 
+    // Since the unresolved Worker continues in a predecessor-less block
+    // (#11450, dyn_extern_i18n.rs), the store after it is emitted as dead
+    // code rather than skipped; the `is_terminated` guards above stay as the
+    // defense for any other operand that ends its block. Either way the
+    // emitted module must parse and verify.
     #[test]
-    fn throwing_operand_does_not_create_guarded_store_blocks() {
+    fn throwing_operand_store_emits_valid_ir() {
         for (ty, block) in [
             (Type::Array(Box::new(Type::Any)), "idxset.recv_global.deref"),
             (Type::Any, "tav.set.fast"),
@@ -412,7 +417,12 @@ mod tests {
                 ty,
             );
             assert!(dead.contains("call void @js_throw_error_with_code("));
-            assert!(!dead.contains(block), "store emitted after throw:\n{dead}");
+            let llvm = inkwell::context::Context::create();
+            let parsed = crate::inprocess::parse_ir_text(&llvm, &dead, block)
+                .unwrap_or_else(|e| panic!("{block}: {e:#}\n{dead}"));
+            parsed
+                .verify()
+                .unwrap_or_else(|e| panic!("{block}: LLVM verifier: {}\n{dead}", e.to_string()));
         }
     }
 }

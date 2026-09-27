@@ -410,6 +410,13 @@ pub(crate) unsafe fn request_create_connection_from_options(options_f64: f64) ->
     read_closure_field(options_f64, "createConnection")
 }
 
+/// `options.agent === false`: Node's "a fresh socket for this request, closed
+/// when it ends" — `new Agent()` with its default `keepAlive: false`, so the
+/// request goes out with `Connection: close` (#11452).
+pub(crate) unsafe fn agent_is_false(options_f64: f64) -> bool {
+    read_field_bits(options_f64, "agent") == Some(0x7FFC_0000_0000_0003)
+}
+
 /// Extract an `options.agent` handle from `options_f64`. Returns `None`
 /// when the field is missing, not a pointer, or doesn't resolve to an
 /// AgentHandle.

@@ -338,6 +338,14 @@ thread_local! {
 /// GC between `.on(...)` and the next `.emit(...)` would sweep the
 /// closure — same root cause as issue #35 for net.Socket listeners.
 fn ensure_gc_scanner_registered() {
+    // #11471: `HANDLES` is process-global; drop an emitter whose listeners /
+    // pending promises live in an exiting thread's arena.
+    static REGISTER_RELEASER: std::sync::Once = std::sync::Once::new();
+    REGISTER_RELEASER.call_once(|| {
+        crate::common::handle::register_handle_payload_releaser::<EventEmitterHandle>(
+            release_emitter_in_freed_ranges,
+        )
+    });
     EVENTS_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -348,6 +356,25 @@ fn ensure_gc_scanner_registered() {
         );
         registered.set(true);
     });
+}
+
+/// `HANDLES` payload releaser (#11471): an emitter holding any GC value in the
+/// exiting thread's arena was used only by that thread, so it is retired whole.
+fn release_emitter_in_freed_ranges(
+    emitter: &mut EventEmitterHandle,
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) -> bool {
+    emitter
+        .events
+        .values()
+        .flatten()
+        .any(|l| freed.holds_i64(l.callback) || freed.holds_i64(l.raw_wrapper))
+        || freed.holds_i64(emitter.async_resource_handle)
+        || emitter.pending_once_promises.values().flatten().any(|p| {
+            freed.contains(p.promise as usize)
+                || freed.holds_value(p.signal)
+                || freed.holds_i64(p.abort_listener)
+        })
 }
 
 /// GC root scanner for EventEmitter listener closures and pending

@@ -534,7 +534,10 @@ NONCOLLECTING = {
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
-    "js_array_length",                               # array/indexing.rs:537
+    # #11522: the `.length` fast lane only. `js_array_length` itself is NOT
+    # here: its Proxy arm runs the `get` trap and its object arm runs getters
+    # and `valueOf`, so it can collect.
+    "js_array_length_leaf",                          # array/indexing.rs
     # #9480 dispatch probes. `js_object_get_class_id` is address checks,
     # Set/Map registry membership reads, validated GcHeader reads, and one
     # scalar load (object/field_get_set/field_ops.rs). The own-field helper

@@ -516,3 +516,44 @@ fn a_dictionary_receiver_never_publishes_a_store_site_word() {
         "a dictionary receiver must not publish"
     );
 }
+
+/// An `Object.create(proto)` receiver is an ORDINARY object whose prototype is
+/// a fact of its shape (#11342), so a store site publishes its shape exactly
+/// as it publishes a literal's or a JSON object's. #11166 moved Object.create
+/// off its synthetic class id onto `class_id == 0`; unmarked, the receiver
+/// failed the receiver-kind test on every store and took the full `[[Set]]`
+/// walk (the acceptance matrix's ocreate column went 293 -> 1,588 instr/op).
+#[test]
+fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
+    let proto = parsed(br#"{"pa":32}"#);
+    let target = crate::object::js_object_create(proto);
+    let obj = object_of(target);
+    assert_eq!(
+        unsafe { (*obj).class_id },
+        0,
+        "test premise: Object.create yields a class-less receiver"
+    );
+    let a = interned(b"a");
+    let b = interned(b"b");
+    // Both keys land in the birth-floor inline slots (the key-adds are what
+    // the fixture's `t.a = 1; t.b = 2` performs).
+    store_fresh(target, a, 1.0);
+    store_fresh(target, b, 2.0);
+    let (stored, word) = store_fresh(target, b, 5.0);
+    assert_eq!(stored, 5.0, "the miss performs the store");
+    assert_eq!(
+        word as u32,
+        stamp(target),
+        "an Object.create receiver must publish its ShapeId to the site word"
+    );
+    assert_eq!(word >> 32, 1, "high half: `b` is the second own slot");
+    // The emitted hit's per-object half admits it too, so the published
+    // word is actually served inline rather than missing on every store.
+    assert!(
+        unsafe { packed_hit_receiver_ok(obj) },
+        "the emitted hit's receiver-kind test must admit an Object.create receiver"
+    );
+    // Its prototype is still the one it was created with.
+    let got = crate::object::js_object_get_prototype_of(target);
+    assert_eq!(got.to_bits(), proto.to_bits());
+}

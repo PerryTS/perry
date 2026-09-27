@@ -42,6 +42,7 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).expando = 0;
     (*meta).elements = 0;
     (*meta).dictionary_keys = 0;
+    (*meta).arguments = 0;
     // GC_STORE_AUDIT(BARRIERED): header-slot store followed by an object-slot
     // barrier, exactly as `object_meta_ensure` does for an `ObjectHeader`.
     *slot = meta;
@@ -91,6 +92,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).expando = 0;
     (*meta).elements = 0;
     (*meta).dictionary_keys = 0;
+    (*meta).arguments = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;

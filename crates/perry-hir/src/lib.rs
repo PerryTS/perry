@@ -71,7 +71,7 @@ pub use lower::{
 pub use monomorph::monomorphize_module;
 pub use native_profile::exported_native_pod_abi;
 pub use patched_builtins::{
-    clear_patched_builtins, scan_module as scan_patched_builtins, set_patched_builtins,
-    PatchedBuiltins,
+    clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
+    set_patched_builtins, PatchedBuiltins,
 };
 pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTable};

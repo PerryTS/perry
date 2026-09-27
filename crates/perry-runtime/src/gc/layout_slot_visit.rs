@@ -465,6 +465,12 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // all three drive; `dictionary_keys_survive_a_moving_collection`
             // reddens if it is removed.
             visit(fixed_slot(&mut (*meta).dictionary_keys as *mut u64));
+            // #11506: a sloppy mapped `arguments` object's alias array (a
+            // NaN-boxed pointer; the unmapped states are scalars the slot
+            // visitor skips). Reachable ONLY through this record, like
+            // `dictionary_keys`; `arguments_mapping_survives_a_moving_collection`
+            // reddens if this visit is removed.
+            visit(fixed_slot(&mut (*meta).arguments as *mut u64));
             // A fresh class object stored as an instance's private evaluation
             // brand is a NaN-boxed child edge and moves with the meta record.
             visit(fixed_slot(

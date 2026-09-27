@@ -1,0 +1,4102 @@
+{
+ "_doc": "Thread-exit verdicts for process-global statics that can hold a heap address (#11471). Checked by scripts/thread_exit_address_globals.py; see its docstring for the verdicts.",
+ "type_verdicts": [
+  {
+   "type": "RealmAtomicI64",
+   "verdict": "per_thread",
+   "why": "The static is a handle to a crate::tls_hot::HotKey<AtomicI64>; every load/store resolves the calling thread's own slot (object/mod.rs), so no address is shared across threads."
+  },
+  {
+   "type": "RealmAtomicU64",
+   "verdict": "per_thread",
+   "why": "u64 twin of RealmAtomicI64: a handle to a per-thread HotKey<AtomicU64> slot, resolved on every access."
+  },
+  {
+   "type": "ImageTable",
+   "verdict": "no_heap_address",
+   "why": "Selects a table of the calling thread's class image (object/class_image.rs). The tables are keyed by codegen class ids and hold code addresses (func_ptr), counts, flags and Rust-owned strings; no GC heap address."
+  }
+ ],
+ "entries": [
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGNAL_ASYNC_IDS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Maps signal name String -> u64 async_id minted from async_hooks NEXT_ASYNC_ID (process-global per_test_global in production) and resolved in the process-global RESOURCES table; the SIGNALWRAP resource object itself is handed to async_hooks::init_resource, not stored here (signal.rs:765-785)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGHUP_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGHUP deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGHUP_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGHUP copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGINT_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGINT deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGINT_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGINT copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGQUIT_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGQUIT deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGQUIT_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGQUIT copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGUSR1_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGUSR1 deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGUSR1_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGUSR1 copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGUSR2_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGUSR2 deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGUSR2_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGUSR2 copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGABRT_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGABRT deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGABRT_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGABRT copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGBUS_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGBUS deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGBUS_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGBUS copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGPIPE_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGPIPE deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGPIPE_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGPIPE copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGTERM_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of undelivered SIGTERM deliveries, bumped by the sigaction handler / on_signal_completion and swapped to 0 by take_pending_process_signals; a plain counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "SIGTERM_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Listener count for SIGTERM copied from the (thread-local) PROCESS_EMITTER by set_process_signal_listener_count (signal.rs:737); an integer count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "PROCESS_SIGNAL_SLOTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Immutable table of ProcessSignalSlot {name, signum, &'static AtomicUsize/AtomicBool} referencing only other statics; addresses of statics."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "TURNLOOP_SIGNAL_IDS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Holds a per-agent turnloop subscription id, not an address; the owning agent (TURNLOOP_SIGNAL_OWNERS) is checked at agent retirement and the slot reset so the next listener installs on a live loop.",
+   "hook": "release_signal_subscriptions_of_agent"
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGINT_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows count of undelivered SIGINT console-control events, bumped from the console ctrl-handler thread and drained by take_pending_process_signals; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGINT_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows listener count for SIGINT, stored by set_process_signal_listener_count; an integer count."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGBREAK_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows count of undelivered SIGBREAK console-control events, bumped from the console ctrl-handler thread and drained by take_pending_process_signals; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGBREAK_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows listener count for SIGBREAK, stored by set_process_signal_listener_count; an integer count."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGHUP_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows count of undelivered SIGHUP console-control events, bumped from the console ctrl-handler thread and drained by take_pending_process_signals; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGHUP_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows listener count for SIGHUP, stored by set_process_signal_listener_count; an integer count."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGTERM_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows count of undelivered SIGTERM console-control events, bumped from the console ctrl-handler thread and drained by take_pending_process_signals; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGTERM_LISTENERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Windows listener count for SIGTERM, stored by set_process_signal_listener_count; an integer count."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "WIN_SIGNAL_SLOTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Immutable table of WinSignalSlot {name, ctrl_event, &'static AtomicUsize} referencing only other statics; addresses of statics."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_WORKER_DATA_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.workerData, stored by js_register_worker_threads_namespace_getters (native_module.rs:414-418); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_IS_MAIN_THREAD_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.isMainThread, stored by js_register_worker_threads_namespace_getters (native_module.rs:414-418); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_PARENT_PORT_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.parentPort, stored by js_register_worker_threads_namespace_getters (native_module.rs:414-418); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_THREAD_NAME_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.threadName, stored by js_register_worker_threads_namespace_getters (native_module.rs:414-418); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_RESOURCE_LIMITS_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.resourceLimits, stored by js_register_worker_threads_namespace_getters (native_module.rs:414-418); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "NATIVE_MODULE_VTABLE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Address of the static NATIVE_MODULE_VTABLE_IMPL, stored by install_native_module_vtable (native_module.rs:544); address of a static."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "MODULE_CJS_CONSTRUCTOR_HOOK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of module_constructor_identity_value, stored by arm_module_cjs_constructor_hook (native_module.rs:1093); function pointer."
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "NEXT_TLS_HANDLE_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic i64 counter (starting 0x70000) minting TLS server/socket handle ids for the process-global TLS_* tables; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "TLS_SERVERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Server records hold the creating thread's raw SNICallback/ALPNCallback closure addresses; a record with a freed callback is dropped whole at thread exit after releasing its keep-alive count.",
+   "hook": "release_tls_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "TLS_SOCKETS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Handle id -> TlsSocketState, whose fields are Rust-owned (bools, Strings, Vec<u8> certs, SocketAddr) plus server_handle, an id from the process-global NEXT_TLS_HANDLE_ID; no heap addresses."
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "TLS_LISTENERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Per-handle, per-event lists of raw listener closure addresses from whichever thread called .on()/.once(); freed addresses are removed at thread exit.",
+   "hook": "release_tls_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "TLS_ONCE_FLAGS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Sets of raw once-listener closure addresses matched by address; freed addresses are removed and empty maps pruned at thread exit.",
+   "hook": "release_tls_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls.rs",
+   "names": [
+    "TLS_PENDING_EVENTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of PendingTlsEvent variants carrying only handle ids (i64 from NEXT_TLS_HANDLE_ID), Vec<u8> data and Strings; no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "function_name_registry: compiled function code address (func_ptr) -> &'static name bytes in the image, written only by js_register_function_name_static from codegen module init; keys are code addresses. | (second declaration) function_source_registry (fn_metadata.rs:343): func_ptr code address -> &'static source bytes in the image, written by js_register_function_source_static from codegen module init."
+  },
+  {
+   "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",
+   "names": [
+    "OVERRIDES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "function_name_overrides: func_ptr -> Arc<[u8]> owned name, written by js_register_function_name / register_function_name_if_absent; all callers key by ClosureHeader.func_ptr or thunk addresses (symbol/properties.rs:278, keys_array.rs:692, util_promisify.rs:168, populate.rs:658) — code addresses, not the closure. | (second declaration) function_source_overrides (fn_metadata.rs:358): func_ptr code address -> Arc<[u8]> copied source + non-strict flag, written by js_register_function_source; keys are code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls_hot.rs",
+   "names": [
+    "HOT"
+   ],
+   "verdict": "per_thread",
+   "why": "Android-only tls_os_pool::LocalKey<UnsafeCell<HotTls>>; the static is a key and each thread resolves its own HotTls cache via the pthread-key pool."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls_hot.rs",
+   "names": [
+    "PERRY_HOT_TSD_KEY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "pthread TSD key number under which each thread publishes its own HotTls address, written only by ensure_key/disable; an OS key id."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls_hot.rs",
+   "names": [
+    "STORAGE"
+   ],
+   "verdict": "per_thread",
+   "why": "Android arm of __perry_thread_local_storage! (const form): a tls_os_pool::LocalKey, storage resolves per thread (thread_local! on other targets). | (second declaration) Android arm of __perry_thread_local_storage! (expr form): a tls_os_pool::LocalKey, storage resolves per thread (thread_local! on other targets)."
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/alloc.rs",
+   "names": [
+    "CLOSURE_ALLOC_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter bumped via promise::bump on each closure allocation (alloc.rs:437,555), read by promise/mod.rs:281 stats."
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/alloc.rs",
+   "names": [
+    "CLOSURE_CAP_SINGLETON_HIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of singleton-closure cache hits (alloc.rs:814)."
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/alloc.rs",
+   "names": [
+    "CLOSURE_CAP_SINGLETON_MISS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of singleton-closure cache misses (alloc.rs:782,822)."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/attr_census.rs",
+   "names": [
+    "SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "PERRY_ATTR_DIAG output sink resolved once from the environment (hot_diag::sink_from_env); Rust-owned config."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/attr_census.rs",
+   "names": [
+    "TABLE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Census counts keyed by (&'static event name, &'static caller file, line) from #[track_caller]; static strings and counters."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/attr_census.rs",
+   "names": [
+    "KINDS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Census counts keyed by (&'static event, &'static owner-kind name); owner address is only classified, never stored."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump.rs",
+   "names": [
+    "WAKE_CALLBACK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the host's wake callback set by perry_set_wake_callback (e.g. perry-ui-windows app.rs:790 post_runtime_wake); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump.rs",
+   "names": [
+    "WAKE_CONTEXT"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Opaque host-owned context pointer passed to perry_set_wake_callback (perry-ui-windows passes the main HWND, app.rs:790-792; cleared at :877); never a Perry arena allocation."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/consumers.rs",
+   "names": [
+    "STREAM_CONSUMER_GET_READER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib getReader callback registered by js_register_stream_consumer_callbacks (consumers.rs:124); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/consumers.rs",
+   "names": [
+    "STREAM_CONSUMER_READER_READ"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib reader.read callback registered by js_register_stream_consumer_callbacks (consumers.rs:125); function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/prop_plan.rs",
+   "names": [
+    "HITS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "PLAN-DIAG counter of load-plan cache hits (prop_plan.rs:205), only under plan_diag_enabled."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/prop_plan.rs",
+   "names": [
+    "RECORDS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "PLAN-DIAG counter of store-plan records (prop_plan.rs:238); key_ptr is only printed, not stored here."
+  },
+  {
+   "file": "crates/perry-stdlib/src/framework/server.rs",
+   "names": [
+    "QUEUES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "listener id -> VecDeque<PendingRequest>; PendingRequest holds Rust-owned method/path/headers/body plus conn_id/seq ids from perry-http-server's process-global id domain (listeners()/conns() are process-global maps)."
+  },
+  {
+   "file": "crates/perry-stdlib/src/framework/server.rs",
+   "names": [
+    "PENDING_RESPONSES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Request id -> ResponseSlot {conn_id, seq}, plain ids into perry-http-server's process-global conns table; no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/builtins/console.rs",
+   "names": [
+    "CONSOLE_LOG_SINGLETON"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "console.log-as-value closure allocated in the first caller's arena and cached process-wide; cleared at thread exit when that arena is freed.",
+   "hook": "release_console_log_singleton_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_fsevents.rs",
+   "names": [
+    "API"
+   ],
+   "verdict": "no_heap_address",
+   "why": "dlsym'd CoreFoundation/CoreServices function pointers plus &kCFTypeArrayCallBacks from a system image (load_api), or a WatchError; code/image addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/async_work.rs",
+   "names": [
+    "COMPLETIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of Arc<AsyncWorkInner> (Rust-heap) whose env_address is the Rust Box of the owning thread's NODE_API_ENV and data/execute/complete are native addon pointers; drained only when work.owner == current ThreadId and env serial matches via with_env (async_work.rs:270-288, mod.rs:421-433), so no GC arena address and a dead owner's entries can never be dereferenced (ThreadIds are never reused)."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
+   "names": [
+    "HITS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "FOR-IN-DIAG counter of stable single-shape for-in hits (for_in_stable.rs:223)."
+  },
+  {
+   "file": "crates/perry-runtime/src/perf_hooks.rs",
+   "names": [
+    "PERF_CLOCK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Process-start Instant plus time-origin milliseconds for performance.now()/timeOrigin; plain data."
+  },
+  {
+   "file": "crates/perry-runtime/src/shared_sab.rs",
+   "names": [
+    "SHARED_SAB_REGISTRY"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Set of BufferHeader addresses of SharedArrayBuffer backings allocated with std::alloc::alloc_zeroed in shared_sab.rs (never freed, not in any thread arena), so thread exit cannot free them."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/input.rs",
+   "names": [
+    "INPUT_HANDLER"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Single atomic raw-closure slot called by drain_input; compare-exchanged to 0 at thread exit only if it still holds a freed closure.",
+   "hook": "release_tui_input_handler_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/handle.rs",
+   "names": [
+    "HANDLES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Type-erased handle payloads; each payload type that holds GC values registers a releaser (register_handle_payload_releaser), run at thread exit to clear freed slots or drop the payload.",
+   "hook": "release_handle_payloads_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/webcrypto/util.rs",
+   "names": [
+    "CRYPTO_KEY_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by the address of a CryptoKey's backing Buffer in the creating thread's arena; entries keyed inside freed blocks are removed at thread exit (the GC death hook never runs there).",
+   "hook": "release_crypto_keys_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_METHOD_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a stdlib/extension extern \"C\" dispatch function pointer, stored once by js_register_handle_method_dispatch (class_handles.rs:458); code address, never a heap pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_PROPERTY_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a stdlib/extension extern \"C\" dispatch function pointer, stored once by the handle-property dispatch registrar (class_handles.rs:766); code address, never a heap pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_PROPERTY_SET_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a stdlib/extension extern \"C\" dispatch function pointer, stored once by the handle-property-set registrar (class_handles.rs:779); code address, never a heap pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_METHOD_EXTENSION_DISPATCH_PTRS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ExtensionTable of extension-crate dispatcher function pointers registered via register_extension (class_handles.rs:467); inline AtomicPtr slots plus a leaked Box<[*mut ()]> overflow list of code pointers, no GC heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ExtensionTable of extension-crate dispatcher function pointers registered via register_extension (class_handles.rs:773); inline AtomicPtr slots plus a leaked Box<[*mut ()]> overflow list of code pointers, no GC heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ExtensionTable of extension-crate dispatcher function pointers registered via register_extension (class_handles.rs:786); inline AtomicPtr slots plus a leaked Box<[*mut ()]> overflow list of code pointers, no GC heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:794); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HANDLE_PROTOTYPE_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`HANDLE_PROTOTYPE_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:800); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "STREAM_HANDLE_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`STREAM_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:484); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "STREAM_EXPANDO_SET_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`STREAM_EXPANDO_SET_PTR.store(f as *mut ())`, class_handles.rs:501); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "STREAM_HANDLE_KIND_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`STREAM_HANDLE_KIND_PROBE_PTR.store(f as *mut ())`, class_handles.rs:518); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "FETCH_HANDLE_KIND_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`FETCH_HANDLE_KIND_PROBE_PTR.store(f as *mut ())`, class_handles.rs:535); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_HANDLE_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:550); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:568); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:585); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_GET_DOMAIN_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_GET_DOMAIN_PTR.store(f as *mut ())`, class_handles.rs:600); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_SET_DOMAIN_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_SET_DOMAIN_PTR.store(f as *mut ())`, class_handles.rs:615); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "NET_SOCKET_HANDLE_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:630); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HTTP_AGENT_HANDLE_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`HTTP_AGENT_HANDLE_PROBE_PTR.store(f as *mut ())`, class_handles.rs:655); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "TLS_HANDLE_KIND_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`TLS_HANDLE_KIND_PROBE_PTR.store(f as *mut ())`, class_handles.rs:669); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "FFI_HANDLE_EXISTS_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`FFI_HANDLE_EXISTS_PROBE_PTR.store(f as *mut ())`, class_handles.rs:695); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_ON_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_ON_PTR.store(f as *mut ())`, class_handles.rs:718); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_METHOD_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_METHOD_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:742); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "EVENT_EMITTER_PROPERTY_DISPATCH_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe/dispatch function pointer, written only by its js_register_* entry point (`EVENT_EMITTER_PROPERTY_DISPATCH_PTR.store(f as *mut ())`, class_handles.rs:760); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Widget-callback registry of NaN-boxed closures (a GC root the pump invokes); widget creation is main-thread-only on macOS alone, so entries whose closure lies in freed blocks are dropped at thread exit.",
+   "hook": "release_geisterhand_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "PENDING_ACTIONS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queued InvokeCallback/SetState actions carry NaN-boxed closures and args copied from REGISTRY; those holding a freed value are dropped at thread exit.",
+   "hook": "release_geisterhand_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_STATE_SET_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_state_set during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_SCREENSHOT_CAPTURE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_screenshot_capture during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_TEXTFIELD_SET_STRING_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_textfield_set_string during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_SCROLL_SET_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_scroll_set during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_READ_VALUE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_read_value during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_QUERY_TREE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_query_tree during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/geisterhand_registry.rs",
+   "names": [
+    "UI_APPLY_STYLE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the platform UI crate's extern \"C\" function pointer, stored by perry_geisterhand_register_apply_style during UI app init (e.g. perry-ui-windows/src/app.rs:761); code address."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "FETCH_RESPONSES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "HashMap keyed by process-global Fetch handle ids (alloc_fetch_handle_id) holding Rust-owned response data plus other handle ids (cached_headers_id, body_stream_id); no raw heap address. Ids are owned per-thread in lifecycle::OWNED and removed by OwnedHandles::drop -> release() (fetch/lifecycle.rs:262-275) when the owning thread exits.",
+   "hook": "release",
+   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "FREE_FETCH_HANDLE_IDS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Vec<usize> free list of recycled Fetch handle ids from the process-global band [FETCH_HANDLE_BAND_START, END); written by lifecycle::release; ids, not addresses."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "NEXT_FETCH_HANDLE_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mutex<usize> bump counter for the process-global Fetch handle id band (alloc_fetch_handle_id, fetch/mod.rs:241); a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "STREAM_HANDLES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<usize, StreamState> keyed by NEXT_STREAM_ID counter; StreamState holds only status, Vec<String> lines, String partial/error and u16 status (fetch/mod.rs:286); Rust-owned data."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "NEXT_STREAM_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mutex<usize> counter minting STREAM_HANDLES ids (fetch/mod.rs:988); a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "HEADERS_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "HashMap<handle id, HeadersRecord> whose method_values hold NaN-boxed bound-method closure bits (GC heap values) created on the owning thread; each thread scans only ids it owns (fetch/gc.rs), and OwnedHandles::drop -> release() removes the exiting thread's records (fetch/lifecycle.rs:262-275, 216-220).",
+   "hook": "release",
+   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "REQUEST_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "HashMap<handle id, RequestRecord> whose `signal: f64` is a NaN-boxed AbortSignal GC object allocated on the constructing thread; per-thread ownership via lifecycle::OWNED, and the thread-local OwnedHandles::drop calls release() which removes the exiting thread's records (fetch/lifecycle.rs:222-226, 262-275).",
+   "hook": "release",
+   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/mod.rs",
+   "names": [
+    "BLOB_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<handle id, BlobData> where BlobData is Vec<u8> body, String content_type, Option<String>/Option<f64> File fields (fetch/mod.rs:1101); Rust-owned. Also released per owning thread by OwnedHandles::drop except blobs an object URL still names."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "REUSED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 lifetime statistics counter (reused fetches/connections) incremented by the turnloop fetch engine and printed by PERRY_LOOP_STATS; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "CONNECTED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 lifetime statistics counter (connected fetches/connections) incremented by the turnloop fetch engine and printed by PERRY_LOOP_STATS; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "REDIRECTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 lifetime statistics counter (redirects fetches/connections) incremented by the turnloop fetch engine and printed by PERRY_LOOP_STATS; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "DECODED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 lifetime statistics counter (decoded fetches/connections) incremented by the turnloop fetch engine and printed by PERRY_LOOP_STATS; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "TUNNELS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 lifetime statistics counter (tunnels fetches/connections) incremented by the turnloop fetch engine and printed by PERRY_LOOP_STATS; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/store.rs",
+   "names": [
+    "PRIMARY_REFED_TIMERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicUsize count/flag republished from the primary agent's timer partition by publish_primary (timer/store.rs:828-832) for the event loop's liveness check; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/store.rs",
+   "names": [
+    "PRIMARY_REFED_CHECK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicUsize count/flag republished from the primary agent's timer partition by publish_primary (timer/store.rs:828-832) for the event loop's liveness check; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/store.rs",
+   "names": [
+    "PRIMARY_CHECK_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicUsize count/flag republished from the primary agent's timer partition by publish_primary (timer/store.rs:828-832) for the event loop's liveness check; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/store.rs",
+   "names": [
+    "PRIMARY_ANY_PENDING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicUsize count/flag republished from the primary agent's timer partition by publish_primary (timer/store.rs:828-832) for the event loop's liveness check; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/quarantine.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<usize> caching the parsed PERRY_GC_PROTECT_FROMSPACE_DEPTH env knob in quarantine_depth() (quarantine.rs:207); config value. | (second declaration) OnceLock<usize> caching sysconf(_SC_PAGESIZE) in page_size() (quarantine.rs:220); OS config value."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/quarantine.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Vec<QuarantinedSet> of from-space arena blocks that copying_quarantine_from_spaces_and_flip has DETACHED (tombstoned) from the retiring thread's arena, so that arena's Arena::drop no longer owns or frees them; they stay owned by this registry until evicted and reinstalled into the evicting thread's Eden (push_set_and_evict, quarantine.rs:477-510)."
+  },
+  {
+   "file": "crates/perry-runtime/src/error_stack_frames.rs",
+   "names": [
+    "IMAGE_BASE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<usize> caching the executable's load base (dladdr dli_fbase) for symbolizing stack frames; image address, not heap."
+  },
+  {
+   "file": "crates/perry-runtime/src/error_stack_frames.rs",
+   "names": [
+    "INDEX"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<Option<StaticSymbolIndex>> of relocated text-symbol start addresses and demangled String names loaded from the executable image (error_stack_frames.rs:429-438); code addresses. | (second declaration) OnceLock<Mutex<Option<CodeSymbolIndex>>> of (generated function start address, Arc<[u8]> display name) snapshotted from the codegen function registry (error_stack_frames.rs:581-592); code addresses."
+  },
+  {
+   "file": "crates/perry-stdlib/src/sqlite.rs",
+   "names": [
+    "NODE_SQLITE_CUSTOM_FUNCTIONS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Addresses of SQLite-owned boxes whose callback is a closure from the thread that called db.function(); a freed callback is set to undefined and the box unregistered at thread exit (xDestroy still frees it).",
+   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/sqlite.rs",
+   "names": [
+    "NODE_SQLITE_CUSTOM_AGGREGATES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Boxes holding db.aggregate() start/step/result/inverse closures; freed slots become undefined and the box is unregistered at thread exit.",
+   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/sqlite.rs",
+   "names": [
+    "NODE_SQLITE_ACTIVE_AGGREGATES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Running-aggregate state boxes; a freed state becomes undefined and the box is unregistered at thread exit, xFinal frees it as before.",
+   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/net.rs",
+   "names": [
+    "TCP_SERVERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<u64, TcpListenerWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpListener + SocketAddr (net.rs:17-25); OS resources, no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/net.rs",
+   "names": [
+    "TCP_SOCKETS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<u64, TcpStreamWrapper> keyed by the process-global NEXT_HANDLE counter, holding std TcpStream + Option<SocketAddr> (net.rs:19-30); OS resources."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
+   "names": [
+    "NM_NAMESPACE_OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr to a `&'static NmNamespaceOps` function-pointer table, stored by arm_nm_namespace_ops (nm_namespace_hooks.rs:51); address of a static."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
+   "names": [
+    "NM_EE_OPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr to a `&'static NmEeOps` function-pointer table, stored by arm_nm_ee_ops (nm_namespace_hooks.rs:83); address of a static."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch_blob.rs",
+   "names": [
+    "OBJECT_URL_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<String url, usize> mapping blob: URLs to process-global Fetch Blob handle ids (fetch_blob.rs:306); blobs it names are deliberately kept by OwnedHandles::drop and BlobData is Rust-owned bytes."
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch_blob.rs",
+   "names": [
+    "NEXT_OBJECT_URL_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mutex<u64> counter used to mint the uuid-shaped object URL (fetch_blob.rs:299); a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/arkts_callbacks.rs",
+   "names": [
+    "CALLBACKS"
+   ],
+   "verdict": "main_thread_only",
+   "why": "Mutex<Vec<f64>> of NaN-boxed GC closures written by perry_arkts_register_callback (arkts_callbacks.rs:131), which codegen emits only for the synthetic perry/arkts.registerCallback calls that bootstrap.rs:1150-1180 splices into the ENTRY module's init (module-init-only path, run from EntryAbility.onCreate on the main thread)."
+  },
+  {
+   "file": "crates/perry-runtime/src/child_process/registry.rs",
+   "names": [
+    "PROCESS_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "HashMap<u64, std::process::Child> keyed by the process-global NEXT_HANDLE_ID counter; OS process handles, no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/fs/filehandle.rs",
+   "names": [
+    "READABLE_WEB_STREAM_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding the perry-stdlib extern \"C\" Web Streams factory function pointer, stored by js_register_filehandle_readable_web_stream_factory (filehandle.rs:34); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/lifecycle.rs",
+   "names": [
+    "NODE_VERSION"
+   ],
+   "verdict": "no_heap_address",
+   "why": "LazyLock<NapiNodeVersion> of u32 major/minor/patch parsed from CARGO_PKG_VERSION plus `release` pointing at the c\"perry\" .rodata literal; no heap address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
+   "names": [
+    "PRIVATE_TEMPLATE_EVALUATED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic hashed bitset of class ids (class_id & 0xFFFF) set by note_private_template_evaluated when a class object is minted (private_guard_fast.rs:108-111); class ids, not addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/plugin.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(feature full) Plugin hook/tool/service/route/event closures and config values registrable from any thread; registrations holding a freed value are dropped at thread exit.",
+   "hook": "release_plugin_registry_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/string/concat.rs",
+   "names": [
+    "MEMO_GOV"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 packing the concat-memo governor's enabled bit, hit count and window candidate count (concat.rs:310-363); counters/flags."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/state.rs",
+   "names": [
+    "SLOTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Index-addressed NaN-boxed TUI state slots (GC roots); freed values are reset to undefined in place at thread exit because indices are handles.",
+   "hook": "release_tui_state_slots_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/mod.rs",
+   "names": [
+    "BACKEND"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<Arc<dyn ContainerBackend>> holding the Rust-owned container runtime backend detected once by get_global_backend (container/mod.rs:63-90); Rust heap object, no GC addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_ARRAY_GET"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle-array element getter installed by value/handle.rs:14 (js_register_handle_array_get); every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_ARRAY_LENGTH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle-array length hook installed from value/handle.rs; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_OBJECT_GET_PROPERTY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle object property-get hook installed from value/handle.rs; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_TO_STRING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle toString hook installed from value/handle.rs; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_CALL_METHOD"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle method-call dispatcher registered by perry-stdlib at startup; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_MODULE_JS_LOADER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the native-module JS loader hook registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NEW_FROM_HANDLE_V8"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the V8-handle `new` constructor hook registered by the V8 bridge; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_HANDLE_TYPEOF"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the handle typeof hook registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_CRYPTO_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:crypto dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_WEBCRYPTO_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the WebCrypto dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_ZLIB_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:zlib dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_QUERYSTRING_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:querystring dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_BUN_TCP_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the Bun TCP dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_NET_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:net dispatch fn registered by perry-stdlib (reset to null only in object/native_module_dispatch/dispatch_m_p.rs:924); every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_SQLITE_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the sqlite dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_DOMAIN_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:domain dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_TLS_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:tls dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_HTTP_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the node:http dispatch fn registered by perry-stdlib; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_EVENTS_CONSTRUCT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the events `new` constructor fn (JsNativeEventsConstructFn) registered by the events impl; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_EVENTS_DISPATCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the module-level events.* helper dispatch fn registered by the events impl; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_ASYNC_HOOKS_CONSTRUCT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the dynamic async_hooks constructor fn registered by perry-stdlib at startup; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/tags.rs",
+   "names": [
+    "JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores js_async_local_storage_subclass_init's fn pointer, stored by value/handle.rs:159; every store in the tree is `func as *mut ()` (or null), so it is a code address, never a heap value."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "MARK_BARRIER_ARMED_SINCE_US"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Microseconds since the process epoch at which the current mark-barrier armed window opened (0 = closed); a timestamp set/cleared by the collector's arm/disarm instruments (instruments.rs:145/150)."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "SKIP_REENTRANT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Telemetry counter of budgeted GC steps skipped for the reentrant reason, bumped by note_budgeted_step_skip; a plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "SKIP_NO_TRIGGER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Telemetry counter of budgeted GC steps skipped for the no-trigger reason, bumped by note_budgeted_step_skip; a plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "SKIP_START_BLOCKED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Telemetry counter of budgeted GC steps skipped for the start-blocked reason, bumped by note_budgeted_step_skip; a plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "SKIP_RESUME_BLOCKED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Telemetry counter of budgeted GC steps skipped for the resume-blocked reason, bumped by note_budgeted_step_skip; a plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "SKIP_NURSERY_CAP_UNDISCHARGEABLE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Telemetry counter of budgeted GC steps skipped for the nursery-cap-undischargeable reason, bumped by note_budgeted_step_skip; a plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "STEP_MAX_US"
+   ],
+   "verdict": "no_heap_address",
+   "why": "High-water mark of a single budgeted GC step's duration in microseconds (bump_max telemetry); a duration."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "REMARK_MAX_US"
+   ],
+   "verdict": "no_heap_address",
+   "why": "High-water mark of the atomic final-remark duration in microseconds; a duration."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/instruments.rs",
+   "names": [
+    "WEAK_MAX_RECORDS_PER_STEP"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Most FinalizationRegistry records charged to one weak-processing step (bump_max at instruments.rs:399, reset at :464); a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Lazily resolved diagnostic output sink from PERRY_SHAPE_MINT_DIAG (hot_diag::sink_from_env); Rust-owned file/stream config."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "CENSUS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic-only shape-mint tallies (HashMaps of causes, call sites, ShapeIds, counts). It does record keys-array addresses (keys_addrs, :452) and prototype bits (proto_div_pairs, :283) but only as opaque distinct-count keys that are never dereferenced or used for lookup of an object."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_EMPTY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind empty, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_COLLIDE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind collide, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_PLACES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind places, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_UNSHARED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind unshared, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_TARGET_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind target_len, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shape_mint_census.rs",
+   "names": [
+    "TC_MISS_UNSTABLE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counter of transition-cache misses of kind unstable, bumped by note_transition_miss when the census is armed; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/alloc_census.rs",
+   "names": [
+    "SAMPLE_INTERVAL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Allocation-census sampling interval in bytes, parsed from PERRY_ALLOC_CENSUS_INTERVAL via getenv at first allocation; config value."
+  },
+  {
+   "file": "crates/perry-runtime/src/alloc_census.rs",
+   "names": [
+    "CLASS_ALLOC_BYTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-size-class cumulative allocated-byte counters updated by the CensusAlloc GlobalAlloc wrapper; counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/alloc_census.rs",
+   "names": [
+    "CLASS_ALLOC_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-size-class allocation-count counters updated by the CensusAlloc wrapper; counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/alloc_census.rs",
+   "names": [
+    "CLASS_LIVE_BYTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-size-class live-byte gauges (alloc minus free) updated by the CensusAlloc wrapper; counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/alloc_census.rs",
+   "names": [
+    "SITES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Sampled allocation-site table; `live` maps pointers returned by the process GlobalAlloc (CensusAlloc wrapping the system/mimalloc allocator, alloc_census.rs:232) to site ids, and record_free (:265) removes the entry on every dealloc — including arena blocks released through the allocator — so addresses are never stale."
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
+   "names": [
+    "CLOSURE_PROPS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Closure-address -> dynamic props map written by closure property sets on any thread; entries whose owner lies in the exiting arena's blocks are dropped by release_closure_side_table_owners_in_ranges (dynamic_props.rs:465), called from Arena::drop (arena/block.rs:539).",
+   "hook": "release_closure_side_table_owners_in_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
+   "names": [
+    "WASM_FUNCREF_EXTERNALS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(wasm-host feature) closure-address -> host funcref handle map; entries in the exiting arena's ranges are removed and their handles dropped by release_closure_side_table_owners_in_ranges (dynamic_props.rs:474-491) from Arena::drop.",
+   "hook": "release_closure_side_table_owners_in_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
+   "names": [
+    "CLOSURE_DELETED_KEYS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Closure-address -> deleted property names, written by closure_mark_key_deleted; purged over the exiting arena's ranges by release_closure_side_table_owners_in_ranges (dynamic_props.rs:471) from Arena::drop.",
+   "hook": "release_closure_side_table_owners_in_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
+   "names": [
+    "CLOSURE_STATIC_PROTOTYPES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Closure-address -> NaN-boxed prototype bits from Object.setPrototypeOf(fn, proto); purged by owner range in release_closure_side_table_owners_in_ranges (dynamic_props.rs:468, via get_closure_prototypes) from Arena::drop.",
+   "hook": "release_closure_side_table_owners_in_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/typedarray/mod.rs",
+   "names": [
+    "PERRY_TA_KIND_CACHE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); Arena::drop clears every slot naming a freed block with a compare-exchange (#11463/#11467).",
+   "hook": "invalidate_caches_in_range"
+  },
+  {
+   "file": "crates/perry-runtime/src/typedarray/mod.rs",
+   "names": [
+    "INLINE_OWNING_U32_CACHE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; cleared for freed blocks by the same Arena::drop call (#11467).",
+   "hook": "invalidate_caches_in_range"
+  },
+  {
+   "file": "crates/perry-runtime/src/typedarray/mod.rs",
+   "names": [
+    "PERRY_TA_VIEW_GUARD"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[no_mangle] count of live non-owning typed-array views, inc/dec by the view register/unregister paths; a counter (a worker exiting with views live only leaves it high, which disables the inline fast path, never makes it unsound)."
+  },
+  {
+   "file": "crates/perry-runtime/src/typedarray/mod.rs",
+   "names": [
+    "TYPED_ARRAY_ADDR_WINDOW"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Min/max address ever passed to register_typed_array (widened at typedarray/mod.rs:404); a stale window only answers 'maybe', after which the authoritative per-thread TYPED_ARRAY_REGISTRY (thread-local, :180) decides."
+  },
+  {
+   "file": "crates/perry-runtime/src/dgram_reactor.rs",
+   "names": [
+    "LIVE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(feature mod-dgram) Entries root the binding thread's socket object and pending send callbacks; entries naming freed memory are dropped at thread exit with LIVE/REFED/TURNLOOP counts adjusted as drop_entry does.",
+   "hook": "release_dgram_sockets_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/dgram_reactor.rs",
+   "names": [
+    "QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Received datagrams awaiting pump(): each is a socket id (u64), an owned Vec<u8> payload and a SocketAddr; no heap addresses (a stale id just misses or hits LIVE, whose own staleness is reported separately)."
+  },
+  {
+   "file": "crates/perry-runtime/src/dgram_reactor.rs",
+   "names": [
+    "NEXT_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic process-global counter minting dgram socket ids for the process-global LIVE table."
+  },
+  {
+   "file": "crates/perry-runtime/src/thread.rs",
+   "names": [
+    "FS_THREAD_CODEC"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Pointer to the `static FS_THREAD_CODEC_IMPL` (fs/filehandle.rs:1470) holding two fn pointers, armed by arm_fs_thread_codec; address of a static."
+  },
+  {
+   "file": "crates/perry-runtime/src/thread.rs",
+   "names": [
+    "PENDING_THREAD_RESULTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queue of spawn results: owner AgentId, raw promise address in the owner's heap, and a SerializedValue; drained only by the owning agent, and agent::retire_agent (agent.rs:164) calls thread::purge_agent_thread_results (thread.rs:1926) to drop every entry owned by an exiting worker agent.",
+   "hook": "purge_agent_thread_results"
+  },
+  {
+   "file": "crates/perry-runtime/src/thread.rs",
+   "names": [
+    "PENDING_THREAD_RESULTS_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mirror of PENDING_THREAD_RESULTS.len() republished under its lock for the lock-free has-pending check; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/copying.rs",
+   "names": [
+    "PREVIOUS_SURVIVOR_ESTIMATE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Survivor count of the previous copying minor, used only to pre-size worklist vectors (capped at SURVIVOR_ESTIMATE_CAP); a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/copying.rs",
+   "names": [
+    "PREVIOUS_DIRTY_COVERED_ESTIMATE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Previous minor's dirty-scan covered-set size used to pre-size the next one; a capped count."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_vm.rs",
+   "names": [
+    "VM_COMPILED_FUNCTION_SOURCES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "vm.compileFunction source text keyed by closure address; owners in freed ranges are dropped at thread exit.",
+   "hook": "release_vm_owner_entries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/node_vm.rs",
+   "names": [
+    "VM_SCRIPTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "vm.Script metadata keyed by owner address; the death prune keeps other threads' owners, so owners in freed ranges are dropped at thread exit.",
+   "hook": "release_vm_owner_entries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/native_async.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Native-async tokens hold promise/payload/handle bits from the creating thread; tokens naming freed memory are completed and removed at thread exit, and a retire hook drops a dead agent's idle tokens.",
+   "hook": "release_native_async_tokens_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/native_async.rs",
+   "names": [
+    "ACTIVE_ENTRIES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mirror of tokens.len()+pending.len() republished under the registry lock for the event loop's keep-alive check; a count."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/idalloc.rs",
+   "names": [
+    "IDALLOC"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Web Streams handle-id allocator state (next id, free/retired VecDeques, pooled/pipe HashSets of ids) in the fixed STREAM_HANDLE_ID band; ids index the process-global READABLE_STREAMS/WRITERS/... tables (streams.rs:575), no addresses."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/idalloc.rs",
+   "names": [
+    "QUARANTINE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stream-id quarantine length limit read once from PERRY_STREAM_ID_QUARANTINE; a config value."
+  },
+  {
+   "file": "crates/perry-runtime/src/cluster_sched.rs",
+   "names": [
+    "KEYS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Primary-side cluster listen keys: String key -> Arc<PrimaryKey> holding the bound port, key id, rr flag and a Vec of worker child-process handle numbers (__cpHandle, cluster.rs:1220); no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+   "names": [
+    "GENERATED_WRITE_BARRIERS_EMITTED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Flag/count recording whether codegen emitted write barriers (per_test_global); a counter, not an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/tsfn.rs",
+   "names": [
+    "TSFN_REGISTRY"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Keyed by N-API threadsafe-function token addresses from Box::into_raw at tsfn.rs:146, which are intentionally never freed (permanent tombstones), so keys cannot be reused. Values are Arc<ThreadsafeFunctionInner> whose JS function_bits are only touched on the owner thread (owner ThreadId check in drain_threadsafe_functions :401 / owner_env :62) and rooted through the per-thread NODE_API_ENV env.tsfns."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/ic_slot.rs",
+   "names": [
+    "PIC_ARENA"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Bump cursor/end over 64 KiB chunks from std::alloc::alloc_zeroed (ic_slot.rs:73) holding inline-cache words; never freed and not a GC arena."
+  },
+  {
+   "file": "crates/perry-runtime/src/pointer_event.rs",
+   "names": [
+    "CELL"
+   ],
+   "verdict": "main_thread_only",
+   "why": "Three NaN-boxed interned strings ('mouse'/'touch'/'pen') from js_string_from_bytes_longlived (per-thread longlived arena), created on first js_pointer_event_new."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol/properties.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Caches the SymbolHeader* for Symbol.for('NextInternalRequestMeta'); registered symbols are Box::into_raw leaked allocations (symbol/constructors.rs:~104), never in a thread arena."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/tree.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "TUI widget table of (i64 handle from NEXT_HANDLE, Node) where Node holds child handle ids, Strings, colors and styles; Rust-owned data, no addresses."
+  },
+  {
+   "file": "crates/perry-stdlib/src/crypto/hash_handles.rs",
+   "names": [
+    "CRYPTO_STREAM_PENDING_EVENTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of crypto Hash/Hmac stream events: a handle id into the process-global common::handle HANDLES DashMap plus owned bytes/encoding; the static itself holds no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_RUN_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_DRAIN_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_EMPTY_DRAIN_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_THENABLE_PROBE_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_PROMISE_NEW_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_PROMISE_THEN_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_PROMISE_RESOLVED_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_FAST_PATH_HIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_FAST_PATH_MISS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_STEP_CHAIN_REUSE_HIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_STEP_CHAIN_REUSE_MISS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_STEP_DONE_REUSE_HIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_STEP_DONE_REUSE_MISS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumentation counter (PERRY_MT_PROFILE); only ever fetch_add'd, printed at exit — never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "FOREIGN_PROMISE_ADAPTER_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the extern \"C\" fn pointer registered by perry-jsruntime via js_register_foreign_promise_adapter (promise/mod.rs:194); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/mod.rs",
+   "names": [
+    "MT_ITER_RESULT_SET_COUNT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Counter of js_iter_result_set calls; fetch_add only, never an address."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "READABLE_STREAMS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold the creating thread's source callbacks, queued chunks, pending read promises and error values; dropped when any lies in the freed blocks or a linked reader/transform is dead.",
+   "hook": "release_web_streams_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "WRITABLE_STREAMS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold sink callbacks, queued chunk bits with write promises, and ready/closed promises from the creating thread's arena; dropped with the dead stream family.",
+   "hook": "release_web_streams_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "TRANSFORM_STREAMS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold transform/flush closure pointers; dropped together with their readable and writable sides.",
+   "hook": "release_web_streams_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "READERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold the closed promise from the thread that called getReader(); released with their stream.",
+   "hook": "release_web_streams_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "WRITERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold closed/ready promises from the writing thread; released with their stream.",
+   "hook": "release_web_streams_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function-local debug-print rate limiter at streams.rs:1244 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1782 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1864 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:1968 (PERRY_JSON_PATH=1); fetch_add counter only. | (second declaration) Function-local debug-print rate limiter at streams.rs:2013 (PERRY_JSON_PATH=1); fetch_add counter only."
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "TOP_LEVEL_RESOURCE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Lazily cached JS object allocated on the first caller's thread; compare-exchanged to empty at thread exit if it names freed memory.",
+   "hook": "release_async_hooks_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "HOOKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "createHook records hold raw closure pointers; a dead record is disabled and its callbacks nulled at thread exit, with the active counts adjusted.",
+   "hook": "release_async_hooks_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "RESOURCES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Async resource entries whose resource value or captured ALS store lies in freed memory are dropped at thread exit without a destroy event.",
+   "hook": "release_async_hooks_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "GC_DESTROY_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "VecDeque<u64> of async ids queued by enqueue_gc_destroy (async_hooks.rs:1118); ids come from the process-global NEXT_ASYNC_ID counter, not addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "CONTEXT_SNAPSHOTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "ALS snapshots holding a freed store are dropped at thread exit.",
+   "hook": "release_async_hooks_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "ASYNC_WRAP_PROVIDERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Lazily cached providers object allocated on the first caller's thread; compare-exchanged to empty at thread exit if it names freed memory.",
+   "hook": "release_async_hooks_in_freed_ranges",
+   "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "ASYNC_RESOURCE_HANDLES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Set of AsyncResource handles, each a Box::into_raw(AsyncResourceHandle) pointer (async_hooks.rs:1161-1169) that is never freed — malloc, not arena."
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "ASYNC_HOOK_HANDLES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Set of AsyncHook handles, each a never-freed Box::into_raw(AsyncHookHandle{index}) pointer (async_hooks.rs:740-741) — std alloc, not arena."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "EXTERNAL_BUFFER_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Addresses of externally-registered buffers, removed only by the dead-buffer finalizer or re-registration; freed addresses are dropped at thread exit.",
+   "hook": "release_external_buffer_registries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "EXTERNAL_UINT8ARRAY_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Addresses of externally-marked Uint8Arrays; same removal gap, freed addresses dropped at thread exit.",
+   "hook": "release_external_buffer_registries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "EXTERNAL_CRYPTO_KEY_META_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "CryptoKey metadata keyed by buffer address; freed addresses dropped at thread exit.",
+   "hook": "release_external_buffer_registries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "CRYPTO_KEY_DEATH_HOOK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "BUFFER_LIKE_ADDR_WINDOW"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), EXTERNAL_BUFFER_REGISTRY, shared_sab's registry via is_registered_buffer_slow."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "UINT8ARRAY_ADDR_WINDOW"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Monotone lo/hi window over Uint8Array marks; staleness only widens admission. Authoritative: UINT8ARRAY_FROM_CTOR (thread-local) and EXTERNAL_UINT8ARRAY_REGISTRY via is_uint8array_buffer_slow."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/header.rs",
+   "names": [
+    "PERRY_U8_INLINE_CACHE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Inline Uint8Array address cache read by codegen guards; each slot is compare-exchanged to 0 at thread exit if it names freed memory.",
+   "hook": "release_external_buffer_registries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/heap_budget.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<Option<usize>> caching PERRY_GC_HEAP_LIMIT / platform heap budget in bytes (gc_heap_budget_bytes); config value. | (second declaration) Macro-generated (budget_scaled_accessor!) OnceLock<usize> caching a budget-scaled byte threshold; config value. | (second declaration) OnceLock<usize> caching gc_block_pool_cap_bytes (recycled arena-block allowance in bytes); config value. | (second declaration) OnceLock<u64> caching gc_rss_pressure_dyn_bytes threshold; config value. | (second declaration) OnceLock<u64> caching gc_rss_hard_pressure_dyn_bytes threshold; config value."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/loop_stats.rs",
+   "names": [
+    "NOTIFY_AT_NS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic timestamp (ns) of the last main-thread notify, set by notifier/cleared by waiter for wake-latency stats (loop_stats.rs:221/237/259)."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/loop_stats.rs",
+   "names": [
+    "TURNLOOP"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Kind{count,total_ns,max_ns} atomic statistics for turnloop parked waits; counters only."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/loop_stats.rs",
+   "names": [
+    "CONDVAR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Kind{count,total_ns,max_ns} atomic statistics for condvar parks; counters only."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/loop_stats.rs",
+   "names": [
+    "WAKE_BUCKETS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Wake-latency histogram bucket counters; counters only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+   "names": [
+    "PENDING_RESOLUTIONS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queue of (owner AgentId, promise_ptr arena address, result_bits) queued by native work; purged for the dying agent by purge_agent_resolutions, registered via register_retire_hook and run from perry-runtime/src/agent.rs:retire_agent (called at worker exit: thread.rs:1220/1473/1708, worker_threads.rs:1482).",
+   "hook": "purge_agent_resolutions"
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+   "names": [
+    "PENDING_DEFERRED"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queue of (owner AgentId, promise_ptr, converter) — purged per agent by async_bridge.rs purge_agent_resolutions from agent.rs:retire_agent at worker exit.",
+   "hook": "purge_agent_resolutions"
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+   "names": [
+    "PENDING_RESOLUTIONS_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Length mirror of PENDING_RESOLUTIONS republished under its lock for the keep-alive check; counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+   "names": [
+    "PENDING_DEFERRED_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Length mirror of PENDING_DEFERRED; counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/frame.rs",
+   "names": [
+    "FRAME_CALLBACKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Pending onFrame raw closure pointers from js_on_frame_callback (no thread check); freed ones are dropped at thread exit so js_frame_tick never calls a dead closure.",
+   "hook": "release_frame_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/frame.rs",
+   "names": [
+    "NEXT_FRAME_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic i64 id counter for onFrame registrations."
+  },
+  {
+   "file": "crates/perry-runtime/src/frame.rs",
+   "names": [
+    "LAST_FIRE_BY_CLOSURE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by closure address; keys in freed blocks are removed so a closure reusing the address does not inherit a stale deltaMs timestamp.",
+   "hook": "release_frame_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/bun_ffi/callback.rs",
+   "names": [
+    "CALLBACKS"
+   ],
+   "verdict": "per_thread",
+   "why": "Fixed pool of bun:ffi JSCallback records with callback_bits (JS closure) tagged by owner std::thread::ThreadId; only the owner thread scans (callback.rs:692-698) or invokes it (:602, drain :646-656); ThreadIds are never reused, so an exited owner's record is never dereferenced."
+  },
+  {
+   "file": "crates/perry-runtime/src/bun_ffi/callback.rs",
+   "names": [
+    "PENDING_CALLBACKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of foreign-thread callback requests: slot index, copied native ABI register images, and an Arc completion; no GC heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/policy.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<usize> caching PERRY_GC_SCAVENGE_NURSERY_MB nursery cap bytes; config value."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/policy.rs",
+   "names": [
+    "CONFIG"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<(usize,usize)> caching major-GC pacing floor bytes and growth numerator from env; config."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/descriptor_state.rs",
+   "names": [
+    "DECLARED_FIELD_NAME_HASHES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Set of FNV hashes of declared instance-field names, written at class registration; hashes, not addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/descriptor_state.rs",
+   "names": [
+    "PROTO_DESCRIPTOR_KEY_HASHES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Set of FNV key-name hashes installed on prototype descriptor targets; hashes, not addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/pty/reactor.rs",
+   "names": [
+    "PTY_EVENT_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Events from pty reader/waiter OS threads: registry handle u64 plus owned byte Vec / exit code; no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/pty/reactor.rs",
+   "names": [
+    "PTY_LIVE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold the spawning thread's IPty object; entries whose object is freed are removed at thread exit with counts adjusted (the master fd is deliberately leaked).",
+   "hook": "release_ptys_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/worker_threads.rs",
+   "names": [
+    "WORKERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Records hold the constructing thread's Worker object, listeners, terminate promise and resource objects (nested Workers exist); any freed slot drops the record after releasing its refed share.",
+   "hook": "release_worker_records_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/worker_threads.rs",
+   "names": [
+    "PARENT_EVENTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queue of (parent AgentId, WorkerEvent) with owned SerializedValue payloads (no arena addresses); entries for a dying agent are purged by worker_threads/worker_pump.rs:purge_parent_events via agent.rs:retire_agent.",
+   "hook": "purge_parent_events",
+   "hook_file": "crates/perry-stdlib/src/worker_threads/worker_pump.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/dgram.rs",
+   "names": [
+    "DGRAM_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(feature mod-dgram) Deterministic-mode map from bound address to a NaN-boxed socket object; bindings whose socket is freed are removed at thread exit.",
+   "hook": "release_dgram_bindings_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/idle_reclaim.rs",
+   "names": [
+    "COMPLETIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Counter of completed idle-reclaim passes (fetch_add at idle_reclaim.rs:474)."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/hono_jsx.rs",
+   "names": [
+    "JSX_RENDER_STREAM_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the RenderStreamFn fn pointer registered by perry-stdlib via js_register_jsx_render_stream (hono_jsx.rs:81); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
+   "names": [
+    "HITS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Hit counter for the inherited-read inline cache; fetch_add / reset only."
+  },
+  {
+   "file": "crates/perry-runtime/src/process.rs",
+   "names": [
+    "PROCESS_STDIO_HOOK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores the address of the fn process_stdio_value (process.rs:761-764); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/mock.rs",
+   "names": [
+    "MOCK_TIMERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Mock-timer callbacks and args (raw closure pointers, JS values) from any thread while mocking is on; entries naming freed memory are dropped at thread exit.",
+   "hook": "release_mock_timers_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/typed_feedback.rs",
+   "names": [
+    "REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(PERRY_TYPED_FEEDBACK) Observations record object and shape addresses; those naming freed memory are removed at thread exit.",
+   "hook": "release_typed_feedback_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
+   "names": [
+    "FORM_DATA_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Map fetch handle id -> FormDataStore (method_values NaN-box bits); ids are registered in the thread-local OwnedHandles (fetch/lifecycle.rs register, via alloc_fetch_handle_id fetch/mod.rs:252), whose Drop at thread exit calls release() removing them from FORM_DATA_REGISTRY (lifecycle.rs:235-238, 264-274).",
+   "hook": "release",
+   "hook_file": "crates/perry-stdlib/src/fetch/lifecycle.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_WITH_OPTIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_with_options (global_fetch.rs:212) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_BLOB_NEW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:258) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_FILE_NEW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:259) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_HEADERS_NEW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:260) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:261) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_REQUEST_NEW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:263) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_RESPONSE_NEW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:264) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_RESPONSE_STATIC_JSON"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:265) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_RESPONSE_STATIC_REDIRECT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:266) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_RESPONSE_STATIC_ERROR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_constructors (global_fetch.rs:268) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_BODY_INIT_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_body_init_ptr (global_fetch.rs:194) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_HEADERS_ENTRIES_JSON"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by its register fn (global_fetch.rs:464) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_HEADERS_OBJECT_JSON"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by its register fn (global_fetch.rs:480) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "GLOBAL_FETCH_NOTIFY_ABORT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds an extern \"C\" fn pointer to a perry-stdlib fetch helper, stored only by js_register_global_fetch_notify_abort (global_fetch.rs:231) and transmuted back to a fn type at call sites; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_NEW_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_ENQUEUE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_CLOSE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_ERROR_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_WRITABLE_NEW_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_GET_READER_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READER_READ_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_WRITABLE_GET_WRITER_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_WRITER_WRITE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_WRITER_CLOSE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_WRITER_ABORT_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks (web_adapter.rs:60-70) and loaded via load_web_callback!; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "REGEX_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the regex diagnostic sink getter; Rust-owned config, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "IC_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the IC diagnostic sink getter; Rust-owned config, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "LAYOUT_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the layout diagnostic sink getter; Rust-owned config, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "ENUM_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the enum diagnostic sink getter; Rust-owned config, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "BUFFER_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the buffer diagnostic sink getter; Rust-owned config, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "BUF_WIN_LO"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic-only lower bound of the buffer-registry min/max window, stored by buffer_note_probe (hot_diag.rs:1462) and only ever formatted into the [buffer-diag] stderr dump; it is a number never dereferenced nor used as a lookup key, so staleness can only misreport a statistic."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "BUF_WIN_HI"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic-only upper bound of the buffer-registry window, stored by buffer_note_probe (hot_diag.rs:1463) and only printed by buffer_dump; never dereferenced nor used for a lookup."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag.rs",
+   "names": [
+    "RECV_ROUTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Array of 8 relaxed counters incremented by js_recv_route_note (only emitted under compile-time PERRY_RECV_ROUTE_COUNT=1) and printed at exit; plain counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "EXT_PUMP_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Extension process_pending fn pointer stored by js_register_ext_pump (lib.rs:416) at extension init; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "STDLIB_PUMP_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "perry-stdlib process_pending fn pointer stored by js_register_stdlib_pump (lib.rs:729); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "STDLIB_NEXT_WAKE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "perry-stdlib nearest-deadline provider fn pointer stored by js_register_stdlib_next_wake (lib.rs:742); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "RUNTIME_PUMP_FNS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Fixed slot array of runtime pump fn pointers written by register_runtime_pump (lib.rs:560, black_box'd fn address); code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "RUNTIME_HAS_ACTIVE_FNS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Fixed slot array of runtime has-active fn pointers written by register_runtime_has_active (lib.rs:592); code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "AUX_HAS_ACTIVE_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Length of the auxiliary has-active fn list, stored at lib.rs:686 and checked for zero at lib.rs:706; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/lib.rs",
+   "names": [
+    "STDLIB_HAS_ACTIVE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "perry-stdlib has_active_handles fn pointer stored by js_register_stdlib_has_active (lib.rs:812); code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_DISPATCH_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-bucket native-module dispatch fn pointers (NmDispatchFn) stored by the per-module install fns (e.g. native_module_registry.rs:185-460); code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_INSTALL_ALL_HOOK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds the black_box'd address of js_nm_install_all, stored at native_module_registry.rs:664; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_CTOR_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-bucket NmCtorFn fn pointers stored at native_module_registry.rs:718; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_ATTACH_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-bucket NmAttachFn fn pointers stored at native_module_registry.rs:759; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
+    "NM_CONST_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-bucket NmConstFn fn pointers stored at native_module_registry.rs:797; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/schedule.rs",
+   "names": [
+    "CACHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "(schedule.rs:261, fn resolved) OnceLock<Option<(seed, threshold)>> parsed once from PERRY_GC_SCHEDULE_SEED/RATE; env config. | (second declaration) (schedule.rs:496, fn schedule_poll_stride_bytes) OnceLock<usize> parsed once from PERRY_GC_SCHEDULE_ALLOC_KB; env config."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/schedule.rs",
+   "names": [
+    "PREVIOUS_HANDLERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Previously installed sigaction sa_sigaction addresses for 5 fatal signals, stored by install_signal_reporter_inner (schedule.rs:803) for chaining; code addresses of signal handlers."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/schedule.rs",
+   "names": [
+    "REPORTED_SEED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The GC schedule seed (u64) published at schedule.rs:920 for failure-path reporting; a number."
+  },
+  {
+   "file": "crates/perry-stdlib/src/readline/mod.rs",
+   "names": [
+    "DATA_CALLBACKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Shared list of raw stdin data closure pointers any thread can add to; freed ones are removed at thread exit as removeListener would.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/readline/mod.rs",
+   "names": [
+    "KEYPRESS_CALLBACKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Shared list of raw keypress closure pointers; freed ones are removed at thread exit.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/readline/mod.rs",
+   "names": [
+    "READABLE_CALLBACKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Shared list of raw readable closure pointers; freed ones are removed at thread exit and pull mode cleared if the list empties.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/readline/mod.rs",
+   "names": [
+    "STDIN_END_CALLBACKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Shared list of raw stdin end closure pointers; freed ones are removed at thread exit.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+   "names": [
+    "PERRY_LAYOUT_ADDR_FILTER"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Monotone 4096-bit hashed sketch of user_ptr addresses that ever got a per-object layout record, OR'd by layout_addr_filter_note (layout_tables.rs:754) and tested inline by codegen; a stale bit only yields a 'maybe' that falls through to the authoritative thread-local LAYOUT_SLOT_MASKS / TYPED_LAYOUTS maps (layout_tables.rs:39-43)."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+   "names": [
+    "N"
+   ],
+   "verdict": "no_heap_address",
+   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config. | (second declaration) (layout_tables.rs:1018, layout_object_mask_min_slots) cached PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS env value (default 8); config."
+  },
+  {
+   "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
+   "names": [
+    "LIBS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Vec<LibRecord> of dlopen handles (OS loader handles as usize), owned path Strings and closed flags, pushed by bun:ffi dlopen (dlopen.rs:749); no GC-heap addresses, indices are process-global."
+  },
+  {
+   "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",
+   "names": [
+    "SYMS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Vec<SymRecord> of dlsym'd / CFunction native fn pointers, arg type codes and a leaked &'static str name (dlopen.rs:765, 819); JS stubs capture only the SYMS index, no GC-heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/roots/stack_maps.rs",
+   "names": [
+    "STACK_MAPS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "StackMapIndexStore: generation counter plus an RwLock'd StackMapIndex built from the loaded images' LLVM stack-map sections (keyed by code return addresses); rebuilt at module load, no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/roots/stack_maps.rs",
+   "names": [
+    "VECTOR_LENGTH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Cached SVE vector length in bytes from prctl(PR_SVE_GET_VL) (aarch64-linux only); a number."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/dictionary_counters.rs",
+   "names": [
+    "LATCH_MIN_KEYS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "per_test_global AtomicU64 key-count threshold for the dictionary latch, set from default/env in object/dictionary.rs:140/213/229; a number."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/dictionary_counters.rs",
+   "names": [
+    "LAYOUT_ID_BUDGET"
+   ],
+   "verdict": "no_heap_address",
+   "why": "per_test_global AtomicU64 remaining layout-id budget, stored in object/dictionary.rs:138/160; a counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol/accessors.rs",
+   "names": [
+    "SYMBOL_ACCESSOR_PROPERTIES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by (owner, symbol) addresses with get/set closure bits; entries whose owner, symbol or closures are freed are dropped at thread exit.",
+   "hook": "release_symbol_accessors_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol/accessors.rs",
+   "names": [
+    "SYMBOL_ACCESSOR_IDS"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Monotone 256-bit filter indexed by SymbolHeader::id (a counter, not an address), set by note_symbol_accessor_key before the table insert; a stale bit only means 'maybe', resolved by the authoritative SYMBOL_ACCESSOR_PROPERTIES table / prototype walk."
+  },
+  {
+   "file": "crates/perry-runtime/src/agent.rs",
+   "names": [
+    "RETIRE_HOOKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Vec of Rust fn(AgentId) pointers registered once per process by register_retire_hook (agent.rs:125) and run from retire_agent; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/array/subclass.rs",
+   "names": [
+    "DENSE_SUBCLASS_CACHE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Seqlock cache keyed by (class_id<<32 | parent/shape id) with values packing slot indices and prefix lengths (array/subclass.rs:66-76, 124); integer ids and offsets, no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/eh_walker.rs",
+   "names": [
+    "WALKER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Lazily built unwinder over loaded images' .eh_frame sections plus a rows cache keyed by code PC; addresses are of mapped image sections/code, not the GC heap."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/layout/typed_shape.rs",
+   "names": [
+    "REGISTERED_TYPED_SHAPES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Module-init registry of typed ShapeIds: layout keys (class id, proto id from class_proto_id = tag|class id, mask words), descriptors, and ImportedShapeSlot addresses of executable data-section globals (typed_shape.rs:106-118); no GC-heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/chain_store.rs",
+   "names": [
+    "CHAIN_STORE_SKIPPED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Six stats counters incremented by note_skip when stats are enabled; counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_dispatch/dispatch_m_p.rs",
+   "names": [
+    "LAST_CALL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[cfg(test)]-only recorder of (method name String, args_len) written by recording_provider in net_provider_dispatch_tests; owned Rust data, not in production builds."
+  },
+  {
+   "file": "crates/perry-runtime/src/promise/then_probe.rs",
+   "names": [
+    "OUTCOME_COUNTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Twelve diagnostic outcome counters for the then-probe; counts."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/ref_states.rs",
+   "names": [
+    "TIMER_REF_STATES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Map from monotonic process-global timer id (i64) to {has_ref, scheduled} plus a retired-id FIFO (ref_states.rs:33-39); ids and booleans only."
+  },
+  {
+   "file": "crates/perry-runtime/src/update_notify.rs",
+   "names": [
+    "CONFIG"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock of the embedded update-notifier config (owned Strings / u64s) parsed from the compiled-in blob at startup; Rust-owned data."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/byob.rs",
+   "names": [
+    "BYOB_PENDING"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Parked read(view) entries hold the reading thread's promise and view; a freed one kills its stream and the queue is evicted with it.",
+   "hook": "release_web_streams_in_freed_ranges",
+   "hook_file": "crates/perry-stdlib/src/streams.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_DATA_LISTENERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_READABLE_LISTENERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_DATA_ONCE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_READABLE_ONCE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_END_LISTENERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_END_ONCE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global list of raw stdin closure addresses filled by process.stdin.on/once from any thread; the dead thread's closures are dropped at thread exit so the pump never calls them.",
+   "hook": "release_stdin_listeners_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_READER_DATA_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "extern \"C\" fn(*const u8,usize) code address stored once by js_register_stdin_reader_consumer (os_process_streams.rs:322), installed by perry-stdlib readline."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_READER_EOF_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "extern \"C\" fn() code address stored by js_register_stdin_reader_consumer (os_process_streams.rs:323) for readline's EOF callback."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_LISTENERS_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of perry-stdlib readline's listeners provider, stored only by js_register_stdin_listeners_provider (os_process_streams.rs:522)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_ON_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of readline's `on` registration op, stored only by js_register_stdin_listener_ops (os_process_streams.rs:674)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_OFF_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of readline's `off` registration op, stored only by js_register_stdin_listener_ops (os_process_streams.rs:675)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_REMOVE_ALL_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of readline's removeAllListeners op, stored only by js_register_stdin_listener_ops (os_process_streams.rs:676)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_FLOW_PAUSE_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of readline's pause() flow op, stored only by js_register_stdin_flow_ops (os_process_streams.rs:700)."
+  },
+  {
+   "file": "crates/perry-runtime/src/os_process_streams.rs",
+   "names": [
+    "STDIN_FLOW_RESUME_FN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of readline's resume() flow op, stored only by js_register_stdin_flow_ops (os_process_streams.rs:701)."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_PROMISE_TIMER_REGISTRATIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_CALLBACK_TIMER_REGISTRATIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_INTERVAL_TIMER_REGISTRATIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_PROMISE_TIMER_TICKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_CALLBACK_TIMER_TICKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_INTERVAL_TIMER_TICKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_PROMISE_TIMERS_FIRED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_CALLBACK_TIMERS_FIRED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "PROFILE_INTERVAL_TIMERS_FIRED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Opt-in PERRY_MT_PROFILE event counter (fetch_add on timer registration/tick/fire), printed at exit; plain count."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer.rs",
+   "names": [
+    "NEXT_TIMER_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic i64 timer-id counter shared by setTimeout/setInterval (timer.rs:481 increments under the mutex); an id, not an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "SHOW_TOAST_HANDLER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the platform UI crate's toast handler, stored by js_register_show_toast_handler."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "SET_TEXT_HANDLER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the platform UI crate's setText handler, stored by js_register_set_text_handler."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "REGISTER_TEXT_ID_HANDLER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the platform UI crate's register-text-id handler, stored by its js_register_* FFI."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "PENDING_REGISTER_IDS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of (widget handle i64, owned String id) buffered before the UI handler registers; widget handles are small ids into the platform UI crate's process-global widget registry, strings are Rust-owned."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "STATE_VALUES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "perry/ui state values are raw JS values settable from any thread (GC root); entries holding a freed value are removed at thread exit.",
+   "hook": "release_ui_text_registry_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "NAVSTACK_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Map of state id String -> Vec<NavRoute{name: String, handle: i64 widget handle}>; widget handles index the platform UI crate's widget registry, not the GC heap."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "SET_WIDGET_HIDDEN_HANDLER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the platform UI set-hidden handler, stored by js_register_widget_hidden_handler."
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "FOREACH_REGISTRY"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "ForEach render closures registered without a thread check; bindings with a freed closure are dropped at thread exit.",
+   "hook": "release_ui_text_registry_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/ui_text_registry.rs",
+   "names": [
+    "FOREACH_RENDER_HANDLER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the platform UI ForEach render handler, stored by js_register_foreach_render_handler."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls.rs",
+   "names": [
+    "TLS_CLIENT_METADATA"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "tls.connect records keep the raw checkServerIdentity closure address and are never removed on close; records whose closure is freed are dropped at thread exit.",
+   "hook": "release_tls_client_metadata_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/tls.rs",
+   "names": [
+    "TLS_CONNECT_PROVIDER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of perry-ext-net's js_tls_connect, stored only by js_set_tls_connect_provider (tls.rs:42)."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/census.rs",
+   "names": [
+    "SUBMITS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-op-class turnloop census counters (submits/completions), atomic increments only."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/census.rs",
+   "names": [
+    "COMPLETIONS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-op-class turnloop census counters (submits/completions), atomic increments only."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/census.rs",
+   "names": [
+    "TIMER_FIRED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "turnloop census count of expired deadlines delivered; atomic counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/census.rs",
+   "names": [
+    "TIMER_CANCELLED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "turnloop census count of Cancelled completions for closed deadline handles; atomic counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/census.rs",
+   "names": [
+    "TIMER_CLOSED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "turnloop census count of Closed completions for deadline handles; atomic counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/media_playback.rs",
+   "names": [
+    "MEDIA_CREATE_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ohos-napi drain queue of MediaCreateIntent{handle: i64 from process-global HANDLE_SEQ, url: owned String}."
+  },
+  {
+   "file": "crates/perry-runtime/src/media_playback.rs",
+   "names": [
+    "MEDIA_CONTROL_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ohos-napi drain queue of MediaCommand variants carrying a HANDLE_SEQ handle and plain f64 numbers (seconds/volume/rate)."
+  },
+  {
+   "file": "crates/perry-runtime/src/media_playback.rs",
+   "names": [
+    "MEDIA_NOW_PLAYING_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "ohos-napi drain queue of MediaNowPlaying{handle, owned title/artist/album/artwork Strings}."
+  },
+  {
+   "file": "crates/perry-runtime/src/media_playback.rs",
+   "names": [
+    "MEDIA_STATE_INBOX"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(feature ohos-napi) onStateChange/onTimeUpdate closures settable from any thread; callbacks in freed blocks are set to None at thread exit.",
+   "hook": "release_media_callbacks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/tee.rs",
+   "names": [
+    "TEE_SOURCE_BRANCHES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Map source stream id -> (branch id, branch id); ids minted by process-global streams IDALLOC (next_stream_id) indexing the process-global READABLE_STREAMS table."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/tee.rs",
+   "names": [
+    "TEE_BRANCH_SOURCE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Map branch stream id -> source stream id; process-global stream ids into the process-global READABLE_STREAMS table."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/tee.rs",
+   "names": [
+    "TEE_PULLING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Set of tee source stream ids with a pull job queued; process-global stream ids."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/tee.rs",
+   "names": [
+    "TEE_STARTED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Set of tee source stream ids whose pull pipeline delivered once; process-global stream ids."
+  },
+  {
+   "file": "crates/perry-runtime/src/messaging.rs",
+   "names": [
+    "WORKER_THREADS_MESSAGE_CHANNEL_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of perry-stdlib worker_threads' MessageChannel factory, stored by js_register_worker_threads_messaging_constructors (messaging.rs:24)."
+  },
+  {
+   "file": "crates/perry-runtime/src/messaging.rs",
+   "names": [
+    "WORKER_THREADS_BROADCAST_CHANNEL_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of perry-stdlib worker_threads' BroadcastChannel factory, stored by js_register_worker_threads_messaging_constructors (messaging.rs:25)."
+  },
+  {
+   "file": "crates/perry-runtime/src/messaging.rs",
+   "names": [
+    "PORT_STATES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "MessagePort state keyed by port address, removed only by close(); ports whose key, partner, onmessage, queue or listener values are freed are dropped at thread exit.",
+   "hook": "release_port_states_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/child_process/reactor.rs",
+   "names": [
+    "CP_EVENT_QUEUE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of CpEvent produced by child reader/waiter threads: numeric live-child handles (CP_NEXT_LIVE_ID), fds, owned byte Vecs/JSON Strings, exit codes, signals; no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/child_process/reactor.rs",
+   "names": [
+    "CP_LIVE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Entries hold the spawning thread's ChildProcess/stdio objects and callbacks emitted on by the global pump; entries naming freed memory are removed at thread exit with live/refed counts adjusted.",
+   "hook": "release_cp_children_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag/receiver_repr.rs",
+   "names": [
+    "COUNTERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "FamilyCounters struct of per-receiver-family AtomicU64 arrays (constructed/observed_old/observed_wrapped), increments only."
+  },
+  {
+   "file": "crates/perry-runtime/src/hot_diag/receiver_repr.rs",
+   "names": [
+    "RECEIVER_REPR_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<Option<Sink>> parsed once from PERRY_RECEIVER_REPR_DIAG (hot_diag::Sink output target: stderr/file); Rust-owned config."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_this_webassembly.rs",
+   "names": [
+    "REG"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "(feature wasm-host) WebAssembly wrapper registries keyed by wrapper object address; move/death hooks do not run at thread exit, so freed addresses are dropped (host handles only unmapped). | (second declaration) (feature wasm-host) WebAssembly wrapper registries keyed by wrapper object address; move/death hooks do not run at thread exit, so freed addresses are dropped (host handles only unmapped).",
+   "hook": "release_wasm_wrapper_registries_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/hooks.rs",
+   "names": [
+    "SLOTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Index-addressed TUI hook slots; freed State/Ref values become undefined, Memos uncomputed, Ref handles and Effect cleanups 0 at thread exit.",
+   "hook": "release_tui_hook_slots_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/hooks.rs",
+   "names": [
+    "FOCUS_CURRENT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Currently focused useFocus id (u32 minted by FOCUS_ID_COUNTER), 0 = none; set by use_focus/focus_next/focus_prev/focus."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/alloc_sample.rs",
+   "names": [
+    "INTERVAL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Allocation-sampling interval in bytes (0=off), written once at gc_init from the env knob."
+  },
+  {
+   "file": "crates/perry-runtime/src/atomics_futex.rs",
+   "names": [
+    "WAIT_TABLE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Futex table keyed by absolute slot address of an Atomics.wait/waitAsync/notify target, values Arc<Waiter> (Rust-owned); callers require a shared backing, which lives in crate::shared_sab's process-global never-freed allocation."
+  },
+  {
+   "file": "crates/perry-runtime/src/embedded.rs",
+   "names": [
+    "EMBEDDED_ASSETS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Registry of embedded assets: owned name String + bytes that are &'static rodata or Box::leak'd decompressed buffers, plus a text_module flag; no GC-heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/gc/poll_arm.rs",
+   "names": [
+    "ARM_EVENTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of times a GC deferral armed the back-edge poll; diagnostic counter."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_image.rs",
+   "names": [
+    "PRIMARY_IMAGE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Never-dropped Arc<ClassImageTables> plus owner ThreadId; the tables are class-id-keyed metadata (vtables, fn-pointer hooks such as has_instance/to_string_tag stored as func_ptr code addresses, names, lengths, parent edges) owned by Rust allocations, not the GC arena."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/prototype_chain.rs",
+   "names": [
+    "OBJECT_PROTOTYPES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by owner address; death pruning only sees the collecting thread, so entries whose owner or prototype is freed are dropped at thread exit.",
+   "hook": "release_object_prototypes_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/proxy/put_value/packed_add.rs",
+   "names": [
+    "PERRY_STORE_CENSUS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[no_mangle] array of 32 store-path census counters incremented by codegen-emitted code (indices <16) and runtime (16..32); counts only."
+  },
+  {
+   "file": "crates/perry-runtime/src/timer/tests_inline.rs",
+   "names": [
+    "SELF_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "cfg(test)-only: records the mock timer's own i64 timer id for the self-eviction test."
+  },
+  {
+   "file": "crates/perry-runtime/src/v8.rs",
+   "names": [
+    "PROMISE_HOOKS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "v8.promiseHooks records hold raw closure pointers from any thread; a record with a freed callback is disabled at thread exit (kept in place, its stop function indexes it).",
+   "hook": "release_promise_hooks_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/expando.rs",
+   "names": [
+    "STREAM_EXPANDO"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Expando values live in the setting thread's heap though the stream id is process-global; freed values are removed property by property.",
+   "hook": "release_stream_expandos_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "PERRY_SYMBOL_PROPERTY_IC_EPOCH"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[no_mangle] monotonic epoch counter bumped on every symbol-data mutation and completed collection (symbol_property_ic_epoch_bump); generated ICs compare it, it never holds an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SYMBOL_REGISTRY"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Maps Symbol.for key String -> SymbolHeader address; the only inserter (symbol/constructors.rs:86-124) stores a Box::into_raw'd (never freed) SymbolHeader, so no thread arena owns the value."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SYMBOL_POINTERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Set of fresh Symbol() header addresses (gc_malloc); death pruning only sees the collecting thread's heap, so addresses in the exiting thread's freed arena/malloc ranges are dropped at thread exit.",
+   "hook": "release_symbol_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "REGISTERED_SYMBOL_DESCRIPTIONS"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Keyed by addresses of Box::leak'd registered/well-known/Intl-fallback SymbolHeaders only (inserters symbol.rs:398, 709, symbol/constructors.rs:122); values are Rust-owned Arc<str>."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "WELL_KNOWN_SYMBOLS"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Short name -> address of a Box::into_raw'd well-known SymbolHeader created in well_known_symbol_slow (symbol.rs:352-402); never freed, never reset."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SLOTS"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Lock-free fast cache (well_known_fast_slot) of the same Box-leaked well-known SymbolHeader addresses returned by well_known_symbol_slow; published once, never cleared."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SYMBOL_ADDR_FILTER"
+   ],
+   "verdict": "conservative_filter",
+   "why": "Bloom-style RegistryAddrFilter admitted with every symbol address before insertion; a stale bit only yields 'maybe', which is resolved against the authoritative SYMBOL_POINTERS set (is_registered_symbol, symbol.rs:738-781). Note the authoritative table itself is a BUG in this audit."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "INTL_FALLBACK_SYMBOL"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Holds the address of the %Intl%.[[FallbackSymbol]] SymbolHeader, Box::into_raw'd once in intl_legacy_constructed_symbol (symbol.rs:688-712); never freed."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SYMBOL_PROPERTIES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by owner object address with strongly-rooted values; owner records in freed ranges, and entries whose symbol or value is freed, are dropped at thread exit.",
+   "hook": "release_symbol_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "SYMBOL_PROPERTY_ATTRS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Keyed by (owner, symbol) addresses; entries where either lies in freed ranges are dropped at thread exit.",
+   "hook": "release_symbol_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "NEXT_SYMBOL_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "CLASS_STATIC_SYMBOLS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Class ids are process-global but members hold symbol addresses and JS values from the writing thread; members with a freed symbol or value are dropped at thread exit.",
+   "hook": "release_symbol_tables_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/symbol.rs",
+   "names": [
+    "CLASS_STATIC_SYMBOL_ORDER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "class_id -> Vec of SymbolHeader::id (monotonic u64 ids, stable across moves) recording creation order (symbol.rs:1162-1172); holds no addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "OPENS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&OPENS) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_NOT_SEGMENTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_NOT_SEGMENTER) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_NOT_GRAPHEME"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_NOT_GRAPHEME) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_SEGMENT_PATCHED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_SEGMENT_PATCHED) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_NOT_STRING"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_NOT_STRING) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_NOT_UTF8"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_NOT_UTF8) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "DECLINE_EMPTY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&DECLINE_EMPTY) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "NEXTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&NEXTS) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "CODE_POINT_ATS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&CODE_POINT_ATS) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "MATERIALISE_SEGMENT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&MATERIALISE_SEGMENT) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "REGEXP_TEST_ACCEPTED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&REGEXP_TEST_ACCEPTED) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/intl/segments_view.rs",
+   "names": [
+    "REGEXP_TEST_DECLINED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic AtomicU64 counter incremented via bump(&REGEXP_TEST_DECLINED) in the Intl.Segmenter segments-view fast path and read only for the diag report."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+   "names": [
+    "DIAG_GLOBAL_ACTIVE_COUNTS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Channel-name key (DiagChannelKey::String; symbol keys are excluded by cross_thread_key) -> subscriber count, adjusted in adjust_global_active_count_for_name; Rust-owned Strings and usizes only."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+   "names": [
+    "DIAG_PENDING_PUBLISHES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Queue of worker publishes: String channel key + SerializedValue deep copy (serialize_nanbox_for_thread) + ThreadId, pushed in enqueue_cross_thread_publish and deserialized on the main pump; arena-independent payload."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+   "names": [
+    "DIAG_PENDING_PUBLISHES_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Mirror of DIAG_PENDING_PUBLISHES.len() republished under its lock; a counter."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "CONTAINER_HANDLES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle (from process-global NEXT_HANDLE_ID) -> perry_container_compose ContainerHandle {id: String, name: Option<String>}; Rust-owned."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "COMPOSE_HANDLES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle (process-global NEXT_HANDLE_ID) -> Arc<ComposeEngine> Rust object; perry-container-compose does not depend on perry-runtime, so no JS values."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "WORKLOAD_HANDLES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle (process-global NEXT_HANDLE_ID) -> Arc<WorkloadGraphEngine> Rust object with no JS values."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "CONTAINER_INFO_LIST_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle -> Vec<ContainerInfo> (Strings/Vec/HashMap of Strings); Rust-owned result data."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "CONTAINER_INFO_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle -> ContainerInfo (Strings); Rust-owned result data."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "CONTAINER_LOGS_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle -> ContainerLogs {stdout, stderr: String}; Rust-owned."
+  },
+  {
+   "file": "crates/perry-stdlib/src/container/types.rs",
+   "names": [
+    "IMAGE_INFO_LIST_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "u64 handle -> Vec<ImageInfo> (Strings + u64 size); Rust-owned."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/transform.rs",
+   "names": [
+    "TRANSFORM_PAIRS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Writable stream id -> transform stream id (transform.rs:126); both ids come from the process-global IDALLOC band allocator (streams/idalloc.rs) indexing process-global stream registries."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/transform.rs",
+   "names": [
+    "TRANSFORM_WRITE_RELEASES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Raw addresses of write promises parked on backpressure; a freed one kills the transform family and its side-table rows.",
+   "hook": "release_web_streams_in_freed_ranges",
+   "hook_file": "crates/perry-stdlib/src/streams.rs"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/transform.rs",
+   "names": [
+    "TRANSFORM_PENDING_WRITES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Writable stream id -> count of queued transform write jobs (transform.rs:261-265, 413); ids and counts only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/transform.rs",
+   "names": [
+    "TRANSFORM_BACKPRESSURED_JOBS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Raw closure addresses of deferred write jobs from the writing thread's arena; evicted with the dead transform family.",
+   "hook": "release_web_streams_in_freed_ranges",
+   "hook_file": "crates/perry-stdlib/src/streams.rs"
+  },
+  {
+   "file": "crates/perry-stdlib/src/streams/transform.rs",
+   "names": [
+    "TRANSFORM_PENDING_CLOSE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Raw close-request promise address from the calling thread's arena; evicted with the dead transform family.",
+   "hook": "release_web_streams_in_freed_ranges",
+   "hook_file": "crates/perry-stdlib/src/streams.rs"
+  },
+  {
+   "file": "crates/perry-runtime/src/registry_latch.rs",
+   "names": [
+    "WINDOW"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[cfg(test)] function-local fixture (concurrent_admits_never_drop_an_address) admitting synthetic integers 0x1_0000+i; never holds a real heap address and does not exist in production. | (second declaration) #[cfg(test)] function-local RegistryAddrWindow fixture (window_admit_is_visible_to_another_thread) admitting the synthetic constant 0x4000; test-only."
+  },
+  {
+   "file": "crates/perry-runtime/src/registry_latch.rs",
+   "names": [
+    "FILTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[cfg(test)] function-local RegistryAddrFilter fixture (concurrent_filter_admits_never_drop_an_address) fed synthetic 0x5_0000_0000-range integers; test-only. | (second declaration) #[cfg(test)] function-local RegistryAddrFilter fixture (filter_admit_is_visible_to_another_thread) admitting the synthetic constant 0x9_0000_1000; test-only."
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib.rs",
+   "names": [
+    "ZLIB_STREAMS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "pipes holds NaN-boxed .pipe(dest) targets from the owning thread's heap; a stream with a freed destination or listener is dropped whole.",
+   "hook": "release_zlib_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib.rs",
+   "names": [
+    "ZLIB_LISTENERS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Raw .on(event, cb) closure pointers from the registering thread's arena; dropped with their stream.",
+   "hook": "release_zlib_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib.rs",
+   "names": [
+    "ZLIB_PENDING_EVENTS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Queued callback closures whose closure is freed are dropped, as are Data/End/Error events of dropped streams.",
+   "hook": "release_zlib_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib.rs",
+   "names": [
+    "NEXT_ZLIB_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic i64 handle counter in the ZLIB handle band (next_zlib_id, zlib.rs:786-797)."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+   "names": [
+    "SUBMOD_REGISTRY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-bucket pointers to `static` SubmoduleSpec descriptors (e.g. &SUBMOD_VM) stored by js_node_submod_install_* (mod.rs:860-970); addresses of statics."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+   "names": [
+    "SUBMOD_INSTALL_ALL_HOOK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function pointer to js_node_submod_install_all stored by js_node_submod_enable_install_all; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_submodules/mod.rs",
+   "names": [
+    "SYS_DEPRECATION_WARNED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "One-shot 0/1 flag compare_exchange'd by emit_sys_deprecation_warning_once."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
+   "names": [
+    "ROUTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Vec of Rust-owned Route {AgentId, ThreadId, loop_id, Arc<AtomicBool>, Notifier, Poster}; no JS/arena addresses, and a thread's route is removed at its thread exit by ClaimGuard::drop (agent_loop.rs:345-354) held in a perry_thread_local."
+  },
+  {
+   "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
+   "names": [
+    "EXTRA_STATS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Function pointer to a perry-stdlib StatsReporter installed by register_stats_reporter; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/native_handle.rs",
+   "names": [
+    "MAIN_THREAD_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Hash of the main thread's std ThreadId, set once by compare_exchange in runtime_main_thread_id."
+  },
+  {
+   "file": "crates/perry-runtime/src/native_handle.rs",
+   "names": [
+    "MAIN_OS_THREAD_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OS thread id (pthread_self / GetCurrentThreadId) of the main thread; not a heap address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/mod.rs",
+   "names": [
+    "GLOBAL_THIS_PTR"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global root slot each thread overwrites with its own globalThis; cleared at thread exit when the last writer's heap is freed.",
+   "hook": "release_global_this_ptr_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/object/mod.rs",
+   "names": [
+    "PERRY_TRANSITION_IC_HITS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[no_mangle] probe counter bumped by generated transition-IC hit paths under PERRY_TRANSITION_IC_PROBE=1 and printed by js_transition_ic_probe_report."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/sink.rs",
+   "names": [
+    "SINKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-subsystem completion-sink function pointers (SinkFn) installed once by register_sink; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_net/sink.rs",
+   "names": [
+    "ALLOCS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Per-subsystem accepted-connection id allocator function pointers (AllocFn) installed by register_sink; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/block.rs",
+   "names": [
+    "BLOCK_POOL_PROCESS_BYTES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Process-wide byte total of pooled free arena blocks (a size counter for the pool cap), not an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/buffer/own_props.rs",
+   "names": [
+    "PROPS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Buffer expando records keyed by buffer address; records whose buffer or any stored value is freed are dropped at thread exit.",
+   "hook": "release_buffer_own_props_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/event_target.rs",
+   "names": [
+    "DOM_EXCEPTION_ERRORS"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Addresses of DOMException error objects, removed only by the error finalizer; freed addresses are dropped at thread exit.",
+   "hook": "release_dom_exception_errors_in_freed_ranges"
+  },
+  {
+   "file": "crates/perry-runtime/src/ios_game_loop.rs",
+   "names": [
+    "CONNECTED_SCENE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "UIWindowScene ObjC object pointer stored by the UIKit scene-delegate callback fallback_scene_will_connect (main-thread UIKit); a UIKit-owned object, not a GC arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_registry/dispatch.rs",
+   "names": [
+    "VTABLE_GEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Generation counter bumped on class method/getter registration; caches compare it to invalidate."
+  },
+  {
+   "file": "crates/perry-runtime/src/ohos_napi.rs",
+   "names": [
+    "NAPI_MODULE_DESC"
+   ],
+   "verdict": "no_heap_address",
+   "why": "static mut NapiModule descriptor holding the napi_init fn pointer and nm_modname pointing into a static buffer filled by derive_modname at .so load; no heap addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/pty/mod.rs",
+   "names": [
+    "EXIT_SINK"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#[cfg(all(test, unix))] test sink recording the onExit payload's exitCode and signal fields (numbers / undefined, per the assertions at pty/mod.rs:514-545); test-only."
+  },
+  {
+   "file": "crates/perry-runtime/src/tls_os_pool.rs",
+   "names": [
+    "NEXT_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Counter assigning each TLS-pool declaration a slot index (tls_os_pool.rs:210-222); storage itself is per-thread via a pthread key."
+  },
+  {
+   "file": "crates/perry-runtime/src/weakref/test_support.rs",
+   "names": [
+    "DELIVERED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Test-only static in a spawned test thread recording the held value delivered to a FinalizationRegistry cleanup callback (asserted to be the number 41.0)."
+  },
+  {
+   "file": "crates/perry-stdlib/src/tls/socket_api.rs",
+   "names": [
+    "NAMES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "TLS server handle id (i64 from the stdlib handle registry) -> queue of original SNI servername Strings (record_original_servername at tls.rs:1215, taken at tls/turnloop_server.rs:295); Rust-owned."
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "HOOKS_ACTIVE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of enabled createHook records, adjusted by enable/disable and by the thread-exit hook; a count, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/async_hooks.rs",
+   "names": [
+    "PROMISE_HOOKS_ACTIVE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of enabled hooks with promise callbacks, adjusted by enable/disable and the thread-exit hook; a count."
+  },
+  {
+   "file": "crates/perry-runtime/src/v8.rs",
+   "names": [
+    "PROMISE_HOOKS_ACTIVE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Count of enabled v8.promiseHooks records, adjusted by enable/disable and the thread-exit hook; a count."
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/handle.rs",
+   "names": [
+    "PAYLOAD_RELEASERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Registry of (TypeId, releaser fn) pairs for HANDLES payload types (#11471); the dyn Fn wraps a plain fn pointer and captures nothing."
+  },
+  {
+   "file": "crates/perry-runtime/src/os/signal.rs",
+   "names": [
+    "TURNLOOP_SIGNAL_OWNERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Agent ids owning each turnloop signal subscription (#11471), read by the retire hook; agent ids are integers, never addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/thread_exit.rs",
+   "names": [
+    "RANGE_HOOKS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Registry of thread-exit range-hook function pointers (#11471); code addresses only, never a heap address."
+  },
+  {
+   "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
+   "names": [
+    "ORPHANS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds (Handle, Parked) rows: a Handle is a native-registry id in [1, 0x40000) minted by the process-global shared pool (perry_ffi::shared_handle_id_pool), never an arena address, and Parked is {kind, NativeRegistrationIdentity{domain, serial, numeric_id}, epoch}. Payloads live in the process-global common HANDLES map, not in any thread's arena. A row cannot name a different object after reuse: release() retires only via begin_retirement_of(identity), which rejects any registration whose serial differs, and ids are reissued only after a full trace proves them unreferenced (#11453)."
+  }
+ ]
+}

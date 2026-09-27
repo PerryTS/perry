@@ -502,7 +502,15 @@ fn pty_reactor_pump_inner() {
             libc::close(item.master);
         }
         let scope = crate::gc::RuntimeHandleScope::new();
-        let bits = pty_live_lock().as_ref().unwrap()[&item.handle].ipty_bits;
+        // #11471: a thread exit may have released this entry since the
+        // snapshot above (`release_ptys_in_freed_ranges`), and that release
+        // owns its counter decrement.
+        let Some(bits) = pty_live_lock()
+            .as_ref()
+            .and_then(|map| map.get(&item.handle).map(|lp| lp.ipty_bits))
+        else {
+            continue;
+        };
         let ipty = scope.root_nanbox_f64(f64::from_bits(bits));
         if !item.tail.is_empty() {
             let chunk = crate::child_process::cp_box_string(&String::from_utf8_lossy(&item.tail));
@@ -525,12 +533,15 @@ fn pty_reactor_pump_inner() {
         // a handler reading `pty.process` state observes post-exit values.
         cp_set_field(ipty.get_nanbox_f64(), b"exitCode", exit_code);
         super::pty_emit(ipty.get_nanbox_f64(), "exit", &[payload.get_nanbox_f64()]);
-        if let Some(map) = pty_live_lock().as_mut() {
-            map.remove(&item.handle);
-        }
-        PTY_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
-        if item.refed {
-            PTY_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        let removed = pty_live_lock()
+            .as_mut()
+            .and_then(|map| map.remove(&item.handle))
+            .is_some();
+        if removed {
+            PTY_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+            if item.refed {
+                PTY_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -557,6 +568,86 @@ pub(crate) fn pty_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
             visitor.visit_nanbox_u64_slot(&mut lp.ipty_bits);
         }
     }
+}
+
+/// #11471: drop every live pty registered by a thread whose arena is being
+/// freed.
+///
+/// `ipty_bits` is the spawning thread's IPty object, GC-rooted by
+/// [`pty_reactor_scan_roots_mut`] and emitted on by the pump. Left behind by an
+/// exited thread, later collections would mark/rewrite memory another arena
+/// may have reused, the pump would fire `onData`/`onExit` on it, and
+/// [`PTY_REFED_COUNT`] would keep the event loop alive forever.
+///
+/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`): no
+/// thread-locals, no JS. The child is not signalled. The master descriptor is
+/// deliberately LEAKED, not closed: the reader thread may still be blocked in
+/// `read(master)`, and closing it under that thread would let the descriptor
+/// number be reused while the read is in flight — the same race the pump
+/// avoids by closing only after `Eof`. The reader/waiter threads finish on the
+/// child's exit and their events for this handle are skipped by the pump.
+/// Dropping the entry drops the writer channel, which ends the writer thread.
+pub(crate) fn release_ptys_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    if PTY_LIVE_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let removed: Vec<LivePty> = {
+        let mut guard = pty_live_lock();
+        let Some(map) = guard.as_mut() else {
+            return;
+        };
+        let dead: Vec<u64> = map
+            .iter()
+            .filter(|(_, lp)| freed.holds_bits(lp.ipty_bits))
+            .map(|(handle, _)| *handle)
+            .collect();
+        dead.iter()
+            .filter_map(|handle| map.remove(handle))
+            .collect()
+    };
+    for lp in &removed {
+        PTY_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if lp.refed {
+            PTY_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    drop(removed);
+}
+
+/// Test probe (#11471): register a live-pty entry for `ipty` as
+/// `pty_register_live` would, minus the child: no descriptor (`-1`), no
+/// reader/waiter threads, un-`ref`'d and never exiting, so no pump acts on it
+/// and no event loop is held open by it. Returns the registry handle.
+#[cfg(unix)]
+#[doc(hidden)]
+pub fn pty_register_idle_live_for_test(ipty: f64) -> u64 {
+    let handle = PTY_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
+    pty_live_lock().get_or_insert_with(HashMap::new).insert(
+        handle,
+        LivePty {
+            ipty_bits: ipty.to_bits(),
+            pid: 0,
+            master: -1,
+            write_tx: std::sync::mpsc::channel().0,
+            utf8_carry: Vec::new(),
+            eof: false,
+            exited: None,
+            closed: false,
+            refed: false,
+            paused: false,
+            pending: Vec::new(),
+        },
+    );
+    PTY_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    handle
+}
+
+/// Test probe (#11471): is pty `handle` still registered?
+#[doc(hidden)]
+pub fn pty_live_registered_for_test(handle: u64) -> bool {
+    pty_live_lock()
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&handle))
 }
 
 #[cfg(test)]

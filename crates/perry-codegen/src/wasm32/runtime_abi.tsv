@@ -43,6 +43,7 @@ js_argon2_verify_sync	i32s	ptr,ptr
 js_arguments_bundle_get_slow	f64	f64,f64,f64,ptr,i32s
 js_arguments_bundle_index_get	f64	f64,f64
 js_arguments_object_alloc	ptr	f64,f64,i32s
+js_arguments_object_alloc_mapped	ptr	f64,f64,i32u
 js_arguments_object_map_index	void	ptr,i32u,ptr
 js_array_alloc	ptr	i32u
 js_array_alloc_literal	ptr	i32u
@@ -118,6 +119,7 @@ js_array_keys	ptr	ptr
 js_array_keys_iter_obj	i64	ptr
 js_array_last_index_of_jsvalue	i64	ptr,f64,f64,i32s
 js_array_length	i32u	ptr
+js_array_length_leaf	i64	ptr
 js_array_like_to_array	ptr	f64
 js_array_live_head	i64	i64
 js_array_map	ptr	ptr,ptr
@@ -3150,6 +3152,7 @@ js_register_class_parent	void	i32u,i32u
 js_register_class_parent_dynamic	void	i32u,f64
 js_register_class_setter	void	i64,ptr,i64,i64
 js_register_class_source	void	i32u,ptr,i32u
+js_register_class_source_static	void	i32u,ptr,i32u
 js_register_class_static_getter	void	i64,ptr,i64,i64
 js_register_class_static_method	void	i64,ptr,i64,i64,i64,i64
 js_register_class_static_method_bind_length	void	i64,ptr,i64,i64

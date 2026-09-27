@@ -343,6 +343,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             offset: 0,
             object_starts: new_object_start_bitmap(size),
             dead_cycles: 0,
+            old_free_holes: false,
         });
     }
     let data = unsafe { alloc(layout) };
@@ -355,6 +356,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
         offset: 0,
         object_starts: new_object_start_bitmap(size),
         dead_cycles: 0,
+        old_free_holes: false,
     })
 }
 
@@ -427,6 +429,12 @@ pub(crate) struct ArenaBlock {
     /// scan finds the pointer (counter resets to 0) or the block is
     /// truly dead and resets.
     pub(crate) dead_cycles: u32,
+    /// #11505 (old arena only): the last old-gen free-list rebuild listed a
+    /// hole in this block. The list is threaded through the holes, so a
+    /// block reset must unlink them before its bytes are reused; this bit
+    /// lets every other reset skip the walk over all chains. Taking a hole
+    /// leaves it set — it may over-approximate, never under-approximate.
+    pub(crate) old_free_holes: bool,
 }
 
 impl ArenaBlock {
@@ -537,6 +545,9 @@ impl Drop for Arena {
                 .map(|block| (block.data as usize, block.data as usize + block.size))
                 .collect();
             crate::closure::release_closure_side_table_owners_in_ranges(&ranges);
+            // #11471: every other process-global table keyed by, or holding,
+            // an address in these blocks (see `arena::thread_exit`).
+            super::thread_exit::release_freed_ranges(&ranges);
         }
         for block in &self.blocks {
             // Skip tombstoned slots (gen-GC Phase C4b-δ): C4b-δ
@@ -632,6 +643,7 @@ impl Arena {
                 offset: 0,
                 object_starts: Box::new([]),
                 dead_cycles: 0,
+                old_free_holes: false,
             }],
             current: 0,
             generation,

@@ -745,6 +745,7 @@ pub(crate) fn install_proto_method(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
+    crate::closure::register_closure_body_builtin(func_ptr);
     super::super::native_module::set_bound_native_closure_name(closure, method_name);
     // #3143: record this method's spec `.length` per closure instance — all
     // noop-backed methods share one func_ptr, so the func-ptr arity registry
@@ -835,6 +836,7 @@ pub(crate) fn install_proto_method_rest_with_length(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::closure::js_register_closure_rest(func_ptr, call_fixed_arity);
+    crate::closure::register_closure_body_builtin(func_ptr);
     super::super::native_module::set_bound_native_closure_name(closure, method_name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);

@@ -19,7 +19,7 @@
 //! closures: it covers method calls, `for…of`, and `.size` reads uniformly.
 
 use crate::map::MapHeader;
-use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
+use crate::object::{js_object_set_field_by_name, ObjectHeader};
 use crate::set::SetHeader;
 use crate::value::{JSValue, POINTER_MASK};
 
@@ -30,7 +30,7 @@ pub(crate) const BACKING_KEY: &[u8] = b"__perry_collection_backing__";
 /// Has any `class X extends Map | Set` instance EVER stashed a backing
 /// collection in this process? Same rationale as
 /// `promise::subclass::PROMISE_SUBCLASS_EVER`: `subclass_backing_of` costs a
-/// key-string alloc plus a full recursive property read per call, and it is
+/// receiver classification plus an own-field probe per call, and it is
 /// reached from generic iteration/dispatch paths in programs that never
 /// subclass a collection. Set at the single stash site (the only writer of
 /// `BACKING_KEY`). (#7795)
@@ -171,9 +171,13 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
     }
     unsafe {
         let obj = instance_object_ptr(value)?;
-        let backing = js_object_get_field_by_name_f64(
-            obj as *const ObjectHeader,
-            crate::string::js_string_from_bytes(BACKING_KEY.as_ptr(), BACKING_KEY.len() as u32),
+        // Internal collection state belongs to this instance, never its
+        // prototype. The own-data probe is a GC leaf: reflective method thunks
+        // may hold their arguments in registers while checking the brand.
+        let backing = super::js_object_get_own_field_or_undef(
+            crate::value::js_nanbox_pointer(obj as i64),
+            BACKING_KEY.as_ptr(),
+            BACKING_KEY.len(),
         );
         let bjs = JSValue::from_bits(backing.to_bits());
         if !bjs.is_pointer() {
@@ -224,30 +228,8 @@ pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
 /// reaches here, and keeping the body out of line preserves the inlined
 /// receiver check at the ~57 `js_map_*` / `js_set_*` entry points.
 ///
-/// # This ALLOCATES, and its callers hold unrooted JSValue args
-///
-/// [`subclass_backing_of`] builds the hidden field's key with
-/// `js_string_from_bytes`, so reaching this arm is a collection point — and it
-/// runs at the TOP of e.g. `js_map_set`, before that function roots its `key` /
-/// `value` params. The exposure is the #7213 shape, and it is closed by the same
-/// accident described in `string/alloc.rs`: an allocation here reaches the
-/// alloc-point arm of `gc_check_trigger`, which takes
-/// `ManualGcScanGuard::force_full_scan`, and a forced conservative stack scan
-/// makes the copying minor ineligible. So the collection this can cause never
-/// MOVES anything, and the same conservative scan finds the raw args on the
-/// native stack.
-///
-/// Recorded rather than pre-emptively fixed, for two reasons. The shape is
-/// already load-bearing on hotter paths — `native_call_method`'s
-/// `collection_methods.rs` calls `subclass_backing_of` on every native method
-/// call on an object, and `field_get_set/get_field_by_name.rs` on every `.size`
-/// read — so this adds no NEW class of exposure. And the obvious fix (a
-/// thread-local caching the interned key `StringHeader`) is itself an unrooted
-/// runtime cache of a heap pointer, the invisible-root hazard CLAUDE.md warns
-/// about, which would have to be registered with
-/// `gc_register_mutable_root_scanner` to be sound. If #7213's premise ever
-/// changes — if the alloc-point arm stops forcing a conservative scan — this
-/// call site must be revisited together with the two above.
+/// This probe is a GC leaf: `subclass_backing_of` reads only the receiver's
+/// own internal backing field, without allocating a key or invoking JavaScript.
 #[cold]
 #[inline(never)]
 pub(crate) fn redirect_collection_receiver(addr: usize, want: CollectionKind) -> usize {

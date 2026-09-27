@@ -90,6 +90,10 @@ pub struct NativeAsyncCompletion {
     thread_policy: u8,
     main_thread_id: u64,
     slots: Mutex<TokenSlots>,
+    /// #11471: the agent (JS heap) that created this token and owns its
+    /// Promise. [`release_native_async_tokens_of_agent`] purges a retired
+    /// agent's tokens by this tag.
+    owner_agent: crate::agent::AgentId,
 }
 
 unsafe impl Send for NativeAsyncCompletion {}
@@ -288,7 +292,9 @@ fn make_token_for_promise(
             handles: Vec::new(),
             context: capture_context(),
         }),
+        owner_agent: crate::agent::current_agent(),
     });
+    register_thread_exit_release();
     let token_ptr = Box::into_raw(token);
     {
         let mut registry = crate::gc::lock_gc_root_registry(registry());
@@ -311,6 +317,111 @@ fn make_token_for_promise(
     };
     set_promise_context_snapshot(promise, context);
     token_ptr
+}
+
+/// #11471: arm the agent-retire purge before the first token exists. The
+/// arena-range half ([`release_native_async_tokens_in_freed_ranges`]) is called
+/// directly by `arena::thread_exit::release_freed_ranges`.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::agent::register_retire_hook(release_native_async_tokens_of_agent);
+    });
+}
+
+/// Retire every registered token `dead` selects: mark it completed (so a late
+/// native completion reports `ALREADY_COMPLETED` instead of queueing), clear
+/// its slots, and drop it from `tokens`, `pending` and `by_promise`,
+/// republishing [`ACTIVE_ENTRIES`] so the keep-alive check stops counting it.
+///
+/// Thread-exit safe: plain registry and slot locks (the same registry →
+/// slots order as `enqueue_payload`), no GC-root-lock bookkeeping (that is a
+/// thread-local), no allocation on the JS heap, no settlement. Deliberately
+/// NOT done, because each needs the dead heap or its thread: the #9552
+/// cross-thread pin is not released (the malloc-resident Promise is
+/// abandoned with the rest of the dead thread's malloc space), and attached
+/// native handles are not disposed (their finalizers are leaked, not run on
+/// a thread that does not own them).
+fn release_tokens_where(dead: impl Fn(&NativeAsyncCompletion, &TokenSlots) -> bool) {
+    let Some(registry) = REGISTRY.get() else {
+        return;
+    };
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registry.tokens.is_empty() && registry.pending.is_empty() {
+        return;
+    }
+    let mut released: Vec<usize> = Vec::new();
+    for &token_ptr in registry.tokens.iter().chain(registry.pending.iter()) {
+        if released.contains(&token_ptr) {
+            continue;
+        }
+        // Tokens are leaked boxes and never freed, so the pointer is valid.
+        let token = unsafe { &*(token_ptr as *const NativeAsyncCompletion) };
+        let mut slots = token
+            .slots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !dead(token, &slots) {
+            continue;
+        }
+        token.state.store(STATE_COMPLETED, Ordering::Release);
+        slots.promise = 0;
+        slots.payload = None;
+        slots.handles.clear();
+        slots.context = AsyncContextSnapshot::default();
+        released.push(token_ptr);
+    }
+    if released.is_empty() {
+        return;
+    }
+    registry
+        .tokens
+        .retain(|token_ptr| !released.contains(token_ptr));
+    registry
+        .pending
+        .retain(|token_ptr| !released.contains(token_ptr));
+    registry
+        .by_promise
+        .retain(|_, token_ptr| !released.contains(token_ptr));
+    publish_active_entries(&registry);
+}
+
+/// #11471: drop every token that names memory in an exiting thread's arena.
+///
+/// A token's payload bits and attached handle values are GC-rooted by
+/// [`scan_native_async_completion_roots_mut`] and settled into its Promise by
+/// whichever thread pumps [`js_native_async_process_pending`]; left behind,
+/// later collections would mark/rewrite reused memory and the pump would
+/// settle a dead heap's promise with dead values. The Promise itself is
+/// malloc-resident and not in the range, so an idle token of a thread with
+/// no agent is invisible here; an agent's idle tokens are released at
+/// retirement instead ([`release_native_async_tokens_of_agent`]).
+pub(crate) fn release_native_async_tokens_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    release_tokens_where(|_, slots| {
+        freed.contains(slots.promise)
+            || match &slots.payload {
+                Some(PendingPayload::ResolveBits(bits) | PendingPayload::RejectBits(bits)) => {
+                    freed.holds_bits(*bits)
+                }
+                _ => false,
+            }
+            || slots
+                .handles
+                .iter()
+                .any(|handle| freed.holds_bits(handle.value_bits))
+    });
+}
+
+/// #11471: at `perry/thread` / worker agent retirement, drop every token that
+/// agent created. Its Promise is reachable only from that agent's heap, so
+/// nothing can observe it any more — but an unsettled token would still count
+/// in [`ACTIVE_ENTRIES`] and keep the process's event loop alive forever.
+fn release_native_async_tokens_of_agent(agent: crate::agent::AgentId) {
+    release_tokens_where(|token, _| token.owner_agent == agent);
 }
 
 fn adopt_or_get_token_for_promise(promise: *mut Promise) -> *mut NativeAsyncCompletion {

@@ -1403,9 +1403,8 @@ pub(crate) fn lower(
             // with the array pointer, and the next read decoded the array as a
             // box → `undefined`. Route through the shared boxed-aware writeback.
             crate::lower_array_method::emit_grow_mutator_writeback(ctx, *array_id, &new_box)?;
-            let blk = ctx.block();
-            let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-            let len_f64 = blk.uitofp(I32, &len_i32, DOUBLE);
+            let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
+            let len_f64 = ctx.block().uitofp(I32, &len_i32, DOUBLE);
             Ok(len_f64)
         }
 

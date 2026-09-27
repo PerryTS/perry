@@ -1292,6 +1292,75 @@ pub(super) fn compile_method(
                 }
             }
 
+            // #11193: the implicit `super(...args)` of a no-own-ctor class whose
+            // ctor-less chain ends at an exotic built-in (`class R extends
+            // RegExp {}`) is the built-in's own Construct with this class as
+            // newTarget — exactly what the inline `new R()` lowering and an
+            // explicit `super()` emit (`js_builtin_subclass_construct`). This
+            // standalone symbol is the body every dynamic construct replays
+            // (`new (R as any)(…)`, `Reflect.construct`, and a species
+            // `Construct` such as RegExp `split`), and it skipped the base as an
+            // uncallable builtin, so those got a plain object with no
+            // `[[RegExpMatcher]]` / buffer / typed-array slots.
+            if builtin_parent_runtime.is_none() && local_parent_ctor.is_none() {
+                if let Some(base) = crate::lower_call::exotic_builtin_base_in_chain(&ctx, class) {
+                    let base = base.to_string();
+                    let undef_lit =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let mut forwarded: Vec<String> = Vec::with_capacity(method.params.len());
+                    for fp in &method.params {
+                        match ctx.locals.get(&fp.id).cloned() {
+                            Some(slot) => {
+                                let loaded = ctx.block().load(DOUBLE, &slot);
+                                forwarded.push(loaded);
+                            }
+                            None => forwarded.push(undef_lit.clone()),
+                        }
+                    }
+                    let (args_ptr, args_len) = if forwarded.is_empty() {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf = ctx.func.alloca_entry_array(DOUBLE, forwarded.len());
+                        for (index, value) in forwarded.iter().enumerate() {
+                            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &index.to_string())]);
+                            ctx.block().store(DOUBLE, value, &slot);
+                        }
+                        let ptr = ctx.block().next_reg();
+                        ctx.block().emit_raw(format!(
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            ptr,
+                            forwarded.len(),
+                            buf
+                        ));
+                        (ptr, forwarded.len().to_string())
+                    };
+                    let class_id = ctx
+                        .class_ids
+                        .get(&class.name)
+                        .copied()
+                        .unwrap_or(0)
+                        .to_string();
+                    let name_idx = ctx.strings.intern(&base);
+                    let entry = ctx.strings.entry(name_idx);
+                    let name_bytes = format!("@{}", entry.bytes_global);
+                    let name_len = entry.byte_len.to_string();
+                    let constructed = ctx.block().call(
+                        DOUBLE,
+                        "js_builtin_subclass_construct",
+                        &[
+                            (crate::types::I32, &class_id),
+                            (crate::types::PTR, &name_bytes),
+                            (I64, &name_len),
+                            (crate::types::PTR, &args_ptr),
+                            (I64, &args_len),
+                        ],
+                    );
+                    if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                        ctx.block().store(DOUBLE, &constructed, &this_slot);
+                    }
+                }
+            }
+
             // #10300: a no-own-ctor class whose chain reaches one of the native
             // bases perry stamps onto the INSTANCE (`EventEmitter`, `Map`/`Set`,
             // `Event`/`CustomEvent`, `AsyncLocalStorage`, ...) gets that surface

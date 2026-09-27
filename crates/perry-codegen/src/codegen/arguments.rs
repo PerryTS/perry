@@ -124,9 +124,7 @@ pub(crate) fn materialize_arguments_object(
         // (that is the proof), so its length is read once, here.
         let raw_args = ctx.block().load(DOUBLE, &arguments_slot);
         let raw_bits = ctx.block().bitcast_double_to_i64(&raw_args);
-        let len = ctx
-            .block()
-            .call(I32, "js_array_length", &[(I64, &raw_bits)]);
+        let len = crate::expr::array_length::emit_array_length_i32(ctx, &raw_bits);
         let len = ctx.block().uitofp(I32, &len, DOUBLE);
         let length_slot = ctx.func.alloca_entry(DOUBLE);
         ctx.block().store(DOUBLE, &len, &length_slot);
@@ -175,16 +173,32 @@ pub(crate) fn materialize_arguments_object(
             }
         }
     };
-    let args_obj = ctx.block().call(
-        I64,
-        "js_arguments_object_alloc",
-        &[
-            (DOUBLE, &raw_args),
-            (DOUBLE, &callee_value),
-            (I32, restricted),
-        ],
-    );
-    for (arg_index, param_id) in mapped_arguments_params(params) {
+    let mapped = mapped_arguments_params(params);
+    // #11506: a mapped object is born with room for its parameter aliases, so
+    // the `map_index` calls below only store into it. They must not be able
+    // to collect: `args_obj` is a bare register across them.
+    let mapped_count = mapped.iter().map(|&(index, _)| index + 1).max();
+    let args_obj = match mapped_count {
+        Some(mapped_count) if !meta.restricted_callee => ctx.block().call(
+            I64,
+            "js_arguments_object_alloc_mapped",
+            &[
+                (DOUBLE, &raw_args),
+                (DOUBLE, &callee_value),
+                (I32, &mapped_count.to_string()),
+            ],
+        ),
+        _ => ctx.block().call(
+            I64,
+            "js_arguments_object_alloc",
+            &[
+                (DOUBLE, &raw_args),
+                (DOUBLE, &callee_value),
+                (I32, restricted),
+            ],
+        ),
+    };
+    for (arg_index, param_id) in mapped {
         if let Some(param_slot) = ctx.locals.get(&param_id).cloned() {
             // #10464: the object aliases the cell for its own lifetime.
             ctx.func.forget_pre_return_box_release(&param_slot);
