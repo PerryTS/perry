@@ -12,7 +12,11 @@ use crate::object::shapes;
 
 pub(crate) const ARRAY_TAIL_TRANSITION_CACHE_SIZE: usize = 8192;
 const ARRAY_TAIL_TRANSITION_CACHE_MASK: usize = ARRAY_TAIL_TRANSITION_CACHE_SIZE - 1;
-const ARRAY_TAIL_DIRECT_INDEX_MISS: u16 = u16::MAX;
+/// Direct-index slot value meaning "no table index". Stored indices carry a
+/// +1 bias so that this miss is zero and a zero-allocated table is empty
+/// (#11507); the largest index, `CACHE_SIZE - 1`, still fits in a `u16`.
+const ARRAY_TAIL_DIRECT_INDEX_MISS: u16 = 0;
+const _: () = assert!(ARRAY_TAIL_TRANSITION_CACHE_SIZE <= u16::MAX as usize);
 
 /// Compact exact-shape accelerator into the authoritative rooted transition
 /// tables. One ShapeId can simultaneously be the successor of one numeric
@@ -20,6 +24,7 @@ const ARRAY_TAIL_DIRECT_INDEX_MISS: u16 = u16::MAX;
 /// A collision only evicts this accelerator entry; the open-addressed tables
 /// remain complete and are the semantics-preserving fallback.
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Debug))]
 pub(crate) struct ArrayTailDirectIndex {
     shape_id: u32,
     forward: u16,
@@ -32,7 +37,31 @@ impl ArrayTailDirectIndex {
         forward: ARRAY_TAIL_DIRECT_INDEX_MISS,
         reverse: ARRAY_TAIL_DIRECT_INDEX_MISS,
     };
+
+    #[inline(always)]
+    fn encode(index: usize) -> u16 {
+        debug_assert!(index < ARRAY_TAIL_TRANSITION_CACHE_SIZE);
+        index as u16 + 1
+    }
+
+    #[inline(always)]
+    fn decode(stored: u16) -> Option<usize> {
+        (stored != ARRAY_TAIL_DIRECT_INDEX_MISS).then(|| stored as usize - 1)
+    }
+
+    #[inline(always)]
+    fn forward_index(self) -> Option<usize> {
+        Self::decode(self.forward)
+    }
+
+    #[inline(always)]
+    fn reverse_index(self) -> Option<usize> {
+        Self::decode(self.reverse)
+    }
 }
+
+// SAFETY: all integer fields, and `EMPTY` is all-zero (the miss is 0).
+unsafe impl crate::zeroed_cache::ZeroEmpty for ArrayTailDirectIndex {}
 
 #[derive(Clone, Copy)]
 pub(crate) struct ArrayTailTransitionEntry {
@@ -47,6 +76,7 @@ pub(crate) struct ArrayTailTransitionEntry {
 }
 
 impl ArrayTailTransitionEntry {
+    #[cfg(test)]
     pub(crate) const EMPTY: Self = Self {
         predecessor_keys: 0,
         successor_keys: 0,
@@ -82,6 +112,9 @@ impl ArrayTailTransitionEntry {
         self.successor_shape_id == 0 && self.predecessor_keys == usize::MAX
     }
 }
+
+// SAFETY: integer fields only; `EMPTY` is all-zero.
+unsafe impl crate::zeroed_cache::ZeroEmpty for ArrayTailTransitionEntry {}
 
 #[inline(always)]
 fn forward_slot(shape_id: u32, index: u32) -> usize {
@@ -264,12 +297,10 @@ fn publish_direct_index(
         };
     }
     if let Some(index) = forward {
-        debug_assert!(index < ARRAY_TAIL_TRANSITION_CACHE_SIZE);
-        entry.forward = index as u16;
+        entry.forward = ArrayTailDirectIndex::encode(index);
     }
     if let Some(index) = reverse {
-        debug_assert!(index < ARRAY_TAIL_TRANSITION_CACHE_SIZE);
-        entry.reverse = index as u16;
+        entry.reverse = ArrayTailDirectIndex::encode(index);
     }
 }
 
@@ -384,8 +415,11 @@ pub(crate) fn lookup_forward_for_owner(
     let direct = unsafe { &*hot.array_tail_direct.get() };
     let cached = direct[direct_slot(predecessor_shape_id)];
     let table = unsafe { &mut *hot.array_tail_forward.get() };
-    if cached.shape_id == predecessor_shape_id && cached.forward != ARRAY_TAIL_DIRECT_INDEX_MISS {
-        let entry = table[cached.forward as usize];
+    if let Some(index) = cached
+        .forward_index()
+        .filter(|_| cached.shape_id == predecessor_shape_id)
+    {
+        let entry = table[index];
         if entry.predecessor_shape_id == predecessor_shape_id
             && entry.array_index == array_index
             && entry.successor_shape_id != 0
@@ -433,8 +467,11 @@ pub(crate) fn lookup_reverse_for_owner(
     let direct = unsafe { &*hot.array_tail_direct.get() };
     let cached = direct[direct_slot(successor_shape_id)];
     let table = unsafe { &mut *hot.array_tail_reverse.get() };
-    if cached.shape_id == successor_shape_id && cached.reverse != ARRAY_TAIL_DIRECT_INDEX_MISS {
-        let entry = table[cached.reverse as usize];
+    if let Some(index) = cached
+        .reverse_index()
+        .filter(|_| cached.shape_id == successor_shape_id)
+    {
+        let entry = table[index];
         if entry.successor_shape_id == successor_shape_id {
             return Some(entry);
         }
@@ -526,4 +563,52 @@ pub(crate) fn test_clear() {
             *entry = ArrayTailTransitionEntry::EMPTY;
         }
     });
+}
+
+#[cfg(test)]
+mod zeroed_table_tests {
+    use super::*;
+
+    /// #11507: the three tables are zero-allocated rather than filled. Every
+    /// slot of a thread's fresh tables must read as a miss -- in particular
+    /// the direct index, whose miss used to be `u16::MAX` and so needed the
+    /// +1 bias before a zeroed slot stopped naming table index 0.
+    #[test]
+    fn fresh_thread_array_tail_tables_read_empty_everywhere() {
+        std::thread::spawn(|| {
+            let hot = &crate::state::state().object_hot;
+            let direct = unsafe { &*hot.array_tail_direct.get() };
+            assert_eq!(direct.len(), ARRAY_TAIL_TRANSITION_CACHE_SIZE);
+            for entry in direct.iter() {
+                assert_eq!(*entry, ArrayTailDirectIndex::EMPTY);
+                assert_eq!(entry.forward_index(), None);
+                assert_eq!(entry.reverse_index(), None);
+            }
+            for table in [&hot.array_tail_forward, &hot.array_tail_reverse] {
+                let table = unsafe { &*table.get() };
+                assert_eq!(table.len(), ARRAY_TAIL_TRANSITION_CACHE_SIZE);
+                for entry in table.iter() {
+                    assert!(entry.is_empty() && !entry.is_tombstone());
+                }
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// The bias must round-trip every index a table can hold, including the
+    /// first (which the old miss encoding could not share a zero with) and
+    /// the last (which must still fit in a `u16` after the +1).
+    #[test]
+    fn direct_index_round_trips_first_and_last_table_index() {
+        for index in [0, 1, ARRAY_TAIL_TRANSITION_CACHE_SIZE - 1] {
+            let entry = ArrayTailDirectIndex {
+                shape_id: 7,
+                forward: ArrayTailDirectIndex::encode(index),
+                reverse: ArrayTailDirectIndex::encode(index),
+            };
+            assert_eq!(entry.forward_index(), Some(index));
+            assert_eq!(entry.reverse_index(), Some(index));
+        }
+    }
 }

@@ -318,7 +318,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "children",
         class_filter: None,
         runtime: "js_cheerio_selection_children",
-        args: &[],
+        args: &[NA_STR],
         ret: NR_HANDLE_ID,
     },
     NativeModSig {
@@ -337,7 +337,7 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_cheerio_selection_has_class",
         args: &[NA_STR],
-        ret: NR_F64,
+        ret: NR_BOOL_I1,
     },
     // ========== zlib ==========
     NativeModSig {

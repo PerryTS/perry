@@ -96,10 +96,10 @@
                     allowed_domains_handle = Some(unbox_to_i64(blk, &v));
                 }
                 "ephemeral" => {
-                    // Boolean → JS truthy → f64 → i64 (1 = ephemeral).
+                    // Boolean → JS truthy → i32 (1 = ephemeral).
                     let v = lower_expr(ctx, val)?;
                     let blk = ctx.block();
-                    let truthy = blk.call(I64, "js_is_truthy", &[(DOUBLE, &v)]);
+                    let truthy = blk.call(I32, "js_is_truthy", &[(DOUBLE, &v)]);
                     ephemeral_d = Some(truthy);
                 }
                 "onShouldNavigate" => {
@@ -157,17 +157,17 @@
             vec![I64, DOUBLE],
         ));
         ctx.pending_declares
-            .push(("js_is_truthy".to_string(), I64, vec![DOUBLE]));
+            .push(("js_is_truthy".to_string(), I32, vec![DOUBLE]));
 
         // v2-B: pass ephemeral as a creation-time arg so backends with
         // construction-time data-store choices (WebView2 userDataFolder,
         // WebKitGTK NetworkSession::new_ephemeral) honor it before the
         // first navigation. Default 1.0 = ephemeral when the user omits
-        // the field. The truthy lowering above produces an i64 (0 / 1);
-        // bitcast to a double via sitofp so the FFI sees an f64 hint.
+        // the field. The truthy lowering above produces an i32 (0 / 1);
+        // convert to a double via sitofp so the FFI sees an f64 hint.
         let blk = ctx.block();
         let eph_hint = if let Some(eph) = &ephemeral_d {
-            blk.sitofp(I64, eph, DOUBLE)
+            blk.sitofp(I32, eph, DOUBLE)
         } else {
             double_literal(1.0)
         };

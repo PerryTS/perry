@@ -13,10 +13,19 @@
 //! universal method dispatcher, which finds an own or inherited user method and
 //! still reaches the builtin through the prototype for a Date, a number or an
 //! array. Known class receivers are left to the class dispatch tower.
+//!
+//! A matching KIND is not the whole condition either (#11493). A Date or an
+//! array is an object and can carry an own property that shadows the builtin:
+//! `const d: any = new Date(0); d.getTime = () => 42; d.getTime()` passed the
+//! Date check and returned `0`. So a heap receiver of the right kind asks the
+//! #10943 own-override test before it takes the builtin, and one that may own
+//! the name takes the dispatcher instead. A number or a Symbol is a primitive
+//! and owns nothing, so those arms go straight to the builtin as before.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
+use super::own_override_guard::emit_own_override_branch;
 use crate::expr::{lower_expr, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
 use crate::type_analysis::{
@@ -51,6 +60,16 @@ enum ReceiverKind {
     LocaleValue,
     Number,
     Array,
+}
+
+impl ReceiverKind {
+    /// Can a receiver that PASSES this kind's check own a property that
+    /// shadows the builtin? A Date and an array are objects and can (#11493);
+    /// a number is a primitive and cannot. `LocaleValue` admits a Date too, so
+    /// it answers yes, and its primitive and Symbol arms skip the test.
+    fn can_own_properties(self) -> bool {
+        !matches!(self, ReceiverKind::Number)
+    }
 }
 
 /// The runtime entry point the HIR `Expr::Date*` arms lower each name to.
@@ -114,6 +133,16 @@ fn date_builtin(property: &str, argc: usize) -> Option<DateBuiltin> {
         "setUTCMilliseconds" => utc(DATE_FIELD_MILLISECONDS),
         _ => return None,
     })
+}
+
+/// Can this lowering call a Date builtin DIRECTLY for `property` on a proven
+/// Date? Every such name is one an own property can shadow, so the
+/// own-override guard asks this rather than keeping a second list that has to
+/// be kept in step with [`date_builtin`] (#11493). Asked with no arguments,
+/// which admits the `toLocale*String` spellings too: over-approximating only
+/// costs a diamond whose two arms reach the same dispatcher.
+pub(super) fn is_direct_date_builtin_name(property: &str) -> bool {
+    date_builtin(property, 0).is_some()
 }
 
 /// `StringHeader* fn(double number, double arg)` for each Number method.
@@ -292,6 +321,11 @@ fn emit_date_builtin(
 /// The receiver is rooted across argument evaluation, and both are re-read
 /// below it. The group is released in the merge block, below both consuming
 /// calls (`open_rooted_group`'s diamond case).
+///
+/// A kind whose receiver can own properties also asks the own-override
+/// predicate below the kind check (#11493). That predicate may allocate, so
+/// for such a kind every operand is rooted, not just those with a collecting
+/// operand after them, and each arm re-reads the operands below the test.
 fn guarded_call(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -301,12 +335,13 @@ fn guarded_call(
     guard: Option<ReceiverKind>,
     builtin: impl FnOnce(&mut FnCtx<'_>, &str, Option<&str>, &[String]) -> String,
 ) -> Result<String> {
+    let own_check = guard.is_some_and(ReceiverKind::can_own_properties);
     let mut group = open_rooted_group(args.len() + 1);
     let recv_box = lower_expr(ctx, object)?;
-    let recv_collects = any_operand_may_collect(ctx, args.iter());
+    let recv_collects = own_check || any_operand_may_collect(ctx, args.iter());
     let rooted_recv = group.adopt_emitted(ctx, Repr::Boxed, &recv_box, recv_collects);
     for (i, arg) in args.iter().enumerate() {
-        let collects = any_operand_may_collect(ctx, args[i + 1..].iter());
+        let collects = own_check || any_operand_may_collect(ctx, args[i + 1..].iter());
         group.lower(ctx, arg, collects)?;
     }
     let recv = group.reread_emitted(ctx, rooted_recv);
@@ -321,23 +356,58 @@ fn guarded_call(
     let builtin_idx = ctx.new_block("kindguard.builtin");
     let generic_idx = ctx.new_block("kindguard.generic");
     let merge_idx = ctx.new_block("kindguard.merge");
+    let own_idx = own_check.then(|| ctx.new_block("kindguard.own"));
     let builtin_label = ctx.block_label(builtin_idx);
     let generic_label = ctx.block_label(generic_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let time = emit_receiver_kind_branch(ctx, kind, &recv, &builtin_label, &generic_label);
+    let own_label = own_idx.map(|idx| ctx.block_label(idx));
+    // A heap receiver of the right kind is still an object that may own the
+    // method, so it takes the own-override test before the builtin.
+    let heap_label = own_label.as_deref().unwrap_or(&builtin_label);
+    let time =
+        emit_receiver_kind_branch(ctx, kind, &recv, heap_label, &builtin_label, &generic_label);
+
+    if let Some(own_idx) = own_idx {
+        ctx.current_block = own_idx;
+        let recv = group.reread_emitted(ctx, rooted_recv);
+        emit_own_override_branch(
+            ctx,
+            property,
+            &recv,
+            kind == ReceiverKind::Array,
+            &generic_label,
+            &builtin_label,
+        );
+    }
+
+    // Below the own-override test the operands come from their roots again:
+    // the test may have collected since the reads above it.
+    let reread = |ctx: &mut FnCtx<'_>| -> Result<(String, Vec<String>)> {
+        if own_check {
+            Ok((
+                group.reread_emitted(ctx, rooted_recv),
+                group.reread_all(ctx)?,
+            ))
+        } else {
+            Ok((recv.clone(), arg_vals.clone()))
+        }
+    };
 
     ctx.current_block = builtin_idx;
-    let builtin_value = builtin(ctx, &recv, time.as_deref(), &arg_vals);
+    let (builtin_recv, builtin_args) = reread(ctx)?;
+    // `time` is a Number, not a heap reference, so it survives the test.
+    let builtin_value = builtin(ctx, &builtin_recv, time.as_deref(), &builtin_args);
     let builtin_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = generic_idx;
+    let (generic_recv, generic_args) = reread(ctx)?;
     let generic_value = super::super::console_promise::emit_native_method_str_dispatch_plain(
         ctx,
         property,
         call_byte_offset,
-        &recv,
-        &arg_vals,
+        &generic_recv,
+        &generic_args,
     );
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -354,13 +424,18 @@ fn guarded_call(
     Ok(value)
 }
 
-/// Branch to `builtin_label` when the NaN-boxed `recv` has the kind the
-/// builtin requires, else to `generic_label`. No check allocates or runs user
-/// code. A Date check returns the Date's time value.
+/// Branch on whether the NaN-boxed `recv` has the kind the builtin requires:
+/// a PRIMITIVE of that kind goes to `builtin_label`, a HEAP receiver of that
+/// kind (a Date, a plain array) to `heap_label` — which is the own-override
+/// test when the caller asks one, because an object of the right kind can
+/// still own the method (#11493) — and anything else to `generic_label`. No
+/// check allocates or runs user code. A Date check returns the Date's time
+/// value.
 fn emit_receiver_kind_branch(
     ctx: &mut FnCtx<'_>,
     kind: ReceiverKind,
     recv: &str,
+    heap_label: &str,
     builtin_label: &str,
     generic_label: &str,
 ) -> Option<String> {
@@ -377,7 +452,7 @@ fn emit_receiver_kind_branch(
             let time_bits = blk.bitcast_double_to_i64(&time);
             let recv_bits = blk.bitcast_double_to_i64(recv);
             let is_date = blk.icmp_ne(I64, &time_bits, &recv_bits);
-            blk.cond_br(&is_date, builtin_label, generic_label);
+            blk.cond_br(&is_date, heap_label, generic_label);
             Some(time)
         }
         // `toLocaleString()` without arguments is `Object.prototype`'s on every
@@ -391,7 +466,7 @@ fn emit_receiver_kind_branch(
             let heap_idx = ctx.new_block("kindguard.locale_heap");
             let symbol_idx = ctx.new_block("kindguard.locale_symbol");
             let heap_or_nullish_label = ctx.block_label(heap_or_nullish_idx);
-            let heap_label = ctx.block_label(heap_idx);
+            let locale_heap_label = ctx.block_label(heap_idx);
             let symbol_label = ctx.block_label(symbol_idx);
 
             let blk = ctx.block();
@@ -405,14 +480,16 @@ fn emit_receiver_kind_branch(
             blk.cond_br(&not_primitive, &heap_or_nullish_label, builtin_label);
 
             ctx.current_block = heap_or_nullish_idx;
-            ctx.block().cond_br(&is_pointer, &heap_label, generic_label);
+            ctx.block()
+                .cond_br(&is_pointer, &locale_heap_label, generic_label);
 
             ctx.current_block = heap_idx;
             let blk = ctx.block();
             let time = blk.call(DOUBLE, "js_date_get_time", &[(DOUBLE, recv)]);
             let time_bits = blk.bitcast_double_to_i64(&time);
             let is_date = blk.icmp_ne(I64, &time_bits, &bits);
-            blk.cond_br(&is_date, builtin_label, &symbol_label);
+            // A Date is an object; a Symbol is a primitive and owns nothing.
+            blk.cond_br(&is_date, heap_label, &symbol_label);
 
             ctx.current_block = symbol_idx;
             let blk = ctx.block();
@@ -473,7 +550,7 @@ fn emit_receiver_kind_branch(
             let forwarded = blk.and(I8, &flags, GC_FLAG_FORWARDED_I8);
             let not_forwarded = blk.icmp_eq(I8, &forwarded, "0");
             let plain_array = blk.and(I1, &is_array, &not_forwarded);
-            blk.cond_br(&plain_array, builtin_label, generic_label);
+            blk.cond_br(&plain_array, heap_label, generic_label);
             None
         }
     }

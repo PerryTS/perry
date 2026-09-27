@@ -267,6 +267,52 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
             method: "getUTCMilliseconds",
             args: Vec::new(),
         },
+        // The remaining zero-argument Date folds (#11493). They reach their
+        // formatters exactly as the getters above do, and were simply missing
+        // from this table: `d.toDateString = () => 1` ran the builtin.
+        //
+        // `Expr::DateToUTCString` is deliberately ABSENT. HIR folds both
+        // `toUTCString` and `toGMTString` into it, so the node does not record
+        // which name the source used, and the guard needs that name twice: to
+        // test which property the receiver owns, and to dispatch it. Guessing
+        // `toUTCString` would make `d.toGMTString()` call an own `toUTCString`,
+        // which is wrong in the other direction. Guarding it needs the fold to
+        // keep its spelling.
+        Expr::DateGetTimezoneOffset(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getTimezoneOffset",
+            args: Vec::new(),
+        },
+        Expr::DateToJSON(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toJSON",
+            args: Vec::new(),
+        },
+        Expr::DateToDateString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toDateString",
+            args: Vec::new(),
+        },
+        Expr::DateToTimeString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toTimeString",
+            args: Vec::new(),
+        },
+        Expr::DateToLocaleDateString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toLocaleDateString",
+            args: Vec::new(),
+        },
+        Expr::DateToLocaleTimeString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toLocaleTimeString",
+            args: Vec::new(),
+        },
+        Expr::DateToLocaleString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toLocaleString",
+            args: Vec::new(),
+        },
         Expr::DateSetFullYear { date, args } => FoldedCall {
             receiver: Receiver::Expr(date),
             method: "setFullYear",
@@ -385,6 +431,14 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             &local_receiver
         }
     };
+    // `(12345).toLocaleString()` shares `Expr::DateToLocaleString` with the
+    // Date spelling. A number is a primitive and owns nothing, so a receiver
+    // proven numeric keeps the plain fold.
+    if matches!(expr, Expr::DateToLocaleString(_))
+        && crate::type_analysis::is_numeric_expr(ctx, receiver_expr)
+    {
+        return Ok(None);
+    }
     // A local receiver (and a fold that captured one) is already in a slot the
     // collector rewrites, so re-lowering it IS the re-read the rooting
     // invariant wants; only a receiver that cannot be evaluated twice needs a
@@ -555,6 +609,35 @@ mod tests {
             end: Some(Box::new(lit(2.0))),
         };
         assert_eq!(folded_call(&two).unwrap().args.len(), 2);
+    }
+
+    /// The zero-argument Date folds missing from the table until #11493, each
+    /// under the name a user would write to shadow it.
+    #[test]
+    fn the_remaining_date_folds_are_guarded_under_their_own_names() {
+        let date = || Box::new(Expr::LocalGet(1));
+        let cases = [
+            (Expr::DateGetTimezoneOffset(date()), "getTimezoneOffset"),
+            (Expr::DateToJSON(date()), "toJSON"),
+            (Expr::DateToDateString(date()), "toDateString"),
+            (Expr::DateToTimeString(date()), "toTimeString"),
+            (Expr::DateToLocaleDateString(date()), "toLocaleDateString"),
+            (Expr::DateToLocaleTimeString(date()), "toLocaleTimeString"),
+            (Expr::DateToLocaleString(date()), "toLocaleString"),
+        ];
+        for (node, name) in cases {
+            let call = folded_call(&node).unwrap_or_else(|| panic!("{name} is guarded"));
+            assert_eq!((call.method, call.args.len()), (name, 0));
+        }
+    }
+
+    /// `DateToUTCString` is both `toUTCString` and `toGMTString`, so the node
+    /// cannot name the property to test. Guarding it under either name would
+    /// dispatch the other spelling to the wrong own method.
+    #[test]
+    fn the_shared_utc_gmt_fold_is_not_guarded() {
+        let node = Expr::DateToUTCString(Box::new(Expr::LocalGet(1)));
+        assert!(folded_call(&node).is_none());
     }
 
     /// A node that is not a folded builtin method call is left alone: the

@@ -190,6 +190,7 @@ const CACHE_MASK: usize = CACHE_SIZE - 1;
 const MAX_HOPS: usize = 4;
 
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Debug))]
 struct Entry {
     /// Interned key pointer. 0 marks the slot empty.
     key_ptr: usize,
@@ -263,9 +264,12 @@ const EMPTY_ENTRY: Entry = Entry {
     accessor: false,
 };
 
+// SAFETY: integer and `bool` fields only; `EMPTY_ENTRY` is all-zero (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for Entry {}
+
 crate::perry_thread_local! {
     static INHERITED_READ_CACHE: std::cell::UnsafeCell<Box<[Entry]>> =
-        std::cell::UnsafeCell::new(vec![EMPTY_ENTRY; CACHE_SIZE].into_boxed_slice());
+        std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(CACHE_SIZE));
 }
 
 /// An entry is identified by (class id, ShapeId, key), so all three have to

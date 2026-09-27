@@ -87,7 +87,8 @@ pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{
     clear_closure_side_tables_for_dead_ptr, clone_closure_rebind_this,
     closure_dynamic_props_owner_moved, closure_dynamic_side_tables_nonempty,
-    closure_set_via_function_prototype_descriptor, prune_dead_closure_side_table_owners,
+    closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
+    function_prototype_inherited_get, prune_dead_closure_side_table_owners,
     prune_dead_closure_side_table_owners_young, release_closure_side_table_owners_in_ranges,
     visit_closure_dynamic_prop_value_slots_mut, visit_closure_static_prototype_slot_mut,
 };

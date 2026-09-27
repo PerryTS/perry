@@ -82,7 +82,17 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
-    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    let born = js_object_alloc(0, 0);
+    // `OrdinaryObjectCreate(proto)`: the result is an ORDINARY object, and its
+    // [[Prototype]] becomes a fact of its shape in the link below (#11342).
+    // So it is born ordinary like every other ordinary birth site
+    // (`mark_object_plain_ordinary`): the store sites' receiver-kind test then
+    // admits it on its ShapeId alone, exactly as it admits a literal or a
+    // class instance. Unmarked, a class-less receiver fails that test on every
+    // store and takes the full `[[Set]]` walk (#11166 moved Object.create off
+    // its synthetic class id, which had been admitting it).
+    unsafe { crate::object::mark_object_plain_ordinary(born) };
+    let obj = scope.root_raw_mut_ptr(born);
     // The link is a self-rooting entry point: it roots the owner and the
     // prototype before its meta-record allocation, so the handle is re-read
     // afterwards for the post-collection address.

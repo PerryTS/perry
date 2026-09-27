@@ -84,6 +84,8 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+#[cfg(test)]
+mod zeroed_cache_tests;
 pub(crate) use class_registry::async_resource_prototype_value;
 pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
@@ -324,7 +326,6 @@ pub use with_env::*;
 pub(crate) use class_meta_registry::{
     builtin_error_prototype_name, class_generic_origin, extends_builtin_error, fetch_parent_kind,
     lookup_has_instance_hook, lookup_to_string_tag_hook, register_fetch_parent_kind,
-    CLASS_REGISTRY,
 };
 pub use class_meta_registry::{
     js_register_class_extends_error, js_register_class_generic_origin,
@@ -658,41 +659,19 @@ impl ObjectHotTables {
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            transition_cache: std::cell::UnsafeCell::new(
-                vec![
-                    TransitionEntry {
-                        key_ptr: 0,
-                        next_keys: 0,
-                        prev_shape_id: 0,
-                        target_shape_id: 0,
-                        slot_idx: 0,
-                        target_len: 0,
-                    };
-                    TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_forward: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_reverse: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_direct: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailDirectIndex::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
+            // #11507: zero-allocated, so untouched pages are never mapped.
+            transition_cache: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_forward: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_reverse: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_direct: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
         }
     }
 }
@@ -930,6 +909,9 @@ pub(crate) struct TransitionEntry {
     slot_idx: u32,        // offset 24 — slot | key byte_len << 24 (namespace marker)
     target_len: u32,      // offset 28, nonzero when target was validated at insert
 }
+
+// SAFETY: all integer fields; `key_ptr == 0` is the miss (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for TransitionEntry {}
 
 /// ── Emitted transition-IC ABI (#9287) ──────────────────────────────────────
 ///
@@ -1687,14 +1669,26 @@ pub struct ObjectHeader {
 /// that need the keys rather than the complete descriptor.
 #[inline]
 pub(crate) unsafe fn object_keys(obj: *const ObjectHeader) -> ObjectKeys {
+    object_keys_and_live_slot_count(obj).0
+}
+
+/// [`object_keys`] and [`object_live_slot_count`] together, from ONE shape
+/// table probe. A walk that needs both — `JSON.stringify` visits every object
+/// this way — otherwise pays the probe twice (#10696).
+#[inline]
+pub(crate) unsafe fn object_keys_and_live_slot_count(
+    obj: *const ObjectHeader,
+) -> (ObjectKeys, u32) {
     let Some(descriptor) = shapes::object_shape_descriptor(obj) else {
-        return ObjectKeys::NONE;
+        return (ObjectKeys::NONE, 0);
     };
+    let live_slots = descriptor.live_inline_slot_count;
     if descriptor.keys != 0 {
-        return ObjectKeys::new(
+        let keys = ObjectKeys::new(
             descriptor.keys as usize as *mut ArrayHeader,
             descriptor.logical_key_count,
         );
+        return (keys, live_slots);
     }
     // The shape publishes no keys. Either the receiver genuinely has none, or
     // it is in DICTIONARY MODE and carries its own ordered list (#10868 step
@@ -1706,7 +1700,7 @@ pub(crate) unsafe fn object_keys(obj: *const ObjectHeader) -> ObjectKeys {
     // line — the nonzero `keys` word returns above — so the branch costs
     // nothing on the path that matters. A dictionary list is the receiver's
     // own, so its header length is its count.
-    ObjectKeys::owned(dictionary::keys_array(obj))
+    (ObjectKeys::owned(dictionary::keys_array(obj)), live_slots)
 }
 
 /// Return the two shape facts needed together by callback-free serializers.

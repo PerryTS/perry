@@ -325,6 +325,12 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // #11394: a module's method calls lower differently when ANY module in the
+    // program writes that method name onto a builtin prototype.
+    h.field(
+        "patched_proto_methods",
+        &perry_codegen::program_patched_proto_methods().join("|"),
+    );
     // #5247: `--debug-symbols` flips per-call `js_set_call_location` emission,
     // which changes the emitted IR (and `.o` bytes). Without this in the key,
     // toggling the flag would serve the previously-cached object and the

@@ -4,7 +4,7 @@
 //! cheerio.
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_third_party(module: &mut LlModule) {
     // ========== bcrypt / argon2 ==========
@@ -79,7 +79,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_sharp_extract", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_flip", I64, &[I64]);
     module.declare_function("js_sharp_flop", I64, &[I64]);
-    module.declare_function("js_sharp_from_buffer", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_from_buffer", I64, &[I64]);
     module.declare_function("js_sharp_from_file", I64, &[I64]);
     module.declare_function("js_sharp_from_input", I64, &[I64]);
     module.declare_function("js_sharp_grayscale", I64, &[I64]);
@@ -291,9 +291,9 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_cheerio_selection_eq", I64, &[I64, DOUBLE]);
     module.declare_function("js_cheerio_selection_find", I64, &[I64, I64]);
     module.declare_function("js_cheerio_selection_first", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_has_class", DOUBLE, &[I64, I64]);
+    module.declare_function("js_cheerio_selection_has_class", I1, &[I64, I64]);
     module.declare_function("js_cheerio_selection_html", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_is", DOUBLE, &[I64, I64]);
+    module.declare_function("js_cheerio_selection_is", I1, &[I64, I64]);
     module.declare_function("js_cheerio_selection_last", I64, &[I64]);
     module.declare_function("js_cheerio_selection_length", DOUBLE, &[I64]);
     module.declare_function("js_cheerio_selection_parent", I64, &[I64]);

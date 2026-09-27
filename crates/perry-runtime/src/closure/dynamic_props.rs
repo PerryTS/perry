@@ -1134,38 +1134,53 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     // installed via `Object.defineProperty(Function.prototype, k, {...})`,
     // must be readable through any closure (`fn.property`, `boundFn.property`,
     // `Function.indicator`).
-    if let Some(proto_ptr) = function_prototype_fallback_target(ptr, prop) {
-        // A defineProperty accessor on Function.prototype
-        // (`{ get: () => 12 }`) is invoked with the reading
-        // closure as receiver.
-        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
-            if acc.get != 0 {
-                let getter =
-                    (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-                if !getter.is_null() {
-                    let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                    let prev =
-                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                    let result = crate::closure::js_closure_call0(getter);
-                    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                    return result;
-                }
+    let receiver = f64::from_bits(crate::value::js_nanbox_pointer(ptr as i64).to_bits());
+    function_prototype_inherited_get(ptr, prop, receiver)
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+/// `[[Get]]` of `prop` on the real `%Function.prototype%` object, for a
+/// function-object receiver whose own/static lookup already missed — a
+/// user method or expando (`Function.prototype.myHelper = fn`) or a
+/// `defineProperty` data/accessor property. An accessor's getter runs with
+/// `receiver` as `this`. `self_ptr` is the receiver's heap pointer, or 0 for
+/// a receiver with none (a ClassRef constructor, #11492), and only guards
+/// against Function.prototype reading itself. `None` means nothing is
+/// installed there, so the caller keeps its own miss result.
+pub(crate) fn function_prototype_inherited_get(
+    self_ptr: usize,
+    prop: &str,
+    receiver: f64,
+) -> Option<f64> {
+    let proto_ptr = function_prototype_fallback_target(self_ptr, prop)?;
+    // A defineProperty accessor on Function.prototype
+    // (`{ get: () => 12 }`) is invoked with the reading
+    // function as receiver.
+    if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+        if acc.get != 0 {
+            let getter =
+                (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if !getter.is_null() {
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let prev =
+                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
+                let result = crate::closure::js_closure_call0(getter);
+                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+                return Some(result);
             }
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        {
-            let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
-            let v = crate::object::js_object_get_field_by_name(
-                proto_ptr as *const crate::object::ObjectHeader,
-                key_hdr as *const crate::StringHeader,
-            );
-            if !v.is_undefined() {
-                return f64::from_bits(v.bits());
-            }
-        }
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    let v = crate::object::js_object_get_field_by_name(
+        proto_ptr as *const crate::object::ObjectHeader,
+        key_hdr as *const crate::StringHeader,
+    );
+    if v.is_undefined() {
+        None
+    } else {
+        Some(f64::from_bits(v.bits()))
+    }
 }
 
 /// Resolve the real, mutable `%Function.prototype%` object pointer for a

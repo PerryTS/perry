@@ -347,10 +347,8 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             map_bytes(&slots) + inner,
         ));
     });
-    if let Ok(g) = super::class_meta_registry::CLASS_REGISTRY.read() {
-        if let Some(m) = g.as_ref() {
-            rows.push(("class.parent_registry", m.len(), map_bytes(m)));
-        }
+    if let Some((entries, bytes)) = super::class_meta_registry::parent_map_census() {
+        rows.push(("class.parent_registry", entries, bytes));
     }
     rows
 }

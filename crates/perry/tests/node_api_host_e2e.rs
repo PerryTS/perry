@@ -1121,3 +1121,6 @@ watcher.writeSnapshot(root, snapshot, {{ backend: "brute-force" }}).then(() => {
         String::from_utf8_lossy(&compile.stdout)
     );
 }
+
+#[path = "fixtures/node_api_host/computed_require.rs"]
+mod computed_require;

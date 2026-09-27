@@ -925,6 +925,7 @@ pub(crate) fn lower(
                         "array[dynamic_index]",
                         TypedFeedbackContract::array_set_index_or_string(),
                     );
+                    let strict_flag = if assignment_strict { "1" } else { "0" };
                     ctx.block().call(
                         I64,
                         "js_typed_feedback_array_set_index_or_string",
@@ -933,6 +934,7 @@ pub(crate) fn lower(
                             (I64, &arr_handle),
                             (DOUBLE, idx_double),
                             (DOUBLE, val_double),
+                            (I32, strict_flag),
                         ],
                     );
                     if value_needs_barrier {

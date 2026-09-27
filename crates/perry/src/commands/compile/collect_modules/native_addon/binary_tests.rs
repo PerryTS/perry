@@ -3,7 +3,7 @@ use super::validate_node_api_binary;
 /// One imported symbol in a minimal two-level Mach-O image. Keep the symbol
 /// range separate from its library ordinal: dynamic lookup uses 0xfe, and
 /// executable lookup uses 0xff, neither of which is a dylib-table index.
-fn macho_import(name: &str, ordinal: u8, is_64: bool, symbol_type: u8) -> Vec<u8> {
+pub(super) fn macho_import(name: &str, ordinal: u8, is_64: bool, symbol_type: u8) -> Vec<u8> {
     let header_size = if is_64 { 32 } else { 28 };
     let symbol_size = if is_64 { 16 } else { 12 };
     let symbol_offset = header_size + 104;

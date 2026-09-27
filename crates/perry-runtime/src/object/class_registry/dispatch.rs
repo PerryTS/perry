@@ -119,6 +119,7 @@ const VTABLE_IC_NAME_MAX: usize = 24;
 // read `'hi'` back as the number 617 that way.
 #[repr(C)]
 #[derive(Copy, Clone)]
+#[cfg_attr(test, derive(PartialEq, Debug))]
 struct VTableICEntry {
     gen: u64,
     class_id: u32,
@@ -131,6 +132,7 @@ struct VTableICEntry {
     has_rest: u32,
 }
 
+#[cfg(test)]
 const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
     gen: 0,
     class_id: 0,
@@ -143,12 +145,15 @@ const EMPTY_VTABLE_IC_ENTRY: VTableICEntry = VTableICEntry {
     has_rest: 0,
 };
 
+// SAFETY: integer fields only; `EMPTY_VTABLE_IC_ENTRY` is all-zero (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for VTableICEntry {}
+
 crate::perry_thread_local! {
     // arm64_32 fix: HEAP-allocate (Box) this ~160KB cache instead of inline TLS.
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.
     static VTABLE_IC: UnsafeCell<Box<[VTableICEntry]>> =
-        UnsafeCell::new(vec![EMPTY_VTABLE_IC_ENTRY; VTABLE_IC_SIZE].into_boxed_slice());
+        UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(VTABLE_IC_SIZE));
 }
 
 #[inline(always)]
@@ -279,6 +284,7 @@ const OBJ_DISPATCH_IC_NAME_MAX: usize = 24;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+#[cfg_attr(test, derive(PartialEq, Debug))]
 struct ObjDispatchICEntry {
     gen: u64,
     class_id: u32,
@@ -291,6 +297,7 @@ struct ObjDispatchICEntry {
     _pad: u32,
 }
 
+#[cfg(test)]
 const EMPTY_OBJ_DISPATCH_IC_ENTRY: ObjDispatchICEntry = ObjDispatchICEntry {
     gen: 0,
     class_id: 0,
@@ -303,6 +310,9 @@ const EMPTY_OBJ_DISPATCH_IC_ENTRY: ObjDispatchICEntry = ObjDispatchICEntry {
     _pad: 0,
 };
 
+// SAFETY: integer fields only; `EMPTY_OBJ_DISPATCH_IC_ENTRY` is all-zero.
+unsafe impl crate::zeroed_cache::ZeroEmpty for ObjDispatchICEntry {}
+
 crate::perry_thread_local! {
     // Boxed for the same arm64_32 reason as `VTABLE_IC`: oversized inline TLS
     // storage overflows the ILP32 TLS layout. `perry_thread_local!` (#7469)
@@ -310,7 +320,7 @@ crate::perry_thread_local! {
     // std form costs a real `_tlv_get_addr` call, which is exactly the tax the
     // fast path exists to remove.
     static OBJ_DISPATCH_IC: UnsafeCell<Box<[ObjDispatchICEntry]>> =
-        UnsafeCell::new(vec![EMPTY_OBJ_DISPATCH_IC_ENTRY; OBJ_DISPATCH_IC_SIZE].into_boxed_slice());
+        UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(OBJ_DISPATCH_IC_SIZE));
 }
 
 /// FNV-1a over the name bytes, mixed with the class id.
@@ -824,5 +834,34 @@ mod obj_dispatch_ic_tests {
             assert_eq!(obj_dispatch_ic_lookup(CID, b"describ"), None);
             true
         });
+    }
+}
+
+#[cfg(test)]
+mod zeroed_cache_tests {
+    use super::*;
+
+    /// #11507: both ICs are zero-allocated rather than filled, so a thread's
+    /// first view of either must be the empty entry in every slot.
+    #[test]
+    fn fresh_thread_dispatch_ics_read_empty_everywhere() {
+        std::thread::spawn(|| {
+            VTABLE_IC.with(|cell| {
+                let cache = unsafe { &**cell.get() };
+                assert_eq!(cache.len(), VTABLE_IC_SIZE);
+                for entry in cache.iter() {
+                    assert_eq!(*entry, EMPTY_VTABLE_IC_ENTRY);
+                }
+            });
+            OBJ_DISPATCH_IC.with(|cell| {
+                let cache = unsafe { &**cell.get() };
+                assert_eq!(cache.len(), OBJ_DISPATCH_IC_SIZE);
+                for entry in cache.iter() {
+                    assert_eq!(*entry, EMPTY_OBJ_DISPATCH_IC_ENTRY);
+                }
+            });
+        })
+        .join()
+        .unwrap();
     }
 }

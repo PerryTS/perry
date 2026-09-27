@@ -388,13 +388,6 @@ pub(crate) unsafe fn try_emit_shape_element(
         return false;
     }
 
-    // The callback-free record path above proves that neither the element nor
-    // any child can observe a `toJSON` key. Only publish the array index once a
-    // path that may invoke user code remains.
-    if let Some(index) = array_index_key {
-        set_to_json_key_index(index);
-    }
-
     // ★ #7268: ROOT THE ELEMENT. The emit loops below call
     // `stringify_value_depth` for every pointer-valued field, and that can run
     // a user `toJSON` — allocating, reaching a safepoint, and taking an
@@ -441,7 +434,9 @@ pub(crate) unsafe fn try_emit_shape_element(
     // `shape_fields <= alloc_limit` and the branch is never taken. Hoisting it
     // stays sound across a collection because it is a COUNT, not an address:
     // `field_count` is copied verbatim when the object moves.
-    let alloc_limit = object_alloc_limit(obj);
+    // The shape probe above resolved this bound for the same receiver, and
+    // nothing between it and here can allocate or change the shape.
+    let alloc_limit = std::cmp::max(live_inline_slots, crate::object::INLINE_SLOT_FLOOR as u32);
     let field_bits_at = |f: usize| -> u64 {
         // Re-derived per access, deliberately. The pre-#7268 code hoisted
         // `fields_ptr` above the loop, which is exactly the address a `toJSON`
@@ -547,6 +542,13 @@ pub(crate) unsafe fn try_emit_shape_element(
         }
     }
     if has_pointer_fields {
+        // The element's own `toJSON` is the one reader of its array-index key:
+        // every field below publishes its own key before its value can call
+        // user code, and a declined element is republished by the caller. So
+        // the index is formatted only here, not for every templated element.
+        if let Some(index) = array_index_key {
+            set_to_json_key_index(index);
+        }
         // Through the handle: the pre-scan above is allocation-free today, but
         // `elem_ptr` is the pre-collection address and there is no reason for a
         // second name for this object to exist (#7268).

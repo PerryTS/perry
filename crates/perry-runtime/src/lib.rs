@@ -165,6 +165,7 @@ pub mod node_stream;
 pub mod node_submodules;
 pub mod node_test;
 pub mod yoga;
+pub(crate) mod zeroed_cache;
 // #3137/#3138/#3142: public `node:v8` serialize/deserialize + heap stats + GCProfiler.
 pub mod node_v8;
 // #3127/#3128/#3130/#3283: public `node:vm` import/require and narrowed execution.

@@ -457,6 +457,18 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     if present {
                         return nanbox_true;
                     }
+                    // #11492: a constructor's chain ends at %Function.prototype%;
+                    // a user member installed there is `in` every class, as
+                    // `C.myHelper` reads it. A prototype ref is excluded — its
+                    // chain is `Object.prototype`, not `Function.prototype`.
+                    if crate::object::class_prototype_ref_id(obj).is_none() {
+                        if let Some(proto_ptr) =
+                            crate::closure::function_prototype_fallback_target(0, name)
+                        {
+                            let proto = crate::value::js_nanbox_pointer(proto_ptr as i64);
+                            return js_object_has_property(f64::from_bits(proto.to_bits()), key);
+                        }
+                    }
                 }
             }
             // Fallback: emit false for class refs that aren't in either table.

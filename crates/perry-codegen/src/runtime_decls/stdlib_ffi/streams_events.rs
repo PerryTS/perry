@@ -228,7 +228,7 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
     );
 
     // ========== Nodemailer ==========
-    module.declare_function("js_nodemailer_create_transport", DOUBLE, &[I64]);
+    module.declare_function("js_nodemailer_create_transport", DOUBLE, &[DOUBLE]);
     module.declare_function("js_nodemailer_send_mail", I64, &[I64, I64]);
     module.declare_function("js_nodemailer_verify", I64, &[I64]);
 }
