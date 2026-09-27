@@ -282,7 +282,10 @@ mod tests {
             let ran_before = perry_ffi::agent_post::dispatched();
             let limit = Instant::now() + Duration::from_secs(10);
             while perry_ffi::agent_post::dispatched() == ran_before {
-                assert!(Instant::now() < limit, "the owner never ran the posted bind");
+                assert!(
+                    Instant::now() < limit,
+                    "the owner never ran the posted bind"
+                );
                 perry_runtime::event_pump::js_loop_turn_bounded(10);
             }
             let listening = get_handle::<HttpServer>(handle).is_some_and(|s| s.listening);
@@ -305,12 +308,17 @@ mod tests {
             let agent = perry_runtime::agent::enter_worker_agent();
             // Asking claims the route slot, without building a loop.
             let claimed = crate::server::turnloop_serve::enabled();
-            claimed_tx.send((agent, claimed)).expect("the test is waiting");
+            claimed_tx
+                .send((agent, claimed))
+                .expect("the test is waiting");
             let _ = release_rx.recv();
             perry_runtime::agent::retire_agent(agent);
         });
         let (agent, claimed) = claimed_rx.recv().expect("the claimant reports");
-        assert!(claimed, "the first thread of a fresh agent claims its route");
+        assert!(
+            claimed,
+            "the first thread of a fresh agent claims its route"
+        );
         let (declined_tx, declined_rx) = mpsc::channel();
         let (gone_tx, gone_rx) = mpsc::channel::<()>();
         let handle = register_handle(HttpServer::with_handler(0));
@@ -330,7 +338,10 @@ mod tests {
         let (owns, can_post, (listening, _, listening_emit, error_code, listener)) = refused;
         close(handle, listener);
         assert!(!owns, "the route was held by a live claimant when asked");
-        assert!(!can_post, "the owner is gone, so there is nothing to post to");
+        assert!(
+            !can_post,
+            "the owner is gone, so there is nothing to post to"
+        );
         assert!(!listening);
         assert!(listener.is_none());
         assert!(!listening_emit, "a failed listen never emits 'listening'");
