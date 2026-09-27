@@ -26,6 +26,7 @@ struct SidecarManifest {
 #[derive(Serialize)]
 struct ManifestAddon {
     logical_id: String,
+    require_aliases: Vec<String>,
     package: String,
     version: String,
     entry: String,
@@ -37,6 +38,36 @@ struct ManifestFile {
     path: String,
     sha256: String,
     size: u64,
+}
+
+// Platform packages commonly expose their .node binary as package.json main.
+// Record that exact entry at compile time; never consult build-machine package
+// metadata at runtime. Packages with exports keep their exports policy.
+fn package_entry_aliases(addon: &NativeAddonModule) -> Vec<String> {
+    if !addon.ship_package_payload {
+        return Vec::new();
+    }
+    let Some(manifest) = fs::read_to_string(addon.package_dir.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    if manifest.get("exports").is_some() {
+        return Vec::new();
+    }
+    let Some(name) = manifest.get("name").and_then(|v| v.as_str()) else {
+        return Vec::new();
+    };
+    let main = manifest
+        .get("main")
+        .and_then(|v| v.as_str())
+        .unwrap_or("index.node");
+    if addon.package_dir.join(main).canonicalize().ok().as_ref() == Some(&addon.source_path) {
+        vec![name.to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn sidecar_root(executable: &Path) -> Result<PathBuf> {
@@ -182,6 +213,7 @@ pub(super) fn stage_native_addon_sidecar(
         }
         manifest_addons.push(ManifestAddon {
             logical_id: addon.logical_id.clone(),
+            require_aliases: package_entry_aliases(addon),
             package: addon.package.clone(),
             version: addon.version.clone(),
             entry: portable_path(&entry),

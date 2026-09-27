@@ -24,8 +24,15 @@ pub(in crate::commands::compile) fn collect_declared_addons(
     }
     // Only packages actually reached by compilation participate. An unused
     // allowlist entry must not turn an ordinary program into a Node-API host.
+    let mut reached = ctx.checked_compile_package_native_addon_roots.clone();
+    reached.extend(
+        ctx.native_modules
+            .keys()
+            .filter_map(|path| nearest_package_root(path)),
+    );
+    let mut required = BTreeSet::new();
     let mut roots = BTreeSet::new();
-    for root in &ctx.checked_compile_package_native_addon_roots {
+    for root in &reached {
         let Some(name) = package_name_from_package_json(root) else {
             continue;
         };
@@ -33,6 +40,9 @@ pub(in crate::commands::compile) fn collect_declared_addons(
             continue;
         }
         roots.insert(root.clone());
+        if node_addon_marker(root).is_some() {
+            required.insert(approved_owner_package(ctx, root, &name).unwrap());
+        }
         if !ctx.native_addon_packages.contains(&name) {
             continue;
         }
@@ -57,11 +67,22 @@ pub(in crate::commands::compile) fn collect_declared_addons(
         let mut candidates = Vec::new();
         addon_files(&root, &root, &mut candidates)?;
         candidates.sort();
+        if !candidates.is_empty() {
+            if let Some(owner) = package_name_from_package_json(&root)
+                .and_then(|name| approved_owner_package(ctx, &root, &name))
+            {
+                required.insert(owner);
+            }
+        }
         for path in candidates {
             if matches_target(&path, triple)? {
                 collect_node_addon_request(ctx, &path)?;
             }
         }
+    }
+    for owner in required {
+        anyhow::ensure!(ctx.native_addons.values().any(|addon| addon.package == owner),
+            "approved package `{owner}` has no Node-API addon matching target `{triple}`. Install or build its target-specific .node binary before compiling");
     }
     Ok(())
 }

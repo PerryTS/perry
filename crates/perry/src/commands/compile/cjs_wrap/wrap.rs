@@ -1389,7 +1389,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
         if ((specifier.charCodeAt(0) === 47 || (specifier.length > 2 && specifier.charCodeAt(1) === 58)) && specifier.slice(-5) === '.json') {{
             return __perry_require_json_disk(specifier);
         }}
-        throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+        // A computed bare platform package can name a manifest-listed addon
+        // through package.json main, without a .node suffix in the request.
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+        return __perry_cjs_reload_require(specifier);
     }}
     // No `defineProperty(require, 'name', ...)`: a `function require(...)`
     // declaration already carries exactly

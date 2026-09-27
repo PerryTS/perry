@@ -503,7 +503,7 @@ fn resolve_request(
         return resolve_file(&base.join(specifier)).ok_or(ResolveError::NotFound);
     }
     #[cfg(feature = "node-api-host")]
-    if specifier.ends_with(".node") {
+    {
         if let Ok(payload) = crate::node_api_host::resolve_addon_request(specifier) {
             return Ok(payload);
         }

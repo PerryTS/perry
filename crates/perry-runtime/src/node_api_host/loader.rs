@@ -24,6 +24,8 @@ struct SidecarManifest {
 #[derive(Deserialize)]
 struct ManifestAddon {
     logical_id: String,
+    #[serde(default)]
+    require_aliases: Vec<String>,
     package: String,
     version: String,
     entry: String,
@@ -160,7 +162,7 @@ fn manifest_entry_for<'a>(
     if let Some(addon) = manifest
         .addons
         .iter()
-        .find(|addon| addon.logical_id == request)
+        .find(|addon| addon.logical_id == request || addon.require_aliases.contains(&request))
     {
         return Ok(addon);
     }
@@ -561,6 +563,7 @@ mod request_tests {
                 .enumerate()
                 .map(|(i, id)| ManifestAddon {
                     logical_id: (*id).into(),
+                    require_aliases: vec![],
                     package: String::new(),
                     version: String::new(),
                     entry: format!("{i}/addon.node"),

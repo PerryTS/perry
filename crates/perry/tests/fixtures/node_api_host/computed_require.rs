@@ -47,7 +47,8 @@ fn computed_native_requires_survive_relocation_and_authenticate_payloads() {
         }
         compile_addon(&source, &native);
         let wrapper = if variant == "platform-package" {
-            "const name = '@parcel/watcher-test-platform'; module.exports = require(name + '/addon.node');".to_string()
+            "const name = '@parcel/watcher-test-platform'; module.exports = require(name);"
+                .to_string()
         } else {
             format!("{}\nconst path = require('path'); const filename = path.join(__dirname, 'build', 'Release', 'addon.node'); module.exports = require(filename);",
                 if variant == "static-edge" { "if (process.env.PERRY_TEST_STATIC_EDGE) require('./build/Release/addon.node');" } else { "" })
