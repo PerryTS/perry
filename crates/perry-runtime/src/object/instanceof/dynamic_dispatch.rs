@@ -9,6 +9,12 @@ use super::*;
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
+    // Proxy ids are registry handles, not closure headers. Resolve their
+    // observable @@hasInstance/prototype reads before any constructor probe
+    // or unwrapping of the left operand (#10364).
+    if crate::proxy::js_proxy_is_proxy(type_ref) != 0 {
+        return super::proxy_rhs::proxy_instanceof(value, type_ref);
+    }
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
     // trap) forwards to the target — so it is equivalent to `target instanceof

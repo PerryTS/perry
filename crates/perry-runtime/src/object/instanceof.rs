@@ -22,6 +22,7 @@ const CLASS_ID_URL: u32 = 0xFFFF0063;
 #[cfg(test)]
 mod builtin_prototype_tests;
 mod dynamic_dispatch;
+mod proxy_rhs;
 mod static_dispatch;
 
 pub use dynamic_dispatch::js_instanceof_dynamic;
@@ -480,6 +481,11 @@ pub(crate) extern "C" fn function_prototype_has_instance_thunk(
 /// operator understands (class objects, bound natives like `Array`/`Map`,
 /// INT32 class-refs, synthetic function class ids, …) resolves identically.
 fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
+    // The inherited Function.prototype hook must perform OrdinaryHasInstance
+    // on the proxy itself, without consulting @@hasInstance a second time.
+    if crate::proxy::js_proxy_is_proxy(constructor) != 0 {
+        return proxy_rhs::ordinary_proxy_has_instance(constructor, value);
+    }
     let prev = SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.replace(true));
     let result = js_instanceof_dynamic(value, constructor);
     SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.set(prev));
