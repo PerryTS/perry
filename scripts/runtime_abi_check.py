@@ -44,6 +44,7 @@ Usage:
   scripts/runtime_abi_check.py --list width     # entries in one category
   scripts/runtime_abi_check.py --json out.json  # full report
   scripts/runtime_abi_check.py --self-test
+  scripts/runtime_abi_check.py --check-native   # required native ABI gate
 """
 
 from __future__ import annotations
@@ -371,8 +372,8 @@ NATIVE_ARG = {"NA_F64": F64, "NA_STR": I64, "NA_PTR": I64, "NA_JSV": I64, "NA_VA
 NATIVE_RET = {
     "NR_GCPTR": I64, "NR_NULLABLE_GCPTR": I64, "NR_HANDLE_ID": I64,
     "NR_FOREIGN_PTR": I64, "NR_JS_VALUE": I64, "NR_PROMISE": I64, "NR_STR": I64,
-    "NR_OBJ_FROM_JSON_STR": I64, "NR_BIGINT": I64, "NR_F64": F64, "NR_BOOL": F64,
-    "NR_I32": I32, "NR_VOID": VOID,
+    "NR_OBJ_FROM_JSON_STR": I64, "NR_BIGINT": I64, "NR_F64": F64,
+    "NR_I32": I32, "NR_VOID": VOID, "NR_BOOL_I1": BOOL, "NR_BOOL_I32": I32,
 }
 
 
@@ -412,6 +413,19 @@ def names_for(text: str, at: int, expr: str) -> list[str] | None:
 def parse_codegen(files: dict[str, str]) -> tuple[list[Decl], dict[str, int]]:
     decls: list[Decl] = []
     skipped: dict[str, int] = defaultdict(int)
+    # Read dispatcher-supplied trailing arguments from the emitter itself.
+    # Today findPackageJSON adds source arity, which is not a JS argument slot.
+    extra_params: dict[str, list[str]] = {}
+    for raw in files.values():
+        if "arg_types.push" not in raw:
+            continue
+        text = strip_test_items(strip_comments(raw))
+        for match in re.finditer(r'if sig\.runtime == "(\w+)"\s*\{', text):
+            end = balanced(text, match.end() - 1, "{", "}")
+            body = text[match.end():end - 1] if end > 0 else ""
+            types = re.findall(r"arg_types\.push\((\w+)\)", body)
+            if types:
+                extra_params[match.group(1)] = [codegen_type(t) for t in types]
 
     def add(origin, names, params, ret, where):
         for n in names:
@@ -481,6 +495,7 @@ def parse_codegen(files: dict[str, str]) -> tuple[list[Decl], dict[str, int]]:
             params = [NATIVE_ARG.get(a.strip(), f"?{a.strip()}") for a in split_top(ar.group(1))]
             if recv.group(1) == "true":
                 params = [I64] + params
+            params.extend(extra_params.get(rt.group(1), []))
             add(
                 "native_table", [rt.group(1)], params,
                 NATIVE_RET.get(rr.group(1), f"?{rr.group(1)}"), f"{path}:{line_of(text, m.start())}",
@@ -550,7 +565,21 @@ def judge(rep: "Report", name: str, d: "Decl", shapes: dict) -> None:
         for sp in shapes
     ):
         return
-    (rparams, rret), rf = min(shapes.items(), key=lambda kv: definition_rank(kv[1].where))
+    def candidate_rank(item):
+        (params, ret), definition = item
+        # A platform implementation can agree on native targets yet still have
+        # the pointer-width mismatch tracked by the wasm worklist. Prefer that
+        # implementation over a different platform's genuinely incompatible ABI
+        # (e.g. the ext-net i64 handle versus the legacy runtime f64 handle).
+        native_agrees = len(params) == len(d.params) and all(
+            category not in EVERY_TARGET
+            for category in [compare_slot(d.ret, ret, True)]
+            + [compare_slot(c, r, False) for c, r in zip(d.params, params)]
+        )
+        stub, crate = definition_rank(definition.where)
+        return (stub, not native_agrees, crate)
+
+    (rparams, rret), rf = min(shapes.items(), key=candidate_rank)
     base = dict(symbol=name, origin=d.origin, codegen=d.where, runtime=rf.where)
     if definition_rank(rf.where)[0] == 1:
         rep.add(
@@ -819,7 +848,7 @@ def self_test() -> int:
         }
         const T: &[NativeModSig] = &[NativeModSig {
             module: "m", has_receiver: true, method: "x", class_filter: None,
-            runtime: "native_row", args: &[NA_F64], ret: NR_BOOL,
+            runtime: "native_row", args: &[NA_F64], ret: NR_F64,
         }];
         """,
     }
@@ -884,6 +913,35 @@ def self_test() -> int:
     for sym, origin in (("pend", "pending_declare"), ("call_void_site", "call"), ("loop_b", "declare")):
         if origins.get(sym) != origin:
             failures.append(f"origin of {sym}: expected {origin}, got {origins.get(sym)}")
+    # A wasm-only pointer-width mismatch must not select a different host's
+    # incompatible receiver and turn into a native register-class failure.
+    platforms = check({"cg.rs": 'm.declare_function("address", I64, &[I64]);'}, {
+        "crates/perry-runtime/src/net.rs":
+            '#[no_mangle] pub extern "C" fn address(h: f64) -> *mut O {}',
+        "crates/perry-ext-net/src/lib.rs":
+            '#[no_mangle] pub extern "C" fn address(h: i64) -> *mut S {}',
+    })
+    if platforms.entries.get("class") or not platforms.entries.get("ptrw_as_i64"):
+        failures.append("native-compatible platform must retain only the wasm pointer mismatch")
+
+    rows = check({"cg.rs": """
+        if sig.runtime == "js_module_find_package_json" {
+            llvm_args.push((DOUBLE, double_literal(args.len() as f64)));
+            arg_types.push(DOUBLE);
+        }
+        NativeModSig { runtime: "js_module_find_package_json", has_receiver: false,
+                       args: &[NA_F64, NA_F64], ret: NR_F64 }
+        NativeModSig { runtime: "rust_bool", has_receiver: true,
+                       args: &[], ret: NR_BOOL_I1 }
+        NativeModSig { runtime: "int_bool", has_receiver: true,
+                       args: &[], ret: NR_BOOL_I32 }
+    """}, {"rt.rs": """
+        #[no_mangle] pub extern "C" fn js_module_find_package_json(a:f64,b:f64,n:f64)->f64 {}
+        #[no_mangle] pub extern "C" fn rust_bool(h:i64)->bool {}
+        #[no_mangle] pub extern "C" fn int_bool(h:i64)->i32 {}
+    """})
+    if any(rows.entries.values()):
+        failures.append("native predicate widths and dispatcher-supplied source arity must agree")
     if failures:
         print("runtime_abi_check self-test FAILED:", file=sys.stderr)
         for f in failures:
@@ -898,6 +956,8 @@ def main() -> int:
     ap.add_argument("--list", metavar="CATEGORY", choices=CATEGORIES)
     ap.add_argument("--json", metavar="PATH")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--check-native", action="store_true",
+                    help="fail on native ABI mismatches or unclassified signature types")
     ap.add_argument("--ir", nargs="+", metavar="LL",
                     help="verify emitted wasm32 .ll files against the runtime ABI table")
     ap.add_argument("--emit-wasm-abi", action="store_true",
@@ -932,6 +992,12 @@ def main() -> int:
         pathlib.Path(args.json).write_text(
             json.dumps({c: rep.entries.get(c, []) for c in CATEGORIES}, indent=1) + "\n"
         )
+    if args.check_native:
+        failures = [e for category in (*EVERY_TARGET, "unclassified")
+                    for e in rep.entries.get(category, [])]
+        for entry in failures:
+            print("  " + json.dumps(entry), file=sys.stderr)
+        return int(bool(failures))
     return 0
 
 

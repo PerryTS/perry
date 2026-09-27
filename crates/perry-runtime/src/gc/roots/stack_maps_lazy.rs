@@ -24,7 +24,7 @@
 //! function. The difference between the two is where the cursor starts and
 //! nothing else. Do not add a second walk here; make this one serve both.
 
-use super::decode::{read_u32, read_u64};
+use super::decode::read_u32;
 use super::{StackMapDerived, StackMapLocation, DWARF_REG_FP_AARCH64, DWARF_REG_SP_AARCH64};
 
 /// One function's position in the map, in the form the root scan needs.
@@ -346,9 +346,13 @@ pub(super) fn unzigzag(value: u32) -> i32 {
 /// This is the whole of what a lazy build reads: headers, function tables and
 /// the v5 stream-offset arrays — 1.45 MB of claude-code's 22.7 MB section,
 /// against the 22.7 MB read and ~117 MB written by the eager build.
+///
+/// `origin` is the runtime address of `bytes[0]`; the v6 function fields are
+/// offsets from their blob, so the table cannot be read without it.
 pub(super) fn parse_function_table(
     section: u16,
     bytes: &[u8],
+    origin: usize,
     out: &mut Vec<FunctionEntry>,
 ) -> Option<()> {
     let mut base = 0usize;
@@ -364,16 +368,14 @@ pub(super) fn parse_function_table(
         if *bytes.get(base + 4)? != super::GC_MAP_VERSION {
             return None;
         }
-        let flags = super::decode::read_u16(bytes, base + 6)?;
-        // Header flags, bit 0: the function-address field is 8 bytes wide.
-        // A mismatch means the map was produced for a different pointer
-        // width and every function address would be misread. Fail closed.
-        if (flags & 1 == 1) != (std::mem::size_of::<usize>() == 8) {
+        // v6 defines no header flags; anything set is a layout this decoder
+        // does not know. Fail closed.
+        if super::decode::read_u16(bytes, base + 6)? != 0 {
             return None;
         }
         let function_count = read_u32(bytes, base + 8)? as usize;
         let total_len = read_u32(bytes, base + 12)? as usize;
-        let entry = if flags & 1 == 1 { 16 } else { 12 };
+        let entry = super::decode::FUNCTION_ENTRY_BYTES;
         // A blob must at least cover its header, function table and v5
         // stream-offset array. Without this a `total_len` of 0 leaves `base`
         // unchanged, and because the magic still matches at that offset the
@@ -407,14 +409,10 @@ pub(super) fn parse_function_table(
         let mut previous_stream_offset = 0u32;
         for index in 0..function_count {
             let base_off = table + index * entry;
-            let addr_bytes = entry - 8;
-            let address = if addr_bytes == 8 {
-                read_u64(bytes, base_off)? as usize
-            } else {
-                read_u32(bytes, base_off)? as usize
-            };
-            let stack_size = read_u32(bytes, base_off + addr_bytes)?;
-            let record_count = read_u32(bytes, base_off + addr_bytes + 4)?;
+            let address =
+                super::decode::function_address(origin, base, read_u32(bytes, base_off)?)?;
+            let stack_size = read_u32(bytes, base_off + 4)?;
+            let record_count = read_u32(bytes, base_off + 8)?;
             let stream_offset = read_u32(bytes, stream_offsets + index * 4)?;
 
             // The encoder emits these in stream order, so the first is 0 and
@@ -705,7 +703,7 @@ pub(super) fn malformed(function_address: usize) -> ! {
     );
 }
 
-/// Build a v5 blob, mirroring `perry-codegen/src/gc_map.rs`.
+/// Build a v6 blob, mirroring `perry-codegen/src/gc_map.rs`.
 ///
 /// Shared by every test that needs real section bytes rather than hand-made
 /// records — which, since the walkers decode from the section, is all of them.
@@ -721,8 +719,17 @@ pub(super) fn test_blob(
     test_blob_multi(&[(address, stack_size, records.to_vec())])
 }
 
+/// A blob read at origin 0 (what `build_index_from_sections_lazy` passes), so
+/// each function field is simply its address — which must then fit in an i32.
 #[cfg(test)]
 pub(super) fn test_blob_multi(functions: &[TestFunction]) -> Vec<u8> {
+    test_blob_multi_at(0, functions)
+}
+
+/// A blob whose function fields are relative to `origin`: the address the
+/// decoder will be told the blob's first byte lives at.
+#[cfg(test)]
+pub(super) fn test_blob_multi_at(origin: u64, functions: &[TestFunction]) -> Vec<u8> {
     fn push_varint(out: &mut Vec<u8>, mut value: u64) {
         while value >= 0x80 {
             out.push((value as u8 & 0x7F) | 0x80);
@@ -762,23 +769,20 @@ pub(super) fn test_blob_multi(functions: &[TestFunction]) -> Vec<u8> {
         }
     }
 
-    let ptr64 = std::mem::size_of::<usize>() == 8;
-    let entry = if ptr64 { 16 } else { 12 };
+    let entry = super::decode::FUNCTION_ENTRY_BYTES;
     let total_len =
         16 + functions.len() * entry + functions.len() * 4 + offsets.len() + stream.len();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(super::GC_MAP_MAGIC);
     bytes.push(super::GC_MAP_VERSION);
     bytes.push(0);
-    bytes.extend_from_slice(&u16::from(ptr64).to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
     bytes.extend_from_slice(&(functions.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&(total_len as u32).to_le_bytes());
     for (address, stack_size, records) in functions {
-        if ptr64 {
-            bytes.extend_from_slice(&address.to_le_bytes());
-        } else {
-            bytes.extend_from_slice(&(*address as u32).to_le_bytes());
-        }
+        let offset = i32::try_from(address.wrapping_sub(origin) as i64)
+            .expect("a test function must sit within +-2 GiB of its blob");
+        bytes.extend_from_slice(&offset.to_le_bytes());
         bytes.extend_from_slice(&stack_size.to_le_bytes());
         bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
     }

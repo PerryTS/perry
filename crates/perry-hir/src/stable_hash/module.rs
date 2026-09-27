@@ -119,7 +119,7 @@ impl SH for Module {
             metadata.text.hash(h);
             metadata.is_non_strict_ordinary.hash(h);
         }
-        // #9413: class source text drives the js_register_class_source calls,
+        // #9413: class source text drives the js_register_class_source{,_static} calls,
         // so it participates in the stable hash for the same reason.
         let mut class_source_pairs: Vec<(u32, &String)> =
             class_source_text.iter().map(|(k, v)| (*k, v)).collect();

@@ -1,0 +1,181 @@
+//! Thread-exit release of process-global address-keyed state (#11471).
+//!
+//! When a thread exits, [`Arena::drop`](super::Arena) hands its arena blocks
+//! back to the allocator, and another thread's arena may reuse the same
+//! addresses. A process-global table keyed by (or holding) an address inside
+//! those blocks then describes a DIFFERENT object: #11319 (closure side
+//! tables), #11462 (`tls.rs` roots) and #11470 (typed-array kind caches) each
+//! shipped as a flake before anyone traced it here.
+//!
+//! This module is the one place those tables hear about a thread exit.
+//! `Arena::drop` calls [`release_freed_ranges`] with the blocks it is about to
+//! free; that runs every hook registered through
+//! [`register_thread_exit_range_hook`]. A hook drops every entry whose key or
+//! stored value lies in [`FreedRanges`].
+//!
+//! # Rules for a hook
+//!
+//! It runs inside a TLS destructor of the exiting thread:
+//!
+//! * no thread-local state (it may already be gone), no GC allocation, no
+//!   collection;
+//! * process-global locks are fine (the tables it touches are exactly those),
+//!   but take them with `lock()`/`try_lock()` and tolerate poisoning;
+//! * it must not call back into JS.
+//!
+//! `scripts/thread_exit_address_globals.py` requires every process-global
+//! static that can hold an arena address to carry a verdict; a
+//! `thread_exit_invalidated` verdict names its hook, and the gate checks the
+//! hook is registered here or called by `Arena::drop`.
+
+use std::sync::{Mutex, PoisonError};
+
+/// The address ranges `[start, end)` of the arena blocks an exiting thread is
+/// about to free, sorted by start. Arena blocks never overlap, so membership
+/// is one binary search.
+pub struct FreedRanges {
+    sorted: Vec<(usize, usize)>,
+}
+
+impl FreedRanges {
+    pub fn new(ranges: &[(usize, usize)]) -> Self {
+        let mut sorted: Vec<(usize, usize)> = ranges
+            .iter()
+            .copied()
+            .filter(|&(start, end)| start < end)
+            .collect();
+        sorted.sort_unstable_by_key(|&(start, _)| start);
+        Self { sorted }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sorted.is_empty()
+    }
+
+    /// Does `addr` lie inside one of the freed blocks?
+    #[inline]
+    pub fn contains(&self, addr: usize) -> bool {
+        if addr == 0 {
+            return false;
+        }
+        let after = self.sorted.partition_point(|&(start, _)| start <= addr);
+        after > 0 && addr < self.sorted[after - 1].1
+    }
+
+    /// Does this 64-bit word name freed memory, read either as a NaN-boxed
+    /// heap reference (pointer, string or bigint tag) or as a raw address
+    /// (closure pointers and `*mut Promise` are stored raw in several
+    /// tables)? A plain number never decodes to a block address unless it is
+    /// one, so erring toward "names it" can only drop an entry that pointed at
+    /// the dead thread's heap anyway.
+    #[inline]
+    pub fn holds_bits(&self, bits: u64) -> bool {
+        let tag = bits >> 48;
+        if matches!(tag, 0x7FFD | 0x7FFF | 0x7FFA) {
+            return self.contains((bits & 0x0000_FFFF_FFFF_FFFF) as usize);
+        }
+        tag == 0 && self.contains(bits as usize)
+    }
+
+    /// [`holds_bits`](Self::holds_bits) for an `f64`-typed JS value.
+    #[inline]
+    pub fn holds_value(&self, value: f64) -> bool {
+        self.holds_bits(value.to_bits())
+    }
+
+    /// [`holds_bits`](Self::holds_bits) for an `i64`-typed word.
+    #[inline]
+    pub fn holds_i64(&self, word: i64) -> bool {
+        self.holds_bits(word as u64)
+    }
+}
+
+/// Hooks for process-global tables, in this crate or downstream
+/// (`perry-stdlib`). Function pointers only: no heap address lives here.
+static RANGE_HOOKS: Mutex<Vec<fn(&FreedRanges)>> = Mutex::new(Vec::new());
+
+/// Register `hook` to run whenever a thread's arena frees its blocks.
+/// Idempotent per function. Call it before the table's first insert (a
+/// `Once` on the insert path is the usual shape), so no entry predates it.
+pub fn register_thread_exit_range_hook(hook: fn(&FreedRanges)) {
+    let mut hooks = RANGE_HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+    if !hooks
+        .iter()
+        .any(|existing| std::ptr::fn_addr_eq(*existing, hook))
+    {
+        hooks.push(hook);
+    }
+}
+
+/// Run every registered hook over `ranges`. Called by `Arena::drop` (arena
+/// blocks) and `MallocState::drop` (`gc_malloc` blocks) at thread exit.
+pub(crate) fn release_freed_ranges(ranges: &[(usize, usize)]) {
+    let freed = FreedRanges::new(ranges);
+    if freed.is_empty() {
+        return;
+    }
+    // -- perry-runtime tables (#11471): one call per owning module --
+    crate::geisterhand_registry::release_geisterhand_in_freed_ranges(&freed);
+    crate::ui_text_registry::release_ui_text_registry_in_freed_ranges(&freed);
+    crate::frame::release_frame_callbacks_in_freed_ranges(&freed);
+    crate::tui::input::release_tui_input_handler_in_freed_ranges(&freed);
+    crate::tui::state::release_tui_state_slots_in_freed_ranges(&freed);
+    crate::tui::hooks::release_tui_hook_slots_in_freed_ranges(&freed);
+    #[cfg(feature = "full")]
+    crate::plugin::release_plugin_registry_in_freed_ranges(&freed);
+    #[cfg(feature = "ohos-napi")]
+    crate::media_playback::release_media_callbacks_in_freed_ranges(&freed);
+    crate::symbol::release_symbol_tables_in_freed_ranges(&freed);
+    crate::symbol::release_symbol_accessors_in_freed_ranges(&freed);
+    crate::object::prototype_chain::release_object_prototypes_in_freed_ranges(&freed);
+    crate::event_target::release_dom_exception_errors_in_freed_ranges(&freed);
+    crate::node_vm::release_vm_owner_entries_in_freed_ranges(&freed);
+    crate::messaging::release_port_states_in_freed_ranges(&freed);
+    crate::v8::release_promise_hooks_in_freed_ranges(&freed);
+    crate::async_hooks::release_async_hooks_in_freed_ranges(&freed);
+    crate::object::release_global_this_ptr_in_freed_ranges(&freed);
+    crate::tls::release_tls_client_metadata_in_freed_ranges(&freed);
+    #[cfg(feature = "mod-dgram")]
+    crate::dgram_reactor::release_dgram_sockets_in_freed_ranges(&freed);
+    #[cfg(feature = "mod-dgram")]
+    crate::dgram::release_dgram_bindings_in_freed_ranges(&freed);
+    crate::child_process::reactor::release_cp_children_in_freed_ranges(&freed);
+    #[cfg(any(unix, windows))]
+    crate::pty::reactor::release_ptys_in_freed_ranges(&freed);
+    crate::promise::native_async::release_native_async_tokens_in_freed_ranges(&freed);
+    crate::typed_feedback::release_typed_feedback_in_freed_ranges(&freed);
+    // -- end perry-runtime tables --
+    // Copied out so a hook may itself take locks without holding this one.
+    let hooks: Vec<fn(&FreedRanges)> = RANGE_HOOKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    for hook in hooks {
+        hook(&freed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FreedRanges;
+
+    #[test]
+    fn membership_and_value_decoding() {
+        let freed = FreedRanges::new(&[(0x2000, 0x3000), (0x1000, 0x1800)]);
+        assert!(freed.contains(0x1000));
+        assert!(freed.contains(0x17ff));
+        assert!(!freed.contains(0x1800));
+        assert!(freed.contains(0x2fff));
+        assert!(!freed.contains(0x3000));
+        assert!(!freed.contains(0));
+        assert!(freed.holds_bits(0x7FFD_0000_0000_2010));
+        assert!(freed.holds_bits(0x7FFF_0000_0000_1010));
+        assert!(freed.holds_bits(0x2010));
+        assert!(!freed.holds_bits(0x7FFD_0000_0000_4000));
+        assert!(!freed.holds_value(1.5));
+        assert!(
+            !freed.holds_bits(0x7FFE_0000_0000_2010),
+            "an int32 is not an address"
+        );
+    }
+}

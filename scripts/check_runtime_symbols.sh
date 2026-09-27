@@ -61,6 +61,9 @@ SENTINELS=(
   # with a named function would fail to link on a build worker instead of here.
   js_register_function_name_static
   js_register_function_source_static
+  # #11501: the class-source sibling, emitted for every class an executable
+  # contains.
+  js_register_class_source_static
   js_object_get_field_by_property_id_f64
   js_object_set_field_by_property_id
   js_native_call_method_by_id

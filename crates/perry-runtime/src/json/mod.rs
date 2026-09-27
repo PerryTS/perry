@@ -45,6 +45,7 @@ mod stringify_escaped_output;
 mod stringify_flat;
 pub(crate) use stringify_flat::note_completed_malloc_json_output;
 mod stringify_nested_records;
+mod stringify_object;
 mod stringify_primitive_array;
 mod stringify_primitive_object;
 mod stringify_record_output;

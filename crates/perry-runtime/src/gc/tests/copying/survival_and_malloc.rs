@@ -929,7 +929,8 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     let re = crate::regex::test_alloc_nursery_regexp_for_move("move/source", "gi");
     let old_addr = re as usize;
     assert!(crate::arena::pointer_in_nursery(old_addr));
-    assert!(crate::regex::test_regex_pointer_entry_exists(old_addr));
+    // Identity is the header: the fixture registers the address nowhere.
+    assert!(crate::regex::is_registered_regex(old_addr));
 
     crate::object::exotic_expando::test_seed_exotic_expando_entry(
         old_addr,
@@ -938,15 +939,20 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     );
     js_shadow_slot_set(0, ptr_bits(old_addr));
 
+    let cycles = crate::gc::copying_minor_cycles();
     let _ = gc_collect_minor();
+    assert!(
+        crate::gc::copying_minor_cycles() > cycles,
+        "test premise: a copying minor ran"
+    );
 
     let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(new_addr, 0, "rooted RegExp must survive the copied minor");
     assert_ne!(new_addr, old_addr, "the RegExp must be evacuated");
     assert!(crate::regex::regex_header_has_magic(new_addr as *const _));
+    assert!(crate::regex::is_registered_regex(new_addr));
 
-    assert!(crate::regex::test_regex_pointer_entry_exists(new_addr));
-    assert!(!crate::regex::test_regex_pointer_entry_exists(old_addr));
+    // The expando owner key moves with the header (`ExoticExpandoOwner`).
     assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
 
@@ -1023,12 +1029,40 @@ fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
     );
 }
 
+/// Set a user property on a RegExp through the production `[[Set]]` path, so
+/// the entry is the one a program's `re.tag = v` would create.
+fn set_regexp_expando(addr: usize, key: &str, value: crate::value::JSValue) {
+    assert!(
+        matches!(
+            crate::object::exotic_expando::exotic_expando_kind(addr),
+            Some(crate::object::exotic_expando::ExoticKind::RegExp)
+        ),
+        "test premise: the header classifies as a RegExp exotic"
+    );
+    let receiver = f64::from_bits(ptr_bits(addr));
+    let stored = unsafe {
+        crate::object::exotic_expando::exotic_set_property(
+            addr,
+            crate::object::exotic_expando::ExoticKind::RegExp,
+            key,
+            f64::from_bits(value.bits()),
+            receiver,
+        )
+    };
+    assert!(stored, "test premise: the RegExp accepted the expando");
+    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+}
+
 /// #9819 follow-up: `js_regexp_new` allocates the header in the NURSERY. A
-/// header that dies young must lose its registry entries and its GC program
-/// must be reclaimed by the copied minor — because the from-space
-/// flip runs no per-object finalize hooks. Without
-/// `finalize_dead_copied_minor_from_space_regexps` the dead address stays in
-/// the owner registry and dead programs would remain reachable.
+/// header that dies young must lose its address-keyed state and its GC program
+/// must be reclaimed by the copied minor — even though the from-space flip runs
+/// no per-object finalize hooks.
+///
+/// #11503: RegExp has no registry or death hook of its own any more. Its only
+/// address-keyed state is the user's expandos, and the dead-owner fan-out
+/// (`prune_dead_exotic_expando_owners`) is what must drop a dead header's
+/// entry. If it did not, a fresh cell recycled at the dead header's address
+/// would read the dead RegExp's properties as its own.
 #[test]
 fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -1041,8 +1075,8 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
         crate::arena::pointer_in_nursery(dead_addr),
         "the header must be nursery-allocated"
     );
-    assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(dead_addr));
+    set_regexp_expando(dead_addr, "tag", crate::value::JSValue::int32(7));
+    set_regexp_expando(live_addr, "tag", crate::value::JSValue::int32(42));
     fn programs() -> usize {
         let mut cursor =
             crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::Address);
@@ -1069,17 +1103,35 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
 
     // Only `live` is rooted; `dead` is garbage.
     js_shadow_slot_set(0, ptr_bits(live_addr));
+    let cycles = crate::gc::copying_minor_cycles();
     let _ = gc_collect_minor();
+    assert!(
+        crate::gc::copying_minor_cycles() > cycles,
+        "test premise: a copying minor ran"
+    );
 
     let live_new = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(live_new, 0, "the rooted RegExp must survive");
     assert_ne!(live_new, live_addr, "the rooted RegExp must be evacuated");
     assert!(crate::regex::regex_header_has_magic(live_new as *const _));
-    assert!(crate::regex::test_regex_pointer_entry_exists(live_new));
+    assert!(crate::regex::is_registered_regex(live_new));
 
     assert!(
-        !crate::regex::test_regex_pointer_entry_exists(dead_addr),
-        "a nursery RegExp that died must be removed from REGEX_POINTERS by the copied minor"
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(dead_addr),
+        "a nursery RegExp that died must lose its expando entry in the copied minor"
+    );
+    assert!(
+        crate::object::exotic_expando::test_exotic_expando_entry_exists(live_new),
+        "the surviving RegExp's expando must follow it to its new address"
+    );
+    assert_eq!(
+        crate::object::exotic_expando::value_lookup(
+            crate::object::exotic_expando::ExoticKind::RegExp,
+            live_new,
+            "tag",
+        ),
+        Some(crate::value::JSValue::int32(42).bits()),
+        "the surviving RegExp keeps its own value, not the dead one's"
     );
     assert_eq!(
         programs(),

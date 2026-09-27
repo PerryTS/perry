@@ -815,6 +815,22 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 return v;
             }
         }
+        // #11193: the subclass (or an ancestor) extends a built-in constructor
+        // (`class X extends Array`). The built-in's own symbol statics — the
+        // `get [Symbol.species]` accessor — live on its constructor closure,
+        // which the chain edge (a reserved class id) does not reach. Read it
+        // there with the original receiver, so the inherited species getter
+        // answers `X`, not `Array`. Statics only: a prototype ref shares this
+        // tag, and `X.prototype` must not see the constructor's symbols.
+        if !is_proto_ref_receiver {
+            if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(class_id) {
+                return js_object_get_symbol_property_with_receiver(
+                    parent_ctor,
+                    sym_f64,
+                    receiver_f64,
+                );
+            }
+        }
         return f64::from_bits(TAG_UNDEFINED);
     }
     // #1545: Web Stream handles are normal finite numbers, not heap objects.

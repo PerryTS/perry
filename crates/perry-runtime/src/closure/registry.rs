@@ -72,7 +72,8 @@ pub(crate) struct ClosureBodyRecord {
     /// site, which is faster — the registry is consulted only when needed.
     rest_arity: u16,
     /// `HAS_*` presence bits plus the boolean attributes (`ARROW`, `STRICT`,
-    /// `ASYNC`, `GENERATOR`, `ASYNC_GENERATOR`, `NON_CONSTRUCTOR`) and the
+    /// `ASYNC`, `GENERATOR`, `ASYNC_GENERATOR`, `NON_CONSTRUCTOR`, `BUILTIN`)
+    /// and the
     /// 2-bit rest kind.
     flags: u16,
     /// 1-based index into `TRUSTED_TARGETS`; 0 = this body has no
@@ -126,6 +127,13 @@ mod body_flags {
     /// such closure had to populate at allocation and the collector had to
     /// prune when it died.
     pub(super) const NON_CONSTRUCTOR: u16 = 1 << 10;
+    /// #11509: the body is a runtime-native BUILT-IN function. ECMA-262
+    /// §10.3.1: a built-in's `[[Call]]` does not run OrdinaryCallBindThis —
+    /// it receives `thisArg` unchanged and does its own coercion — so a
+    /// primitive receiver reaches it unboxed, exactly as for a `STRICT` body.
+    /// Recorded once per body by the built-in prototype-method installers,
+    /// never per closure instance.
+    pub(super) const BUILTIN: u16 = 1 << 11;
 }
 
 impl ClosureBodyRecord {
@@ -907,6 +915,28 @@ pub fn is_registered_strict_function(func_ptr: *const u8) -> bool {
         return false;
     }
     body_record(func_ptr).is_some_and(|record| record.has(body_flags::STRICT))
+}
+
+/// #11509: mark every closure whose body is `func_ptr` as a built-in function,
+/// so a method call on a primitive hands it the raw receiver instead of a
+/// `ToObject` wrapper. Only runtime-native thunks may be registered here.
+pub(crate) fn register_closure_body_builtin(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    update_body_record(func_ptr, |record| record.flags |= body_flags::BUILTIN);
+}
+
+/// OrdinaryCallBindThis, decided by function KIND in one registry lookup:
+/// a strict body or a built-in body observes the primitive `thisArg`
+/// unchanged; only a sloppy user body is owed the `ToObject` wrapper.
+#[inline(always)]
+pub(crate) fn body_receives_primitive_this(func_ptr: *const u8) -> bool {
+    if func_ptr.is_null() {
+        return false;
+    }
+    body_record(func_ptr)
+        .is_some_and(|record| record.has(body_flags::STRICT) || record.has(body_flags::BUILTIN))
 }
 
 pub fn closure_is_arrow(closure: *const ClosureHeader) -> bool {

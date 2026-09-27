@@ -372,6 +372,37 @@ fn require_base_filename(closure: *const ClosureHeader) -> String {
     value_to_string(js_closure_get_capture_f64(closure, 0), "filename")
 }
 
+// Compiled modules remain resolvable after their build tree is removed. Keep
+// host realpath/symlink behavior when a file exists, and normalize only absent
+// absolute candidates before consulting the registry (#11448).
+fn resolve_file_candidate(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    #[cfg(feature = "node-api-host")]
+    if path.extension().and_then(|ext| ext.to_str()) == Some("node") {
+        if let Ok(payload) = crate::node_api_host::resolve_addon_request(&path.to_string_lossy()) {
+            return Some(payload);
+        }
+    }
+    if path.is_file() {
+        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    }
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    MODULE_PATH_REGISTRY
+        .with(|registry| registry.contains_registered(&normalized.to_string_lossy()))
+        .then_some(normalized)
+}
+
 fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
     if crate::embedded::is_virtual_path(&path.to_string_lossy()) {
         // Virtual files do not exist on disk. Normalize lexical components
@@ -391,16 +422,16 @@ fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
             && crate::embedded::lookup_text_module(&key).is_some())
         .then_some(normalized);
     }
-    if path.is_file() {
-        return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    if let Some(found) = resolve_file_candidate(path) {
+        return Some(found);
     }
     for ext in ["js", "json", "node"] {
         let mut candidate = path.as_os_str().to_os_string();
         candidate.push(".");
         candidate.push(ext);
         let candidate = std::path::PathBuf::from(candidate);
-        if candidate.is_file() {
-            return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+        if let Some(found) = resolve_file_candidate(&candidate) {
+            return Some(found);
         }
     }
     if path.is_dir() {
@@ -413,11 +444,11 @@ fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
                 }
             }
         }
-        for ext in ["js", "json", "node", "cjs"] {
-            let candidate = path.join(format!("index.{ext}"));
-            if candidate.is_file() {
-                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
-            }
+    }
+    // A compiled directory index has no host directory after relocation.
+    for ext in ["js", "json", "node", "cjs"] {
+        if let Some(found) = resolve_file_candidate(&path.join(format!("index.{ext}"))) {
+            return Some(found);
         }
     }
     None
@@ -470,6 +501,12 @@ fn resolve_request(
     }
     if specifier.starts_with("./") || specifier.starts_with("../") {
         return resolve_file(&base.join(specifier)).ok_or(ResolveError::NotFound);
+    }
+    #[cfg(feature = "node-api-host")]
+    {
+        if let Ok(payload) = crate::node_api_host::resolve_addon_request(specifier) {
+            return Ok(payload);
+        }
     }
     let (package, subpath) = package_parts(specifier);
     for ancestor in base.ancestors() {
@@ -688,6 +725,17 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         let exports_handle = scope.root_nanbox_f64(exports);
         link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
         return exports_handle.get_nanbox_f64();
+    }
+    #[cfg(feature = "node-api-host")]
+    if path.extension().and_then(|ext| ext.to_str()) == Some("node") {
+        let exports = scope.root_nanbox_f64(crate::node_api_host::load_addon_or_throw(&filename));
+        let record = cache_exports(
+            cache_handle.get_nanbox_f64(),
+            &filename,
+            exports.get_nanbox_f64(),
+        );
+        link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
+        return exports.get_nanbox_f64();
     }
     let mut registered = registered_path_module_value(&filename).unwrap_or_else(|| {
         PENDING_REQUIRE_PARENT.with(|pending| {
@@ -1326,6 +1374,20 @@ pub(crate) fn test_remove_path_module_root(key: &str) {
 pub extern "C" fn js_require_resolve_node_modules(from_dir: f64, specifier: f64) -> f64 {
     let from = value_to_string(from_dir, "from");
     let spec = value_to_string(specifier, "specifier");
+    #[cfg(feature = "node-api-host")]
+    {
+        let request = if spec.starts_with("./") || spec.starts_with("../") {
+            std::path::Path::new(&from)
+                .join(&spec)
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            spec.clone()
+        };
+        if let Ok(payload) = crate::node_api_host::resolve_addon_request(&request) {
+            return string_value(&payload.to_string_lossy());
+        }
+    }
     if spec == "." || spec == ".." || spec.starts_with("./") || spec.starts_with("../") {
         // Resolve from this CJS module, not the process cwd or the shared
         // createRequire instance. Reuse extension/directory lookup and realpath

@@ -179,6 +179,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     } else {
         Vec::new()
     };
+    // The receiver's id must stay reachable while its method runs: a
+    // GC-reclaimable common handle (#11453) is released at a full trace that
+    // finds no word naming it, and a chained temporary receiver
+    // (`createHash(a).update(b)`) lives in no JS slot.
+    let _receiver =
+        scope.root_nanbox_u64(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF));
     let arg_handles = scope.root_nanbox_f64_slice(&original_args);
     let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let _ = method_name;

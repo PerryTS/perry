@@ -1,0 +1,1237 @@
+{
+ "env": {
+  "PERRY_BUILD_COMMIT": "21c9f5438a15cefaac70933e6927d8b6ced84e8f"
+ },
+ "flags": "",
+ "host": "MacBookPro.fritz.box",
+ "perry": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry",
+ "perry_commit": "",
+ "perry_version": "perry 0.5.1654",
+ "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+ "workloads": {
+  "axios/get_json": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile axios/get_json.ts -o /private/tmp/claude-pkg-bench-out/mac/axios__get_json",
+   "compile_s": 444.22,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "agent-base": 2,
+     "asynckit": 10,
+     "axios": 63,
+     "call-bind-apply-helpers": 5,
+     "combined-stream": 1,
+     "debug": 4,
+     "delayed-stream": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "es-set-tostringtag": 1,
+     "follow-redirects": 2,
+     "form-data": 2,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "has-tostringtag": 1,
+     "hasown": 1,
+     "https-proxy-agent": 3,
+     "math-intrinsics": 8,
+     "mime-db": 2,
+     "mime-types": 1,
+     "ms": 1,
+     "proxy-from-env": 1
+    },
+    "native_modules": 132,
+    "package_modules_compiled": 63,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 19.51,
+   "runtime_rebuilt": true,
+   "size_bytes": 25259328,
+   "status": "OK"
+  },
+  "axios/post_json": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile axios/post_json.ts -o /private/tmp/claude-pkg-bench-out/mac/axios__post_json",
+   "compile_s": 66.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "agent-base": 2,
+     "asynckit": 10,
+     "axios": 63,
+     "call-bind-apply-helpers": 5,
+     "combined-stream": 1,
+     "debug": 4,
+     "delayed-stream": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "es-set-tostringtag": 1,
+     "follow-redirects": 2,
+     "form-data": 2,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "has-tostringtag": 1,
+     "hasown": 1,
+     "https-proxy-agent": 3,
+     "math-intrinsics": 8,
+     "mime-db": 2,
+     "mime-types": 1,
+     "ms": 1,
+     "proxy-from-env": 1
+    },
+    "native_modules": 132,
+    "package_modules_compiled": 63,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 20.31,
+   "runtime_rebuilt": false,
+   "size_bytes": 25259328,
+   "status": "OK"
+  },
+  "big.js/arith_chain": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile big.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/big_js__arith_chain",
+   "compile_s": 11.95,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "big.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 18.91,
+   "runtime_rebuilt": false,
+   "size_bytes": 6879168,
+   "status": "OK"
+  },
+  "bignumber.js/arith_chain": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile bignumber.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/bignumber_js__arith_chain",
+   "compile_s": 14.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "bignumber.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 27.64,
+   "runtime_rebuilt": false,
+   "size_bytes": 9014808,
+   "status": "OK"
+  },
+  "commander/parse_argv": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile commander/parse_argv.ts -o /private/tmp/claude-pkg-bench-out/mac/commander__parse_argv",
+   "compile_s": 325.08,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "commander": 7
+    },
+    "native_modules": 9,
+    "package_modules_compiled": 7,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 38.1,
+   "runtime_rebuilt": true,
+   "size_bytes": 9031032,
+   "status": "OK"
+  },
+  "control/bare_loop": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile control/bare_loop.ts -o /private/tmp/claude-pkg-bench-out/mac/control__bare_loop",
+   "compile_s": 2.51,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2
+    },
+    "native_modules": 2,
+    "package_modules_compiled": 0,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 35.65,
+   "runtime_rebuilt": false,
+   "size_bytes": 5986608,
+   "status": "OK"
+  },
+  "control/prop_read": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile control/prop_read.ts -o /private/tmp/claude-pkg-bench-out/mac/control__prop_read",
+   "compile_s": 1.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2
+    },
+    "native_modules": 2,
+    "package_modules_compiled": 0,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 34.88,
+   "runtime_rebuilt": false,
+   "size_bytes": 5986608,
+   "status": "OK"
+  },
+  "cron/next_dates": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile cron/next_dates.ts -o /private/tmp/claude-pkg-bench-out/mac/cron__next_dates",
+   "compile_s": 492.13,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "cron": 5,
+     "luxon": 1
+    },
+    "native_modules": 8,
+    "package_modules_compiled": 5,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 56.19,
+   "runtime_rebuilt": true,
+   "size_bytes": 16137600,
+   "status": "OK"
+  },
+  "date-fns/diff_interval": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile date-fns/diff_interval.ts -o /private/tmp/claude-pkg-bench-out/mac/date-fns__diff_interval",
+   "compile_s": 4.98,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "date-fns": 20
+    },
+    "native_modules": 22,
+    "package_modules_compiled": 20,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 36.3,
+   "runtime_rebuilt": false,
+   "size_bytes": 6152152,
+   "status": "OK"
+  },
+  "date-fns/format_add": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile date-fns/format_add.ts -o /private/tmp/claude-pkg-bench-out/mac/date-fns__format_add",
+   "compile_s": 9.98,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "date-fns": 41
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 41,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 38.93,
+   "runtime_rebuilt": false,
+   "size_bytes": 7342408,
+   "status": "OK"
+  },
+  "dayjs/diff_startof": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dayjs/diff_startof.ts -o /private/tmp/claude-pkg-bench-out/mac/dayjs__diff_startof",
+   "compile_s": 4.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dayjs": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 37.36,
+   "runtime_rebuilt": false,
+   "size_bytes": 9265104,
+   "status": "OK"
+  },
+  "dayjs/parse_format": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dayjs/parse_format.ts -o /private/tmp/claude-pkg-bench-out/mac/dayjs__parse_format",
+   "compile_s": 4.98,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dayjs": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 39.13,
+   "runtime_rebuilt": false,
+   "size_bytes": 9265104,
+   "status": "OK"
+  },
+  "decimal.js/arith_chain": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile decimal.js/arith_chain.ts -o /private/tmp/claude-pkg-bench-out/mac/decimal_js__arith_chain",
+   "compile_s": 19.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "decimal.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 18.9,
+   "runtime_rebuilt": false,
+   "size_bytes": 9262600,
+   "status": "OK"
+  },
+  "decimal.js/parse_sum": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile decimal.js/parse_sum.ts -o /private/tmp/claude-pkg-bench-out/mac/decimal_js__parse_sum",
+   "compile_s": 24.02,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "decimal.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 16.03,
+   "runtime_rebuilt": false,
+   "size_bytes": 9262600,
+   "status": "OK"
+  },
+  "dotenv/parse": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile dotenv/parse.ts -o /private/tmp/claude-pkg-bench-out/mac/dotenv__parse",
+   "compile_s": 390.11,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dotenv": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 12.82,
+   "runtime_rebuilt": true,
+   "size_bytes": 9661664,
+   "status": "OK"
+  },
+  "exponential-backoff/retry": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile exponential-backoff/retry.ts -o /private/tmp/claude-pkg-bench-out/mac/exponential-backoff__retry",
+   "compile_s": 3.97,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "exponential-backoff": 10
+    },
+    "native_modules": 12,
+    "package_modules_compiled": 10,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 17.94,
+   "runtime_rebuilt": false,
+   "size_bytes": 6450024,
+   "status": "OK"
+  },
+  "fastify/inject": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile fastify/inject.ts -o /private/tmp/claude-pkg-bench-out/mac/fastify__inject",
+   "compile_s": 802.82,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "@fastify/ajv-compiler": 5,
+     "@fastify/error": 1,
+     "@fastify/fast-json-stringify-compiler": 2,
+     "@fastify/forwarded": 1,
+     "@fastify/merge-json-schemas": 3,
+     "@fastify/proxy-addr": 1,
+     "@pinojs/redact": 1,
+     "abstract-logging": 1,
+     "ajv": 85,
+     "ajv-formats": 3,
+     "atomic-sleep": 1,
+     "avvio": 13,
+     "cookie": 1,
+     "dequal": 1,
+     "fast-decode-uri-component": 1,
+     "fast-deep-equal": 1,
+     "fast-json-stringify": 7,
+     "fast-querystring": 4,
+     "fast-uri": 6,
+     "fastify": 33,
+     "fastq": 1,
+     "find-my-way": 11,
+     "ipaddr.js": 1,
+     "json-schema-ref-resolver": 1,
+     "json-schema-traverse": 1,
+     "light-my-request": 6,
+     "on-exit-leak-free": 1,
+     "pino": 12,
+     "pino-std-serializers": 7,
+     "process-warning": 2,
+     "quick-format-unescaped": 1,
+     "ret": 11,
+     "reusify": 1,
+     "rfdc": 1,
+     "safe-regex2": 1,
+     "safe-stable-stringify": 1,
+     "secure-json-parse": 1,
+     "semver": 46,
+     "set-cookie-parser": 1,
+     "sonic-boom": 1,
+     "thread-stream": 4,
+     "toad-cache": 1
+    },
+    "native_modules": 286,
+    "package_modules_compiled": 33,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 49.32,
+   "runtime_rebuilt": true,
+   "size_bytes": 51225632,
+   "status": "OK"
+  },
+  "fastify/listen_fetch": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile fastify/listen_fetch.ts -o /private/tmp/claude-pkg-bench-out/mac/fastify__listen_fetch",
+   "compile_s": 334.11,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "@fastify/ajv-compiler": 5,
+     "@fastify/error": 1,
+     "@fastify/fast-json-stringify-compiler": 2,
+     "@fastify/forwarded": 1,
+     "@fastify/merge-json-schemas": 3,
+     "@fastify/proxy-addr": 1,
+     "@pinojs/redact": 1,
+     "abstract-logging": 1,
+     "ajv": 85,
+     "ajv-formats": 3,
+     "atomic-sleep": 1,
+     "avvio": 13,
+     "cookie": 1,
+     "dequal": 1,
+     "fast-decode-uri-component": 1,
+     "fast-deep-equal": 1,
+     "fast-json-stringify": 7,
+     "fast-querystring": 4,
+     "fast-uri": 6,
+     "fastify": 33,
+     "fastq": 1,
+     "find-my-way": 11,
+     "ipaddr.js": 1,
+     "json-schema-ref-resolver": 1,
+     "json-schema-traverse": 1,
+     "light-my-request": 6,
+     "on-exit-leak-free": 1,
+     "pino": 12,
+     "pino-std-serializers": 7,
+     "process-warning": 2,
+     "quick-format-unescaped": 1,
+     "ret": 11,
+     "reusify": 1,
+     "rfdc": 1,
+     "safe-regex2": 1,
+     "safe-stable-stringify": 1,
+     "secure-json-parse": 1,
+     "semver": 46,
+     "set-cookie-parser": 1,
+     "sonic-boom": 1,
+     "thread-stream": 4,
+     "toad-cache": 1
+    },
+    "native_modules": 286,
+    "package_modules_compiled": 33,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 15.93,
+   "runtime_rebuilt": false,
+   "size_bytes": 51209128,
+   "status": "OK"
+  },
+  "ioredis/pipeline": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile ioredis/pipeline.ts -o /private/tmp/claude-pkg-bench-out/mac/ioredis__pipeline",
+   "compile_s": 89.03,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@ioredis/commands": 2,
+     "cluster-key-slot": 1,
+     "debug": 4,
+     "denque": 1,
+     "ioredis": 39,
+     "ms": 1,
+     "redis-errors": 3,
+     "redis-parser": 2,
+     "standard-as-callback": 2
+    },
+    "native_modules": 58,
+    "package_modules_compiled": 39,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 16.71,
+   "runtime_rebuilt": false,
+   "size_bytes": 20063408,
+   "status": "OK"
+  },
+  "ioredis/set_get": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile ioredis/set_get.ts -o /private/tmp/claude-pkg-bench-out/mac/ioredis__set_get",
+   "compile_s": 63.93,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@ioredis/commands": 2,
+     "cluster-key-slot": 1,
+     "debug": 4,
+     "denque": 1,
+     "ioredis": 39,
+     "ms": 1,
+     "redis-errors": 3,
+     "redis-parser": 2,
+     "standard-as-callback": 2
+    },
+    "native_modules": 58,
+    "package_modules_compiled": 39,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 22.28,
+   "runtime_rebuilt": false,
+   "size_bytes": 20046896,
+   "status": "OK"
+  },
+  "jsonwebtoken/decode": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/decode.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__decode",
+   "compile_s": 61.57,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "buffer-equal-constant-time": 1,
+     "ecdsa-sig-formatter": 2,
+     "jsonwebtoken": 12,
+     "jwa": 1,
+     "jws": 5,
+     "lodash.includes": 1,
+     "lodash.isboolean": 1,
+     "lodash.isinteger": 1,
+     "lodash.isnumber": 1,
+     "lodash.isplainobject": 1,
+     "lodash.isstring": 1,
+     "lodash.once": 1,
+     "ms": 1,
+     "safe-buffer": 1,
+     "semver": 46
+    },
+    "native_modules": 78,
+    "package_modules_compiled": 12,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 55.85,
+   "runtime_rebuilt": false,
+   "size_bytes": 16620888,
+   "status": "OK"
+  },
+  "jsonwebtoken/hs256": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/hs256.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__hs256",
+   "compile_s": 464.14,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "buffer-equal-constant-time": 1,
+     "ecdsa-sig-formatter": 2,
+     "jsonwebtoken": 12,
+     "jwa": 1,
+     "jws": 5,
+     "lodash.includes": 1,
+     "lodash.isboolean": 1,
+     "lodash.isinteger": 1,
+     "lodash.isnumber": 1,
+     "lodash.isplainobject": 1,
+     "lodash.isstring": 1,
+     "lodash.once": 1,
+     "ms": 1,
+     "safe-buffer": 1,
+     "semver": 46
+    },
+    "native_modules": 78,
+    "package_modules_compiled": 12,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 25.04,
+   "runtime_rebuilt": true,
+   "size_bytes": 16620880,
+   "status": "OK"
+  },
+  "jsonwebtoken/rs256": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile jsonwebtoken/rs256.ts -o /private/tmp/claude-pkg-bench-out/mac/jsonwebtoken__rs256",
+   "compile_s": 84.01,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "buffer-equal-constant-time": 1,
+     "ecdsa-sig-formatter": 2,
+     "jsonwebtoken": 12,
+     "jwa": 1,
+     "jws": 5,
+     "lodash.includes": 1,
+     "lodash.isboolean": 1,
+     "lodash.isinteger": 1,
+     "lodash.isnumber": 1,
+     "lodash.isplainobject": 1,
+     "lodash.isstring": 1,
+     "lodash.once": 1,
+     "ms": 1,
+     "safe-buffer": 1,
+     "semver": 46
+    },
+    "native_modules": 79,
+    "package_modules_compiled": 12,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 51.07,
+   "runtime_rebuilt": false,
+   "size_bytes": 16620880,
+   "status": "OK"
+  },
+  "lru-cache/churn": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile lru-cache/churn.ts -o /private/tmp/claude-pkg-bench-out/mac/lru-cache__churn",
+   "compile_s": 334.41,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "lru-cache": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 13.9,
+   "runtime_rebuilt": true,
+   "size_bytes": 7442336,
+   "status": "OK"
+  },
+  "lru-cache/ttl_mixed": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile lru-cache/ttl_mixed.ts -o /private/tmp/claude-pkg-bench-out/mac/lru-cache__ttl_mixed",
+   "compile_s": 14.98,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "lru-cache": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 45.05,
+   "runtime_rebuilt": false,
+   "size_bytes": 7442344,
+   "status": "OK"
+  },
+  "moment/diff_duration": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile moment/diff_duration.ts -o /private/tmp/claude-pkg-bench-out/mac/moment__diff_duration",
+   "compile_s": 95.01,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "moment": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 20.07,
+   "runtime_rebuilt": false,
+   "size_bytes": 15227208,
+   "status": "OK"
+  },
+  "moment/parse_format": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile moment/parse_format.ts -o /private/tmp/claude-pkg-bench-out/mac/moment__parse_format",
+   "compile_s": 317.94,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "moment": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 34.27,
+   "runtime_rebuilt": true,
+   "size_bytes": 15227208,
+   "status": "OK"
+  },
+  "mongodb/batch_query": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mongodb/batch_query.ts -o /private/tmp/claude-pkg-bench-out/mac/mongodb__batch_query",
+   "compile_s": 188.06,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@mongodb-js/saslprep": 5,
+     "bson": 32,
+     "memory-pager": 1,
+     "mongodb": 133,
+     "mongodb-connection-string-url": 3,
+     "sparse-bitfield": 1,
+     "tr46": 4,
+     "webidl-conversions": 1,
+     "whatwg-url": 13
+    },
+    "native_modules": 196,
+    "package_modules_compiled": 133,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 14.72,
+   "runtime_rebuilt": false,
+   "size_bytes": 39424776,
+   "status": "OK"
+  },
+  "mongodb/insert_find": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mongodb/insert_find.ts -o /private/tmp/claude-pkg-bench-out/mac/mongodb__insert_find",
+   "compile_s": 615.97,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@mongodb-js/saslprep": 5,
+     "bson": 32,
+     "memory-pager": 1,
+     "mongodb": 133,
+     "mongodb-connection-string-url": 3,
+     "sparse-bitfield": 1,
+     "tr46": 4,
+     "webidl-conversions": 1,
+     "whatwg-url": 13
+    },
+    "native_modules": 196,
+    "package_modules_compiled": 133,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 13.99,
+   "runtime_rebuilt": true,
+   "size_bytes": 39424760,
+   "status": "OK"
+  },
+  "mysql2/insert_batch": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mysql2/insert_batch.ts -o /private/tmp/claude-pkg-bench-out/mac/mysql2__insert_batch",
+   "compile_s": 98.01,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "aws-ssl-profiles": 3,
+     "generate-function": 1,
+     "iconv-lite": 22,
+     "is-property": 1,
+     "long": 1,
+     "lru.min": 1,
+     "mysql2": 92,
+     "named-placeholders": 1,
+     "safer-buffer": 1,
+     "sql-escaper": 1
+    },
+    "native_modules": 127,
+    "package_modules_compiled": 92,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 23.44,
+   "runtime_rebuilt": false,
+   "size_bytes": 31553896,
+   "status": "OK"
+  },
+  "mysql2/select": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile mysql2/select.ts -o /private/tmp/claude-pkg-bench-out/mac/mysql2__select",
+   "compile_s": 494.49,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "aws-ssl-profiles": 3,
+     "generate-function": 1,
+     "iconv-lite": 22,
+     "is-property": 1,
+     "long": 1,
+     "lru.min": 1,
+     "mysql2": 92,
+     "named-placeholders": 1,
+     "safer-buffer": 1,
+     "sql-escaper": 1
+    },
+    "native_modules": 127,
+    "package_modules_compiled": 92,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 20.04,
+   "runtime_rebuilt": true,
+   "size_bytes": 31553888,
+   "status": "OK"
+  },
+  "nanoid/generate": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile nanoid/generate.ts -o /private/tmp/claude-pkg-bench-out/mac/nanoid__generate",
+   "compile_s": 286.87,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "nanoid": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 37.06,
+   "runtime_rebuilt": true,
+   "size_bytes": 6598320,
+   "status": "OK"
+  },
+  "node-cron/match": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-cron/match.ts -o /private/tmp/claude-pkg-bench-out/mac/node-cron__match",
+   "compile_s": 9.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-cron": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 17.47,
+   "runtime_rebuilt": false,
+   "size_bytes": 13167360,
+   "status": "OK"
+  },
+  "node-cron/validate_parse": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-cron/validate_parse.ts -o /private/tmp/claude-pkg-bench-out/mac/node-cron__validate_parse",
+   "compile_s": 422.13,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-cron": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 57.6,
+   "runtime_rebuilt": true,
+   "size_bytes": 13167368,
+   "status": "OK"
+  },
+  "node-forge/aes_cbc": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/aes_cbc.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__aes_cbc",
+   "compile_s": 200.1,
+   "load1": 10.0,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/hmac": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/hmac.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__hmac",
+   "compile_s": 104.04,
+   "load1": 14.26,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/rsa_sign": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/rsa_sign.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__rsa_sign",
+   "compile_s": 102.03,
+   "load1": 9.52,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/sha256": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile node-forge/sha256.ts -o /private/tmp/claude-pkg-bench-out/mac/node-forge__sha256",
+   "compile_s": 107.55,
+   "load1": 24.09,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "pg/insert_batch": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile pg/insert_batch.ts -o /private/tmp/claude-pkg-bench-out/mac/pg__insert_batch",
+   "compile_s": 38.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "pg": 17,
+     "pg-cloudflare": 1,
+     "pg-connection-string": 1,
+     "pg-int8": 1,
+     "pg-pool": 1,
+     "pg-protocol": 6,
+     "pg-types": 5,
+     "pgpass": 2,
+     "postgres-array": 1,
+     "postgres-bytea": 1,
+     "postgres-date": 1,
+     "postgres-interval": 1,
+     "split2": 1,
+     "xtend": 1
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 17,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 13.19,
+   "runtime_rebuilt": false,
+   "size_bytes": 17901024,
+   "status": "OK"
+  },
+  "pg/select": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile pg/select.ts -o /private/tmp/claude-pkg-bench-out/mac/pg__select",
+   "compile_s": 316.09,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "pg": 17,
+     "pg-cloudflare": 1,
+     "pg-connection-string": 1,
+     "pg-int8": 1,
+     "pg-pool": 1,
+     "pg-protocol": 6,
+     "pg-types": 5,
+     "pgpass": 2,
+     "postgres-array": 1,
+     "postgres-bytea": 1,
+     "postgres-date": 1,
+     "postgres-interval": 1,
+     "split2": 1,
+     "xtend": 1
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 17,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 15.19,
+   "runtime_rebuilt": true,
+   "size_bytes": 17901016,
+   "status": "OK"
+  },
+  "qs/parse_nested": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile qs/parse_nested.ts -o /private/tmp/claude-pkg-bench-out/mac/qs__parse_nested",
+   "compile_s": 339.1,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "call-bind-apply-helpers": 5,
+     "call-bound": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "hasown": 1,
+     "math-intrinsics": 8,
+     "object-inspect": 2,
+     "qs": 5,
+     "side-channel": 1,
+     "side-channel-list": 1,
+     "side-channel-map": 1,
+     "side-channel-weakmap": 1
+    },
+    "native_modules": 48,
+    "package_modules_compiled": 5,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 13.89,
+   "runtime_rebuilt": true,
+   "size_bytes": 13711760,
+   "status": "OK"
+  },
+  "qs/stringify_nested": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile qs/stringify_nested.ts -o /private/tmp/claude-pkg-bench-out/mac/qs__stringify_nested",
+   "compile_s": 24.01,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "call-bind-apply-helpers": 5,
+     "call-bound": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "hasown": 1,
+     "math-intrinsics": 8,
+     "object-inspect": 2,
+     "qs": 5,
+     "side-channel": 1,
+     "side-channel-list": 1,
+     "side-channel-map": 1,
+     "side-channel-weakmap": 1
+    },
+    "native_modules": 48,
+    "package_modules_compiled": 5,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 14.45,
+   "runtime_rebuilt": false,
+   "size_bytes": 13711784,
+   "status": "OK"
+  },
+  "rate-limiter-flexible/consume": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile rate-limiter-flexible/consume.ts -o /private/tmp/claude-pkg-bench-out/mac/rate-limiter-flexible__consume",
+   "compile_s": 407.07,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "rate-limiter-flexible": 36
+    },
+    "native_modules": 38,
+    "package_modules_compiled": 36,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 53.19,
+   "runtime_rebuilt": true,
+   "size_bytes": 14589920,
+   "status": "OK"
+  },
+  "rate-limiter-flexible/get_penalty": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /private/tmp/claude-pkg-bench-out/mac/rate-limiter-flexible__get_penalty",
+   "compile_s": 33.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "rate-limiter-flexible": 36
+    },
+    "native_modules": 38,
+    "package_modules_compiled": 36,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 26.73,
+   "runtime_rebuilt": false,
+   "size_bytes": 14589920,
+   "status": "OK"
+  },
+  "redis/pipeline": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile redis/pipeline.ts -o /private/tmp/claude-pkg-bench-out/mac/redis__pipeline",
+   "compile_s": 518.93,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@redis/bloom": 57,
+     "@redis/client": 473,
+     "@redis/json": 25,
+     "@redis/search": 40,
+     "@redis/time-series": 46,
+     "cluster-key-slot": 1,
+     "redis": 1
+    },
+    "native_modules": 646,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 21.14,
+   "runtime_rebuilt": false,
+   "size_bytes": 69656880,
+   "status": "OK"
+  },
+  "redis/set_get": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile redis/set_get.ts -o /private/tmp/claude-pkg-bench-out/mac/redis__set_get",
+   "compile_s": 703.84,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@redis/bloom": 57,
+     "@redis/client": 473,
+     "@redis/json": 25,
+     "@redis/search": 40,
+     "@redis/time-series": 46,
+     "cluster-key-slot": 1,
+     "redis": 1
+    },
+    "native_modules": 646,
+    "package_modules_compiled": 1,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 18.31,
+   "runtime_rebuilt": true,
+   "size_bytes": 69656880,
+   "status": "OK"
+  },
+  "uuid/v4": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v4.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v4",
+   "compile_s": 400.08,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 13
+    },
+    "native_modules": 15,
+    "package_modules_compiled": 13,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 41.3,
+   "runtime_rebuilt": true,
+   "size_bytes": 8486472,
+   "status": "OK"
+  },
+  "uuid/v5_parse": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v5_parse.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v5_parse",
+   "compile_s": 2.99,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 10
+    },
+    "native_modules": 12,
+    "package_modules_compiled": 10,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 37.06,
+   "runtime_rebuilt": false,
+   "size_bytes": 8486464,
+   "status": "OK"
+  },
+  "uuid/v7": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile uuid/v7.ts -o /private/tmp/claude-pkg-bench-out/mac/uuid__v7",
+   "compile_s": 3.95,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 13
+    },
+    "native_modules": 15,
+    "package_modules_compiled": 13,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 37.76,
+   "runtime_rebuilt": false,
+   "size_bytes": 8502984,
+   "status": "OK"
+  },
+  "validator/batch": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile validator/batch.ts -o /private/tmp/claude-pkg-bench-out/mac/validator__batch",
+   "compile_s": 464.19,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "validator": 113
+    },
+    "native_modules": 115,
+    "package_modules_compiled": 113,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 14.87,
+   "runtime_rebuilt": true,
+   "size_bytes": 19936464,
+   "status": "OK"
+  },
+  "validator/sanitize": {
+   "cmd": "/Users/amlug/projects/perry/claude-pkg-bench/target/release/perry compile validator/sanitize.ts -o /private/tmp/claude-pkg-bench-out/mac/validator__sanitize",
+   "compile_s": 84.01,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "validator": 113
+    },
+    "native_modules": 115,
+    "package_modules_compiled": 113,
+    "symbol_check": "not run: stripped binary (set PERRY_KEEP_SYMBOLS=1)"
+   },
+   "load1": 21.33,
+   "runtime_rebuilt": false,
+   "size_bytes": 19936448,
+   "status": "OK"
+  }
+ }
+}

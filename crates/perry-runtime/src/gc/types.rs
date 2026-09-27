@@ -336,7 +336,10 @@ pub(crate) enum GcMoveHookKind {
     SetSideTables,
     /// Rekey a movable exotic cell's address-keyed expando side table after a
     /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
-    /// (#5142) live in `object::exotic_expando` keyed by the promise address.
+    /// (#5142) live in `object::exotic_expando` keyed by the promise address,
+    /// and by `GC_TYPE_REGEXP`, whose user-assigned properties live there too.
+    /// A dead owner's entry is dropped by the `gc::dead_owner` fan-out
+    /// (`prune_dead_exotic_expando_owners`), not by a per-type hook.
     ExoticExpandoOwner,
     /// Rekey the Node diagnostic record keyed by the ErrorHeader address after
     /// a move. Errors are movable; without this a moved error loses its
@@ -344,10 +347,6 @@ pub(crate) enum GcMoveHookKind {
     /// live on the Error's traced `ObjectMeta` edge and need no side-table
     /// rekeying.
     ErrorSideTables,
-    /// Rekey the RegExp identity registry plus its exotic expando owner entry.
-    /// `GC_TYPE_REGEXP` is movable, and both tables use the payload address as
-    /// their key.
-    RegExpSideTables,
     /// Rekey a lazy JSON array's tape registration. `json_tape_store` keys a
     /// tape by its owner's address, which is precisely what kept
     /// `GC_TYPE_LAZY_ARRAY` immovable and old-gen until this existed.
@@ -392,11 +391,6 @@ pub(crate) enum GcFinalizeHookKind {
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.
     LazyArrayTape,
-    /// Release a dead RegExp cell's header-owned compiled programs and drop
-    /// its entries from every payload-address-keyed registry. Moved arena
-    /// stubs use only the move-hook dead-owner fan-out so ownership transfers
-    /// to the relocated header instead of being released with the old copy.
-    RegExpSideTables,
 }
 
 #[allow(dead_code)]
@@ -812,9 +806,9 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::MallocTracked,
         false,
-        GcMoveHookKind::RegExpSideTables,
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::RegExpSideTables,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_REGEX_PROGRAM,
@@ -937,9 +931,6 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
                 old_user, new_user,
             );
         }
-        GcMoveHookKind::RegExpSideTables => {
-            crate::regex::regex_header_moved_for_gc(old_user, new_user);
-        }
         GcMoveHookKind::LazyArrayTape => {
             crate::json_tape_store::owner_moved(old_user, new_user);
         }
@@ -972,9 +963,6 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
             // `finalize_dead_copied_minor_from_space_lazy_tapes`. Releasing it
             // a third time here would be sound (the release is idempotent) but
             // would hide which pass actually owns the reclaim.
-        }
-        GcMoveHookKind::RegExpSideTables => {
-            crate::regex::regex_header_clear_dead_for_gc(user_ptr);
         }
         GcMoveHookKind::None
         | GcMoveHookKind::MapForeachStack
@@ -1030,9 +1018,6 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         }
         GcFinalizeHookKind::LazyArrayTape => {
             crate::json_tape_store::release(user_ptr as usize);
-        }
-        GcFinalizeHookKind::RegExpSideTables => {
-            crate::regex::regex_header_finalize_for_gc(user_ptr as *mut crate::regex::RegExpHeader);
         }
     }
 }

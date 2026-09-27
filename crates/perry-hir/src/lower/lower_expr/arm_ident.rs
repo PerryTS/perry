@@ -260,7 +260,8 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // through to the `js_global_get_or_throw_unresolved` arm below
         // and throw `ReferenceError: require is not defined`. Bind a
         // bare unshadowed `require` to a real createRequire-backed
-        // closure instead — builtins (`node:os`, …) resolve by string;
+        // closure rooted at this module's filename (#10436), not the
+        // process cwd. Builtins (`node:os`, …) resolve by string;
         // unresolved package/file specifiers throw Node-compatible
         // MODULE_NOT_FOUND. Reaching this arm means
         // `require` is unshadowed (a local/func/imported/native binding
@@ -269,11 +270,11 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // is deliberate and must not regress into a runtime path.
         Ok(Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
-                name: "js_module_ambient_require".to_string(),
-                param_types: Vec::new(),
+                name: "js_module_create_require_devirt".to_string(),
+                param_types: vec![Type::Any],
                 return_type: Type::Any,
             }),
-            args: Vec::new(),
+            args: vec![Expr::String(ctx.source_file_path.replace('\\', "/"))],
             type_args: Vec::new(),
             byte_offset: 0,
         })
@@ -309,7 +310,12 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             // Platform globals (Bun in Bun mode) are supplied at module
             // initialization. Keep the same lookup so replacement on
             // globalThis remains observable; only the warning is suppressed.
-            if ctx.unresolved_ident_as_global && !ctx.platform_globals.contains(&name) {
+            // `self` likewise exists only in Bun/worker realms, so absence must
+            // throw on reads while `typeof self` keeps its optional lookup.
+            if ctx.unresolved_ident_as_global
+                && !ctx.platform_globals.contains(&name)
+                && name != "self"
+            {
                 eprintln!(
                     "  Warning: unknown identifier '{}' in {} — assuming global; resolved by name on globalThis (incl. Object.prototype-inherited members) at runtime",
                     name,

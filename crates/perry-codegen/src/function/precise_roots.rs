@@ -201,19 +201,16 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
         }
         if is_call && trimmed.ends_with(')') && !trimmed.contains(" asm ") {
             if let Some(callee) = direct_callee_name(line) {
-                let leaf = match crate::gc_call_effects::classify_direct_callee(callee) {
-                    crate::gc_call_effects::GcCallEffect::CannotCollect => true,
-                    crate::gc_call_effects::GcCallEffect::AllocNoReentry => {
-                        crate::codegen::helpers::gc_safepoint_only_contract_enabled()
-                    }
-                    crate::gc_call_effects::GcCallEffect::Unknown => false,
-                };
-                if leaf && !callee.starts_with("llvm.") {
+                if audited_leaf_callee(callee) {
                     out.push_str(line.trim_end());
                     out.push_str(" \"gc-leaf-function\"\n");
                     continue;
                 }
             }
+        }
+        if let Some(marked) = leaf_marked_invoke(line) {
+            out.push_str(&marked);
+            continue;
         }
 
         out.push_str(line);
@@ -222,8 +219,61 @@ fn lower_roots_for_rs4gc(lines: &[&str], root_ptrs: &[String]) -> Option<String>
     Some(out)
 }
 
+/// Whether the audited call-effect table lets RS4GC skip the safepoint at a
+/// direct call of `callee`. `AllocNoReentry` keeps its contract gating.
+fn audited_leaf_callee(callee: &str) -> bool {
+    let leaf = match crate::gc_call_effects::classify_direct_callee(callee) {
+        crate::gc_call_effects::GcCallEffect::CannotCollect => true,
+        crate::gc_call_effects::GcCallEffect::AllocNoReentry => {
+            crate::codegen::helpers::gc_safepoint_only_contract_enabled()
+        }
+        crate::gc_call_effects::GcCallEffect::Unknown => false,
+    };
+    leaf && !callee.starts_with("llvm.")
+}
+
+/// The `invoke` arm of the leaf marking above (#11500).
+///
+/// Inside a `try`, the same audited helper is emitted as
+/// `[%r =] invoke TY @name(ARGS) to label %cont unwind label %pad`, which the
+/// `call`-only classification never saw — so every such site became a full
+/// statepoint relocating every live GC value (164k of 291k
+/// `js_closure_get_capture_bits` sites on one real bundle). The verdict is
+/// the call arm's, unchanged: a callee that cannot collect cannot collect on
+/// either successor, so neither edge needs relocations.
+///
+/// The one textual difference is placement. An invoke's function attributes
+/// sit after the argument list and BEFORE `to label`; appended at the end of
+/// the line they would be a parse error. The head must end in `)` — the call
+/// arm's `ends_with(')')` — so a site already carrying a call-site attribute,
+/// including a leaf mark emitted by `call_gc_leaf`, is left alone. Inline asm
+/// is marked for the call arm's reason: RS4GC cannot wrap it at all.
+fn leaf_marked_invoke(line: &str) -> Option<String> {
+    let line = line.trim_end();
+    let trimmed = line.trim_start();
+    if !(trimmed.starts_with("invoke ") || trimmed.contains(" = invoke ")) {
+        return None;
+    }
+    let (head, edges) = line.split_at(line.rfind(" to label %")?);
+    if !head.ends_with(')') {
+        return None;
+    }
+    let leaf =
+        head.contains(" asm ") || direct_invoke_callee_name(head).is_some_and(audited_leaf_callee);
+    leaf.then(|| format!("{head} \"gc-leaf-function\"{edges}\n"))
+}
+
 fn direct_callee_name(line: &str) -> Option<&str> {
-    let call = line.trim().split_once("call ")?.1;
+    callee_before_args(line.trim().split_once("call ")?.1)
+}
+
+fn direct_invoke_callee_name(line: &str) -> Option<&str> {
+    callee_before_args(line.trim().split_once("invoke ")?.1)
+}
+
+/// The `@name` token ending the text before the first `(` of `call`, the
+/// remainder of a call or invoke line after its opcode.
+fn callee_before_args(call: &str) -> Option<&str> {
     let args_open = call.find('(')?;
     let target = call[..args_open].trim();
     let name = target.split_ascii_whitespace().last()?.strip_prefix('@')?;
@@ -392,6 +442,155 @@ mod tests {
         assert!(
             !rewritten.contains("= call i64 @js_map_alloc("),
             "the control callee must be statepoint-wrapped, not direct:\n{rewritten}"
+        );
+    }
+
+    /// #11500: inside a `try` the same audited accessor is an `invoke`, and
+    /// the call-only classification left it a full statepoint (164k of 291k
+    /// `js_closure_get_capture_bits` sites on one real bundle).
+    ///
+    /// Built the way `lower_try` builds a body — personality, an active EH
+    /// scope, a landing pad — so the helper takes the real invoke path rather
+    /// than a hand-written line. The collecting control inside the SAME try
+    /// body is also an invoke and must stay a statepoint, so this fails in
+    /// both directions, as the #8132 test above does.
+    ///
+    /// Sabotage: deleting the `leaf_marked_invoke` arm from
+    /// `lower_roots_for_rs4gc` turns the accessor into a third statepoint.
+    #[test]
+    fn audited_accessor_invoke_inside_try_takes_no_statepoint() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let target = crate::codegen::default_target_triple();
+        let mut module = crate::module::LlModule::new(target.clone());
+        use crate::types::{I32, I64, PTR, VOID};
+        module.declare_personality();
+        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+        module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
+        module.declare_function("js_map_alloc", I64, &[I32]);
+
+        let function = module.define_function("try_leaf_probe", I64, vec![]);
+        function.personality = Some("perry_eh_personality");
+        function.enable_shadow_frame(0);
+        let idx = function
+            .reserve_shadow_slot()
+            .expect("native pin reserves a precise-root slot");
+        let root = function.alloca_entry(I64);
+        function.entry_allocas_push_store(I64, "0", &root);
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(I32, &idx.to_string()), (PTR, &root)],
+        );
+        function.create_block("entry");
+        let body = function.create_block("try.body").label.clone();
+        let lpad = function.create_block("eh.lpad").label.clone();
+
+        let entry = function.block_mut(0).expect("entry block");
+        let dynamic = entry.call(I64, "js_map_alloc", &[(I32, "0")]);
+        entry.store(I64, &dynamic, &root);
+        entry.br(&body);
+
+        function.push_eh_scope(lpad.clone());
+        let try_body = function.block_mut(1).expect("try body");
+        // The audited accessor, with the root live across it.
+        let cap = try_body.call(
+            I64,
+            "js_closure_get_capture_bits",
+            &[(I64, "0"), (I32, "0")],
+        );
+        // Control: an unaudited callee in the same try body.
+        let unknown = try_body.call(I64, "js_map_alloc", &[(I32, "1")]);
+        let live = try_body.load(I64, &root);
+        let acc = try_body.xor(I64, &live, &cap);
+        let acc = try_body.xor(I64, &acc, &unknown);
+        try_body.ret(I64, &acc);
+        function.pop_eh_scope();
+
+        let pad = function.block_mut(2).expect("landing pad");
+        let lp = pad.next_reg();
+        pad.emit_raw(format!("{lp} = landingpad {{ ptr, i32 }} catch ptr null"));
+        pad.ret(I64, "0");
+
+        let ir = module.to_ir();
+        // Subject check: both try-body calls really are invokes, or the
+        // assertions below say nothing about the invoke arm.
+        for invoke in [
+            "invoke i64 @js_closure_get_capture_bits(",
+            "invoke i64 @js_map_alloc(",
+        ] {
+            assert!(ir.contains(invoke), "fixture must emit `{invoke}`:\n{ir}");
+        }
+
+        let rewritten = crate::inprocess::statepoint_rewritten_ir(&ir, &target, "try_leaf_probe")
+            .expect("try leaf probe must survive RS4GC");
+        assert!(
+            rewritten.contains("invoke i64 @js_closure_get_capture_bits("),
+            "#11500: the audited accessor must remain a direct invoke, not a \
+             statepoint:\n{rewritten}"
+        );
+        assert_eq!(
+            rewritten
+                .matches("@llvm.experimental.gc.statepoint")
+                .count(),
+            // one declare line + the entry call + the control invoke
+            3,
+            "only the two unaudited js_map_alloc sites may be statepoints:\n{rewritten}"
+        );
+        assert!(
+            rewritten.lines().any(|line| line.contains("invoke token")
+                && line.contains("@llvm.experimental.gc.statepoint")),
+            "the control invoke must be statepoint-wrapped, keeping its unwind \
+             edge:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("invoke i64 @js_map_alloc("),
+            "the control callee must be statepoint-wrapped, not direct:\n{rewritten}"
+        );
+    }
+
+    /// #11500, at the text level: where the attribute goes on an invoke, and
+    /// what is left alone. Appending at end of line (the call arm's placement)
+    /// would be a parse error; a site that already carries the attribute —
+    /// `call_gc_leaf` emits invokes that way — must not be marked twice.
+    #[test]
+    fn invoke_leaf_marking_places_the_attribute_before_the_successors() {
+        let ir = "define i64 @f() {\n\
+                  entry:\n\
+                  \x20 %a = invoke i64 @js_closure_get_capture_bits(i64 0, i32 0) to label %ok1 unwind label %pad\n\
+                  ok1:\n\
+                  \x20 invoke void @js_box_set_bits(i64 %a, i64 1) to label %ok2 unwind label %pad\n\
+                  ok2:\n\
+                  \x20 %b = invoke i64 @js_map_alloc(i32 0) to label %ok3 unwind label %pad\n\
+                  ok3:\n\
+                  \x20 %c = invoke i64 @js_closure_get_capture_bits(i64 0, i32 1) \"gc-leaf-function\" to label %ok4 unwind label %pad\n\
+                  ok4:\n\
+                  \x20 invoke void asm sideeffect \"\", \"\"() to label %ok5 unwind label %pad\n\
+                  ok5:\n\
+                  \x20 ret i64 %b\n\
+                  pad:\n\
+                  \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
+                  \x20 ret i64 0\n\
+                  }\n";
+        let lowered = lower_precise_roots_to_native_stack(ir, "f", 0);
+        for expected in [
+            "  %a = invoke i64 @js_closure_get_capture_bits(i64 0, i32 0) \"gc-leaf-function\" to label %ok1 unwind label %pad\n",
+            "  invoke void @js_box_set_bits(i64 %a, i64 1) \"gc-leaf-function\" to label %ok2 unwind label %pad\n",
+            // Unknown callee: a genuine safepoint, untouched.
+            "  %b = invoke i64 @js_map_alloc(i32 0) to label %ok3 unwind label %pad\n",
+            // Already marked: exactly once.
+            "  %c = invoke i64 @js_closure_get_capture_bits(i64 0, i32 1) \"gc-leaf-function\" to label %ok4 unwind label %pad\n",
+            // Inline asm: RS4GC cannot wrap it, same as the call arm.
+            "  invoke void asm sideeffect \"\", \"\"() \"gc-leaf-function\" to label %ok5 unwind label %pad\n",
+        ] {
+            assert!(
+                lowered.contains(expected),
+                "expected line `{}`:\n{lowered}",
+                expected.trim_end()
+            );
+        }
+        assert_eq!(
+            lowered.matches("\"gc-leaf-function\"").count(),
+            4,
+            "one mark per leaf site, none on the control:\n{lowered}"
         );
     }
 

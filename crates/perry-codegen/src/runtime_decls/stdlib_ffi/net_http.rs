@@ -2,7 +2,7 @@
 //! stdlib FFI declarations (extracted from stdlib_ffi.rs).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, VOID};
 
 pub(crate) fn declare_net_http(module: &mut LlModule) {
     // ========== node:vm ==========
@@ -117,11 +117,11 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function("js_http_request_body", I64, &[I64]);
     module.declare_function("js_http_request_body_length", DOUBLE, &[I64]);
     module.declare_function("js_http_request_content_type", I64, &[I64]);
-    module.declare_function("js_http_request_has_header", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_request_has_header", I1, &[I64, I64]);
     module.declare_function("js_http_request_header", I64, &[I64, I64]);
     module.declare_function("js_http_request_headers_all", I64, &[I64]);
     module.declare_function("js_http_request_id", DOUBLE, &[I64]);
-    module.declare_function("js_http_request_is_method", DOUBLE, &[I64, I64]);
+    module.declare_function("js_http_request_is_method", I1, &[I64, I64]);
     module.declare_function("js_http_request_method", I64, &[I64]);
     module.declare_function("js_http_request_path", I64, &[I64]);
     module.declare_function("js_http_request_query", I64, &[I64]);

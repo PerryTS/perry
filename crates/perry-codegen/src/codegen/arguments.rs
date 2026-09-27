@@ -124,9 +124,7 @@ pub(crate) fn materialize_arguments_object(
         // (that is the proof), so its length is read once, here.
         let raw_args = ctx.block().load(DOUBLE, &arguments_slot);
         let raw_bits = ctx.block().bitcast_double_to_i64(&raw_args);
-        let len = ctx
-            .block()
-            .call(I32, "js_array_length", &[(I64, &raw_bits)]);
+        let len = crate::expr::array_length::emit_array_length_i32(ctx, &raw_bits);
         let len = ctx.block().uitofp(I32, &len, DOUBLE);
         let length_slot = ctx.func.alloca_entry(DOUBLE);
         ctx.block().store(DOUBLE, &len, &length_slot);

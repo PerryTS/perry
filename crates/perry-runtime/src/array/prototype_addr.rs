@@ -1,7 +1,7 @@
-//! The memoized `Array.prototype` / `Object.prototype` addresses (#6981),
-//! **one pair per thread** (#7988).
+//! The memoized `Array.prototype` / `Object.prototype` / `Function.prototype`
+//! addresses (#6981, #10497), **one set per thread** (#7988).
 //!
-//! Two `usize` cells and the algebra over them: lazy resolution from
+//! Three `usize` cells and the algebra over them: lazy resolution from
 //! `globalThis`, healing through the GC forwarding chain, and the registered
 //! root scanner that lets a relocating cycle rewrite them.
 //!
@@ -70,6 +70,8 @@ const PROTOTYPE_ADDR_CACHE_COUNT: usize = crate::tls_hot::INLINE_PROTOTYPE_ADDR_
 const ARRAY_PROTO_CACHE: usize = 0;
 /// Row index of the `Object.prototype` cell.
 const OBJECT_PROTO_CACHE: usize = 1;
+/// Row index of the `Function.prototype` cell (#10497).
+const FUNCTION_PROTO_CACHE: usize = 2;
 
 /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
 /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
@@ -86,6 +88,22 @@ const OBJECT_PROTO_CACHE: usize = 1;
 /// array HOLES and OOB reads (chain: arr → Array.prototype →
 /// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Consulted by the
 /// typed-feedback guards and the hole/OOB read fallbacks.
+///
+/// Row 2 is `Function.prototype` (#10497). The universal method dispatcher's
+/// own-override check asks `js_object_has_own`, which asks "is this receiver
+/// %Function.prototype%?" on every dispatched call, and that question used to
+/// be answered by looking `globalThis.Function` up BY NAME and then reading its
+/// `prototype` dynamic property — 5–6% of Perry's excess instructions over
+/// Node across the package suite (#11464). The identity is fixed per realm:
+/// `Function.prototype` is installed `{writable:false, configurable:false}`
+/// (`populate_global_this_builtins`), and mutating the object — adding or
+/// replacing `call`/`apply`/`bind`, `Object.setPrototypeOf` on it or on any
+/// function — changes its KEYS, never which object it is. Those keys are still
+/// read through the ordinary property path by every caller; only the identity
+/// is memoized. The row is primed at the end of `populate_global_this_builtins`
+/// ([`prime_prototype_addr_cache`]), so a later `globalThis.Function = X`
+/// (writable per spec) cannot make it name `X.prototype`: it always names the
+/// realm's intrinsic, which is what every caller means by %Function.prototype%.
 ///
 /// ***THESE ARE RAW ADDRESSES OF MOVABLE OBJECTS*** (#6981).
 /// `Array.prototype` relocates two different ways, and BOTH leave the cache
@@ -122,7 +140,8 @@ fn prototype_addrs() -> &'static [Cell<usize>; PROTOTYPE_ADDR_CACHE_COUNT] {
 /// second fact a reader has to trust — "each accessor resolves the builtin its
 /// cell is named for" — is established by construction instead of by a test
 /// that has to mutate a process-global to observe it (#7955).
-static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [b"Array", b"Object"];
+static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] =
+    [b"Array", b"Object", b"Function"];
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).
 ///
@@ -290,6 +309,30 @@ pub(crate) fn object_prototype_addr() -> usize {
     resolve_prototype_addr(OBJECT_PROTO_CACHE)
 }
 
+/// **This realm's** `%Function.prototype%` address, or 0 while this thread
+/// has no `globalThis` yet (no intrinsic exists, so nothing can be it). See
+/// the row-2 note on [`prototype_addrs`] (#10497).
+#[inline]
+pub(crate) fn function_prototype_addr() -> usize {
+    resolve_prototype_addr(FUNCTION_PROTO_CACHE)
+}
+
+/// Memoize every row from THIS thread's freshly populated `globalThis`.
+///
+/// Called once, at the end of `populate_global_this_builtins`, while every
+/// `globalThis.<Builtin>` still names its intrinsic. Lazy resolution alone
+/// would memoize whatever `globalThis.Function` holds at the FIRST query, and
+/// user code may have reassigned that global by then; priming pins the
+/// intrinsic. A row that cannot resolve yet stays unresolved and keeps its
+/// lazy fallback, exactly as before.
+pub(crate) fn prime_prototype_addr_cache() {
+    for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
+        if prototype_addrs()[slot].get() == usize::MAX {
+            bootstrap_prototype_addr(slot);
+        }
+    }
+}
+
 /// `true` when `addr` is **this realm's** canonical `Object.prototype` (cheap:
 /// one slot load + compare; lazily computes the address on first use).
 /// `#[inline]`: the object-field set funnel calls this on every store, and
@@ -305,7 +348,7 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// The mutating #6981 cases run on cells they own; nothing hands out a writable
 /// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 2] {
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 3] {
     [
         (
             ARRAY_PROTO_CACHE,
@@ -314,6 +357,10 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 2] 
         (
             OBJECT_PROTO_CACHE,
             PROTOTYPE_ADDR_BUILTINS[OBJECT_PROTO_CACHE],
+        ),
+        (
+            FUNCTION_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE],
         ),
     ]
 }

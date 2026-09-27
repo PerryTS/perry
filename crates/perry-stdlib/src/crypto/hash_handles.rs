@@ -30,6 +30,13 @@ struct CryptoDigestStream {
 }
 
 impl CryptoDigestStream {
+    fn holds_freed(&self, freed: &perry_runtime::arena::thread_exit::FreedRanges) -> bool {
+        self.listeners
+            .values()
+            .flatten()
+            .any(|cb| freed.holds_i64(*cb))
+    }
+
     fn scan_roots(&mut self, visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
         for callbacks in self.listeners.values_mut() {
             for cb in callbacks {
@@ -67,6 +74,24 @@ thread_local! {
 }
 
 fn ensure_crypto_stream_gc_scanner() {
+    // #11471: retire a Hash/Hmac whose stream listeners live in an exiting
+    // thread's arena (`HANDLES` is process-global).
+    static REGISTER_RELEASERS: std::sync::Once = std::sync::Once::new();
+    REGISTER_RELEASERS.call_once(|| {
+        use crate::common::handle::register_handle_payload_releaser as register;
+        register::<HashHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+        register::<HmacHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+    });
     CRYPTO_STREAM_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -106,7 +131,8 @@ fn js_true() -> f64 {
 }
 
 fn unbox_to_i64(value: f64) -> i64 {
-    (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+    // SSO-aware (#11430): a short string argument is materialized first.
+    arg_ptr(value)
 }
 
 fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
@@ -428,7 +454,7 @@ pub unsafe extern "C" fn js_crypto_create_hash_options(alg_ptr: i64, options_bit
     };
     let output_len = object_field_bits(options_bits.to_bits(), b"outputLength")
         .and_then(|bits| nanboxed_to_usize(f64::from_bits(bits)));
-    let handle: Handle = register_handle(HashHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
         state: Mutex::new(Some(state)),
         output_len,
         stream: Mutex::new(CryptoDigestStream::default()),
@@ -443,6 +469,11 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // Stream use keys listeners, pipes and queued digest events by this id
+    // in native state, so the handle stops being GC-reclaimable (#11453).
+    if is_stream_method(method) {
+        crate::common::retain_strongly(handle);
+    }
     // #2944 — once `digest()` consumed the hasher state, Node throws
     // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` for any
     // subsequent `update`, `digest`, or `copy`. The `state` Mutex holds
@@ -485,7 +516,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 {
                     output_encoding.to_ascii_lowercase()
                 } else {
-                    let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let enc_ptr = arg_ptr(args[0]);
                     let enc_bytes = bytes_from_ptr(enc_ptr);
                     std::str::from_utf8(&enc_bytes)
                         .unwrap_or("hex")
@@ -524,7 +555,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             let Some(state) = state else {
                 return f64::from_bits(0x7FFC_0000_0000_0001);
             };
-            let handle: Handle = register_handle(HashHandle {
+            let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
                 state: Mutex::new(Some(state)),
                 output_len: h.output_len,
                 stream: Mutex::new(CryptoDigestStream::default()),
@@ -610,6 +641,13 @@ pub unsafe fn dispatch_hash_property(handle: i64, property: &str) -> f64 {
     js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
 }
 
+fn is_stream_method(method: &str) -> bool {
+    matches!(
+        method,
+        "write" | "end" | "on" | "once" | "addListener" | "pipe" | "setEncoding"
+    )
+}
+
 #[inline]
 pub(super) fn is_undefined_f64(v: f64) -> bool {
     v.to_bits() == 0x7FFC_0000_0000_0001
@@ -691,7 +729,7 @@ pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f6
         },
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
-    let handle: Handle = register_handle(HmacHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(HmacHandle {
         state: Mutex::new(Some(state)),
         stream: Mutex::new(CryptoDigestStream::default()),
     });
@@ -705,6 +743,11 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // Stream use keys listeners, pipes and queued digest events by this id
+    // in native state, so the handle stops being GC-reclaimable (#11453).
+    if is_stream_method(method) {
+        crate::common::retain_strongly(handle);
+    }
     // #2945 — after the MAC is finalized by `digest()`, Node keeps a second
     // `digest()` idempotent (returns `""` / empty Buffer) but throws
     // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` on `update()`.
@@ -744,7 +787,7 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let buf = alloc_buffer_from_slice(&digest);
                 f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
             } else {
-                let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let enc_ptr = arg_ptr(args[0]);
                 let enc_bytes = bytes_from_ptr(enc_ptr);
                 let enc = std::str::from_utf8(&enc_bytes)
                     .unwrap_or("hex")

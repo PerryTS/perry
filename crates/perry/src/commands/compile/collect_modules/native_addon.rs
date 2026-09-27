@@ -1,16 +1,9 @@
-//! Compile-package Node native-addon detection.
-//!
-//! Extracted from `collect_modules.rs` (file-size cap). A package listed in
-//! `perry.compilePackages` must be pure JS/TS — Perry cannot load Node
-//! `.node` / N-API addons inside a native binary. These helpers locate the
-//! package root for a resolved file and probe it for native-addon markers
-//! (`binding.gyp`, `prebuilds/`, `gypfile`, `node-gyp-build`/`bindings`
-//! loader deps, or a stray `*.node`), so `refuse_compile_package_native_addon`
-//! can fail the compile with an actionable message instead of silently
-//! emitting a broken binary.
+//! Authorize and collect Node-API addon inputs for the authenticated sidecar.
 
 use anyhow::Result;
+mod discovery;
 mod imports;
+pub(in crate::commands::compile) use discovery::collect_declared_addons;
 use std::fs;
 use std::path::PathBuf;
 
@@ -196,7 +189,7 @@ pub(super) fn collect_node_addon_request(
     let package_root = nearest_package_root(canonical);
     if package_root
         .as_deref()
-        .is_some_and(package_is_parcel_watcher_facade)
+        .is_some_and(|root| parcel_facade_without_approval(ctx, root))
     {
         return Ok(None);
     }
@@ -251,11 +244,17 @@ pub(super) fn collect_or_refuse_node_addon(
     if canonical.extension().and_then(|ext| ext.to_str()) == Some("node")
         && nearest_package_root(canonical)
             .as_deref()
-            .is_some_and(package_is_parcel_watcher_facade)
+            .is_some_and(|root| parcel_facade_without_approval(ctx, root))
     {
         return Ok(true);
     }
     collect_node_addon_request(ctx, canonical).map(|request| request.is_some())
+}
+
+fn parcel_facade_without_approval(ctx: &CompilationContext, root: &std::path::Path) -> bool {
+    package_is_parcel_watcher_facade(root)
+        && package_name_from_package_json(root)
+            .is_none_or(|name| approved_owner_package(ctx, root, &name).is_none())
 }
 
 fn package_is_parcel_watcher_facade(package_root: &std::path::Path) -> bool {

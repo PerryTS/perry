@@ -224,3 +224,52 @@ fn http_2_carries_no_connection_header_at_all() {
     assert_eq!(header_of(&shape, "connection"), None);
     assert_eq!(header_of(&shape, "keep-alive"), None);
 }
+
+#[test]
+fn buffered_end_does_not_infer_a_length_after_write_head() {
+    use crate::server::turnloop_serve::wire::{framing_for, Framing};
+    for body in [b"".as_slice(), b"hello".as_slice()] {
+        let mut implicit = empty_response();
+        implicit.buffered_body.extend_from_slice(body);
+        assert!(implicit.ensure_content_length());
+        assert_eq!(
+            framing_for(&implicit.snapshot_headers(), 200, "GET", 1, None, false),
+            Framing::Sized(body.len() as u64)
+        );
+
+        let mut committed = empty_response();
+        committed.header_committed = true;
+        committed.buffered_body.extend_from_slice(body);
+        assert!(!committed.ensure_content_length());
+        assert!(!committed.headers.contains_key("content-length"));
+        assert_eq!(
+            framing_for(&committed.snapshot_headers(), 200, "GET", 1, None, false),
+            Framing::Chunked
+        );
+        assert_eq!(
+            framing_for(&committed.snapshot_headers(), 200, "GET", 0, None, false),
+            Framing::UntilClose
+        );
+    }
+}
+
+#[test]
+fn buffered_end_preserves_explicit_framing_after_write_head() {
+    use crate::server::turnloop_serve::wire::{framing_for, Framing};
+    for (header, value, expected) in [
+        ("content-length", "5", Framing::Sized(5)),
+        ("transfer-encoding", "chunked", Framing::Chunked),
+    ] {
+        let mut response = empty_response();
+        response.header_committed = true;
+        response.buffered_body.extend_from_slice(b"hello");
+        response.headers.insert(header.into(), value.into());
+        response.remember_header(header);
+        assert!(!response.ensure_content_length());
+        assert_eq!(response.headers.get(header).unwrap(), value);
+        assert_eq!(
+            framing_for(&response.snapshot_headers(), 200, "GET", 1, None, false),
+            expected
+        );
+    }
+}

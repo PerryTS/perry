@@ -219,6 +219,39 @@ pub fn port_states_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
     }
 }
 
+/// #11471: thread-exit release for `PORT_STATES`. The only removal is
+/// `port.close()`, so an exiting thread's ports (their keys, entangled
+/// partner, queued values, `onmessage` and listener closures all live in its
+/// arena) would otherwise stay: a fresh object at a reused address would read
+/// as a port and the scanner would trace the dead values. Delivery rides the
+/// thread-local `setImmediate` queue, so no liveness counter needs adjusting.
+/// Runs from a TLS destructor: one process-global lock, no thread-locals.
+pub(crate) fn release_port_states_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    let mut guard = PORT_STATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    map.retain(|&port, state| {
+        !freed.contains(port)
+            && !freed.contains(state.entangled)
+            && !freed.holds_value(state.onmessage)
+            && !state.queue.iter().any(|&v| freed.holds_value(v))
+            && !state.listeners.iter().any(|&v| freed.holds_value(v))
+    });
+}
+
+/// Test probe (#11471): does `PORT_STATES` hold an entry for `port`?
+#[doc(hidden)]
+pub fn port_state_registered_for_test(port: usize) -> bool {
+    PORT_STATES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&port))
+}
+
 fn with_port_states<R>(f: impl FnOnce(&mut HashMap<usize, PortState>) -> R) -> R {
     let mut guard = PORT_STATES.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
@@ -586,6 +619,18 @@ pub extern "C" fn js_message_channel_new() -> f64 {
     if let Some(factory) = worker_threads_message_channel_factory() {
         return factory();
     }
+    same_thread_message_channel_new()
+}
+
+/// Test probe (#11471): the same-thread `MessageChannel` this crate builds when
+/// perry-stdlib's worker_threads factory is not installed (a stdlib test
+/// binary installs it, which would bypass `PORT_STATES`).
+#[doc(hidden)]
+pub fn same_thread_message_channel_new_for_test() -> f64 {
+    same_thread_message_channel_new()
+}
+
+fn same_thread_message_channel_new() -> f64 {
     let obj = object::js_object_alloc(0, 0);
     set_object_prototype(obj, constructor_prototype("MessageChannel"));
     set_field(obj, "constructor", get_global_constructor("MessageChannel"));

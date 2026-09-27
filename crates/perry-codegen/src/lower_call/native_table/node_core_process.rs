@@ -569,7 +569,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         method: "setgroups",
         class_filter: None,
         runtime: "js_process_setgroups",
-        args: &[NA_JSV],
+        args: &[NA_F64],
         ret: NR_VOID,
     },
     // #2135: process.initgroups(user, extra_gid) — username + numeric GID.
@@ -579,7 +579,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         method: "initgroups",
         class_filter: None,
         runtime: "js_process_initgroups",
-        args: &[NA_JSV, NA_F64],
+        args: &[NA_F64, NA_F64],
         ret: NR_VOID,
     },
 ];

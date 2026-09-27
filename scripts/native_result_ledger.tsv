@@ -55,11 +55,8 @@ js_ext_tls_connect	NR_HANDLE_ID	crates/perry-ext-net/src/tls.rs	i64
 js_http_agent_create_connection	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	i64
 js_http_agent_create_socket	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	i64
 js_http_agent_destroy	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
-js_http_agent_free_sockets	NR_JS_VALUE	crates/perry-ext-http/src/agent.rs	f64
 js_http_agent_new	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
 js_http_agent_noop_self	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
-js_http_agent_requests	NR_JS_VALUE	crates/perry-ext-http/src/agent.rs	f64
-js_http_agent_sockets	NR_JS_VALUE	crates/perry-ext-http/src/agent.rs	f64
 js_http_client_request_destroy	NR_HANDLE_ID	crates/perry-ext-http/src/client_request_surface.rs	Handle
 js_http_client_request_end_full	NR_HANDLE_ID	crates/perry-ext-http/src/client_outgoing.rs	Handle
 js_http_get_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
@@ -223,6 +220,7 @@ js_undici_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
 js_undici_get_global_dispatcher	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
 js_undici_proxy_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
 js_ws_connect	NR_GCPTR	crates/perry-ext-ws/src/lib.rs	*mut perry_ffi::Promise
+js_ws_on	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
 js_ws_on_client_i64	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
 js_ws_server_new	NR_HANDLE_ID	crates/perry-ext-ws/src/server.rs	Handle
 js_zlib_brotli_compress_sync	NR_GCPTR	crates/perry-ext-zlib/src/stream.rs	*mut BufferHeader

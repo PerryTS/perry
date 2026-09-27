@@ -1000,7 +1000,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     if key_bytes == b"asymmetricKeyType" {
                         let label = match asym_type {
                             1 => b"rsa".as_slice(),
-                            2 => b"ec".as_slice(),
+                            2 | 5 | 6 => b"ec".as_slice(),
                             3 => b"ed25519".as_slice(),
                             4 => b"x25519".as_slice(),
                             _ => b"".as_slice(),
@@ -1014,12 +1014,21 @@ pub(crate) fn get_field_by_name_object_tail(
                         }
                     }
                     if key_bytes == b"asymmetricKeyDetails" {
-                        let details = js_object_alloc(0, if asym_type == 2 { 1 } else { 0 });
-                        if asym_type == 2 {
+                        // 2/5/6: EC over P-256/P-384/P-521 (perry-stdlib's ec_sign).
+                        let curve: &[u8] = match asym_type {
+                            2 => b"prime256v1",
+                            5 => b"secp384r1",
+                            6 => b"secp521r1",
+                            _ => b"",
+                        };
+                        let details = js_object_alloc(0, if curve.is_empty() { 0 } else { 1 });
+                        if !curve.is_empty() {
                             let name =
                                 crate::string::js_string_from_bytes(b"namedCurve".as_ptr(), 10);
-                            let val =
-                                crate::string::js_string_from_bytes(b"prime256v1".as_ptr(), 10);
+                            let val = crate::string::js_string_from_bytes(
+                                curve.as_ptr(),
+                                curve.len() as u32,
+                            );
                             js_object_set_field_by_name(
                                 details,
                                 name,

@@ -106,7 +106,6 @@ pub(crate) fn is_known_global_identifier_name(name: &str) -> bool {
         "console"
             | "process"
             | "globalThis"
-            | "self"
             | "postMessage"
             | "addEventListener"
             | "removeEventListener"

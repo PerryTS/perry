@@ -1,0 +1,1240 @@
+{
+ "env": {
+  "PERRY_BUILD_COMMIT": "36420d2e56883493f6296b1c7a5d0bfefbbfeacc",
+  "PERRY_KEEP_SYMBOLS": "1",
+  "PERRY_LLVM_CLANG": "/usr/bin/clang-22",
+  "PERRY_NO_TELEMETRY": "1"
+ },
+ "flags": "",
+ "host": "ideal-mastodon",
+ "perry": "/root/claude-pkg-bench-main/target/release/perry",
+ "perry_commit": "36420d2e56",
+ "perry_version": "perry 0.5.1654",
+ "platform": "Linux-6.17.0-23-generic-x86_64-with-glibc2.39",
+ "workloads": {
+  "axios/get_json": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile axios/get_json.ts -o /root/claude-pkg-bench-out/linux-sym/axios__get_json",
+   "compile_s": 18.72,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "agent-base": 2,
+     "asynckit": 10,
+     "axios": 63,
+     "call-bind-apply-helpers": 5,
+     "combined-stream": 1,
+     "debug": 4,
+     "delayed-stream": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "es-set-tostringtag": 1,
+     "follow-redirects": 2,
+     "form-data": 2,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "has-tostringtag": 1,
+     "hasown": 1,
+     "https-proxy-agent": 3,
+     "math-intrinsics": 8,
+     "mime-db": 2,
+     "mime-types": 1,
+     "ms": 1,
+     "proxy-from-env": 1
+    },
+    "native_modules": 132,
+    "package_modules_compiled": 63,
+    "symbol_check": "ran over 14777 symbols"
+   },
+   "load1": 40.95,
+   "runtime_rebuilt": false,
+   "size_bytes": 43041600,
+   "status": "OK"
+  },
+  "axios/post_json": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile axios/post_json.ts -o /root/claude-pkg-bench-out/linux-sym/axios__post_json",
+   "compile_s": 19.07,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "agent-base": 2,
+     "asynckit": 10,
+     "axios": 63,
+     "call-bind-apply-helpers": 5,
+     "combined-stream": 1,
+     "debug": 4,
+     "delayed-stream": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "es-set-tostringtag": 1,
+     "follow-redirects": 2,
+     "form-data": 2,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "has-tostringtag": 1,
+     "hasown": 1,
+     "https-proxy-agent": 3,
+     "math-intrinsics": 8,
+     "mime-db": 2,
+     "mime-types": 1,
+     "ms": 1,
+     "proxy-from-env": 1
+    },
+    "native_modules": 132,
+    "package_modules_compiled": 63,
+    "symbol_check": "ran over 14776 symbols"
+   },
+   "load1": 38.69,
+   "runtime_rebuilt": false,
+   "size_bytes": 43041256,
+   "status": "OK"
+  },
+  "big.js/arith_chain": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile big.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux-sym/big_js__arith_chain",
+   "compile_s": 4.52,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "big.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 3535 symbols"
+   },
+   "load1": 46.21,
+   "runtime_rebuilt": false,
+   "size_bytes": 12858344,
+   "status": "OK"
+  },
+  "bignumber.js/arith_chain": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile bignumber.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux-sym/bignumber_js__arith_chain",
+   "compile_s": 6.81,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "bignumber.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 6274 symbols"
+   },
+   "load1": 45.55,
+   "runtime_rebuilt": false,
+   "size_bytes": 16467928,
+   "status": "OK"
+  },
+  "commander/parse_argv": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile commander/parse_argv.ts -o /root/claude-pkg-bench-out/linux-sym/commander__parse_argv",
+   "compile_s": 13.84,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "commander": 7
+    },
+    "native_modules": 9,
+    "package_modules_compiled": 7,
+    "symbol_check": "ran over 5173 symbols"
+   },
+   "load1": 46.44,
+   "runtime_rebuilt": false,
+   "size_bytes": 16294240,
+   "status": "OK"
+  },
+  "control/bare_loop": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile control/bare_loop.ts -o /root/claude-pkg-bench-out/linux-sym/control__bare_loop",
+   "compile_s": 6.71,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2
+    },
+    "native_modules": 2,
+    "package_modules_compiled": 0,
+    "symbol_check": "ran over 3343 symbols"
+   },
+   "load1": 46.36,
+   "runtime_rebuilt": false,
+   "size_bytes": 11688392,
+   "status": "OK"
+  },
+  "control/prop_read": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile control/prop_read.ts -o /root/claude-pkg-bench-out/linux-sym/control__prop_read",
+   "compile_s": 16.7,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2
+    },
+    "native_modules": 2,
+    "package_modules_compiled": 0,
+    "symbol_check": "ran over 3348 symbols"
+   },
+   "load1": 46.01,
+   "runtime_rebuilt": false,
+   "size_bytes": 11689056,
+   "status": "OK"
+  },
+  "cron/next_dates": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile cron/next_dates.ts -o /root/claude-pkg-bench-out/linux-sym/cron__next_dates",
+   "compile_s": 38.43,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "cron": 5,
+     "luxon": 1
+    },
+    "native_modules": 8,
+    "package_modules_compiled": 5,
+    "symbol_check": "ran over 13047 symbols"
+   },
+   "load1": 49.7,
+   "runtime_rebuilt": false,
+   "size_bytes": 25399000,
+   "status": "OK"
+  },
+  "date-fns/diff_interval": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile date-fns/diff_interval.ts -o /root/claude-pkg-bench-out/linux-sym/date-fns__diff_interval",
+   "compile_s": 9.45,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "date-fns": 20
+    },
+    "native_modules": 22,
+    "package_modules_compiled": 20,
+    "symbol_check": "ran over 3709 symbols"
+   },
+   "load1": 46.75,
+   "runtime_rebuilt": false,
+   "size_bytes": 11960864,
+   "status": "OK"
+  },
+  "date-fns/format_add": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile date-fns/format_add.ts -o /root/claude-pkg-bench-out/linux-sym/date-fns__format_add",
+   "compile_s": 10.88,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "date-fns": 41
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 41,
+    "symbol_check": "ran over 4277 symbols"
+   },
+   "load1": 49.1,
+   "runtime_rebuilt": false,
+   "size_bytes": 13491336,
+   "status": "OK"
+  },
+  "dayjs/diff_startof": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dayjs/diff_startof.ts -o /root/claude-pkg-bench-out/linux-sym/dayjs__diff_startof",
+   "compile_s": 12.18,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dayjs": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "ran over 4307 symbols"
+   },
+   "load1": 47.82,
+   "runtime_rebuilt": false,
+   "size_bytes": 16178224,
+   "status": "OK"
+  },
+  "dayjs/parse_format": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dayjs/parse_format.ts -o /root/claude-pkg-bench-out/linux-sym/dayjs__parse_format",
+   "compile_s": 10.53,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dayjs": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "ran over 4307 symbols"
+   },
+   "load1": 48.62,
+   "runtime_rebuilt": false,
+   "size_bytes": 16177528,
+   "status": "OK"
+  },
+  "decimal.js/arith_chain": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile decimal.js/arith_chain.ts -o /root/claude-pkg-bench-out/linux-sym/decimal_js__arith_chain",
+   "compile_s": 8.1,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "decimal.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 6393 symbols"
+   },
+   "load1": 47.89,
+   "runtime_rebuilt": false,
+   "size_bytes": 16807184,
+   "status": "OK"
+  },
+  "decimal.js/parse_sum": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile decimal.js/parse_sum.ts -o /root/claude-pkg-bench-out/linux-sym/decimal_js__parse_sum",
+   "compile_s": 8.4,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "decimal.js": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 6390 symbols"
+   },
+   "load1": 46.54,
+   "runtime_rebuilt": false,
+   "size_bytes": 16806912,
+   "status": "OK"
+  },
+  "dotenv/parse": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile dotenv/parse.ts -o /root/claude-pkg-bench-out/linux-sym/dotenv__parse",
+   "compile_s": 9.34,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "dotenv": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 4406 symbols"
+   },
+   "load1": 46.24,
+   "runtime_rebuilt": false,
+   "size_bytes": 16636808,
+   "status": "OK"
+  },
+  "exponential-backoff/retry": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile exponential-backoff/retry.ts -o /root/claude-pkg-bench-out/linux-sym/exponential-backoff__retry",
+   "compile_s": 8.46,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "exponential-backoff": 10
+    },
+    "native_modules": 12,
+    "package_modules_compiled": 10,
+    "symbol_check": "ran over 3565 symbols"
+   },
+   "load1": 48.06,
+   "runtime_rebuilt": false,
+   "size_bytes": 12333440,
+   "status": "OK"
+  },
+  "fastify/inject": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile fastify/inject.ts -o /root/claude-pkg-bench-out/linux-sym/fastify__inject",
+   "compile_s": 49.82,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "@fastify/ajv-compiler": 5,
+     "@fastify/error": 1,
+     "@fastify/fast-json-stringify-compiler": 2,
+     "@fastify/forwarded": 1,
+     "@fastify/merge-json-schemas": 3,
+     "@fastify/proxy-addr": 1,
+     "@pinojs/redact": 1,
+     "abstract-logging": 1,
+     "ajv": 85,
+     "ajv-formats": 3,
+     "atomic-sleep": 1,
+     "avvio": 13,
+     "cookie": 1,
+     "dequal": 1,
+     "fast-decode-uri-component": 1,
+     "fast-deep-equal": 1,
+     "fast-json-stringify": 7,
+     "fast-querystring": 4,
+     "fast-uri": 6,
+     "fastify": 33,
+     "fastq": 1,
+     "find-my-way": 11,
+     "ipaddr.js": 1,
+     "json-schema-ref-resolver": 1,
+     "json-schema-traverse": 1,
+     "light-my-request": 6,
+     "on-exit-leak-free": 1,
+     "pino": 12,
+     "pino-std-serializers": 7,
+     "process-warning": 2,
+     "quick-format-unescaped": 1,
+     "ret": 11,
+     "reusify": 1,
+     "rfdc": 1,
+     "safe-regex2": 1,
+     "safe-stable-stringify": 1,
+     "secure-json-parse": 1,
+     "semver": 46,
+     "set-cookie-parser": 1,
+     "sonic-boom": 1,
+     "thread-stream": 4,
+     "toad-cache": 1
+    },
+    "native_modules": 286,
+    "package_modules_compiled": 33,
+    "symbol_check": "ran over 23700 symbols"
+   },
+   "load1": 47.88,
+   "runtime_rebuilt": false,
+   "size_bytes": 74786680,
+   "status": "OK"
+  },
+  "fastify/listen_fetch": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile fastify/listen_fetch.ts -o /root/claude-pkg-bench-out/linux-sym/fastify__listen_fetch",
+   "compile_s": 52.17,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "@fastify/ajv-compiler": 5,
+     "@fastify/error": 1,
+     "@fastify/fast-json-stringify-compiler": 2,
+     "@fastify/forwarded": 1,
+     "@fastify/merge-json-schemas": 3,
+     "@fastify/proxy-addr": 1,
+     "@pinojs/redact": 1,
+     "abstract-logging": 1,
+     "ajv": 85,
+     "ajv-formats": 3,
+     "atomic-sleep": 1,
+     "avvio": 13,
+     "cookie": 1,
+     "dequal": 1,
+     "fast-decode-uri-component": 1,
+     "fast-deep-equal": 1,
+     "fast-json-stringify": 7,
+     "fast-querystring": 4,
+     "fast-uri": 6,
+     "fastify": 33,
+     "fastq": 1,
+     "find-my-way": 11,
+     "ipaddr.js": 1,
+     "json-schema-ref-resolver": 1,
+     "json-schema-traverse": 1,
+     "light-my-request": 6,
+     "on-exit-leak-free": 1,
+     "pino": 12,
+     "pino-std-serializers": 7,
+     "process-warning": 2,
+     "quick-format-unescaped": 1,
+     "ret": 11,
+     "reusify": 1,
+     "rfdc": 1,
+     "safe-regex2": 1,
+     "safe-stable-stringify": 1,
+     "secure-json-parse": 1,
+     "semver": 46,
+     "set-cookie-parser": 1,
+     "sonic-boom": 1,
+     "thread-stream": 4,
+     "toad-cache": 1
+    },
+    "native_modules": 286,
+    "package_modules_compiled": 33,
+    "symbol_check": "ran over 23695 symbols"
+   },
+   "load1": 45.01,
+   "runtime_rebuilt": false,
+   "size_bytes": 74776792,
+   "status": "OK"
+  },
+  "ioredis/pipeline": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile ioredis/pipeline.ts -o /root/claude-pkg-bench-out/linux-sym/ioredis__pipeline",
+   "compile_s": 45.82,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@ioredis/commands": 2,
+     "cluster-key-slot": 1,
+     "debug": 4,
+     "denque": 1,
+     "ioredis": 39,
+     "ms": 1,
+     "redis-errors": 3,
+     "redis-parser": 2,
+     "standard-as-callback": 2
+    },
+    "native_modules": 58,
+    "package_modules_compiled": 39,
+    "symbol_check": "ran over 11509 symbols"
+   },
+   "load1": 40.01,
+   "runtime_rebuilt": false,
+   "size_bytes": 35468568,
+   "status": "OK"
+  },
+  "ioredis/set_get": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile ioredis/set_get.ts -o /root/claude-pkg-bench-out/linux-sym/ioredis__set_get",
+   "compile_s": 45.95,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@ioredis/commands": 2,
+     "cluster-key-slot": 1,
+     "debug": 4,
+     "denque": 1,
+     "ioredis": 39,
+     "ms": 1,
+     "redis-errors": 3,
+     "redis-parser": 2,
+     "standard-as-callback": 2
+    },
+    "native_modules": 58,
+    "package_modules_compiled": 39,
+    "symbol_check": "ran over 11508 symbols"
+   },
+   "load1": 35.54,
+   "runtime_rebuilt": false,
+   "size_bytes": 35459440,
+   "status": "OK"
+  },
+  "jsonwebtoken/decode": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/decode.ts -o /root/claude-pkg-bench-out/linux-sym/jsonwebtoken__decode",
+   "compile_s": 19.7,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "buffer-equal-constant-time": 1,
+     "ecdsa-sig-formatter": 2,
+     "jsonwebtoken": 12,
+     "jwa": 1,
+     "jws": 5,
+     "lodash.includes": 1,
+     "lodash.isboolean": 1,
+     "lodash.isinteger": 1,
+     "lodash.isnumber": 1,
+     "lodash.isplainobject": 1,
+     "lodash.isstring": 1,
+     "lodash.once": 1,
+     "ms": 1,
+     "safe-buffer": 1,
+     "semver": 46
+    },
+    "native_modules": 78,
+    "package_modules_compiled": 12,
+    "symbol_check": "ran over 9090 symbols"
+   },
+   "load1": 49.33,
+   "runtime_rebuilt": false,
+   "size_bytes": 25995608,
+   "status": "OK"
+  },
+  "jsonwebtoken/hs256": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/hs256.ts -o /root/claude-pkg-bench-out/linux-sym/jsonwebtoken__hs256",
+   "compile_s": 42.64,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "buffer-equal-constant-time": 1,
+     "ecdsa-sig-formatter": 2,
+     "jsonwebtoken": 12,
+     "jwa": 1,
+     "jws": 5,
+     "lodash.includes": 1,
+     "lodash.isboolean": 1,
+     "lodash.isinteger": 1,
+     "lodash.isnumber": 1,
+     "lodash.isplainobject": 1,
+     "lodash.isstring": 1,
+     "lodash.once": 1,
+     "ms": 1,
+     "safe-buffer": 1,
+     "semver": 46
+    },
+    "native_modules": 78,
+    "package_modules_compiled": 12,
+    "symbol_check": "ran over 9086 symbols"
+   },
+   "load1": 51.92,
+   "runtime_rebuilt": false,
+   "size_bytes": 25990216,
+   "status": "OK"
+  },
+  "jsonwebtoken/rs256": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile jsonwebtoken/rs256.ts -o /root/claude-pkg-bench-out/linux-sym/jsonwebtoken__rs256",
+   "compile_s": 19.7,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 1,
+     "pg": 17,
+     "pg-cloudflare": 1,
+     "pg-connection-string": 1,
+     "pg-int8": 1,
+     "pg-pool": 1,
+     "pg-protocol": 6,
+     "pg-types": 5,
+     "pgpass": 2,
+     "postgres-array": 1,
+     "postgres-bytea": 1,
+     "postgres-date": 1,
+     "postgres-interval": 1,
+     "split2": 1,
+     "xtend": 1
+    },
+    "native_modules": 79,
+    "package_modules_compiled": 0,
+    "symbol_check": "ran over 9097 symbols"
+   },
+   "load1": 53.89,
+   "reason": "liveness: no module of package jsonwebtoken was compiled natively (audit.json census: {'pg': 17, 'pg-cloudflare': 1, 'pg-connection-string': 1, 'pg-int8': 1, 'pg-pool': 1, 'pg-protocol': 6, 'pg-types': 5, 'pgpass': 2, 'postgres-array': 1, 'postgres-bytea': 1, 'postgres-date': 1, 'postgres-interval': 1, 'split2': 1, 'xtend': 1, '<app>': 1})",
+   "runtime_rebuilt": false,
+   "size_bytes": 25995648,
+   "status": "FAIL"
+  },
+  "lru-cache/churn": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile lru-cache/churn.ts -o /root/claude-pkg-bench-out/linux-sym/lru-cache__churn",
+   "compile_s": 8.22,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "lru-cache": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 3897 symbols"
+   },
+   "load1": 45.81,
+   "runtime_rebuilt": false,
+   "size_bytes": 13609568,
+   "status": "OK"
+  },
+  "lru-cache/ttl_mixed": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile lru-cache/ttl_mixed.ts -o /root/claude-pkg-bench-out/linux-sym/lru-cache__ttl_mixed",
+   "compile_s": 9.79,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "lru-cache": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 3895 symbols"
+   },
+   "load1": 47.31,
+   "runtime_rebuilt": false,
+   "size_bytes": 13614432,
+   "status": "OK"
+  },
+  "moment/diff_duration": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile moment/diff_duration.ts -o /root/claude-pkg-bench-out/linux-sym/moment__diff_duration",
+   "compile_s": 22.69,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "moment": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 4741 symbols"
+   },
+   "load1": 47.07,
+   "runtime_rebuilt": false,
+   "size_bytes": 18520864,
+   "status": "OK"
+  },
+  "moment/parse_format": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile moment/parse_format.ts -o /root/claude-pkg-bench-out/linux-sym/moment__parse_format",
+   "compile_s": 13.36,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "moment": 1
+    },
+    "native_modules": 3,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 4741 symbols"
+   },
+   "load1": 46.59,
+   "runtime_rebuilt": false,
+   "size_bytes": 18520208,
+   "status": "OK"
+  },
+  "mongodb/batch_query": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mongodb/batch_query.ts -o /root/claude-pkg-bench-out/linux-sym/mongodb__batch_query",
+   "compile_s": 97.66,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@mongodb-js/saslprep": 5,
+     "bson": 32,
+     "memory-pager": 1,
+     "mongodb": 133,
+     "mongodb-connection-string-url": 3,
+     "sparse-bitfield": 1,
+     "tr46": 4,
+     "webidl-conversions": 1,
+     "whatwg-url": 13
+    },
+    "native_modules": 196,
+    "package_modules_compiled": 133,
+    "symbol_check": "ran over 24289 symbols"
+   },
+   "load1": 31.81,
+   "runtime_rebuilt": false,
+   "size_bytes": 65644152,
+   "status": "OK"
+  },
+  "mongodb/insert_find": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mongodb/insert_find.ts -o /root/claude-pkg-bench-out/linux-sym/mongodb__insert_find",
+   "compile_s": 39.29,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@mongodb-js/saslprep": 5,
+     "bson": 32,
+     "memory-pager": 1,
+     "mongodb": 133,
+     "mongodb-connection-string-url": 3,
+     "sparse-bitfield": 1,
+     "tr46": 4,
+     "webidl-conversions": 1,
+     "whatwg-url": 13
+    },
+    "native_modules": 196,
+    "package_modules_compiled": 133,
+    "symbol_check": "ran over 24283 symbols"
+   },
+   "load1": 35.05,
+   "runtime_rebuilt": false,
+   "size_bytes": 65629392,
+   "status": "OK"
+  },
+  "mysql2/insert_batch": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mysql2/insert_batch.ts -o /root/claude-pkg-bench-out/linux-sym/mysql2__insert_batch",
+   "compile_s": 45.19,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "aws-ssl-profiles": 3,
+     "generate-function": 1,
+     "iconv-lite": 22,
+     "is-property": 1,
+     "long": 1,
+     "lru.min": 1,
+     "mysql2": 92,
+     "named-placeholders": 1,
+     "safer-buffer": 1,
+     "sql-escaper": 1
+    },
+    "native_modules": 127,
+    "package_modules_compiled": 92,
+    "symbol_check": "ran over 24226 symbols"
+   },
+   "load1": 38.78,
+   "runtime_rebuilt": false,
+   "size_bytes": 52449528,
+   "status": "OK"
+  },
+  "mysql2/select": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile mysql2/select.ts -o /root/claude-pkg-bench-out/linux-sym/mysql2__select",
+   "compile_s": 48.04,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "aws-ssl-profiles": 3,
+     "generate-function": 1,
+     "iconv-lite": 22,
+     "is-property": 1,
+     "long": 1,
+     "lru.min": 1,
+     "mysql2": 92,
+     "named-placeholders": 1,
+     "safer-buffer": 1,
+     "sql-escaper": 1
+    },
+    "native_modules": 127,
+    "package_modules_compiled": 92,
+    "symbol_check": "ran over 24227 symbols"
+   },
+   "load1": 45.42,
+   "runtime_rebuilt": false,
+   "size_bytes": 52431416,
+   "status": "OK"
+  },
+  "nanoid/generate": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile nanoid/generate.ts -o /root/claude-pkg-bench-out/linux-sym/nanoid__generate",
+   "compile_s": 3.72,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "nanoid": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "ran over 3495 symbols"
+   },
+   "load1": 49.05,
+   "runtime_rebuilt": false,
+   "size_bytes": 12469016,
+   "status": "OK"
+  },
+  "node-cron/match": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-cron/match.ts -o /root/claude-pkg-bench-out/linux-sym/node-cron__match",
+   "compile_s": 18.49,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-cron": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "ran over 7749 symbols"
+   },
+   "load1": 51.41,
+   "runtime_rebuilt": false,
+   "size_bytes": 22677304,
+   "status": "OK"
+  },
+  "node-cron/validate_parse": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-cron/validate_parse.ts -o /root/claude-pkg-bench-out/linux-sym/node-cron__validate_parse",
+   "compile_s": 19.96,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "node-cron": 2
+    },
+    "native_modules": 4,
+    "package_modules_compiled": 2,
+    "symbol_check": "ran over 7744 symbols"
+   },
+   "load1": 51.69,
+   "runtime_rebuilt": false,
+   "size_bytes": 22686264,
+   "status": "OK"
+  },
+  "node-forge/aes_cbc": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/aes_cbc.ts -o /root/claude-pkg-bench-out/linux-sym/node-forge__aes_cbc",
+   "compile_s": 11.19,
+   "load1": 51.14,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/hmac": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/hmac.ts -o /root/claude-pkg-bench-out/linux-sym/node-forge__hmac",
+   "compile_s": 29.49,
+   "load1": 44.09,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/rsa_sign": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/rsa_sign.ts -o /root/claude-pkg-bench-out/linux-sym/node-forge__rsa_sign",
+   "compile_s": 24.16,
+   "load1": 49.6,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "node-forge/sha256": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile node-forge/sha256.ts -o /root/claude-pkg-bench-out/linux-sym/node-forge__sha256",
+   "compile_s": 15.83,
+   "load1": 45.99,
+   "reason": "compile failed (exit 1): ns \u2014 so the\nbuild fails here rather than emitting a misleading COMPILE_EXIT=0.\n\nFix the codegen errors above (search for `Error compiling module`),\nor set `PERRY_ALLOW_PARTIAL_CODEGEN=1` to link empty `<prefix>__init`\nstubs for the failed modules and surface deeper errors during\niterative debugging (the resulting binary is inert/unsafe in those\nmodules and may crash at runtime).\n\nError: 1 module(s) failed to compile (see errors above); set PERRY_ALLOW_PARTIAL_CODEGEN=1 to link empty stubs anyway",
+   "runtime_rebuilt": false,
+   "status": "FAIL"
+  },
+  "pg/insert_batch": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile pg/insert_batch.ts -o /root/claude-pkg-bench-out/linux-sym/pg__insert_batch",
+   "compile_s": 30.72,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "pg": 17,
+     "pg-cloudflare": 1,
+     "pg-connection-string": 1,
+     "pg-int8": 1,
+     "pg-pool": 1,
+     "pg-protocol": 6,
+     "pg-types": 5,
+     "pgpass": 2,
+     "postgres-array": 1,
+     "postgres-bytea": 1,
+     "postgres-date": 1,
+     "postgres-interval": 1,
+     "split2": 1,
+     "xtend": 1
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 17,
+    "symbol_check": "ran over 12063 symbols"
+   },
+   "load1": 44.63,
+   "runtime_rebuilt": false,
+   "size_bytes": 33245752,
+   "status": "OK"
+  },
+  "pg/select": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile pg/select.ts -o /root/claude-pkg-bench-out/linux-sym/pg__select",
+   "compile_s": 21.14,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "pg": 17,
+     "pg-cloudflare": 1,
+     "pg-connection-string": 1,
+     "pg-int8": 1,
+     "pg-pool": 1,
+     "pg-protocol": 6,
+     "pg-types": 5,
+     "pgpass": 2,
+     "postgres-array": 1,
+     "postgres-bytea": 1,
+     "postgres-date": 1,
+     "postgres-interval": 1,
+     "split2": 1,
+     "xtend": 1
+    },
+    "native_modules": 43,
+    "package_modules_compiled": 17,
+    "symbol_check": "ran over 12064 symbols"
+   },
+   "load1": 40.99,
+   "runtime_rebuilt": false,
+   "size_bytes": 33235992,
+   "status": "OK"
+  },
+  "qs/parse_nested": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile qs/parse_nested.ts -o /root/claude-pkg-bench-out/linux-sym/qs__parse_nested",
+   "compile_s": 13.07,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "call-bind-apply-helpers": 5,
+     "call-bound": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "hasown": 1,
+     "math-intrinsics": 8,
+     "object-inspect": 2,
+     "qs": 5,
+     "side-channel": 1,
+     "side-channel-list": 1,
+     "side-channel-map": 1,
+     "side-channel-weakmap": 1
+    },
+    "native_modules": 48,
+    "package_modules_compiled": 5,
+    "symbol_check": "ran over 5797 symbols"
+   },
+   "load1": 49.32,
+   "runtime_rebuilt": false,
+   "size_bytes": 21969696,
+   "status": "OK"
+  },
+  "qs/stringify_nested": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile qs/stringify_nested.ts -o /root/claude-pkg-bench-out/linux-sym/qs__stringify_nested",
+   "compile_s": 14.77,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "call-bind-apply-helpers": 5,
+     "call-bound": 1,
+     "dunder-proto": 1,
+     "es-define-property": 1,
+     "es-errors": 7,
+     "es-object-atoms": 1,
+     "function-bind": 2,
+     "get-intrinsic": 1,
+     "get-proto": 3,
+     "gopd": 2,
+     "has-symbols": 2,
+     "hasown": 1,
+     "math-intrinsics": 8,
+     "object-inspect": 2,
+     "qs": 5,
+     "side-channel": 1,
+     "side-channel-list": 1,
+     "side-channel-map": 1,
+     "side-channel-weakmap": 1
+    },
+    "native_modules": 48,
+    "package_modules_compiled": 5,
+    "symbol_check": "ran over 5813 symbols"
+   },
+   "load1": 47.59,
+   "runtime_rebuilt": false,
+   "size_bytes": 21985728,
+   "status": "OK"
+  },
+  "rate-limiter-flexible/consume": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile rate-limiter-flexible/consume.ts -o /root/claude-pkg-bench-out/linux-sym/rate-limiter-flexible__consume",
+   "compile_s": 8.09,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "rate-limiter-flexible": 36
+    },
+    "native_modules": 38,
+    "package_modules_compiled": 36,
+    "symbol_check": "ran over 9307 symbols"
+   },
+   "load1": 42.61,
+   "runtime_rebuilt": false,
+   "size_bytes": 23932232,
+   "status": "OK"
+  },
+  "rate-limiter-flexible/get_penalty": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile rate-limiter-flexible/get_penalty.ts -o /root/claude-pkg-bench-out/linux-sym/rate-limiter-flexible__get_penalty",
+   "compile_s": 7.04,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "rate-limiter-flexible": 36
+    },
+    "native_modules": 38,
+    "package_modules_compiled": 36,
+    "symbol_check": "ran over 9307 symbols"
+   },
+   "load1": 41.99,
+   "runtime_rebuilt": false,
+   "size_bytes": 23941648,
+   "status": "OK"
+  },
+  "redis/pipeline": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile redis/pipeline.ts -o /root/claude-pkg-bench-out/linux-sym/redis__pipeline",
+   "compile_s": 113.88,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@redis/bloom": 57,
+     "@redis/client": 473,
+     "@redis/json": 25,
+     "@redis/search": 40,
+     "@redis/time-series": 46,
+     "cluster-key-slot": 1,
+     "redis": 1
+    },
+    "native_modules": 646,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 48990 symbols"
+   },
+   "load1": 61.07,
+   "runtime_rebuilt": false,
+   "size_bytes": 93269856,
+   "status": "OK"
+  },
+  "redis/set_get": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile redis/set_get.ts -o /root/claude-pkg-bench-out/linux-sym/redis__set_get",
+   "compile_s": 347.29,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 3,
+     "@redis/bloom": 57,
+     "@redis/client": 473,
+     "@redis/json": 25,
+     "@redis/search": 40,
+     "@redis/time-series": 46,
+     "cluster-key-slot": 1,
+     "redis": 1
+    },
+    "native_modules": 646,
+    "package_modules_compiled": 1,
+    "symbol_check": "ran over 48989 symbols"
+   },
+   "load1": 45.89,
+   "runtime_rebuilt": false,
+   "size_bytes": 93264728,
+   "status": "OK"
+  },
+  "uuid/v4": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v4.ts -o /root/claude-pkg-bench-out/linux-sym/uuid__v4",
+   "compile_s": 14.32,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 13
+    },
+    "native_modules": 15,
+    "package_modules_compiled": 13,
+    "symbol_check": "ran over 6299 symbols"
+   },
+   "load1": 45.88,
+   "runtime_rebuilt": false,
+   "size_bytes": 15797112,
+   "status": "OK"
+  },
+  "uuid/v5_parse": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v5_parse.ts -o /root/claude-pkg-bench-out/linux-sym/uuid__v5_parse",
+   "compile_s": 7.32,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 10
+    },
+    "native_modules": 12,
+    "package_modules_compiled": 10,
+    "symbol_check": "ran over 6270 symbols"
+   },
+   "load1": 48.79,
+   "runtime_rebuilt": false,
+   "size_bytes": 15793504,
+   "status": "OK"
+  },
+  "uuid/v7": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile uuid/v7.ts -o /root/claude-pkg-bench-out/linux-sym/uuid__v7",
+   "compile_s": 15.27,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "uuid": 13
+    },
+    "native_modules": 15,
+    "package_modules_compiled": 13,
+    "symbol_check": "ran over 6305 symbols"
+   },
+   "load1": 47.38,
+   "runtime_rebuilt": false,
+   "size_bytes": 15818928,
+   "status": "OK"
+  },
+  "validator/batch": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile validator/batch.ts -o /root/claude-pkg-bench-out/linux-sym/validator__batch",
+   "compile_s": 18.57,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "validator": 113
+    },
+    "native_modules": 115,
+    "package_modules_compiled": 113,
+    "symbol_check": "ran over 7689 symbols"
+   },
+   "load1": 49.29,
+   "runtime_rebuilt": false,
+   "size_bytes": 27913512,
+   "status": "OK"
+  },
+  "validator/sanitize": {
+   "cmd": "/root/claude-pkg-bench-main/target/release/perry compile validator/sanitize.ts -o /root/claude-pkg-bench-out/linux-sym/validator__sanitize",
+   "compile_s": 24.8,
+   "liveness": {
+    "binding_symbols": [],
+    "javascript_modules": 0,
+    "modules_by_package": {
+     "<app>": 2,
+     "validator": 113
+    },
+    "native_modules": 115,
+    "package_modules_compiled": 113,
+    "symbol_check": "ran over 7686 symbols"
+   },
+   "load1": 47.82,
+   "runtime_rebuilt": false,
+   "size_bytes": 27904448,
+   "status": "OK"
+  }
+ }
+}

@@ -96,6 +96,13 @@ static GC_REGISTERED: Once = Once::new();
 /// same root cause as issue #35 for net.Socket listeners.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
+        // The pump below walks the server handles every tick (keepalive
+        // probe + drain). Index them so that walk costs O(servers), not
+        // O(every live handle): each keep-alive connection holds a
+        // `req.socket` handle, which made the per-tick walk O(connections).
+        perry_ffi::index_handle_type::<HttpServer>();
+        perry_ffi::index_handle_type::<HttpsServer>();
+        perry_ffi::index_handle_type::<Http2SecureServer>();
         gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
         // Register the extension's pump and keepalive contributor with runtime;
         // stdlib intentionally does not name either HTTP symbol (#9696).
@@ -275,6 +282,30 @@ mod tests {
         let mut s = HttpServer::with_handler(handler);
         s.listeners = listeners;
         s
+    }
+
+    /// #11433 — a server belongs to the agent that created it, and no other
+    /// agent's pump may treat it as its own. Every agent runs this extension's
+    /// pump, so this is what keeps a Worker from dispatching the primary
+    /// agent's requests on the Worker's thread.
+    #[test]
+    fn a_server_belongs_to_the_agent_that_created_it() {
+        let here = HttpServer::with_handler(0);
+        assert!(here.owned_here());
+        let worker_owner = std::thread::spawn(|| {
+            perry_runtime::agent::enter_worker_agent();
+            let s = HttpServer::with_handler(0);
+            assert!(s.owned_here(), "the creating Worker owns its server");
+            s.owner_agent
+        })
+        .join()
+        .unwrap();
+        let mut foreign = HttpServer::with_handler(0);
+        foreign.owner_agent = worker_owner;
+        assert!(
+            !foreign.owned_here(),
+            "the primary agent must not drain a Worker's server"
+        );
     }
 
     /// Issue #2210 — `HttpServer::with_handler` seeds Node's

@@ -193,6 +193,24 @@ fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i3
     }
 }
 
+/// The needle bytes of an SSO (inline short string) needle under `encoding`,
+/// or `None` when `needle` is not an SSO string.
+fn sso_needle_bytes(needle: f64, encoding: i32) -> Option<Vec<u8>> {
+    if !crate::value::JSValue::from_bits(needle.to_bits()).is_short_string() {
+        return None;
+    }
+    let str_ptr =
+        crate::value::js_get_string_pointer_unified(needle) as usize as *const StringHeader;
+    if str_ptr.is_null() {
+        return None;
+    }
+    let owned = unsafe { crate::string::OwnedStringBytes::copy_from_header(str_ptr) };
+    Some(super::from::buffer_string_bytes_for_encoding(
+        owned.as_bytes(),
+        encoding,
+    ))
+}
+
 fn buffer_search_needle_with_encoding(
     buf: *const BufferHeader,
     needle: f64,
@@ -203,6 +221,11 @@ fn buffer_search_needle_with_encoding(
     }
     let needle_bits = needle.to_bits();
     let top16 = needle_bits >> 48;
+    // #11430: an SSO short string carries its bytes inline (no heap header),
+    // so it must be materialized before the heap-string branch can read it.
+    if let Some(bytes) = sso_needle_bytes(needle, encoding) {
+        return Some(bytes);
+    }
 
     let raw_ptr = if top16 >= 0x7FF8 {
         (needle_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -263,6 +286,9 @@ pub extern "C" fn js_buffer_index_of_enc(
     }
     let needle_bits = needle.to_bits();
     let top16 = needle_bits >> 48;
+    if let Some(bytes) = sso_needle_bytes(needle, encoding) {
+        return buffer_index_of_bytes(buf, &bytes, start);
+    }
 
     // Buffer needle (POINTER_TAG-boxed or raw)
     let raw_ptr = if top16 >= 0x7FF8 {

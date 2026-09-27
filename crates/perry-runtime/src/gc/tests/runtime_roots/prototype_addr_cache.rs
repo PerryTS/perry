@@ -290,6 +290,19 @@ fn the_shipped_cells_are_the_ones_the_scanner_visits() {
         "row 1 is what object_prototype_addr() indexes; it must bootstrap from \
          globalThis.Object"
     );
+    assert_eq!(
+        wiring[2].1, b"Function",
+        "row 2 is what function_prototype_addr() indexes; it must bootstrap \
+         from globalThis.Function (#10497)"
+    );
+    assert_ne!(
+        wiring[0].0, wiring[2].0,
+        "Array.prototype and Function.prototype must memoize into different cells"
+    );
+    assert_ne!(
+        wiring[1].0, wiring[2].0,
+        "Object.prototype and Function.prototype must memoize into different cells"
+    );
     assert_ne!(
         wiring[0].0, wiring[1].0,
         "the two intrinsics must memoize into DIFFERENT cells — sharing one \

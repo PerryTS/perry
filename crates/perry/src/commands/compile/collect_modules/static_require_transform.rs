@@ -67,6 +67,7 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     let mut imported_specs = HashMap::new();
     let mut imports = Vec::new();
     let mut discovered_side_effects = HashSet::new();
+    let mut commonjs_targets = HashMap::new();
     let mut replacements = Vec::new();
     let mut next_id = 0usize;
     for alias in require_aliases {
@@ -163,7 +164,14 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
                 if !matches!(
                     target.extension().and_then(|e| e.to_str()),
                     Some("ts" | "tsx" | "mts" | "cts" | "js" | "mjs")
-                ) {
+                ) || *commonjs_targets.entry(target.clone()).or_insert_with(|| {
+                    // A .js/.ts CommonJS target also needs the lazy loader:
+                    // an ESM namespace is not its module.exports value, and
+                    // hoisting the load would execute conditional requires.
+                    std::fs::read_to_string(target).is_ok_and(|source| {
+                        crate::commands::compile::cjs_wrap::is_commonjs(&source)
+                    })
+                }) {
                     if !is_native_addon && discovered_side_effects.insert(target.clone()) {
                         let binding = unique_lazy_require_name(source, &mut next_id);
                         imports.push(format!(

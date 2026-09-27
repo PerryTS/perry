@@ -17,9 +17,11 @@
 //! `ACCESSOR_DESCRIPTORS`), which are already keyed by raw address.
 //!
 //! GC: address keys are migrated by each movable owner's registered move
-//! hook. Stored values are kept alive via a mutable root scanner. Address
-//! reuse after a sweep is handled by clearing the table slot at allocation
-//! time (`expando_clear_on_alloc`).
+//! hook. Stored values are kept alive via a mutable root scanner. A dead
+//! owner's entry is dropped by the `gc::dead_owner` fan-out
+//! (`prune_dead_exotic_expando_owners`), and Date/RegExp allocation also
+//! clears the table slot (`expando_clear_on_alloc`) as a backstop for an owner
+//! that died pinned.
 
 use std::cell::{Cell, RefCell};
 
@@ -264,12 +266,6 @@ pub(crate) fn expando_clear_on_alloc(addr: usize) {
     tables.entries.borrow_mut().remove(&addr);
 }
 
-/// Drop an expando entry when its owner is finalized directly rather than
-/// discovered by the shared dead-owner pruning pass.
-pub(crate) fn exotic_expando_owner_clear_dead(addr: usize) {
-    expando_clear_on_alloc(addr);
-}
-
 /// Death pruning (2026-07-09 GC audit wave 2): the root scanner
 /// (`scan_exotic_expando_roots_mut`) strongly roots EVERY owner's values,
 /// dead owners included, so a dead Date/RegExp/Promise/Map/Set's expando
@@ -315,9 +311,8 @@ pub(crate) fn test_exotic_expando_entry_exists(addr: usize) -> bool {
 /// `old_addr` to `new_addr`. Without this, a surviving owner would lose its
 /// user-defined properties after a move. Stored expando *values* are already
 /// rewritten by `scan_exotic_expando_roots_mut`; this migrates the owner
-/// *key*. Most users wire this directly via
-/// `GcMoveHookKind::ExoticExpandoOwner`; RegExp calls it from its combined
-/// side-table move hook.
+/// *key*. Every user wires this directly via
+/// `GcMoveHookKind::ExoticExpandoOwner`.
 pub(crate) fn exotic_expando_owner_moved(old_addr: usize, new_addr: usize) {
     let tables = &crate::state::state().exotic_expando;
     if !tables.in_use.get() || old_addr == new_addr {

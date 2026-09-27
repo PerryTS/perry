@@ -7,9 +7,12 @@ use crate::object::class_image::{self, ImageTable, PARENT_DENSE_CAP};
 use crate::registry_latch::RegistryLatch;
 use std::sync::RwLock;
 
-/// The calling image's class registry mapping class_id -> parent_class_id for
-/// inheritance chain lookups (#8546 — see `object/class_image.rs`).
-pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>>> =
+/// The calling image's class_id -> parent_class_id map for the children the
+/// dense table below cannot hold (#8546 — see `object/class_image.rs`). Not a
+/// complete view: an in-window child's edge lives ONLY in the dense table
+/// (#11502), so the map is private and every reader goes through
+/// [`get_parent_class_id`] / [`any_registered_ancestor`].
+static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>>> =
     ImageTable::new(|image| &image.parents);
 
 // ============================================================================
@@ -27,16 +30,19 @@ pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>
 //
 // Codegen assigns user class ids from a small sequential counter
 // (`perry-hir::lower::context`, monomorphized specializations offset by
-// +1000), so the overwhelming majority of ids are tiny and dense. Mirror
-// every edge whose CHILD id fits into a flat array of atomics; ids outside
-// the window (the reserved builtin bands `0xFFFF_00xx` / `0x7FFF_FFxx` and
-// the high-bit synthetic ids) keep using the map.
+// +1000), so the overwhelming majority of ids are tiny and dense. Every edge
+// whose CHILD id fits is stored in a flat array of atomics, and ONLY there
+// (#11502: it used to be inserted into the map as well, under the map's write
+// lock, for no reader); ids outside the window (the reserved builtin bands
+// `0xFFFF_00xx` / `0x7FFF_FFxx` and the high-bit synthetic ids) keep using
+// the map.
 //
-// The table is one 256 KiB zero-filled allocation per image, created on its
-// first representable edge (#8546: `ClassImageTables::parent_dense`, one per
-// hosted application). Reads before registration answer absent without an
-// allocation. Initialized reads retain the atomic indexed load, reached
-// through the same thread-local image resolution as every other class table.
+// The table is one 256 KiB zeroed allocation per image, created on its first
+// representable edge (#8546: `ClassImageTables::parent_dense`, one per hosted
+// application); only the pages holding registered children become resident.
+// Reads before registration answer absent without an allocation. Initialized
+// reads retain the atomic indexed load, reached through the same thread-local
+// image resolution as every other class table.
 //
 // Encoding: `parent + 1` for every registered edge whose child id is
 // `< PARENT_DENSE_CAP`; `0` means "no edge registered for this child". The
@@ -51,24 +57,38 @@ pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>
 /// *proves* there is no edge, so the map is never consulted.
 static PARENT_DENSE_INCOMPLETE: RegistryLatch = RegistryLatch::new();
 
-/// Mirror one parent edge into the dense table.
-///
-/// Called from `class_registry::parent_static::register_class` *before* the
-/// map insert, so a reader can never observe the map entry without the dense
-/// entry (readers of in-window ids do not consult the map at all, but keeping
-/// the publish order makes that independent of who reads what).
-pub(crate) fn parent_dense_store(class_id: u32, parent_class_id: u32) {
+/// Publish one parent edge: into the dense table when the child is in the
+/// window and the parent is representable, otherwise into the map. Exactly one
+/// of the two receives it, which is sound because no reader consults the map
+/// for an in-window child while the dense slot is set or
+/// [`PARENT_DENSE_INCOMPLETE`] is idle — see [`get_parent_class_id`].
+pub(crate) fn publish_parent_edge(class_id: u32, parent_class_id: u32) {
+    if parent_dense_store(class_id, parent_class_id) {
+        return;
+    }
+    let mut registry = CLASS_REGISTRY.write().unwrap();
+    registry
+        .get_or_insert_with(new_ptr_hash_map)
+        .insert(class_id, parent_class_id);
+}
+
+/// Store one parent edge into the dense table; `false` when it cannot be held
+/// there and must go to the map instead.
+fn parent_dense_store(class_id: u32, parent_class_id: u32) -> bool {
     let idx = class_id as usize;
     if idx >= PARENT_DENSE_CAP {
         // Out-of-window children are served by the map on both sides; nothing
         // to arm.
-        return;
+        return false;
     }
     if parent_class_id == u32::MAX {
+        // Arm BEFORE the caller's map insert, so a zero dense slot stops
+        // proving absence no later than the map starts holding the edge.
         PARENT_DENSE_INCOMPLETE.arm();
-        return;
+        return false;
     }
     class_image::parent_dense_store(idx, parent_class_id.wrapping_add(1));
+    true
 }
 
 /// Look up parent class ID from the registry.
@@ -90,6 +110,49 @@ pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
     }
     let registry = CLASS_REGISTRY.read().unwrap();
     registry.as_ref().and_then(|r| r.get(&class_id).copied())
+}
+
+/// Walk `class_id`'s registered ancestors (not `class_id` itself) for at most
+/// `max_hops` hops, and report whether `hit` accepts any of them. A missing
+/// edge or a `0` parent ends the chain.
+///
+/// The one chain walk for code that tests membership of an ancestor in some
+/// class-id set. It goes through [`get_parent_class_id`] rather than the map,
+/// which since #11502 does not hold in-window edges at all.
+pub(crate) fn any_registered_ancestor(
+    class_id: u32,
+    max_hops: usize,
+    mut hit: impl FnMut(u32) -> bool,
+) -> bool {
+    let mut current = class_id;
+    for _ in 0..max_hops {
+        match get_parent_class_id(current) {
+            Some(parent) if parent != 0 => {
+                if hit(parent) {
+                    return true;
+                }
+                current = parent;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
+/// An upper bound on the number of parent edges the calling image holds: one
+/// per dense slot plus one per map entry. A chain walk that takes more hops
+/// than this has revisited a child, i.e. the registry holds a cycle.
+pub(crate) fn parent_edge_count_bound() -> usize {
+    let registry = CLASS_REGISTRY.read().unwrap();
+    PARENT_DENSE_CAP + registry.as_ref().map_or(0, |r| r.len())
+}
+
+/// `(entries, bytes)` of the out-of-window parent map, for the side-table
+/// census; `None` until the first out-of-window edge.
+pub(crate) fn parent_map_census() -> Option<(usize, usize)> {
+    let registry = CLASS_REGISTRY.read().ok()?;
+    let map = registry.as_ref()?;
+    Some((map.len(), crate::gc::census::map_bytes(map)))
 }
 
 /// class_id -> fetch-builtin parent kind (1 = Request, 2 = Response). Recorded
@@ -315,27 +378,10 @@ pub(crate) fn extends_builtin_error(class_id: u32) -> bool {
 #[inline(never)]
 fn extends_builtin_error_slow(class_id: u32) -> bool {
     let registry = EXTENDS_ERROR_REGISTRY.read().unwrap();
-    if let Some(reg) = registry.as_ref() {
-        if reg.contains(&class_id) {
-            return true;
-        }
-        let mut current = class_id;
-        let parent_reg = CLASS_REGISTRY.read().unwrap();
-        if let Some(pr) = parent_reg.as_ref() {
-            for _ in 0..32 {
-                match pr.get(&current).copied() {
-                    Some(parent) if parent != 0 => {
-                        if reg.contains(&parent) {
-                            return true;
-                        }
-                        current = parent;
-                    }
-                    _ => break,
-                }
-            }
-        }
-    }
-    false
+    let Some(reg) = registry.as_ref() else {
+        return false;
+    };
+    reg.contains(&class_id) || any_registered_ancestor(class_id, 32, |p| reg.contains(&p))
 }
 
 /// Resolve the Error-family prototype at the bottom of a registered class
@@ -376,8 +422,14 @@ mod dense_parent_tests {
     /// the map.
     const FAR_CHILD: u32 = (PARENT_DENSE_CAP as u32) + 7;
 
+    /// The map entry for `class_id`, bypassing the dense table.
+    fn map_entry(class_id: u32) -> Option<u32> {
+        let map = CLASS_REGISTRY.read().unwrap();
+        map.as_ref().and_then(|m| m.get(&class_id).copied())
+    }
+
     #[test]
-    fn dense_table_answers_the_same_chain_as_the_map() {
+    fn in_window_edges_are_held_only_by_the_dense_table() {
         // C extends B extends A, exactly the shape `class Square extends Rect
         // extends Shape` produces.
         crate::object::class_registry::register_class(B, A);
@@ -385,13 +437,17 @@ mod dense_parent_tests {
 
         assert_eq!(get_parent_class_id(C), Some(B));
         assert_eq!(get_parent_class_id(B), Some(A));
+        assert_eq!(get_parent_class_id(A), None);
 
-        // The dense answer must agree with the authoritative map, entry for
-        // entry — the dense table is a mirror, not a second source of truth.
-        let map = CLASS_REGISTRY.read().unwrap();
-        let map = map.as_ref().expect("registry populated");
-        for cid in [A, B, C] {
-            assert_eq!(get_parent_class_id(cid), map.get(&cid).copied());
+        // #11502: the dense table is the edge's only copy. Publishing it into
+        // the map as well took the map's write lock and grew the map on every
+        // first registration, for no reader.
+        for cid in [B, C] {
+            assert_eq!(
+                map_entry(cid),
+                None,
+                "in-window edge {cid} was double-published into the map"
+            );
         }
     }
 
@@ -408,6 +464,69 @@ mod dense_parent_tests {
     fn out_of_window_children_still_resolve_through_the_map() {
         crate::object::class_registry::register_class(FAR_CHILD, A);
         assert_eq!(get_parent_class_id(FAR_CHILD), Some(A));
+        assert_eq!(map_entry(FAR_CHILD), Some(A), "the map is its only home");
+    }
+
+    /// #11502: the `extends Error` / `DataView` / typed-array probes used to
+    /// walk the map directly. Once in-window edges live only in the dense
+    /// table, such a walk sees no ancestors at all, so a grandchild of a
+    /// registered builtin subclass stops counting as one.
+    #[test]
+    fn builtin_subclass_probes_walk_edges_held_only_densely() {
+        // Registering bumps the process-global store-plan epoch that
+        // `re_registering_the_same_edge_flushes_nothing` asserts on.
+        let _lock = crate::gc::global_side_table_test_lock();
+        const ERR_BASE: u32 = 60_101;
+        const VIEW_BASE: u32 = 60_111;
+        const TYPED_BASE: u32 = 60_121;
+        const UNRELATED: u32 = 60_131;
+        let register = crate::object::class_registry::register_class;
+
+        js_register_class_extends_error(ERR_BASE);
+        register(60_102, ERR_BASE);
+        register(60_103, 60_102);
+        assert!(extends_builtin_error(60_103));
+        assert!(!extends_builtin_error(UNRELATED));
+
+        crate::object::data_view_registry::js_register_class_extends_data_view(VIEW_BASE);
+        register(60_112, VIEW_BASE);
+        register(60_113, 60_112);
+        assert!(crate::object::extends_builtin_data_view(60_113));
+        assert!(!crate::object::extends_builtin_data_view(UNRELATED));
+
+        // The typed-array probe follows arbitrarily deep hierarchies (its hop
+        // bound is the registry's edge count, not 32), so chain 40 levels.
+        crate::object::data_view_registry::js_register_class_extends_typed_array(TYPED_BASE);
+        let mut parent = TYPED_BASE;
+        for child in 60_140..60_180 {
+            register(child, parent);
+            parent = child;
+        }
+        assert!(crate::object::extends_builtin_typed_array(parent));
+        assert!(!crate::object::extends_builtin_typed_array(UNRELATED));
+    }
+
+    /// The typed-array probe's hop bound must still terminate on a malformed
+    /// (cyclic) chain now that the edges are not all in the map it used to
+    /// count.
+    #[test]
+    fn unbounded_ancestor_walk_terminates_on_a_cycle() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const X: u32 = 60_191;
+        const Y: u32 = 60_192;
+        crate::object::class_registry::register_class(X, Y);
+        crate::object::class_registry::register_class(Y, X);
+        let bound = parent_edge_count_bound();
+        assert!(
+            bound >= PARENT_DENSE_CAP,
+            "the bound must count dense edges"
+        );
+        let mut hops = 0usize;
+        assert!(!any_registered_ancestor(X, bound, |_| {
+            hops += 1;
+            false
+        }));
+        assert_eq!(hops, bound, "the walk must stop at the bound, not before");
     }
 
     /// A registered edge whose parent is `0` must read back as `Some(0)`, not
@@ -494,11 +613,6 @@ mod dense_parent_tests {
             "a re-parent changes what the chain intercepts and must flush plans"
         );
         assert_eq!(get_parent_class_id(CHILD), Some(SECOND));
-        let map = CLASS_REGISTRY.read().unwrap();
-        assert_eq!(
-            map.as_ref().and_then(|m| m.get(&CHILD).copied()),
-            Some(SECOND),
-            "the authoritative map must carry the new edge too"
-        );
+        assert_eq!(map_entry(CHILD), None, "re-parenting double-published");
     }
 }

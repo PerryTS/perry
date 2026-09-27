@@ -59,6 +59,15 @@ use anyhow::{anyhow, Context, Result};
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// Format version. Bump on any layout change — the runtime rejects others.
 ///
+/// v6 (#11508): each function's address is a signed 32-bit offset from the
+/// blob's own start (`.long fn-_perry_gc_map`) instead of an absolute
+/// pointer. That is a link-time constant — PC32/PREL32 on ELF, REL32 on COFF, a
+/// SUBTRACTOR pair on Mach-O — so the linked section carries NO dynamic
+/// relocations (v5 cost one `R_*_RELATIVE` or chained fixup per function, all
+/// applied eagerly at load, dirtying every page of the table), and on ELF and
+/// COFF the section can be read-only. The entry is 12 bytes on every target,
+/// so the header's old pointer-width flag is gone and flags must be 0.
+///
 /// v5: a `u32 stream_offset` per function follows the function table, so the
 /// runtime can decode ONE function's records without decoding every function
 /// before it. The record stream and the instruction-offset array are byte for
@@ -71,14 +80,17 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// every statepoint (base, derived) pair to one slot on the false premise
 /// that Perry emits no interior pointers; the runtime decoder fails closed on
 /// a version mismatch, so both sides bump together.
-const GC_MAP_VERSION: u8 = 5;
+const GC_MAP_VERSION: u8 = 6;
 /// Section the compact map is emitted into, and the label it is given.
 const GC_MAP_LABEL: &str = "_perry_gc_map";
+/// Mach-O keeps its own segment so the runtime's lookup is unchanged. ld64
+/// maps a custom segment `rw-`, but since v6 there is nothing in it to fix up,
+/// so dyld never writes its pages and they stay clean, file-backed memory.
 const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
-/// `w` because the section holds **relocated function addresses**: without
-/// SHF_WRITE the linker reports `relocation against \`main\` in read-only
-/// section \`.perry_gcmap\`` and creates a DT_TEXTREL in a PIE, which is both
-/// a hardening regression and a portability hazard.
+/// `a` without `w`: since v6 the section holds no absolute addresses, only
+/// link-time-resolved `fn - anchor` differences, so it needs no dynamic
+/// relocations and can be read-only. (v5 needed SHF_WRITE for its relocated
+/// `.quad`s; without it the linker created a DT_TEXTREL.)
 ///
 /// `R` is SHF_GNU_RETAIN, the ELF analogue of Mach-O's `.no_dead_strip`.
 /// Perry links with `-Wl,--gc-sections`, and nothing in the program
@@ -86,13 +98,14 @@ const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
 /// without RETAIN the linker discards it and the binary ships with no GC map
 /// at all. Measured: the section is present in the object (PROGBITS, SHF_ALLOC,
 /// with relocations) and absent from the linked binary.
-const ELF_SECTION: &str = ".perry_gcmap,\"awR\",@progbits";
+const ELF_SECTION: &str = ".perry_gcmap,\"aR\",@progbits";
 /// COFF/PE. The name is SHORT on purpose: a PE image section header has an
 /// 8-byte name field, and long names survive only in object files (as a `/nnn`
 /// string-table offset) — the linker cannot put `.perry_gcmap` in the image, so
-/// the runtime would never find it by name. `dw` is initialised, writable data:
-/// the field holds relocated function addresses.
-const COFF_SECTION: &str = ".pgcmap,\"dw\"";
+/// the runtime would never find it by name. `dr` is initialised, read-only
+/// data: since v6 the function fields are REL32 differences the linker
+/// resolves, so the image needs no base relocations for them.
+const COFF_SECTION: &str = ".pgcmap,\"dr\"";
 /// What the runtime looks for in a PE image. Must match `COFF_SECTION`'s name
 /// and stay within eight bytes.
 #[cfg(test)]
@@ -494,7 +507,7 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                 format!(
                     "map {maps} function[{index}]: the 8-byte function address at block offset \
                      {pos} is a literal ({:#x}), not a symbol reference. The rewriter re-emits \
-                     that address as `.quad <symbol>` and has no way to name a function it was \
+                     that address as `<symbol>-_perry_gc_map` and has no way to name a function it was \
                      given only as a number.",
                     read_u64(bytes, pos).unwrap_or(0)
                 )
@@ -1011,10 +1024,10 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
 ///
 /// ```text
 ///   0  "PGCM"
-///   4  u8 version, u8 reserved, u16 flags
+///   4  u8 version, u8 reserved, u16 flags (0)
 ///   8  u32 function_count
 ///  12  u32 total_len          -- lets the runtime walk concatenated blobs
-///  16  function_count x { u64 address, u32 stack_size, u32 record_count }
+///  16  function_count x { i32 function_offset, u32 stack_size, u32 record_count }
 ///      function_count x u32 stream_offset   -- v5; see below
 ///      record_count_total x u32 instruction_offset
 ///      varint root stream (see `encode_stream`)
@@ -1024,11 +1037,15 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
 /// varint stream. Without it the stream is only readable from the front — it
 /// is delta- and repeat-chained — so a collector that wanted one frame's live
 /// set had to decode the whole section. It is placed AFTER the function table
-/// rather than inside it so the table's relocated addresses stay 8-byte
-/// aligned and the entry keeps its v4 shape.
+/// rather than inside it so the function entry keeps its v4 shape.
 ///
-/// The function table starts at 16 so every relocated address is 8-byte
-/// aligned, and the offset array that follows it is 4-byte aligned.
+/// v6: `function_offset` is `function - blob_start`, where `blob_start` is the
+/// `_perry_gc_map` label at the magic. Every object's blob has its own label,
+/// so concatenated blobs each anchor to themselves, and the runtime recovers
+/// the address as `address_of(blob) + function_offset`. It is signed because
+/// the linker may place text on either side of the map; the ±2 GiB reach is
+/// the same assumption every PC32/PREL32 relocation in the program already
+/// makes. Every field is 4 bytes, so the whole blob is 4-byte aligned.
 ///
 /// Instruction offsets are a fixed-width array rather than part of the varint
 /// stream because at `-O3` they are **label differences the assembler
@@ -1036,12 +1053,6 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
 /// That costs ~4 bytes per record — 18.7x compaction instead of 31.8x — and
 /// buys not having to assemble twice just to learn numbers the assembler is
 /// about to compute anyway.
-/// `ptr64` selects the width of the relocated function-address field. It is the
-/// target's pointer width, not a constant: `arm64_32` (watchOS) is ILP32, so an
-/// 8-byte address slot there would need a relocation ld64 has no reason to
-/// produce, and the runtime would be reading two pointers as one. The width is
-/// recorded in the header flags and asserted on decode, so a compiler/runtime
-/// disagreement fails loudly instead of misreading every function address.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ObjectFormat {
     MachO,
@@ -1059,18 +1070,83 @@ fn format_for(target: &str) -> ObjectFormat {
     }
 }
 
+/// ELF only: a local label at each mapped function's entry, keyed by symbol,
+/// plus the asm line each one goes after.
+///
+/// The map cannot name the function symbol itself on ELF. In a shared object
+/// (a Linux plugin is `cc -shared` without `-Bsymbolic`) a global
+/// default-visibility function is preemptible, and a PC-relative reference to
+/// a preemptible symbol does not link: lld refuses (`R_X86_64_PC32 cannot be
+/// used against symbol`) and bfd falls back to a DT_TEXTREL. A local label at
+/// the same address is resolved against its section at link time whatever the
+/// output is. Mach-O and COFF have no interposition for a SUBTRACTOR pair or a
+/// REL32 to worry about, so they keep the symbol.
+///
+/// A mapped function whose definition is not in this file is a hard error: the
+/// stack map only ever lists functions of its own module, so that means the
+/// label scan is wrong, and guessing would bind the map to the wrong code.
+fn elf_entry_labels(
+    lines: &[&str],
+    block: &RawBlock,
+    functions: &[FunctionMap],
+) -> Result<(HashMap<String, String>, HashMap<usize, String>), String> {
+    let mut by_symbol: HashMap<String, String> = HashMap::new();
+    for function in functions {
+        let next = format!(".Lperry_gcmap_fn{}", by_symbol.len());
+        by_symbol.entry(function.symbol.clone()).or_insert(next);
+    }
+    let mut by_line = HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        if (block.start_line..block.end_line).contains(&index) {
+            continue;
+        }
+        // LLVM prints a definition at column 0: `name:` then an optional
+        // `# @name` comment.
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if !(rest.is_empty() || rest.starts_with([' ', '\t'])) {
+            continue;
+        }
+        if let Some(label) = by_symbol.get(name) {
+            if by_line.values().any(|seen| seen == label) {
+                return Err(format!("function `{name}` is defined twice in this module"));
+            }
+            by_line.insert(index, label.clone());
+        }
+    }
+    if let Some((symbol, _)) = by_symbol
+        .iter()
+        .find(|(_, label)| !by_line.values().any(|seen| seen == *label))
+    {
+        return Err(format!(
+            "the stack map names `{symbol}`, but no definition of it was found in this \
+             module's assembly, so the map could not name its entry with a local label"
+        ));
+    }
+    Ok((by_symbol, by_line))
+}
+
+/// Push `line`, then the ELF entry label that belongs right after it, if any.
+fn push_line(out: &mut String, index: usize, line: &str, labels: &HashMap<usize, String>) {
+    out.push_str(line);
+    out.push('\n');
+    if let Some(label) = labels.get(&index) {
+        out.push_str(label);
+        out.push_str(":\n");
+    }
+}
+
+/// `entry_labels` maps a function symbol to the local label the map names it
+/// by (ELF — see [`elf_entry_labels`]); a symbol not in it is named directly.
 fn emit_asm(
     functions: &[FunctionMap],
     compact: &CompactStream,
     format: ObjectFormat,
-    ptr64: bool,
+    entry_labels: &HashMap<String, String>,
 ) -> String {
     let stream = &compact.bytes[..];
-    let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
-    let addr_bytes = if ptr64 { 8 } else { 4 };
-    let entry_bytes = addr_bytes + 8; // address + u32 stack_size + u32 records
-    let total_len =
-        16 + functions.len() * entry_bytes + functions.len() * 4 + record_total * 4 + stream.len();
+    let total_len = compact_len(functions, stream.len());
     let mut out = String::new();
     out.push_str(&format!(
         "\t.section\t{}\n",
@@ -1088,16 +1164,19 @@ fn emit_asm(
     ));
     out.push_str(&format!("\t.byte\t{GC_MAP_VERSION}\n"));
     out.push_str("\t.byte\t0\n");
-    // Header flags, bit 0: the function-address field is 8 bytes wide.
-    out.push_str(&format!("\t.short\t{}\n", u16::from(ptr64)));
+    // Header flags: none are defined in v6. (v5's bit 0 was the width of an
+    // absolute address field; a relative offset is 4 bytes on every target.)
+    out.push_str("\t.short\t0\n");
     out.push_str(&format!("\t.long\t{}\n", functions.len()));
     out.push_str(&format!("\t.long\t{total_len}\n"));
     for function in functions {
-        out.push_str(&format!(
-            "\t{}\t{}\n",
-            if ptr64 { ".quad" } else { ".long" },
-            function.symbol
-        ));
+        // v6: a link-time difference against this blob's own label, never an
+        // absolute address — that is what keeps the section free of dynamic
+        // relocations.
+        let entry = entry_labels
+            .get(&function.symbol)
+            .unwrap_or(&function.symbol);
+        out.push_str(&format!("\t.long\t{entry}-{GC_MAP_LABEL}\n"));
         out.push_str(&format!("\t.long\t{}\n", function.stack_size as u32));
         out.push_str(&format!("\t.long\t{}\n", function.records.len()));
     }
@@ -1115,6 +1194,13 @@ fn emit_asm(
         out.push_str(&format!("\t.byte\t{}\n", bytes.join(",")));
     }
     out
+}
+
+/// Byte length of one emitted blob: header, 12-byte function entries, v5
+/// stream offsets, instruction offsets, then the varint stream.
+fn compact_len(functions: &[FunctionMap], stream_len: usize) -> usize {
+    let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
+    16 + functions.len() * 12 + functions.len() * 4 + record_total * 4 + stream_len
 }
 
 /// Statistics for the caller to log — a compaction that silently did nothing
@@ -1142,9 +1228,6 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
     if find_block_start(&lines).is_none() {
         return Ok(None);
     }
-    // watchOS is ILP32: the relocated function-address field follows the
-    // target's pointer width rather than assuming 8 bytes.
-    let ptr64 = !target.starts_with("arm64_32");
     let block = parse_block(&lines, word_width_for(target))?;
     let functions = decode_v3(&block)?;
     let stream = encode_stream(&functions)?;
@@ -1152,11 +1235,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
 
     let stats = GcMapStats {
         original_bytes: block.bytes.len(),
-        compact_bytes: 16
-            + functions.len() * (if ptr64 { 16 } else { 12 })
-            + functions.len() * 4
-            + functions.iter().map(|f| f.records.len()).sum::<usize>() * 4
-            + stream.bytes.len(),
+        compact_bytes: compact_len(&functions, stream.bytes.len()),
         functions: functions.len(),
         records: functions.iter().map(|f| f.records.len()).sum(),
         roots: functions
@@ -1166,9 +1245,14 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
             .sum(),
     };
 
-    let replacement = emit_asm(&functions, &stream, format_for(target), ptr64);
+    let format = format_for(target);
+    let (entry_labels, label_lines) = match format {
+        ObjectFormat::Elf => elf_entry_labels(&lines, &block, &functions)?,
+        ObjectFormat::MachO | ObjectFormat::Coff => (HashMap::new(), HashMap::new()),
+    };
+    let replacement = emit_asm(&functions, &stream, format, &entry_labels);
     let mut out = String::with_capacity(asm.len());
-    for line in &lines[..block.start_line] {
+    for (index, line) in lines[..block.start_line].iter().enumerate() {
         // `.no_dead_strip` names the block's label from outside it. It is also
         // the only thing keeping a section nothing references from being
         // discarded, so retarget it instead of dropping it — without it the
@@ -1176,8 +1260,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         if line.contains(".no_dead_strip") && line.contains("__LLVM_StackMaps") {
             out.push_str(&format!("\t.no_dead_strip\t{GC_MAP_LABEL}\n"));
         } else {
-            out.push_str(line);
-            out.push('\n');
+            push_line(&mut out, index, line, &label_lines);
         }
     }
     out.push_str(&replacement);
@@ -1192,12 +1275,11 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         out.push_str(line);
         out.push('\n');
     }
-    for line in &lines[block.end_line..] {
+    for (index, line) in lines.iter().enumerate().skip(block.end_line) {
         if line.contains("__LLVM_StackMaps") {
             continue;
         }
-        out.push_str(line);
-        out.push('\n');
+        push_line(&mut out, index, line, &label_lines);
     }
     Ok(Some((out, stats)))
 }
@@ -1279,20 +1361,12 @@ pub fn compact_and_assemble(
     // Still a deny-list rather than an allow-anything: a target whose bases the
     // runtime cannot resolve must fail the compile, because the alternative is
     // a binary that segfaults during collection with no diagnostic.
-    // `arm64_32` (watchOS) is excluded deliberately, and before `arm64`: it has
-    // 32-bit pointers, while the map stores function addresses as `u64` and the
-    // runtime does `usize` arithmetic on them. The runtime's loader is gated to
-    // 64-bit Apple for the same reason, so admitting it here would emit a map
-    // nothing reads — roots lost silently on the platform hardest to debug.
     let arch_supported = target.starts_with("aarch64")
         || target.starts_with("arm64")
         || target.starts_with("x86_64");
-    // No pointer-width refusal here on purpose. watchOS `arm64_32` is ILP32,
-    // and the emitter handles that by following the target's width for the
-    // function-address field (see `ptr64` in `compact_stack_map_asm`) rather
-    // than assuming 8 bytes — so a narrow pointer is a supported width, not an
-    // excluded target. This spot used to recompute that predicate and never
-    // read it, which read like a guard that had been defeated.
+    // No pointer-width refusal here on purpose. Since v6 the function field is
+    // a 32-bit offset on every target, so watchOS `arm64_32` (ILP32) emits the
+    // same blob as LP64 — a narrow pointer is not a separate case at all.
     if !arch_supported {
         return Err(anyhow!(
             "perry: native GC roots (PERRY_RS4GC) are not supported for target \

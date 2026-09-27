@@ -221,48 +221,84 @@ pub(crate) fn array_get_property_by_key(
 #[used(compiler)]
 static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
 
-#[no_mangle]
-pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
-    // Fast lane: a live plain array on an arena page. Every dynamic `.length`
-    // read and every native push lowering (which re-reads the length for the
-    // result) lands here; the proxy, Set/Map, object and subclass arms below
-    // all begin with probes this receiver cannot satisfy. A proxy id sits in
-    // the handle band and a Set/Map/object header has another type, so the
-    // lane's own checks exclude them.
-    {
-        let bits = arr as u64;
-        let top16 = bits >> 48;
-        let raw = if top16 >= 0x7FF8 {
-            if top16 == (crate::value::POINTER_TAG >> 48) {
-                (bits & crate::value::POINTER_MASK) as usize
-            } else {
-                0
-            }
+/// The plain-array fast lane shared by [`js_array_length`] and
+/// [`js_array_length_leaf`]: a live, unforwarded `GC_TYPE_ARRAY` on an arena
+/// page answers its header length. Everything else — a Proxy id, a Set/Map,
+/// an array-like object, a lazy JSON array, a forwarded head — answers `None`.
+///
+/// Header reads only: no allocation, no side-table write, no user code. That
+/// is the whole of the #11522 leaf certification, so keep it that way.
+#[inline(always)]
+fn array_length_fast_lane(arr: *const ArrayHeader) -> Option<u32> {
+    let bits = arr as u64;
+    let top16 = bits >> 48;
+    let raw = if top16 >= 0x7FF8 {
+        if top16 == (crate::value::POINTER_TAG >> 48) {
+            (bits & crate::value::POINTER_MASK) as usize
         } else {
-            bits as usize
-        };
-        if raw >= crate::gc::GC_HEADER_SIZE
-            && raw % std::mem::align_of::<crate::gc::GcHeader>() == 0
-            && crate::value::addr_class::is_plausible_heap_addr(raw)
-            && !matches!(
-                crate::arena::classify_heap_generation(raw),
-                crate::arena::HeapGeneration::Unknown
-            )
+            0
+        }
+    } else {
+        bits as usize
+    };
+    if raw >= crate::gc::GC_HEADER_SIZE
+        && raw % std::mem::align_of::<crate::gc::GcHeader>() == 0
+        && crate::value::addr_class::is_plausible_heap_addr(raw)
+        && !matches!(
+            crate::arena::classify_heap_generation(raw),
+            crate::arena::HeapGeneration::Unknown
+        )
+    {
+        // SAFETY: owned arena page, header-aligned; the header word
+        // precedes every arena block.
+        let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
+        if obj_type == crate::gc::GC_TYPE_ARRAY
+            && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && gc_flags & crate::gc::GC_FLAG_ARENA != 0
         {
-            // SAFETY: owned arena page, header-aligned; the header word
-            // precedes every arena block.
-            let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
-            if obj_type == crate::gc::GC_TYPE_ARRAY
-                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
-            {
-                let hdr = unsafe { &*(raw as *const ArrayHeader) };
-                if hdr.length <= hdr.capacity {
-                    return hdr.length;
-                }
+            let hdr = unsafe { &*(raw as *const ArrayHeader) };
+            if hdr.length <= hdr.capacity {
+                return Some(hdr.length);
             }
         }
+    }
+    None
+}
+
+/// Perry-GC leaf half of `.length` (#11522): the plain-array fast lane, or
+/// `-1` for every receiver it cannot serve.
+///
+/// [`js_array_length`] cannot be a GC leaf: its Proxy arm runs the user's
+/// `get` trap and its array-like-object arm runs getters and `valueOf`, any
+/// of which can allocate, collect and move the caller's live values. Codegen
+/// calls this first and takes the collecting `js_array_length` call only on a
+/// miss (`expr::array_length::emit_array_length_i32`), so the common case
+/// carries no statepoint while the exotic arms get a real one.
+#[no_mangle]
+pub extern "C" fn js_array_length_leaf(arr: *const ArrayHeader) -> i64 {
+    match array_length_fast_lane(arr) {
+        Some(len) => len as i64,
+        None => -1,
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_ARRAY_LENGTH_LEAF: extern "C" fn(*const ArrayHeader) -> i64 = js_array_length_leaf;
+
+#[no_mangle]
+pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
+    // Fast lane: a live plain array on an arena page. The proxy, Set/Map,
+    // object and subclass arms below all begin with probes this receiver
+    // cannot satisfy. A proxy id sits in the handle band and a Set/Map/object
+    // header has another type, so the lane's own checks exclude them.
+    //
+    // Everything past the lane can run user JS (Proxy `get` trap, getters,
+    // `valueOf`), so this entry point is NOT a Perry-GC leaf (#11522).
+    // Generated code reaches it only on a `js_array_length_leaf` miss.
+    if let Some(len) = array_length_fast_lane(arr) {
+        return len;
     }
     // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
     // with the masked proxy id. Read `length` through the proxy `get` trap

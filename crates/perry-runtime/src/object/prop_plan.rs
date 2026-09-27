@@ -146,6 +146,10 @@ pub(crate) unsafe fn receiver_proto_bits(obj: *const super::ObjectHeader) -> u64
     }
 }
 
+// SAFETY: integer fields only; `key_ptr == 0` never matches an interned key,
+// so a zeroed slot is a miss (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for PlanEntry {}
+
 const PLAN_CACHE_SIZE: usize = 4096;
 const PLAN_CACHE_MASK: usize = PLAN_CACHE_SIZE - 1;
 
@@ -153,19 +157,7 @@ crate::perry_thread_local! {
     // Heap-allocate the table (~112KB) — oversized inline TLS overflows the
     // ILP32 TLS layout on arm64_32 (same fix as string/intern.rs).
     static STORE_PLAN_CACHE: std::cell::UnsafeCell<Box<[PlanEntry]>> =
-        std::cell::UnsafeCell::new(
-            vec![
-                PlanEntry {
-                    key_ptr: 0,
-                    epoch: 0,
-                    vtable_gen: 0,
-                    proto_bits: 0,
-                    class_id: 0,
-                };
-                PLAN_CACHE_SIZE
-            ]
-            .into_boxed_slice(),
-        );
+        std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(PLAN_CACHE_SIZE));
 }
 
 #[inline(always)]
@@ -265,24 +257,16 @@ struct ReadPlanEntry {
     field_idx: u32,
 }
 
+// SAFETY: integer fields only; `keys_id == 0` never matches a keys array.
+unsafe impl crate::zeroed_cache::ZeroEmpty for ReadPlanEntry {}
+
 const READ_PLAN_SIZE: usize = 8192;
 const READ_PLAN_MASK: usize = READ_PLAN_SIZE - 1;
 
 crate::perry_thread_local! {
     // Heap-allocated for the same arm64_32 TLS-size reason as the store table.
     static READ_PLAN_CACHE: std::cell::UnsafeCell<Box<[ReadPlanEntry]>> =
-        std::cell::UnsafeCell::new(
-            vec![
-                ReadPlanEntry {
-                    keys_id: 0,
-                    key_ptr: 0,
-                    epoch: 0,
-                    field_idx: 0,
-                };
-                READ_PLAN_SIZE
-            ]
-            .into_boxed_slice(),
-        );
+        std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(READ_PLAN_SIZE));
 }
 
 #[inline(always)]
@@ -421,5 +405,37 @@ mod tests {
         assert!(!store_plan_check(0, 0x1000, 0));
         store_plan_record(3, 0, 0);
         assert!(!store_plan_check(3, 0, 0));
+    }
+}
+
+#[cfg(test)]
+mod zeroed_cache_tests {
+    use super::*;
+
+    /// #11507: both plan caches are zero-allocated rather than filled, so a
+    /// thread's first view of them must hold no key in any slot.
+    #[test]
+    fn fresh_thread_plan_caches_read_empty_everywhere() {
+        std::thread::spawn(|| {
+            STORE_PLAN_CACHE.with(|c| {
+                let cache = unsafe { &*c.get() };
+                assert_eq!(cache.len(), PLAN_CACHE_SIZE);
+                for e in cache.iter() {
+                    assert_eq!(
+                        (e.key_ptr, e.epoch, e.vtable_gen, e.proto_bits, e.class_id),
+                        (0, 0, 0, 0, 0)
+                    );
+                }
+            });
+            READ_PLAN_CACHE.with(|c| {
+                let cache = unsafe { &*c.get() };
+                assert_eq!(cache.len(), READ_PLAN_SIZE);
+                for e in cache.iter() {
+                    assert_eq!((e.keys_id, e.key_ptr, e.epoch, e.field_idx), (0, 0, 0, 0));
+                }
+            });
+        })
+        .join()
+        .unwrap();
     }
 }

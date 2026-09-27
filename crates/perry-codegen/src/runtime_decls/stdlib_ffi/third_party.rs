@@ -4,7 +4,7 @@
 //! cheerio.
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_third_party(module: &mut LlModule) {
     // ========== bcrypt / argon2 ==========
@@ -79,7 +79,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_sharp_extract", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_flip", I64, &[I64]);
     module.declare_function("js_sharp_flop", I64, &[I64]);
-    module.declare_function("js_sharp_from_buffer", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_from_buffer", I64, &[I64]);
     module.declare_function("js_sharp_from_file", I64, &[I64]);
     module.declare_function("js_sharp_from_input", I64, &[I64]);
     module.declare_function("js_sharp_grayscale", I64, &[I64]);
@@ -152,30 +152,30 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     // an options object (DOUBLE) so the `{ level }` option can select the
     // compression level / throw RangeError. The codec unboxes the data itself.
     module.declare_function("js_zlib_deflate_sync", I64, &[I64, DOUBLE]);
-    module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
-    module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_gzip_sync", I64, &[I64, DOUBLE]);
-    module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
-    module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_unzip_sync", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
     // Brotli sync one-shots take data as raw NaN-box bits for the same
     // shared validation path as gzipSync/deflateSync.
     module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
     module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_compress_sync", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_decompress_sync", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_zstd_compress", VOID, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_zstd_decompress", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)
@@ -291,9 +291,9 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_cheerio_selection_eq", I64, &[I64, DOUBLE]);
     module.declare_function("js_cheerio_selection_find", I64, &[I64, I64]);
     module.declare_function("js_cheerio_selection_first", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_has_class", DOUBLE, &[I64, I64]);
+    module.declare_function("js_cheerio_selection_has_class", I1, &[I64, I64]);
     module.declare_function("js_cheerio_selection_html", I64, &[I64]);
-    module.declare_function("js_cheerio_selection_is", DOUBLE, &[I64, I64]);
+    module.declare_function("js_cheerio_selection_is", I1, &[I64, I64]);
     module.declare_function("js_cheerio_selection_last", I64, &[I64]);
     module.declare_function("js_cheerio_selection_length", DOUBLE, &[I64]);
     module.declare_function("js_cheerio_selection_parent", I64, &[I64]);

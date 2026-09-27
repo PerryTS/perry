@@ -323,6 +323,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                     }
                 }
+                // #11394: a method the program writes onto a builtin
+                // prototype is looked up before the short/native forms bind it.
+                if !skip
+                    && crate::lower_call::property_get::patched_proto::guards(ctx, object, property)
+                {
+                    return crate::lower_call::property_get::patched_proto::lower_spread(
+                        ctx, object, property, args,
+                    );
+                }
                 if !skip {
                     if let Some(result) =
                         super::call_spread_short::try_lower(ctx, object, property, args)?

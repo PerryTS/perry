@@ -18,6 +18,20 @@ fn is_buffer_dispatch_string(value: f64) -> bool {
     jsval.is_string() || jsval.is_short_string()
 }
 
+/// The `StringHeader` for a string argument `is_buffer_dispatch_string`
+/// accepted. #11430: that predicate admits SSO short strings, whose NaN-box
+/// carries the characters inline — there is no heap header behind the low 48
+/// bits. Masking them into a pointer (what the `write` arms did) dereferenced
+/// the inline bytes as an address. `String(7)` returns SSO since #10762, so
+/// node-postgres' bind of any short numeric parameter
+/// (`writer.addInt32PrefixedString(String(value))` → `buffer.write(...)`)
+/// segfaulted. `js_get_string_pointer_unified` materializes an SSO value onto
+/// the heap and returns a heap string's header unchanged.
+fn buffer_dispatch_string_ptr(value: f64) -> *const crate::string::StringHeader {
+    crate::value::js_get_string_pointer_unified(value) as usize
+        as *const crate::string::StringHeader
+}
+
 fn buffer_dispatch_i32(value: f64) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_int32() {
@@ -820,13 +834,7 @@ pub unsafe fn dispatch_buffer_method(
                 );
             }
             let enc = fixed_slice_write_encoding(method_name).unwrap_or(0);
-            let str_bits = args[0].to_bits();
-            let str_addr = if (str_bits >> 48) >= 0x7FF8 {
-                str_bits & 0x0000_FFFF_FFFF_FFFF
-            } else {
-                str_bits
-            };
-            let str_ptr = str_addr as *const crate::string::StringHeader;
+            let str_ptr = buffer_dispatch_string_ptr(args[0]);
             let offset = if args.len() >= 2 { arg_i32(1) } else { 0 };
             let max_len = if args.len() >= 3 {
                 arg_i32(2)
@@ -846,13 +854,7 @@ pub unsafe fn dispatch_buffer_method(
                     "ERR_INVALID_ARG_TYPE",
                 );
             }
-            let str_bits = args[0].to_bits();
-            let str_addr = if (str_bits >> 48) >= 0x7FF8 {
-                str_bits & 0x0000_FFFF_FFFF_FFFF
-            } else {
-                str_bits
-            };
-            let str_ptr = str_addr as *const crate::string::StringHeader;
+            let str_ptr = buffer_dispatch_string_ptr(args[0]);
             let (offset, max_len, enc) = buffer_write_args((*buf_ptr).length as i32, &args[1..]);
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }

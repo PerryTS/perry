@@ -1667,6 +1667,17 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             "ERR_INVALID_ARG_TYPE",
                         );
                     }
+                    // #11492: a constructor's chain ends at %Function.prototype%,
+                    // so a user method or expando installed there
+                    // (`Function.prototype.myHelper = fn`) is readable through
+                    // `C.myHelper` exactly as through a closure.
+                    if !is_prototype_ref {
+                        if let Some(v) =
+                            crate::closure::function_prototype_inherited_get(0, name, class_value)
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
                 }
                 // The built-in constructor object's `constructor` value is
                 // inherited from Function.prototype. It is therefore only the

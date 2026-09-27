@@ -509,6 +509,33 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #11471. The other half of the census above: a process-global cache
+      # KEYED by (or holding) a heap address is not a GC root, so that audit
+      # cannot see it, yet it goes stale the moment its thread exits and
+      # `Arena::drop` hands the blocks to another thread's arena. #11319,
+      # #11462 and #11470 were all this shape, each found by chasing a flake.
+      # Every such static must carry a thread-exit verdict; a new unclassified
+      # one fails, and so does a stale entry. Build-free, so it lives in `lint`.
+      - name: Thread-exit custody of address-keyed globals (#11471)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/thread_exit_address_globals.py --self-test
+          python3 scripts/thread_exit_address_globals.py
+
+      # #11511. The holder audit above proves a table is SCANNED, not that it
+      # ever SHRINKS. The Web Fetch handle registries were `remove`d only in
+      # tests, so a server leaked every request/response until the id band ran
+      # out and panicked (#11164/#11165). Every map-like static in the runtime,
+      # stdlib, ffi and ext crates must have a production removal path or a
+      # written verdict; a new unclassified one fails, and so does a stale
+      # entry. `--self-test` plants a test-only-removal registry and requires
+      # it to fail. Build-free, so it lives in `lint`.
+      - name: Registry lifetime audit (#11511)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/registry_lifetime_check.py --self-test
+          python3 scripts/registry_lifetime_check.py
+
       # #8821. The poll-reach audit is static, build-free and sub-second, but it
       # lived ONLY in `gc-root-dominance.yml`, which is label-gated behind
       # `run-extended-tests` — so it is skipped on every PR and speaks only on
@@ -658,6 +685,11 @@ jobs:
       - name: GC evacuation-liveness assert can say no
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
+
+      - name: Native runtime ABI consistency
+        run: |
+          python3 scripts/runtime_abi_check.py --self-test
+          python3 scripts/runtime_abi_check.py --check-native
 
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of

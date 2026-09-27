@@ -98,6 +98,8 @@ pub(crate) struct Conn {
     paused: bool,
     read_eof: bool,
     closing: bool,
+    /// The shutdown `finish_and_close` submitted has completed: our FIN is out.
+    write_shut: bool,
     destroyed: bool,
     secure: bool,
     /// The handshake has not completed, so no HTTP byte has been seen yet.
@@ -125,8 +127,12 @@ fn pending() -> &'static Mutex<HashMap<i64, VecDeque<HttpPendingRequest>>> {
 /// `IncomingMessage` handles whose connection died before their response
 /// completed. Node raises `'aborted'` on the request; the sink cannot run JS,
 /// so the pump drains this and fires the listeners on its own tick.
-fn aborted() -> &'static Mutex<Vec<i64>> {
-    static ABORTED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+///
+/// Each entry is tagged with the agent whose loop queued it — the server's
+/// owner, since the completion sink runs there — and only that agent's pump
+/// takes it (#11433).
+fn aborted() -> &'static Mutex<Vec<(u64, i64)>> {
+    static ABORTED: OnceLock<Mutex<Vec<(u64, i64)>>> = OnceLock::new();
     ABORTED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -142,21 +148,32 @@ pub(crate) fn note_aborted_handle(handle: i64) {
     aborted()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push(handle);
+        .push((perry_ffi::agent_post::current_agent(), handle));
 }
 
 /// Take the `IncomingMessage` handles whose connection died mid-request.
 pub(crate) fn take_aborted() -> Vec<i64> {
     let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *queue)
+    take_owned(&mut queue)
+}
+
+/// Remove and return the calling agent's entries, leaving every other agent's
+/// in place for its own pump (#11433).
+fn take_owned(queue: &mut Vec<(u64, i64)>) -> Vec<i64> {
+    let agent = perry_ffi::agent_post::current_agent();
+    let (mine, theirs): (Vec<_>, Vec<_>) = std::mem::take(queue)
+        .into_iter()
+        .partition(|(owner, _)| *owner == agent);
+    *queue = theirs;
+    mine.into_iter().map(|(_, handle)| handle).collect()
 }
 
 /// Connection-socket handles (`alloc_connection_socket`) whose TCP connection
 /// has fully closed. Same pattern as `aborted()`: the completion sink cannot
 /// run JS, so the pump drains this and fires the socket's `'close'`
 /// listeners on its own tick.
-fn closed_sockets() -> &'static Mutex<Vec<i64>> {
-    static CLOSED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+fn closed_sockets() -> &'static Mutex<Vec<(u64, i64)>> {
+    static CLOSED: OnceLock<Mutex<Vec<(u64, i64)>>> = OnceLock::new();
     CLOSED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -164,13 +181,13 @@ fn note_closed_socket(socket_handle: i64) {
     closed_sockets()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push(socket_handle);
+        .push((perry_ffi::agent_post::current_agent(), socket_handle));
 }
 
 /// Take the connection-socket handles due a `'close'` emit.
 pub(crate) fn take_closed_sockets() -> Vec<i64> {
     let mut queue = closed_sockets().lock().unwrap_or_else(|e| e.into_inner());
-    std::mem::take(&mut *queue)
+    take_owned(&mut queue)
 }
 
 /// Note that this connection's in-flight request (if any) will never be
@@ -184,10 +201,7 @@ fn note_aborted(id: i64) {
     .flatten()
     .filter(|h| *h != 0);
     if let Some(handle) = handle {
-        aborted()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(handle);
+        note_aborted_handle(handle);
     }
 }
 
@@ -251,6 +265,7 @@ pub(crate) extern "C" fn sink(completion: *const tl::NetCompletion) {
         tl::NET_DATA => on_data(c.id, unsafe { c.bytes() }),
         tl::NET_EOF => on_eof(c.id),
         tl::NET_WROTE => on_wrote(c.id, c.len),
+        tl::NET_SHUTDOWN => on_shutdown(c.id),
         tl::NET_CLOSED => on_closed(c.id),
         tl::NET_TIMER => on_timer(c.id),
         tl::NET_ERROR => {
@@ -321,6 +336,7 @@ pub(crate) fn start_connection(
             paused: false,
             read_eof: false,
             closing: false,
+            write_shut: false,
             destroyed: false,
             secure,
             handshaking: secure,
@@ -385,6 +401,7 @@ pub(crate) fn adopt_alpn_http1(
             paused: false,
             read_eof: false,
             closing: false,
+            write_shut: false,
             destroyed: false,
             secure: true,
             // The handshake is already complete: that is what decided ALPN.
@@ -768,9 +785,20 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
             shape.status,
             &method,
             version,
-            Some(body.len() as u64),
+            // end() already synthesized a length if the headers were open.
+            // A buffered body cannot change framing committed by writeHead().
+            None,
             eof_framed,
         );
+        if framing == Framing::UntilClose {
+            shape.headers.retain(|(name, _)| {
+                !name.eq_ignore_ascii_case("connection") && !name.eq_ignore_ascii_case("keep-alive")
+            });
+            shape.headers.push(("Connection".into(), "close".into()));
+            if let Some(active) = c.active.as_mut() {
+                active.keep_alive = false;
+            }
+        }
         wire::align_headers(&mut shape.headers, framing, shape.auto_content_length);
         let head = match wire::encode_head(
             shape.status,
@@ -993,8 +1021,10 @@ fn finish_and_close(conn_id: i64) {
     })
     .unwrap_or(false);
     if secure {
-        // `close_notify` first, then the FIN, then the close.
-        let _ = perry_ext_net::turnloop_tls_io::shutdown(conn_id, 0);
+        // `close_notify` first, then the FIN, then the close (`on_shutdown`).
+        if perry_ext_net::turnloop_tls_io::shutdown(conn_id, 0).is_err() {
+            let _ = tl::close(conn_id);
+        }
         return;
     }
     if tl::shutdown(conn_id, 0).is_err() {
@@ -1044,8 +1074,17 @@ fn on_eof(id: i64) {
         // finished. Shutting down twice answers `ENOTCONN`, and answering that
         // with a destroy resets a connection whose answering close frame is
         // still on the wire.
+        let shut = with_conn(id, |c| {
+            c.read_eof = true;
+            c.write_shut
+        })
+        .unwrap_or(false);
         if perry_ext_ws::turnloop_link::on_eof(id) {
             finish_and_close(id);
+        } else if shut {
+            // The close handshake finished and our FIN went out first; this
+            // FIN is the last thing either side sends (see `on_shutdown`).
+            let _ = tl::close(id);
         }
         return;
     }
@@ -1081,6 +1120,37 @@ fn on_eof(id: i64) {
     }
     // A request still being answered keeps the connection until its response
     // has been written; `complete_response` sees `read_eof` and closes.
+}
+
+/// The write side is shut down: every queued byte has left. Release the
+/// descriptor.
+///
+/// Node's server socket ends an HTTP connection with `destroySoon()` —
+/// `end()`, and `destroy()` on `'finish'` — so the handle is closed as soon as
+/// the FIN is out, whichever side finished first. This used to wait for the
+/// peer's EOF instead, and nothing did the waiting: `on_eof` returns early on
+/// a connection that is already `closing`, and one whose peer FINed *before*
+/// the shutdown (a keep-alive client that hangs up — `curl`, an
+/// `agent: false` `http.get`) had already had its EOF. Either way the
+/// connection was never closed: one descriptor per connection for the life of
+/// the process (#11452).
+///
+/// A WebSocket is the exception, as it is in Node: `ws` ends its socket and
+/// lets it go when the peer's FIN arrives too, so the close is whichever of
+/// this and that EOF comes second. Only a shutdown this layer asked for
+/// (`closing`) counts.
+fn on_shutdown(id: i64) {
+    let close = with_conn(id, |c| {
+        if !c.closing {
+            return false;
+        }
+        c.write_shut = true;
+        !c.websocket || c.read_eof
+    })
+    .unwrap_or(false);
+    if close {
+        let _ = tl::close(id);
+    }
 }
 
 fn on_wrote(_id: i64, _len: usize) {

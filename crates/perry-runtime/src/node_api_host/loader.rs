@@ -24,6 +24,8 @@ struct SidecarManifest {
 #[derive(Deserialize)]
 struct ManifestAddon {
     logical_id: String,
+    #[serde(default)]
+    require_aliases: Vec<String>,
     package: String,
     version: String,
     entry: String,
@@ -132,10 +134,24 @@ fn load_manifest(root: &Path) -> Result<SidecarManifest, String> {
 }
 
 fn normalize_request(request: &str) -> String {
-    request
-        .replace('\\', "/")
-        .trim_start_matches("./")
-        .to_string()
+    let request = request.replace('\\', "/");
+    let mut parts = Vec::new();
+    for part in request.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|part| *part != "..") => {
+                parts.pop();
+            }
+            ".." if !request.starts_with('/') => parts.push(part),
+            ".." => {}
+            part => parts.push(part),
+        }
+    }
+    format!(
+        "{}{}",
+        if request.starts_with('/') { "/" } else { "" },
+        parts.join("/")
+    )
 }
 
 fn manifest_entry_for<'a>(
@@ -146,7 +162,7 @@ fn manifest_entry_for<'a>(
     if let Some(addon) = manifest
         .addons
         .iter()
-        .find(|addon| addon.logical_id == request)
+        .find(|addon| addon.logical_id == request || addon.require_aliases.contains(&request))
     {
         return Ok(addon);
     }
@@ -159,10 +175,17 @@ fn manifest_entry_for<'a>(
             return Ok(addon);
         }
     }
-    let mut suffix_matches = manifest
-        .addons
-        .iter()
-        .filter(|addon| request.ends_with(&addon.logical_id) || request.ends_with(&addon.entry));
+    let mut suffix_matches = manifest.addons.iter().filter(|addon| {
+        request == addon.entry
+            || request.ends_with(&format!("/{}", addon.entry))
+            || request.ends_with(&format!("/{}", addon.logical_id))
+            || addon
+                .logical_id
+                .strip_prefix("$project/")
+                .is_some_and(|relative| {
+                    request == relative || request.ends_with(&format!("/{relative}"))
+                })
+    });
     let first = suffix_matches.next();
     if first.is_some() && suffix_matches.next().is_none() {
         return Ok(first.unwrap());
@@ -170,6 +193,15 @@ fn manifest_entry_for<'a>(
     Err(format!(
         "Node-API addon `{request}` is not authorized by this executable's compile-time manifest"
     ))
+}
+
+/// Resolve only manifest-listed addons, including requests whose original
+/// source tree no longer exists. Loading still authenticates every payload.
+pub fn resolve_addon_request(request: &str) -> Result<PathBuf, String> {
+    let root = sidecar_root()?;
+    let manifest = load_manifest(&root)?;
+    let addon = manifest_entry_for(&manifest, request)?;
+    safe_payload_path(&root, &addon.entry)
 }
 
 fn safe_payload_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -513,4 +545,77 @@ pub(crate) unsafe fn js_string_value(value: f64) -> Option<String> {
     let mut short = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     crate::string::js_string_key_bytes(value, &mut short)
         .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    fn manifest(ids: &[&str]) -> SidecarManifest {
+        SidecarManifest {
+            schema_version: 1,
+            policy_version: 1,
+            napi_version: 10,
+            shipping_model: SHIPPING_MODEL.into(),
+            target: String::new(),
+            addons: ids
+                .iter()
+                .enumerate()
+                .map(|(i, id)| ManifestAddon {
+                    logical_id: (*id).into(),
+                    require_aliases: vec![],
+                    package: String::new(),
+                    version: String::new(),
+                    entry: format!("{i}/addon.node"),
+                    files: vec![],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn computed_requests_match_only_declared_path_components() {
+        let manifest = manifest(&[
+            "demo/build/Release/addon.node",
+            "$project/native/addon.node",
+        ]);
+        for request in [
+            "demo/build/Release/addon.node",
+            "/gone/node_modules/demo/build/../build/Release/addon.node",
+            r"C:\gone\node_modules\demo\build\Release\addon.node",
+        ] {
+            assert_eq!(
+                manifest_entry_for(&manifest, request).unwrap().logical_id,
+                "demo/build/Release/addon.node"
+            );
+        }
+        for request in [
+            "./native/addon.node",
+            "/gone/native/addon.node",
+            "$project/native/addon.node",
+        ] {
+            assert_eq!(
+                manifest_entry_for(&manifest, request).unwrap().logical_id,
+                "$project/native/addon.node"
+            );
+        }
+        for request in [
+            "/gone/notnative/addon.node",
+            "/gone/node_modules/notdemo/build/Release/addon.node",
+            "unlisted.node",
+            "/gone/native/../unlisted.node",
+        ] {
+            assert!(manifest_entry_for(&manifest, request).is_err(), "{request}");
+        }
+    }
+
+    #[test]
+    fn ambiguous_project_suffixes_are_rejected() {
+        let manifest = manifest(&[
+            "$project/native/addon.node",
+            "$project/sub/native/addon.node",
+        ]);
+        assert!(manifest_entry_for(&manifest, "/gone/sub/native/addon.node").is_err());
+        assert!(manifest_entry_for(&manifest, "$project/sub/native/addon.node").is_ok());
+    }
 }

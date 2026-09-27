@@ -18,7 +18,7 @@ use crate::types::{DOUBLE, I64};
 
 use super::{
     emit_string_literal_global, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
-    unbox_str_handle, unbox_to_i64, FnCtx,
+    unbox_ffi_str_arg, unbox_str_handle, FnCtx,
 };
 
 mod crypto_hash;

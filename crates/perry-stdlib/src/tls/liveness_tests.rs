@@ -33,7 +33,7 @@ fn drain_until_removed(handle: i64) {
 
 #[test]
 fn tls_keepalive_count_balances_listen_close_bind_error_and_early_close() {
-    let _owner = crate::turnloop_client::become_the_owner_for_test();
+    let _owner = super::turnloop_server_tests::own_the_loop_and_the_tls_event_queue();
     let undefined = TAG_UNDEFINED_BITS as i64;
     let baseline = liveness::count_for_test();
     // SAFETY: undefined options/callbacks are valid API arguments, and every

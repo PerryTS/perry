@@ -943,6 +943,45 @@ pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -
     }
 }
 
+/// #11471: thread-exit release for `OBJECT_PROTOTYPES`. Death pruning above
+/// only attributes the collecting thread's heap, so an exiting thread's
+/// entries (owner in its arena, or a prototype value from it) would outlive
+/// its blocks and a fresh object at a reused address would inherit the dead
+/// owner's prototype. Runs from `Arena::drop` (TLS destructor): one plain
+/// process-global lock, no thread-locals, no allocation. The owner's header
+/// bit (`set_residual_proto_owner_bit`) lives in the freed memory itself.
+pub(crate) fn release_object_prototypes_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(registry) = OBJECT_PROTOTYPES.get() else {
+        return;
+    };
+    let mut map = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.retain(|&owner, bits| !freed.contains(owner) && !freed.holds_bits(*bits));
+    // Same latch release as the death prune, under the same lock (#7737).
+    if map.is_empty() {
+        OBJECT_PROTOTYPES_NONEMPTY.store(false, Ordering::Release);
+    }
+}
+
+/// Test probe (#11471): does the residual registry hold an entry for `owner`?
+/// Exported unmangled because this module is crate-private.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "C" fn perry_thread_exit_probe_object_prototype_recorded(owner: usize) -> bool {
+    OBJECT_PROTOTYPES.get().is_some_and(|registry| {
+        registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&owner)
+    })
+}
+
 /// Can the residual owner registry hold an entry at all?
 ///
 /// The latch is stored (`Release`) before the first insert, so `false` proves

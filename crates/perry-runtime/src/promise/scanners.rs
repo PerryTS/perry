@@ -795,11 +795,6 @@ pub(crate) fn test_seed_promise_scanner_roots(
             box_activation: std::ptr::null_mut(),
         })
     });
-    ASYNC_STEP_GUARD.with(|c| {
-        c.set(AsyncStepGuard {
-            consecutive_error_count: 1,
-        })
-    });
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
@@ -917,11 +912,6 @@ pub(crate) fn test_clear_promise_scanner_roots() {
     super::microtasks::CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
     super::microtasks::CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
     INLINE_TRAP.with(|c| c.set(InlineTrap::empty()));
-    ASYNC_STEP_GUARD.with(|c| {
-        c.set(AsyncStepGuard {
-            consecutive_error_count: 0,
-        })
-    });
     super::combinators::SCHEDULED_RESOLVES.with(|q| q.borrow_mut().clear());
     super::reactions::PROMISE_SETTLE_LISTENERS.with(|listeners| listeners.borrow_mut().clear());
     super::reactions::PROMISE_OVERFLOW_REACTIONS.with(|reactions| reactions.borrow_mut().clear());

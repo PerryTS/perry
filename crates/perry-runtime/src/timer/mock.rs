@@ -167,6 +167,7 @@ pub(super) fn schedule_mock_callback_timer(
     if !state.enabled || (state.apis & api) == 0 {
         return None;
     }
+    register_thread_exit_release();
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
@@ -207,6 +208,7 @@ pub(super) fn schedule_mock_interval_timer(
     if !state.enabled || (state.apis & MOCK_TIMERS_API_SET_INTERVAL) == 0 {
         return None;
     }
+    register_thread_exit_release();
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
@@ -348,6 +350,66 @@ pub(super) fn mock_clear_immediate(timer_id: i64) {
         }
     }
     state.callbacks.retain(|timer| !timer.cleared);
+}
+
+// ── Thread exit (#11471) ────────────────────────────────────────────────────
+
+/// Register [`release_mock_timers_in_freed_ranges`] before the first entry is
+/// queued. `timer::mock` is private to `timer`, so the hook is registered
+/// rather than named in `arena::thread_exit`'s anchor block.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_mock_timers_in_freed_ranges,
+        );
+    });
+}
+
+/// #11471: drop every queued mock timer whose closure or arguments live in an
+/// exiting thread's arena.
+///
+/// `MOCK_TIMERS` is process-global, and while it is enabled ANY thread's
+/// `setTimeout`/`setInterval` lands here, so an entry can hold a worker's raw
+/// closure pointer and NaN-boxed arguments. The agent-timer purge at worker
+/// retirement covers only the real store; left behind here, the next
+/// `mock.timers.tick()`/`runAll()` would call a dead closure and
+/// `scan_mock_timers_step` would mark/rewrite reused memory.
+///
+/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`):
+/// this table's lock only (poison-tolerant), no thread-locals. The removed
+/// entries are dropped AFTER the lock is released: each carries a
+/// `ScheduledTimerId` whose drop retires the id in the ref-state registry
+/// (its own process-global lock — the same queue → registry order the clear
+/// paths use, but there is no need to nest them here).
+fn release_mock_timers_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    let (callbacks, intervals) = {
+        let mut state = MOCK_TIMERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.callbacks.is_empty() && state.intervals.is_empty() {
+            return;
+        }
+        let (dead_callbacks, live_callbacks): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut state.callbacks)
+                .into_iter()
+                .partition(|timer| {
+                    freed.holds_i64(timer.callback)
+                        || timer.args.iter().any(|&arg| freed.holds_value(arg))
+                });
+        state.callbacks = live_callbacks;
+        let (dead_intervals, live_intervals): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut state.intervals)
+                .into_iter()
+                .partition(|timer| {
+                    freed.holds_i64(timer.callback)
+                        || timer.args.iter().any(|&arg| freed.holds_value(arg))
+                });
+        state.intervals = live_intervals;
+        (dead_callbacks, dead_intervals)
+    };
+    drop(callbacks);
+    drop(intervals);
 }
 
 // ── GC roots and accounting for the mock tables ─────────────────────────────

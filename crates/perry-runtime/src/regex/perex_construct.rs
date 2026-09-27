@@ -5,7 +5,7 @@ use super::perex_api::{self as api, PROGRAM_BYTES, SCRATCH_BYTES, WORK};
 use super::perex_memory::MemoryBudget;
 use super::perex_owner::{GcProgram, HeapSubject};
 use super::perex_runtime::{self as host, EngineError};
-use super::{RegExpHeader, RegexMetadata, REGEXP_MAGIC, REGEX_EVER_REGISTERED, REGEX_SOURCE_TABLE};
+use super::{RegExpHeader, REGEXP_MAGIC};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
@@ -180,15 +180,6 @@ pub(super) fn new(
     unsafe {
         publish(&receiver, &source, &flags, canonical, &program);
     }
-    REGEX_EVER_REGISTERED.arm();
-    REGEX_SOURCE_TABLE.with(|t| {
-        t.borrow_mut().insert(
-            receiver.with_mut_ptr::<RegExpHeader, _>(|re| re as usize),
-            RegexMetadata {
-                registered_owner: true,
-            },
-        );
-    });
     Ok(receiver.with_mut_ptr::<RegExpHeader, _>(|re| re))
 }
 

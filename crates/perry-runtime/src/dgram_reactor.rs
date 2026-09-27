@@ -574,6 +574,73 @@ pub(crate) fn pump() {
     }
 }
 
+/// #11471: drop every socket registered by a thread whose arena is being
+/// freed.
+///
+/// A [`LiveSocket`] holds the binding thread's socket object, bind-time async
+/// context and pending send callbacks, and [`scan_roots_mut`] roots all of
+/// them — so an entry that outlives its thread would have every later
+/// collection mark (and rewrite) memory another thread's arena may already
+/// have reused, [`pump`] would emit `'message'` on it, and [`REFED_COUNT`]
+/// would keep the process's event loop alive forever. Values never cross
+/// threads, so an entry naming the dead heap anywhere is wholly the dead
+/// thread's, and the whole record goes.
+///
+/// Runs in the exiting thread's TLS destructor (see `arena::thread_exit`):
+/// no thread-locals, so the turnloop entry of a loop-backed socket is left to
+/// die with that thread's loop (the retained duplicate descriptor closes when
+/// the entry drops here). A thread-backed socket's reader is told to stop and
+/// woken, but not joined — it exits on its own next `recv_from` return, and
+/// its already-queued datagrams are skipped by [`pump`] because the entry is
+/// gone. The liveness counters are decremented exactly as [`drop_entry`]
+/// does, so `has_active` stays true only for sockets that still exist.
+pub(crate) fn release_dgram_sockets_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if LIVE_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    let removed: Vec<LiveSocket> = {
+        let mut guard = live_lock();
+        let Some(map) = guard.as_mut() else {
+            return;
+        };
+        let dead: Vec<u64> = map
+            .iter()
+            .filter(|(_, ls)| {
+                freed.holds_bits(ls.socket_bits)
+                    || ls
+                        .sends
+                        .values()
+                        .any(|pending| freed.holds_bits(pending.callback_bits))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        dead.iter().filter_map(|id| map.remove(id)).collect()
+    };
+    for mut ls in removed {
+        LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if ls.refed {
+            REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+        if ls.proc_id.is_some() {
+            TURNLOOP_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+        if ls.recv_thread.take().is_some() {
+            ls.closing.store(true, Ordering::Release);
+            wake_receiver(&ls.udp);
+        }
+    }
+}
+
+/// Test probe (#11471): is socket `id` still registered?
+#[doc(hidden)]
+pub fn live_socket_registered_for_test(id: u64) -> bool {
+    live_lock()
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&id))
+}
+
 /// Whether any bound + `ref`'d socket should keep the event loop alive — OR'd
 /// into `js_stdlib_has_active_handles`.
 pub(crate) fn has_active() -> bool {

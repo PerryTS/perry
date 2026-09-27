@@ -16,12 +16,37 @@ use std::sync::{Mutex, OnceLock};
 pub const CLASS_ID_TLS_SECURE_CONTEXT: u32 = 0xFFFF_00B5;
 
 static TLS_PROTOTYPE_INITIALIZED: AtomicBool = AtomicBool::new(false);
-static ROOT_CERTS_CACHE: AtomicU64 = AtomicU64::new(0);
-static DEFAULT_CA_CACHE: AtomicU64 = AtomicU64::new(0);
-static SYSTEM_CA_CACHE: AtomicU64 = AtomicU64::new(0);
-static EXTRA_CA_CACHE: AtomicU64 = AtomicU64::new(0);
-static SHARED_SIGALGS_CACHE: AtomicU64 = AtomicU64::new(0);
+// The frozen arrays these helpers hand out are cached PER THREAD. Each mutator
+// has its own heap, and the cache is a GC root visited by the collecting
+// thread's `scan_tls_roots_mut`. A process-global slot let one thread's GC mark
+// (and keep alive, and rewrite) whatever object another thread's arena later
+// placed at a dead thread's cached address — the dead heap's block was freed at
+// thread exit and reused. `js_tls_create_server` fills the sigalgs cache, so
+// any thread that ever created a TLS server leaked a stale root into every
+// other thread's collections (#11417 follow-up).
+thread_local! {
+    static ROOT_CERTS_CACHE: AtomicU64 = const { AtomicU64::new(0) };
+    static DEFAULT_CA_CACHE: DefaultCaCache = const {
+        DefaultCaCache { array: AtomicU64::new(0), generation: AtomicU64::new(0) }
+    };
+    static SYSTEM_CA_CACHE: AtomicU64 = const { AtomicU64::new(0) };
+    static EXTRA_CA_CACHE: AtomicU64 = const { AtomicU64::new(0) };
+    static SHARED_SIGALGS_CACHE: AtomicU64 = const { AtomicU64::new(0) };
+}
+/// This thread's `getCACertificates('default')` array and the
+/// `DEFAULT_CA_GENERATION` it was built from.
+struct DefaultCaCache {
+    array: AtomicU64,
+    generation: AtomicU64,
+}
 static DEFAULT_CA_CONFIGURED: AtomicBool = AtomicBool::new(false);
+/// `tls.setDefaultCACertificates` is process-wide configuration, so it is kept
+/// as Rust-owned PEM text; each thread materialises its own array from it.
+static DEFAULT_CA_CONFIG: Mutex<Option<Vec<String>>> = Mutex::new(None);
+/// Bumped by every `setDefaultCACertificates`, so a thread rebuilds a cached
+/// default array that predates the latest configuration. Starts at 1: a
+/// thread's cache generation 0 means "never built".
+static DEFAULT_CA_GENERATION: AtomicU64 = AtomicU64::new(1);
 static TLS_CLIENT_METADATA: OnceLock<Mutex<HashMap<i64, TlsClientMetadata>>> = OnceLock::new();
 
 /// `tls.connect` as perry-ext-net implements it (`js_tls_connect`).
@@ -69,6 +94,21 @@ pub struct TlsClientMetadata {
 
 fn client_metadata() -> &'static Mutex<HashMap<i64, TlsClientMetadata>> {
     crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || Mutex::new(HashMap::new()))
+}
+
+/// #11471: drop every client record whose `checkServerIdentity` closure lives
+/// in an exiting thread's arena. The map is process-global while
+/// `tls.connect` can run on any thread, and closing a socket keeps its record,
+/// so a left-behind entry would be rooted as a dangling address and called by a
+/// late `js_tls_client_check_identity`.
+pub(crate) fn release_tls_client_metadata_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if let Some(map) = TLS_CLIENT_METADATA.get() {
+        map.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, metadata| !freed.holds_i64(metadata.check_server_identity));
+    }
 }
 
 pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {
@@ -334,26 +374,74 @@ fn owned_string_array(items: &[String]) -> f64 {
     arr.with_mut_ptr(|arr: *mut ArrayHeader| ptr_value(arr))
 }
 
-fn cached_owned_cert_array(cache: &AtomicU64, certs: &[String]) -> f64 {
-    let cached = cache.load(Ordering::Relaxed);
+/// This thread's cached array in `cache`, built by `build` on first use.
+fn cached_heap_array(cache: &'static TlsCacheKey, build: impl FnOnce() -> f64) -> f64 {
+    let cached = cache.with(|slot| slot.load(Ordering::Relaxed));
     if cached != 0 {
         return f64::from_bits(cached);
     }
-    let arr = freeze_heap_value(owned_string_array(certs));
-    crate::gc::runtime_store_root_atomic_nanbox_u64(cache, arr.to_bits(), Ordering::Relaxed);
+    let arr = freeze_heap_value(build());
+    cache.with(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, arr.to_bits(), Ordering::Relaxed)
+    });
     arr
 }
 
+type TlsCacheKey = std::thread::LocalKey<AtomicU64>;
+
+fn cached_owned_cert_array(cache: &'static TlsCacheKey, certs: &[String]) -> f64 {
+    cached_heap_array(cache, || owned_string_array(certs))
+}
+
+/// This thread's `tls.getCACertificates('default')`: the configured list once
+/// `setDefaultCACertificates` ran (rebuilt when it runs again), else bundled.
+fn default_ca_certificates() -> f64 {
+    let generation = DEFAULT_CA_GENERATION.load(Ordering::Acquire);
+    let (cached, built) = DEFAULT_CA_CACHE.with(|cache| {
+        (
+            cache.array.load(Ordering::Relaxed),
+            cache.generation.load(Ordering::Relaxed),
+        )
+    });
+    if cached != 0 && built == generation {
+        return f64::from_bits(cached);
+    }
+    let configured = DEFAULT_CA_CONFIG.lock().unwrap().clone();
+    let arr = freeze_heap_value(match configured {
+        Some(certs) => owned_string_array(&certs),
+        None => owned_string_array(roots::bundled_certificates()),
+    });
+    DEFAULT_CA_CACHE.with(|cache| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            &cache.array,
+            arr.to_bits(),
+            Ordering::Relaxed,
+        );
+        cache.generation.store(generation, Ordering::Relaxed);
+    });
+    arr
+}
+
+fn configure_default_ca_certificates(certs: Vec<String>) {
+    *DEFAULT_CA_CONFIG.lock().unwrap() = Some(certs);
+    DEFAULT_CA_GENERATION.fetch_add(1, Ordering::AcqRel);
+    DEFAULT_CA_CONFIGURED.store(true, Ordering::Release);
+}
+
 pub fn scan_tls_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    visitor.visit_atomic_nanbox_u64_slot(&ROOT_CERTS_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&DEFAULT_CA_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&SYSTEM_CA_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(&EXTRA_CA_CACHE, Ordering::Relaxed, Ordering::Relaxed);
-    visitor.visit_atomic_nanbox_u64_slot(
+    DEFAULT_CA_CACHE.with(|cache| {
+        visitor.visit_atomic_nanbox_u64_slot(&cache.array, Ordering::Relaxed, Ordering::Relaxed)
+    });
+    for cache in [
+        &ROOT_CERTS_CACHE,
+        &SYSTEM_CA_CACHE,
+        &EXTRA_CA_CACHE,
         &SHARED_SIGALGS_CACHE,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
+    ] {
+        cache.with(|slot| {
+            visitor.visit_atomic_nanbox_u64_slot(slot, Ordering::Relaxed, Ordering::Relaxed)
+        });
+    }
     if let Ok(mut all) = client_metadata().lock() {
         for metadata in all.values_mut() {
             if metadata.check_server_identity != 0 {
@@ -364,16 +452,14 @@ pub fn scan_tls_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 pub fn tls_shared_signature_algorithms() -> f64 {
-    let cached = SHARED_SIGALGS_CACHE.load(Ordering::Relaxed);
+    let cached = SHARED_SIGALGS_CACHE.with(|slot| slot.load(Ordering::Relaxed));
     if cached != 0 {
         return f64::from_bits(cached);
     }
     let value = string_array(&["RSA-PSS+SHA256", "RSA-PSS+SHA384", "ECDSA+SHA256"]);
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &SHARED_SIGALGS_CACHE,
-        value.to_bits(),
-        Ordering::Relaxed,
-    );
+    SHARED_SIGALGS_CACHE.with(|slot| {
+        crate::gc::runtime_store_root_atomic_nanbox_u64(slot, value.to_bits(), Ordering::Relaxed)
+    });
     value
 }
 
@@ -641,7 +727,7 @@ pub extern "C" fn js_tls_get_ca_certificates(ca_type: f64) -> f64 {
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     };
     match ca_type.as_str() {
-        "default" => cached_owned_cert_array(&DEFAULT_CA_CACHE, roots::bundled_certificates()),
+        "default" => default_ca_certificates(),
         "system" => cached_owned_cert_array(&SYSTEM_CA_CACHE, roots::system_certificates()),
         "bundled" => js_tls_root_certificates(),
         "extra" => cached_owned_cert_array(&EXTRA_CA_CACHE, roots::extra_certificates()),
@@ -706,13 +792,7 @@ pub extern "C" fn js_tls_set_default_ca_certificates(certs: f64) -> f64 {
     let len = crate::array::js_array_length(arr);
     let mut default_certs = Vec::with_capacity(len as usize);
     if len == 0 {
-        let empty = freeze_heap_value(string_array(&[]));
-        crate::gc::runtime_store_root_atomic_nanbox_u64(
-            &DEFAULT_CA_CACHE,
-            empty.to_bits(),
-            Ordering::Relaxed,
-        );
-        DEFAULT_CA_CONFIGURED.store(true, Ordering::Release);
+        configure_default_ca_certificates(Vec::new());
         return f64::from_bits(TAG_UNDEFINED);
     }
 
@@ -747,13 +827,7 @@ pub extern "C" fn js_tls_set_default_ca_certificates(certs: f64) -> f64 {
             "No valid certificates found in the provided array",
         );
     }
-    let configured = freeze_heap_value(owned_string_array(&default_certs));
-    crate::gc::runtime_store_root_atomic_nanbox_u64(
-        &DEFAULT_CA_CACHE,
-        configured.to_bits(),
-        Ordering::Relaxed,
-    );
-    DEFAULT_CA_CONFIGURED.store(true, Ordering::Release);
+    configure_default_ca_certificates(default_certs);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1533,6 +1607,42 @@ static KEEP_JS_TLS_CHECK_SERVER_IDENTITY: extern "C" fn(f64, f64) -> f64 =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cached frozen arrays are GC roots, so each mutator must cache its
+    /// own. With one process-global slot, the second thread got a pointer into
+    /// the first thread's heap, and every thread's collector marked (and could
+    /// rewrite) whatever its own arena later placed at a dead thread's address.
+    #[test]
+    fn cached_tls_arrays_belong_to_the_calling_thread() {
+        fn cached_pair() -> (u64, u64) {
+            crate::gc::gc_init();
+            let sigalgs = tls_shared_signature_algorithms().to_bits();
+            let roots = js_tls_root_certificates().to_bits();
+            assert_eq!(
+                (
+                    tls_shared_signature_algorithms().to_bits(),
+                    js_tls_root_certificates().to_bits()
+                ),
+                (sigalgs, roots),
+                "a repeat call on one thread must hit that thread's cache"
+            );
+            (sigalgs, roots)
+        }
+        let (first, release) = std::sync::mpsc::channel::<()>();
+        let (sent, received) = std::sync::mpsc::channel();
+        // Keep the first thread alive until the second one has read its
+        // caches, so the second thread's arrays cannot reuse its blocks.
+        let owner = std::thread::spawn(move || {
+            sent.send(cached_pair()).unwrap();
+            let _ = release.recv();
+        });
+        let theirs = received.recv().unwrap();
+        let ours = std::thread::spawn(cached_pair).join().unwrap();
+        drop(first);
+        owner.join().unwrap();
+        assert_ne!(ours.0, theirs.0, "sigalgs array came from another heap");
+        assert_ne!(ours.1, theirs.1, "root-cert array came from another heap");
+    }
 
     #[test]
     fn cipher_inventory_is_sorted_and_node_shaped() {

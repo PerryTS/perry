@@ -11,6 +11,9 @@ pub(crate) struct InternEntry {
     pub(crate) string_ptr: usize, // pointer to StringHeader (0 = empty slot)
 }
 
+// SAFETY: integer fields only; `string_ptr == 0` is the empty slot (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for InternEntry {}
+
 pub(crate) const INTERN_TABLE_SIZE: usize = 8192;
 pub(crate) const INTERN_TABLE_MASK: usize = INTERN_TABLE_SIZE - 1;
 
@@ -30,16 +33,7 @@ crate::perry_thread_local! {
     // Oversized `#[thread_local]` storage overflows the ILP32 TLS layout and its
     // writes corrupt adjacent thread-locals. Boxing keeps only a pointer in TLS.
     pub(crate) static INTERN_TABLE: std::cell::UnsafeCell<Box<[InternEntry]>> =
-        std::cell::UnsafeCell::new(
-            vec![
-                InternEntry {
-                    hash: 0,
-                    string_ptr: 0,
-                };
-                INTERN_TABLE_SIZE
-            ]
-            .into_boxed_slice(),
-        );
+        std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(INTERN_TABLE_SIZE));
 }
 
 #[inline]
@@ -273,6 +267,22 @@ pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
         }
     });
+}
+
+/// #11507: the table is zero-allocated rather than filled, so a thread's first
+/// view of it must be an empty slot everywhere.
+#[cfg(test)]
+#[test]
+fn fresh_thread_intern_table_reads_empty_everywhere() {
+    std::thread::spawn(|| {
+        with_intern_table(|table| unsafe {
+            for entry in (*table).iter() {
+                assert_eq!((entry.hash, entry.string_ptr), (0, 0));
+            }
+        });
+    })
+    .join()
+    .unwrap();
 }
 
 #[cfg(test)]

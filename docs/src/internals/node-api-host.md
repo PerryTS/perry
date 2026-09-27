@@ -12,7 +12,11 @@ opaque handle scopes and references, GC root rewriting and weak clearing,
 object metadata/finalization, values and descriptors, native callbacks,
 buffers/views, promises, async work, threadsafe functions, cleanup hooks, and
 the authenticated module loader. The compiler enables it only after the graph
-reaches a `.node` file owned by an exact host `perry.nativeAddons` entry.
+reaches an approved `.node` input. Inputs include literal edges, exact
+`perry.nativeAddonPaths` declarations, and target-matching binaries discovered
+inside reached packages authorized by `perry.nativeAddons` (including their
+declared direct platform dependencies). An unused package allowlist entry alone
+does not enable the host.
 
 Approved addons are screened for direct libuv/V8/NAN/Node C++ imports, copied
 to the relocatable `<executable>.perry-native` sidecar, hashed into its manifest
@@ -373,8 +377,15 @@ callbacks, and TSFN `call_js_cb` all run on the owner thread.
 ## Module loading
 
 The compile graph records every approved `.node` file as a native-addon module
-instead of trying to read it as UTF-8. At runtime, one loader operation does the
-following:
+instead of trying to read it as UTF-8. Computed CommonJS `require()` and
+`createRequire()` requests use the same loader as `process.dlopen()`. The
+manifest maps logical IDs, original package paths, and unambiguous declared
+project paths to sidecar payloads, so the original source tree may be removed.
+Runtime-computed `require.resolve()` requests return the deployed payload
+path, which also keys `require.cache`. Only manifest entries can load; merely finding a `.node` file
+on the host filesystem does not authorize it.
+
+At runtime, one loader operation does the following:
 
 1. canonicalize the manifest-selected sidecar path beneath the executable's
    sidecar root;
@@ -456,7 +467,10 @@ Resolution order is:
 Thus listing `better-sqlite3`, `sharp`, or `@parcel/watcher` does not bypass its
 Perry facade. Node-API is faithful native execution, so an approved addon is
 compatible with `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`; partial hand-written
-facade policy remains unchanged. NAN/V8 or direct-libuv imports remain hard
+facade policy remains unchanged. When the actual JavaScript package or a
+`.node` subpath is selected, explicit addon approval does authorize Parcel
+watcher platform payloads; these files are no longer silently discarded by
+the addon collector. NAN/V8 or direct-libuv imports remain hard
 errors even when the package name is allowlisted.
 
 Desktop/server targets are macOS, Windows, Linux, and the BSDs supported by

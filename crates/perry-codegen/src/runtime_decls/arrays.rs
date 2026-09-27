@@ -118,6 +118,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // `expr/array_push.rs` whenever the declaration is not (or no longer) live.
     module.declare_function("js_array_declare_all_pointer_elements", VOID, &[I64]);
     module.declare_function("js_array_length", I32, &[I64]);
+    // #11522: GC-leaf plain-array fast lane of `js_array_length`; `-1` on a
+    // miss. See `expr::array_length`.
+    module.declare_function("js_array_length_leaf", I64, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate
     // static type (e.g. JSON.parse results, closure captures, any/
     // unknown-typed locals). Returns NaN-boxed boolean.

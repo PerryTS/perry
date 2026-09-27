@@ -51,3 +51,32 @@ fn import_meta_require_native_literal_uses_the_existing_namespace() {
         crate::Stmt::Let { init: Some(Expr::NativeModuleRef(name)), .. } if name == "os"
     )));
 }
+
+#[test]
+fn external_require_value_uses_its_defining_module_filename() {
+    for path in [
+        "/project/node_modules/first/src/index.ts",
+        "/project/node_modules/second/src/index.ts",
+    ] {
+        let source = "export const read = require;";
+        let ast = perry_parser::parse_typescript(source, path).unwrap();
+        let (hir, _) =
+            crate::lower::lower_module_full(&ast, "pkg", path, 0, None, None, None, false, true)
+                .unwrap();
+        crate::ir::clear_current_module_source();
+        let initializer = hir
+            .init
+            .iter()
+            .find_map(|stmt| match stmt {
+                crate::Stmt::Let { name, init, .. } if name == "read" => init.as_ref(),
+                _ => None,
+            })
+            .expect("require binding");
+        let Expr::Call { callee, args, .. } = initializer else {
+            panic!("expected module-bound require constructor: {initializer:?}");
+        };
+        assert!(matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
+            if name == "js_module_create_require_devirt"));
+        assert!(matches!(args.as_slice(), [Expr::String(filename)] if filename == path));
+    }
+}

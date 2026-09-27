@@ -31,6 +31,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // `lower_expr` and the foundational types (`FnCtx`, `FlatConstInfo`)
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
+pub(crate) mod array_length;
 mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
@@ -97,7 +98,7 @@ pub(crate) use helpers::{
     expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_function_name, is_global_this_builtin_name,
     lower_expr_with_expected_type, lower_js_args_array, store_needs_string_addref,
-    unbox_str_handle, unbox_to_i64,
+    unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
@@ -3008,7 +3009,7 @@ mod bigint_set;
 mod binary;
 #[cfg(test)]
 mod boolean_number_tests;
-mod call_spread;
+pub(crate) mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
 pub(crate) mod class_env;

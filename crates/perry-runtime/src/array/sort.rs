@@ -767,6 +767,10 @@ pub extern "C" fn js_array_sort_with_comparator(
     if comparator.is_null() {
         return js_array_sort_default(arr);
     }
+    // #11419: the callback runs with `this` undefined, not the receiver of
+    // whatever method dispatch encloses this call.
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&this_scope);
     unsafe {
         // Runtime plain-object receiver behind a statically-Array variable —
         // probe the RAW pointer before the array-plausibility clean.

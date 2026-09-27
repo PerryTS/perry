@@ -259,7 +259,37 @@ static STDIN_LISTENERS_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 fn arm_stdin_listeners() {
+    // #11471: the hook must exist before the first entry does.
+    static REGISTER_THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
+    REGISTER_THREAD_EXIT_HOOK.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_stdin_listeners_in_freed_ranges,
+        );
+    });
     STDIN_LISTENERS_ARMED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// #11471: drop every stdin listener whose closure lives in an exiting
+/// thread's arena. The six lists are process-global while `process.stdin.on`
+/// can run on any thread; left behind, the main-thread pump would call a freed
+/// (or reused) closure address and the root scanner would visit it. Removing
+/// the entries also keeps `stdin_listeners_keep_loop_alive` honest: a dead
+/// thread's listener no longer pins the event loop open. Registered (from
+/// `arm_stdin_listeners`, which every push runs first) rather than called from
+/// `release_freed_ranges`, because this module is private to `os`.
+fn release_stdin_listeners_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    for list in [
+        &STDIN_DATA_LISTENERS,
+        &STDIN_DATA_ONCE,
+        &STDIN_READABLE_LISTENERS,
+        &STDIN_READABLE_ONCE,
+        &STDIN_END_LISTENERS,
+        &STDIN_END_ONCE,
+    ] {
+        list.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|cb| !freed.holds_i64(*cb));
+    }
 }
 // Set by the reader thread on fd-0 EOF; observed by the main-thread pump.
 static STDIN_EOF_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

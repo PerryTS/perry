@@ -565,3 +565,190 @@ fn object_literal_shapes_reach_the_flat_emitter() {
         assert!(super::super::stringify_record_output::try_object(bits).is_none());
     }
 }
+
+// ─── #10696: the plain-member admission behind the direct object walk ────────
+
+/// Parse `text` and keep the result rooted in `scope`.
+unsafe fn parsed<'s>(
+    scope: &'s crate::gc::RuntimeHandleScope,
+    text: &str,
+) -> crate::gc::RuntimeHandle<'s> {
+    let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    scope.root_nanbox_u64(super::super::test_json_parse_direct(source).bits())
+}
+
+unsafe fn keys_of(value: &crate::gc::RuntimeHandle<'_>) -> crate::object::ObjectKeys {
+    let obj = (value.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+    crate::object::object_keys(obj)
+}
+
+#[test]
+fn member_keys_scan_answers_both_questions_it_fuses() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        for text in [
+            r#"{"a":1}"#,
+            r#"{"a":1,"b":2,"c":3}"#,
+            r#"{"1":1,"b":2}"#,
+            r#"{"b":2,"10":1}"#,
+            r#"{"01":1,"b":2}"#,
+            r#"{"4294967295":1}"#,
+            r#"{"toJSON":1}"#,
+            r#"{"a":1,"toJSON":2,"3":3}"#,
+            r#"{"tojson":1,"_x":2,"toJSONx":3}"#,
+            r#"{"__module__":1}"#,
+            r#"{"-1":1,"1.5":2," 1":3}"#,
+            r#"{}"#,
+        ] {
+            let value = parsed(&scope, text);
+            let keys = keys_of(&value);
+            let expected = if keys_array_may_carry_to_json(keys) {
+                None
+            } else {
+                Some(crate::object::keys_contain_array_index(keys))
+            };
+            assert_eq!(super::member_keys_scan(keys), expected, "{text}");
+        }
+        // A malformed keys array declines, as `keys_array_may_carry_to_json` does.
+        let value = parsed(&scope, r#"{"a":1,"b":2}"#);
+        let keys = keys_of(&value);
+        assert_eq!(
+            super::member_keys_scan(crate::object::ObjectKeys::new(
+                keys.arr(),
+                keys.count() + 64
+            )),
+            None
+        );
+        assert_eq!(
+            super::member_keys_scan(crate::object::ObjectKeys::new(
+                (keys.arr() as *mut u8).add(1).cast(),
+                keys.count()
+            )),
+            None
+        );
+    }
+}
+
+#[test]
+fn plain_object_member_admits_only_what_the_member_dispatch_would_walk() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let plain = parsed(&scope, r#"{"a":1,"b":{"c":2}}"#);
+        let obj = |v: &crate::gc::RuntimeHandle<'_>| {
+            (v.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut crate::ObjectHeader
+        };
+        // Warm the default-prototype lookup through the rooted general probe;
+        // the admission declines the allocating first lookup by design.
+        assert!(super::to_json_definitely_absent(obj(&plain) as *const u8));
+
+        let mut proof = false;
+        let bits = plain.get_nanbox_f64().to_bits();
+        let (ptr, member) = super::plain_object_member(bits, &mut proof)
+            .expect("a parsed record with no toJSON anywhere is a plain member");
+        assert_eq!(ptr, obj(&plain) as *const u8);
+        assert!(proof, "the stringify-wide half is established on first use");
+        assert_eq!(member.keys, crate::object::object_keys(obj(&plain)));
+        assert_eq!(
+            member.live_slots,
+            crate::object::object_live_slot_count(obj(&plain))
+        );
+        assert!(!member.has_index_key);
+
+        let indexed = parsed(&scope, r#"{"b":1,"2":2}"#);
+        let (_, member) =
+            super::plain_object_member(indexed.get_nanbox_f64().to_bits(), &mut proof).unwrap();
+        assert!(member.has_index_key);
+
+        // An anon-shape literal qualifies; a declared class does not.
+        let anon = probe_test_class_id(0xB1);
+        crate::object::js_register_anon_shape_class_id(anon);
+        (*obj(&plain)).class_id = anon;
+        assert!(super::plain_object_member(bits, &mut proof).is_some());
+        (*obj(&plain)).class_id = probe_test_class_id(0xB2);
+        assert!(super::plain_object_member(bits, &mut proof).is_none());
+        (*obj(&plain)).class_id = 0;
+
+        // Not objects, or objects whose own keys can carry a `toJSON`.
+        let array = parsed(&scope, "[1,2]");
+        let with_to_json = parsed(&scope, r#"{"toJSON":1}"#);
+        for declined in [
+            array.get_nanbox_f64().to_bits(),
+            with_to_json.get_nanbox_f64().to_bits(),
+            JSValue::number(1.0).bits(),
+            JSValue::try_short_string(b"ab").unwrap().bits(),
+            crate::value::POINTER_TAG | 0x40,
+        ] {
+            assert!(super::plain_object_member(declined, &mut proof).is_none());
+        }
+
+        // A recorded prototype lives in the meta record: declined.
+        let inherits = parsed(&scope, r#"{"a":1}"#);
+        let proto = crate::object::js_object_alloc(0, 0);
+        crate::object::prototype_chain::object_set_user_prototype(
+            obj(&inherits) as usize,
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
+        assert!(
+            !(*obj(&inherits)).meta.is_null(),
+            "fixture must record a prototype"
+        );
+        assert!(
+            super::plain_object_member(inherits.get_nanbox_f64().to_bits(), &mut proof).is_none()
+        );
+
+        // The stringify-wide half is re-asked only once the walk cleared it,
+        // and an armed one-shot suppression then declines.
+        proof = false;
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
+        assert!(super::plain_object_member(bits, &mut proof).is_none());
+        assert!(!proof);
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+        assert!(super::plain_object_member(bits, &mut proof).is_some());
+        assert!(proof);
+    }
+}
+
+#[test]
+fn object_keys_and_live_slot_count_is_both_probes_at_once() {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        for text in [
+            r#"{"a":1}"#,
+            r#"{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9}"#,
+            "{}",
+        ] {
+            let value = parsed(&scope, text);
+            let obj =
+                (value.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+            assert_eq!(
+                crate::object::object_keys_and_live_slot_count(obj),
+                (
+                    crate::object::object_keys(obj),
+                    crate::object::object_live_slot_count(obj)
+                ),
+                "{text}"
+            );
+        }
+        let empty = crate::object::js_object_alloc(0, 0);
+        assert_eq!(
+            crate::object::object_keys_and_live_slot_count(empty),
+            (
+                crate::object::object_keys(empty),
+                crate::object::object_live_slot_count(empty)
+            )
+        );
+    }
+}
+
+#[test]
+fn to_json_index_key_is_the_decimal_index() {
+    for index in [0usize, 7, 10, 1_234_567, usize::MAX] {
+        super::set_to_json_key_index(index);
+        let key = unsafe { super::current_to_json_key_arg() };
+        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+        let (ptr, len) = crate::string::str_bytes_from_jsvalue(key, &mut scratch).unwrap();
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        assert_eq!(bytes, index.to_string().as_bytes());
+    }
+    super::reset_to_json_key();
+}

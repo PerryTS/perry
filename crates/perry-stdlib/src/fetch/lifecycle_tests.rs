@@ -39,6 +39,37 @@ fn garbage(alloc: fn() -> usize) -> Hidden {
     Hidden::new(std::hint::black_box(alloc()))
 }
 
+/// Words of dead stack [`scrub_dead_stack`] zeroes: 64 KiB, deeper than the
+/// allocation and collection call chains that ran before a reader.
+const SCRUB_WORDS: usize = 8192;
+
+/// Zero the dead stack below the caller's frame. Call it immediately before
+/// the reader, from the case's own frame.
+///
+/// Masking the id in the case's frame is not enough: the calls that minted it
+/// (`garbage` → `js_headers_new` → id allocation) and the aging collection in
+/// [`arm_full_trace`] ran at the depth the reader's frame occupies next, and
+/// left the raw id in slots there. The conservative scan reads the reader's
+/// uninitialized slots as roots, so the "garbage" is retained and the case
+/// fails without any defect in the code under test. That is exactly what
+/// happened on Linux CI (debuginfo off): the id sat in an unwritten slot of
+/// `js_headers_setheaders_entries_json`'s frame. The runtime's own
+/// `scrub_dead_stack_below` (#10182) cannot reach it, because by the time
+/// the collection starts that slot belongs to a live frame.
+#[inline(never)]
+fn scrub_dead_stack() {
+    let mut words = [0u64; SCRUB_WORDS];
+    std::hint::black_box(&mut words);
+}
+
+/// Fill the dead stack below the caller's frame with `id`, the way a
+/// returned call chain that handled the id leaves it.
+#[inline(never)]
+fn plant_in_dead_stack(id: &Hidden) {
+    let mut words = [id.id() as u64; SCRUB_WORDS];
+    std::hint::black_box(&mut words);
+}
+
 /// Run `case` on a fresh mutator and fail (instead of hanging the suite) if it
 /// does not finish: the defect under test is a self-deadlock on a registry
 /// mutex, taken by a collection that an allocation under that mutex started.
@@ -139,6 +170,7 @@ fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
             .set("x-big", &big('h'));
         let garbage = garbage(|| handle_id(js_headers_new()));
         let before = arm_full_trace();
+        scrub_dead_stack();
         js_headers_setheaders_entries_json(headers);
         assert!(
             full_traces() > before,
@@ -158,6 +190,7 @@ fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
             .set("x-big", &big('h'));
         let garbage = garbage(|| handle_id(js_headers_new()));
         let before = arm_full_trace();
+        scrub_dead_stack();
         js_headers_fetch_object_json(headers);
         assert!(
             full_traces() > before,
@@ -171,12 +204,42 @@ fn readers_survive_a_full_trace_that_releases_ids_of_their_own_kind() {
         let _root = scope.root_nanbox_f64(handle_to_f64(blob));
         let garbage = garbage(|| alloc_blob(BlobData::blob(vec![2], String::new())));
         let before = arm_full_trace();
+        scrub_dead_stack();
         dispatch::dispatch_blob_property(blob, "type").unwrap();
         assert!(
             full_traces() > before,
             "no full trace ran inside the reader"
         );
         assert!(!BLOB_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
+    });
+}
+
+/// The failure mode behind the Linux-only flake of the case above, made
+/// deterministic: the raw id is planted in dead stack where the reader's frame
+/// lands. Scrubbed first, the full trace inside the reader must release it.
+#[test]
+fn a_stale_dead_stack_copy_of_the_id_is_scrubbed_before_the_reader() {
+    let _band = crate::fetch::handle_band_test_lock();
+    run_without_deadlock("planted js_headers_setheaders_entries_json", || {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let headers = js_headers_new();
+        let _root = scope.root_nanbox_f64(headers);
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get_mut(&handle_id(headers))
+            .unwrap()
+            .set("x-big", &big('h'));
+        let garbage = garbage(|| handle_id(js_headers_new()));
+        let before = arm_full_trace();
+        plant_in_dead_stack(&garbage);
+        scrub_dead_stack();
+        js_headers_setheaders_entries_json(headers);
+        assert!(
+            full_traces() > before,
+            "no full trace ran inside the reader"
+        );
+        assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&garbage.id()));
     });
 }
 

@@ -181,7 +181,7 @@ pub struct Module {
     /// AST span (SWC anchors `Class::span` at the `class` keyword and ends it
     /// at the closing brace, so the slice is exactly what
     /// `Function.prototype.toString` must return). Consumed by codegen to emit
-    /// `js_register_class_source`, so `String(C)` / `C.toString()` /
+    /// `js_register_class_source{,_static}`, so `String(C)` / `C.toString()` /
     /// `` `${C}` `` reconstruct the class source instead of the
     /// `function C() { [native code] }` placeholder a class ref used to get —
     /// classes are the one callable kind whose source perry retained nowhere,

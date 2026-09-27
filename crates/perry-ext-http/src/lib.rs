@@ -463,6 +463,9 @@ pub struct ClientRequestHandle {
     /// #5080 — set while the continue exchange is waiting for the deferred
     /// body; the first `end()` clears it and hands the body over (once).
     continue_body_pending: bool,
+    /// `options.agent === false` (#11452): the request asks the server to
+    /// close, as Node's throwaway `keepAlive: false` agent does.
+    agent_false: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -672,6 +675,7 @@ fn make_request_handle(
         incoming_handle: 0,
         expects_continue: false,
         continue_body_pending: false,
+        agent_false: false,
     });
     if callback != 0 {
         let wrapper =
@@ -772,6 +776,16 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
 /// Parse the client-side TLS options (#4906) off a request options value
 /// and store them on the freshly-built request handle. A no-op for
 /// string-URL requests / plain http (parse yields the default).
+/// Record `options.agent === false` on the request (#11452).
+unsafe fn note_agent_false(handle: Handle, opts_f64: f64) {
+    if is_string_value(opts_f64) || !agent::agent_is_false(opts_f64) {
+        return;
+    }
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+        request.agent_false = true;
+    });
+}
+
 unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
     let mut tls = tls_client::parse_tls_options(opts_f64);
     let agent_handle =
@@ -1066,6 +1080,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg_f64);
+    note_agent_false(handle, arg_f64); // #11452
     attach_tls_options(handle, arg_f64); // #4906
     continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     handle
@@ -1133,6 +1148,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg_f64);
+    note_agent_false(handle, arg_f64); // #11452
     attach_tls_options(handle, arg_f64); // #4906
                                          // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1197,6 +1213,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
     );
     client_abort::attach_request_signal(handle, parsed.opts);
     attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
+    note_agent_false(handle, parsed.opts); // #11452
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1519,6 +1536,19 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
             );
             return;
         }
+    }
+
+    // #11452 — `agent: false` is Node's throwaway `keepAlive: false` agent:
+    // the head says `Connection: close` (a caller's own `Connection` wins, as
+    // in Node), so the server ends the connection with the response and the
+    // transport never parks it. Added to the dispatched copy only:
+    // `req.getHeader('connection')` stays `undefined`, as it is in Node.
+    let mut headers = headers;
+    let agent_false =
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| request.agent_false)
+            .unwrap_or(false);
+    if agent_false && !headers.keys().any(|k| k.eq_ignore_ascii_case("connection")) {
+        headers.insert("Connection".to_string(), "close".to_string());
     }
 
     // The transport. It runs here, on the agent thread, so the submission

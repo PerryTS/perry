@@ -78,3 +78,64 @@ fn the_wrapper_counter_moves_when_a_receiver_is_boxed() {
         "if this cannot move, the codePointAt assertion above is vacuous"
     );
 }
+
+/// #11509: ECMA-262 §10.3.1 hands a BUILT-IN's `[[Call]]` the `thisArg`
+/// unchanged, so `call_primitive_closure_value` must not `ToObject` a primitive
+/// receiver for one — only a sloppy USER callee is owed that wrapper. The
+/// built-in-ness is a property of the closure BODY (a registry bit set by the
+/// prototype-method installer), not a per-instance side-table entry.
+///
+/// Pins both directions. A method installed through `install_proto_method`
+/// receives the raw string (no new wrapper, and it still answers correctly);
+/// an unregistered closure body — what a sloppy user function looks like to
+/// this predicate — still gets boxed. Without the negative half, a predicate
+/// that answered "built-in" for everything would pass.
+#[test]
+fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
+    unsafe {
+        let s = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+        let recv = f64::from_bits(JSValue::string_ptr(s).bits());
+
+        let proto = crate::object::js_object_alloc(0, 4);
+        let method = crate::object::global_this::install_proto_method(
+            proto,
+            "codePointAt",
+            crate::object::string_proto_thunks::string_proto_code_point_at_thunk as *const u8,
+            1,
+        );
+        let before = crate::builtins::test_boxed_primitive_payload_count();
+        let cp = super::call_primitive_closure_value(
+            recv,
+            JSValue::from_bits(method.to_bits()),
+            [0.0f64].as_ptr(),
+            1,
+        );
+        assert_eq!(
+            cp,
+            Some(97.0),
+            "the built-in still sees \"a\" through the raw receiver"
+        );
+        assert_eq!(
+            crate::builtins::test_boxed_primitive_payload_count(),
+            before,
+            "a built-in callee must receive the primitive, not a ToObject wrapper"
+        );
+
+        extern "C" fn sloppy_user_body(_c: *const crate::closure::ClosureHeader) -> f64 {
+            0.0
+        }
+        let user = crate::closure::js_closure_alloc(sloppy_user_body as *const u8, 0);
+        let user_value = crate::value::js_nanbox_pointer(user as i64);
+        let before = crate::builtins::test_boxed_primitive_payload_count();
+        let _ = super::call_primitive_closure_value(
+            recv,
+            JSValue::from_bits(user_value.to_bits()),
+            std::ptr::null(),
+            0,
+        );
+        assert!(
+            crate::builtins::test_boxed_primitive_payload_count() > before,
+            "a sloppy user callee is still owed the ToObject wrapper"
+        );
+    }
+}

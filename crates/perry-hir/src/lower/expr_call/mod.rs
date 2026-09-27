@@ -72,6 +72,7 @@ mod nested_namespace;
 mod object_static;
 mod os;
 mod patched_builtin_call;
+mod patched_proto_call;
 mod post_args_dispatch;
 mod prescans;
 mod reflect_args;
@@ -327,7 +328,13 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
     // #10848: a built-in member the program replaces anywhere must not bind
     // to its intrinsic — call whatever the property holds at runtime.
-    let mut args = match patched_builtin_call::try_patched_builtin_call(ctx, call, args)? {
+    let args = match patched_builtin_call::try_patched_builtin_call(ctx, call, args)? {
+        Ok(expr) => return Ok(expr),
+        Err(args) => args,
+    };
+    // #11394: likewise a method the program writes onto a builtin PROTOTYPE —
+    // no receiver-specific arm may fold the call to its intrinsic.
+    let mut args = match patched_proto_call::try_patched_proto_call(ctx, call, args)? {
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };

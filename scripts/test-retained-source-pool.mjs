@@ -51,7 +51,7 @@ try {
     cwd, settings, 120000);
     const candidates = llvmFiles(path.join(cwd, '.perry-trace/llvm')).map(file => fs.readFileSync(file, 'utf8'));
     const ir = candidates.find(text => text.includes('RETAINED_SOURCE_PARENT') &&
-      text.includes('call void @js_register_class_source('));
+      text.includes('call void @js_register_class_source_static('));
     assert(ir, 'fixture source registrations must actually be emitted');
     const sourceCalls = ir.split('\n').filter(line => line.includes('call void @js_register_function_source_static('));
     // Native LLVM construction can fold the GEP into a constant expression;

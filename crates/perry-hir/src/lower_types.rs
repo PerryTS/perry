@@ -313,6 +313,15 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
 /// source never nests literals this deep, so the cap loses no practical
 /// precision while keeping pathological/minified inputs tractable.
 const INFER_TYPE_RECURSION_CAP: u32 = 48;
+/// Node budget for one `&&` / `||` chain walk (#11510). Generated/minified
+/// predicates are long left-deep logical chains (a 212-comparison
+/// codepoint-range test is real bundle output), and the plain recursive rule
+/// spent one `INFER_TYPE_RECURSION_CAP` level per join, so any chain past ~48
+/// operands collapsed to `Any` and the function lost its `Boolean` return
+/// type. `infer_logical_chain_type` flattens the joins onto a worklist
+/// instead, keeping this fixed work bound so repeated re-inference while
+/// lowering a pathological chain cannot bring back #5258's O(n²).
+const INFER_LOGICAL_CHAIN_NODE_CAP: usize = 512;
 const INFER_TYPE_STACK_RED_ZONE: usize = 256 * 1024;
 const INFER_TYPE_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
@@ -341,6 +350,68 @@ pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> T
     stacker::maybe_grow(INFER_TYPE_STACK_RED_ZONE, INFER_TYPE_STACK_SEGMENT, || {
         infer_type_from_expr_inner(expr, ctx)
     })
+}
+
+/// Infer a tree built only from `&&` / `||` joins without spending a
+/// recursion level per join. The logical rule is associative at the type
+/// level: the result is a concrete type exactly when every leaf has that same
+/// concrete type, else `Any`. Leaves go through the ordinary
+/// `infer_type_from_expr`, so every other type rule is unchanged. Past the
+/// node budget it defers to `infer_logical_pair_type`, the pre-#11510 rule.
+fn infer_logical_chain_type(root: &ast::BinExpr, ctx: &LoweringContext) -> Type {
+    let mut pending = vec![root.right.as_ref(), root.left.as_ref()];
+    let mut visited = 1usize;
+    let mut common: Option<Type> = None;
+
+    while let Some(expr) = pending.pop() {
+        visited += 1;
+        if visited > INFER_LOGICAL_CHAIN_NODE_CAP {
+            return infer_logical_pair_type(root, ctx);
+        }
+
+        match expr {
+            // Look through parens so a grouped chain shares this walk's
+            // budget instead of starting a fresh one per group.
+            ast::Expr::Paren(paren) => {
+                pending.push(paren.expr.as_ref());
+                continue;
+            }
+            ast::Expr::Bin(bin)
+                if matches!(bin.op, ast::BinaryOp::LogicalAnd | ast::BinaryOp::LogicalOr) =>
+            {
+                pending.push(bin.right.as_ref());
+                pending.push(bin.left.as_ref());
+                continue;
+            }
+            _ => {}
+        }
+
+        let ty = infer_type_from_expr(expr, ctx);
+        if matches!(ty, Type::Any) {
+            return Type::Any;
+        }
+        match &common {
+            None => common = Some(ty),
+            Some(expected) if *expected == ty => {}
+            Some(_) => return Type::Any,
+        }
+    }
+
+    common.unwrap_or(Type::Any)
+}
+
+/// The pairwise rule the chain walk falls back to once its node budget is
+/// spent. Recursion is bounded by `INFER_TYPE_RECURSION_CAP`, so an over-budget
+/// tree is typed exactly as it was before the walk existed — never less
+/// precisely (a wide, shallow parenthesised tree still resolves here).
+fn infer_logical_pair_type(bin: &ast::BinExpr, ctx: &LoweringContext) -> Type {
+    let left = infer_type_from_expr(&bin.left, ctx);
+    let right = infer_type_from_expr(&bin.right, ctx);
+    if left == right && !matches!(right, Type::Any) {
+        right
+    } else {
+        Type::Any
+    }
 }
 
 fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
@@ -458,15 +529,9 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 // operand types match, else `Any` (dynamic truthiness/isArray).
                 // Extends the #3527 fix (right = `Any` → `Any`) to the
                 // mismatched-type case.
-                LogicalAnd | LogicalOr => {
-                    let left = infer_type_from_expr(&bin.left, ctx);
-                    let right = infer_type_from_expr(&bin.right, ctx);
-                    if left == right && !matches!(right, Type::Any) {
-                        right
-                    } else {
-                        Type::Any
-                    }
-                }
+                // Deep chains are walked iteratively — see
+                // `infer_logical_chain_type` (#11510).
+                LogicalAnd | LogicalOr => infer_logical_chain_type(bin, ctx),
                 // One rule with the HIR-level `??` inference: an unknown left
                 // stays unknown, only a nullish left takes the right type.
                 // Pre-fix this arm answered the RIGHT type for an `Any` left,
@@ -1497,8 +1562,13 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                         "join" => Type::String,
                         "includes" | "every" | "some" => Type::Boolean,
                         "pop" | "shift" | "find" | "at" => *elem_ty.clone(),
-                        "map" | "filter" | "slice" | "concat" | "flat" | "flatMap" | "reverse"
-                        | "sort" | "splice" => obj_ty.clone(),
+                        // Mapping callbacks can replace every element (#11446).
+                        // This early table sees only the callee, so defer the
+                        // result element type to callback-aware HIR inference.
+                        "map" | "flatMap" => Type::Array(Box::new(Type::Any)),
+                        "filter" | "slice" | "concat" | "flat" | "reverse" | "sort" | "splice" => {
+                            obj_ty.clone()
+                        }
                         "reduce" => Type::Any, // depends on accumulator
                         "fill" => obj_ty.clone(),
                         "forEach" => Type::Void,
@@ -1638,10 +1708,12 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
     }
 }
 
+mod array_mapping_tests;
 mod branded_intersection_tests;
 mod buffer_backed_generic_tests;
 mod extract;
 mod generic_alias_specialization_tests;
+mod logical_chain_tests;
 
 pub(crate) use extract::{
     extract_binding_type, extract_member_class_name, extract_param_type_with_ctx, extract_ts_type,

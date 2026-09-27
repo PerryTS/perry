@@ -77,6 +77,9 @@ fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
 pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     if is_plain_async_function(closure_ptr) {
         ensure_generator_intrinsics();
+        // Bootstrap also wires the Function parents. A lazy tower alone has
+        // no such links yet when this is the program's first reflection.
+        let _ = builtin_prototype_value("Function");
         return intrinsic_pointer_value(
             crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         );
@@ -86,6 +89,9 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     // program that reflects on a generator without ever touching `globalThis`
     // would otherwise see null. Build lazily (idempotent) on first use.
     ensure_generator_intrinsics();
+    // Bootstrap also wires the Function parents. A lazy tower alone has
+    // no such links yet when this is the program's first reflection.
+    let _ = builtin_prototype_value("Function");
     let slot = match kind {
         GeneratorKind::Sync => crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         GeneratorKind::Async => {
@@ -132,37 +138,51 @@ fn build_async_function_tower() {
     crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
 }
 
-/// Complete `%AsyncFunction%.__proto__ = Function` and
-/// `%AsyncFunction.prototype%.__proto__ = Function.prototype` after the
-/// global constructor table exists.
-pub(crate) fn wire_async_function_intrinsic_parents() {
-    let ctor = crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire);
-    let proto = crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
-    if ctor == 0 || proto == 0 {
-        return;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
-    let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-    let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
-    if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
-        let function_ctor = scope.root_nanbox_f64(function_ctor);
-        ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
-            crate::closure::closure_set_static_prototype(
-                ctor as usize,
-                function_ctor.get_nanbox_f64().to_bits(),
-            )
-        });
-    }
-    let function_proto = builtin_prototype_value("Function");
-    if crate::value::JSValue::from_bits(function_proto.to_bits()).is_pointer() {
-        let function_proto = scope.root_nanbox_f64(function_proto);
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            super::super::prototype_chain::object_set_static_prototype(
-                proto as usize,
-                function_proto.get_nanbox_f64().to_bits(),
-            )
-        });
+/// Complete the async/generator intrinsic constructor and prototype parents
+/// after the global `Function` constructor has been populated.
+pub(crate) fn wire_function_intrinsic_parents() {
+    for (ctor_slot, proto_slot) in [
+        (
+            &crate::object::ASYNC_FUNCTION_INTRINSIC_PTR,
+            &crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            &crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR,
+            &crate::object::GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+        (
+            &crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+            &crate::object::ASYNC_GENERATOR_INTRINSIC_PROTO_PTR,
+        ),
+    ] {
+        let ctor = ctor_slot.load(Ordering::Acquire);
+        let proto = proto_slot.load(Ordering::Acquire);
+        if ctor == 0 || proto == 0 {
+            continue;
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
+        let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
+        let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+        if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
+            let function_ctor = scope.root_nanbox_f64(function_ctor);
+            ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
+                crate::closure::closure_set_static_prototype(
+                    ctor as usize,
+                    function_ctor.get_nanbox_f64().to_bits(),
+                )
+            });
+        }
+        let function_proto = builtin_prototype_value("Function");
+        if crate::value::JSValue::from_bits(function_proto.to_bits()).is_pointer() {
+            let function_proto = scope.root_nanbox_f64(function_proto);
+            proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                super::super::prototype_chain::object_set_static_prototype(
+                    proto as usize,
+                    function_proto.get_nanbox_f64().to_bits(),
+                )
+            });
+        }
     }
 }
 
