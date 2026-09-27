@@ -1940,6 +1940,8 @@ pub(crate) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 #[cfg(test)]
 mod keys_front_offset_tests;
 #[cfg(test)]
+mod native_module_namespace_proto_tests;
+#[cfg(test)]
 mod own_key_probe_tests;
 #[cfg(test)]
 mod restricted_function_store_tests;

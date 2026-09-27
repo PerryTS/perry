@@ -781,16 +781,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if !obj_ptr.is_null() && (*obj_ptr).class_id == NATIVE_MODULE_CLASS_ID {
                 let key_ptr =
                     crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
-                let present = super::super::native_module::read_native_module_name(obj_ptr)
-                    .as_deref()
-                    .zip(super::super::has_own_helpers::str_from_string_header(
-                        key_ptr,
-                    ))
-                    .map(|(module, key)| {
-                        super::super::native_module::native_module_vtable()
-                            .is_some_and(|vt| (vt.has_enumerable_key)(module, key))
-                    })
-                    .unwrap_or(false);
+                let present = native_module_namespace_has_property(obj_ptr, key_ptr);
                 return if present { nanbox_true } else { nanbox_false };
             }
         }
@@ -854,17 +845,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         if key_str.is_null() {
             return nanbox_false;
         }
-        let key_name =
-            match unsafe { super::super::has_own_helpers::str_from_string_header(key_str) } {
-                Some(name) => name,
-                None => return nanbox_false,
-            };
-        let present = unsafe { read_native_module_name(obj_ptr) }
-            .as_deref()
-            .is_some_and(|module_name| {
-                super::super::native_module::native_module_vtable()
-                    .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
-            });
+        let present = unsafe { native_module_namespace_has_property(obj_ptr, key_str) };
         return if present { nanbox_true } else { nanbox_false };
     }
 
@@ -1075,16 +1056,7 @@ unsafe fn object_string_key_has_property(
             if key_str.is_null() {
                 return nanbox_false;
             }
-            let key_name = match super::super::has_own_helpers::str_from_string_header(key_str) {
-                Some(name) => name,
-                None => return nanbox_false,
-            };
-            let present = read_native_module_name(obj_ptr)
-                .as_deref()
-                .is_some_and(|module_name| {
-                    super::super::native_module::native_module_vtable()
-                        .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
-                });
+            let present = native_module_namespace_has_property(obj_ptr, key_str);
             return if present { nanbox_true } else { nanbox_false };
         }
     }
@@ -1306,6 +1278,40 @@ unsafe fn ordinary_has_property(
     // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
     // plus any user-assigned `Object.prototype` members).
     ordinary_object_prototype_property_value(last_valid, key).is_some()
+}
+
+/// #11542: `[[HasProperty]]` on a native-module namespace object. Its own
+/// properties are its module's export surface (the set `hasOwnProperty` and
+/// `Object.keys` report); on an own miss the answer continues at its
+/// `[[Prototype]]`, exactly as for any ordinary object, so `"constructor" in
+/// ns` holds.
+///
+/// # Safety
+/// `obj` must point to a live `NATIVE_MODULE_CLASS_ID` object; `key` is a
+/// string key or null.
+unsafe fn native_module_namespace_has_property(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(key_name) = super::super::has_own_helpers::str_from_string_header(key) else {
+        return false;
+    };
+    let own = read_native_module_name(obj)
+        .as_deref()
+        .is_some_and(|module_name| {
+            super::super::native_module::native_module_vtable()
+                .is_some_and(|vt| (vt.has_enumerable_key)(module_name, key_name))
+        });
+    if own {
+        return true;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+    // May allocate (the default prototype is resolved lazily).
+    let proto_bits = super::super::native_module::native_module_namespace_prototype_bits(obj);
+    let key =
+        crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader;
+    prototype_value_has_property(proto_bits, key)
 }
 
 /// #9192: ECMA-262 `[[HasProperty]]` on a value that is serving as some other

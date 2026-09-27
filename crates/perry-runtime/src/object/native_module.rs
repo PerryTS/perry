@@ -29,6 +29,7 @@ mod constants_tables;
 mod constructor_exports;
 mod module_keys;
 mod namespace_builders;
+mod namespace_prototype;
 mod web_locks;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
@@ -63,6 +64,9 @@ pub(crate) use namespace_builders::{
     create_cached_sub_namespace, create_sub_namespace, http_global_agent_object,
     http_methods_array, http_status_codes_object, https_global_agent_object,
     native_namespace_or_create,
+};
+pub(crate) use namespace_prototype::{
+    native_module_namespace_default_prototype, native_module_namespace_prototype_bits,
 };
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
@@ -1850,13 +1854,24 @@ unsafe fn vt_get_own_field(
     // `process.getBuiltinModule(...)`) returned undefined for them while the
     // static codegen path resolved them via `js_native_module_property_by_name`.
     // Defer to that authoritative resolver so dynamic namespaces match static.
-    let resolved = js_native_module_property_by_name(
-        module_name.as_ptr(),
-        module_name.len(),
+    if native_module_has_enumerable_key(&module_name, property_name) {
+        let resolved = js_native_module_property_by_name(
+            module_name.as_ptr(),
+            module_name.len(),
+            key_ptr,
+            key_len,
+        );
+        return Some(JSValue::from_bits(resolved.to_bits()));
+    }
+    // #11542: not an own property — continue at the namespace's
+    // `[[Prototype]]` (see `namespace_prototype`).
+    Some(namespace_prototype::non_own_field(
+        obj,
+        key,
+        &module_name,
         key_ptr,
         key_len,
-    );
-    Some(JSValue::from_bits(resolved.to_bits()))
+    ))
 }
 
 /// `Object.keys(namespace)` — fresh array of the module's enumerable

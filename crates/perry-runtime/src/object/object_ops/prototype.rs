@@ -1,4 +1,5 @@
 //! `Object.create`, `Object.getPrototypeOf`, and the globalThis-builtin lookup.
+use super::super::native_module::native_module_namespace_default_prototype as namespace_default_prototype;
 use super::*;
 
 /// Look up the canonical NaN-boxed value of a built-in constructor /
@@ -696,11 +697,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // memory growth, no `✓ Ready`). Return Object.prototype so the
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
-                    let proto = crate::object::builtin_prototype_value("Object");
-                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                        return proto;
-                    }
-                    return f64::from_bits(TAG_NULL);
+                    return namespace_default_prototype();
                 }
             }
             return obj_value;
@@ -832,11 +829,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // memory growth, no `✓ Ready`). Return Object.prototype so the
                 // walk reaches a LEAF_PROTOTYPE and stops.
                 if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
-                    let proto = crate::object::builtin_prototype_value("Object");
-                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                        return proto;
-                    }
-                    return f64::from_bits(TAG_NULL);
+                    return namespace_default_prototype();
                 }
             }
         }
