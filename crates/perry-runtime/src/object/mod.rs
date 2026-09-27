@@ -84,6 +84,8 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+#[cfg(test)]
+mod zeroed_cache_tests;
 pub(crate) use class_registry::async_resource_prototype_value;
 pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
@@ -655,41 +657,19 @@ impl ObjectHotTables {
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
-            transition_cache: std::cell::UnsafeCell::new(
-                vec![
-                    TransitionEntry {
-                        key_ptr: 0,
-                        next_keys: 0,
-                        prev_shape_id: 0,
-                        target_shape_id: 0,
-                        slot_idx: 0,
-                        target_len: 0,
-                    };
-                    TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_forward: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_reverse: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
-            array_tail_direct: std::cell::UnsafeCell::new(
-                vec![
-                    array_tail_transition::ArrayTailDirectIndex::EMPTY;
-                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
-                ]
-                .into_boxed_slice(),
-            ),
+            // #11507: zero-allocated, so untouched pages are never mapped.
+            transition_cache: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_forward: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_reverse: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
+            array_tail_direct: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
+                array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
+            )),
         }
     }
 }
@@ -927,6 +907,9 @@ pub(crate) struct TransitionEntry {
     slot_idx: u32,        // offset 24 — slot | key byte_len << 24 (namespace marker)
     target_len: u32,      // offset 28, nonzero when target was validated at insert
 }
+
+// SAFETY: all integer fields; `key_ptr == 0` is the miss (#11507).
+unsafe impl crate::zeroed_cache::ZeroEmpty for TransitionEntry {}
 
 /// ── Emitted transition-IC ABI (#9287) ──────────────────────────────────────
 ///
