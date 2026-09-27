@@ -223,6 +223,18 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
                 if (Path(cand).parent / target).as_posix() == rel:
                     return True
         parent = parent.parent
+    # A test suite root (`crates/<c>/tests/<suite>.rs`) can pull a file from
+    # anywhere under `tests/` with `#[path = "…"] mod name;` — e.g.
+    # `node_api_host_e2e.rs` registers `fixtures/node_api_host/computed_require.rs`.
+    # Those roots are siblings of the file's directory, not ancestors, so the
+    # walk above never reads them.
+    if len(parts) > 3 and parts[0] == "crates" and parts[2] == "tests":
+        tests_dir = Path(*parts[:3])
+        for root in tree.glob((tests_dir / "*.rs").as_posix()):
+            text = tree.read(root)
+            for target in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', text):
+                if (Path(root).parent / target).as_posix() == rel:
+                    return True
     return False
 
 
