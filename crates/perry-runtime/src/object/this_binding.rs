@@ -280,6 +280,15 @@ impl<'scope> ImplicitThisScope<'scope> {
             previous: scope.root_nanbox_f64(js_implicit_this_set(receiver)),
         }
     }
+
+    /// Bind `this` to `undefined`: OrdinaryCallBindThis for a callback the
+    /// runtime invokes with no receiver (`sort` comparators, `reduce`
+    /// callbacks, an absent `thisArg`). Without it the callee reads whatever
+    /// the enclosing method dispatch left in the cell (#11419).
+    #[inline]
+    pub fn bind_undefined(scope: &'scope crate::gc::RuntimeHandleScope) -> Self {
+        Self::bind(scope, f64::from_bits(crate::value::TAG_UNDEFINED))
+    }
 }
 
 impl Drop for ImplicitThisScope<'_> {

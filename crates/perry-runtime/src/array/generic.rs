@@ -873,6 +873,8 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
+    // #11419: `this` is undefined in the callback (no thisArg parameter).
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&scope);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -916,6 +918,8 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
 #[no_mangle]
 pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, init: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
+    // #11419: `this` is undefined in the callback (no thisArg parameter).
+    let _this = crate::object::ImplicitThisScope::bind_undefined(&scope);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
