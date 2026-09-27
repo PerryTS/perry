@@ -144,12 +144,14 @@ RULE_KINDS = {
     # cuts
     "throw",      # the throw funnel (cut in ThrowOnly); must also match a node
     "panic",      # panic=abort path: never returns, cut in every class
+    "teardown",   # runs only at thread/process teardown: cut in every class
     # exemptions
     "indirect",   # an indirect call inside a matching function is NOT a seed
     "extern",     # an undefined symbol matching this is a system leaf
     "forbid",     # a symbol nothing in the archives may call (a checked premise)
     "trusted",    # a Rust crate whose indirect calls are not seeds (a trust boundary)
     "idiom",      # `idiom NAME => match pattern`: a recognized indirect idiom's targets
+    "closures",   # matching functions gain edges to their own `::{closure#N}` bodies
     "target",     # internal: the target side of a delegated `indirect` rule
 }
 
@@ -183,7 +185,7 @@ def load_rules(path: str) -> list[Rule]:
 # --------------------------------------------------------------------------
 # objdump parsing
 
-MEMBER_HDR = re.compile(r"^(.*?)(?:\((.+)\))?:\s+file format (\S+)")
+MEMBER_HDR = re.compile(r"^(.*?)(?:\((.+)\))?:\s+file format (.+?)\s*$")
 LABEL = re.compile(r"^([0-9a-f]+) <(.+)>:$")
 INSN = re.compile(r"^\s*([0-9a-f]+):\s+(.*)$")
 RELOC = re.compile(r"^\s+([0-9a-f]+):\s+(\S+)\s+(.+?)\s*$")
@@ -196,6 +198,7 @@ def temp_label(name: str) -> bool:
     return name.startswith(("ltmp", "Ltmp", ".L", "L_", "l_", "lCPI", "LCPI", "$"))
 
 
+LLVM_SUFFIX = re.compile(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")
 _HASHED = re.compile(r"^(.+)-[0-9a-f]{16}$")
 
 
@@ -217,7 +220,7 @@ def crate_of(obj: str) -> str | None:
 
 class Node:
     __slots__ = ("idx", "obj", "sec", "addr", "names", "fmt", "indirect_calls",
-                 "indirect_jmps", "calls", "externs", "idioms")
+                 "indirect_jmps", "calls", "externs", "idioms", "sites", "switches")
 
     def __init__(self, idx, obj, sec, addr, fmt):
         self.idx, self.obj, self.sec, self.addr, self.fmt = idx, obj, sec, addr, fmt
@@ -227,6 +230,8 @@ class Node:
         self.calls: set[str] = set()   # raw target names of direct branches
         self.externs: set[str] = set()
         self.idioms: set[str] = set()  # recognized indirect-call idioms (see IDIOMS)
+        self.sites: list[str] = []     # "+0xOFF insn" of each unresolved indirect site
+        self.switches = 0              # switch-table dispatches recognized (not seeds)
 
 
 def _norm(name: str, fmt: str) -> str:
@@ -247,6 +252,9 @@ X86_IMPLICIT_MN = ("mul", "div", "imul", "idiv", "cqto", "cqo", "cltd", "cltq", 
                    "cpuid", "rdtsc", "rdtscp", "syscall", "rep", "movs", "stos", "lods",
                    "scas", "cmps", "xgetbv", "rdrand", "rdseed", "xchg", "cmpxchg", "xadd")
 A64_CALLEE_SAVED = {f"x{i}" for i in range(19, 30)}
+# Registers that carry arguments at function entry, in any ABI we analyze
+# (SysV x86-64, Win64, AAPCS64 incl. x8 indirect-result).
+ARG_REGS = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"} | {f"x{i}" for i in range(0, 9)}
 X86_REG = re.compile(r"%([re]?[a-z]{1,2}x?|r\d{1,2}[dwb]?|[re]?[sd]il?|[re]?[sb]pl?|[a-d][lh])\b")
 HEX_TARGET = re.compile(r"\b0x([0-9a-f]+)\b")
 
@@ -453,7 +461,85 @@ def _flow(ins: Insn, arch: str):
     return None, None
 
 
-def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str) -> str | None:
+def _copy_source(ins: Insn, arch: str) -> str | None:
+    """`mov %src, %dst` (x86-64, 64-bit) / `mov xD, xS` (AArch64): the source
+    register family of a plain register copy, else None."""
+    if arch == "x86":
+        m = re.match(r"^movq\s*$", ins.mn + " ") and re.match(r"^%(r\w+), %(r\w+)$", ins.ops)
+        return x86_family(m.group(1)) if m else None
+    if ins.mn == "mov":
+        m = re.match(r"^x(\d+), x(\d+)$", ins.ops)
+        return f"x{m.group(2)}" if m else None
+    return None
+
+
+def _slot_load(ins: Insn, arch: str) -> str | None:
+    """A reload from a frame spill slot: `movq -0x48(%rbp), %r` (x86-64) /
+    `ldr xN, [sp|x29, #imm]` (AArch64). Returns the slot key."""
+    if arch == "x86":
+        m = ins.mn == "movq" and re.match(r"^(-?0x[0-9a-f]+\(%rbp\)), %r\w+$", ins.ops)
+        return m.group(1) if m else None
+    if ins.mn == "ldr":
+        m = re.match(r"^x\d+, (\[(sp|x29), #-?0x[0-9a-f]+\])$", ins.ops)
+        return m.group(1) if m else None
+    return None
+
+
+def _slot_store(ins: Insn, slot: str, arch: str):
+    """(is_write, source register family) for an instruction touching `slot`."""
+    if slot not in ins.ops:
+        return False, None
+    if arch == "x86":
+        dest = ins.ops.rsplit(",", 1)[-1].strip() if "," in ins.ops else ins.ops
+        if dest != slot:
+            return False, None
+        m = ins.mn == "movq" and re.match(r"^%(r\w+), ", ins.ops)
+        return True, (x86_family(m.group(1)) if m else None)
+    if ins.mn == "str":
+        m = re.match(r"^x(\d+), " + re.escape(slot) + "$", ins.ops)
+        return True, (f"x{m.group(1)}" if m else None)
+    if ins.mn.startswith(("st", "stp")):
+        return True, None
+    return False, None
+
+
+def _slot_pinned(cfg: "_Cfg", i: int, slot: str, arch: str, depth: int) -> str | None:
+    """Every store to spill slot `slot` reaching insns[i] stores a register
+    that is itself GOT-pinned to one symbol."""
+    insns = cfg.insns
+    sym = None
+    seen: set[int] = set()
+    work = [(cfg.block_of[i], i)]
+    while work:
+        b, upto = work.pop()
+        st = cfg.starts[b]
+        found = False
+        for k in range(upto - 1, st - 1, -1):
+            w, src = _slot_store(insns[k], slot, arch)
+            if w:
+                g = _got_pinned(cfg, k, src, arch, depth + 1) if src else None
+                if g is None or (sym is not None and g != sym):
+                    return None
+                sym = g
+                found = True
+                break
+        if found:
+            continue
+        if b == 0:
+            continue             # slot unwritten on this path: infeasible reload
+        if not cfg.pred[b]:
+            if cfg.padding(b):
+                continue
+            return None
+        for p in cfg.pred[b]:
+            if p not in seen:
+                seen.add(p)
+                en = cfg.starts[p + 1] if p + 1 < len(cfg.starts) else len(insns)
+                work.append((p, en))
+    return sym
+
+
+def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str, depth: int = 0) -> str | None:
     """If every definition of `reg` reaching the indirect branch at insns[i]
     is a load of the same GOT/IAT entry, return that symbol (the branch is a
     direct call the compiler routed through a register); else None.
@@ -476,6 +562,14 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str) -> str | None:
             ins = insns[k]
             if reg in writes(ins):
                 g = _got_symbol(ins)
+                if g is None and depth < 6:
+                    src = _copy_source(ins, arch)
+                    if src is not None and src != reg:
+                        g = _got_pinned(cfg, k, src, arch, depth + 1)
+                    else:
+                        slot = _slot_load(ins, arch)
+                        if slot is not None:
+                            g = _slot_pinned(cfg, k, slot, arch, depth)
                 if g is None or (sym is not None and g != sym):
                     return None
                 sym = g
@@ -484,7 +578,15 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str) -> str | None:
         if found:
             continue
         if b == 0:
-            return None          # reaches entry: the caller's value
+            # Reaching the entry means the register holds its value at
+            # function entry on this path. For an argument register that is
+            # a caller-supplied function pointer: indirect. For any other
+            # register a call through it would call an unknown garbage value,
+            # which no compiled function does, so the path is infeasible
+            # (typically a switch-table edge the CFG over-approximates).
+            if reg in ARG_REGS:
+                return None
+            continue
         if not cfg.pred[b]:
             if cfg.padding(b):
                 continue         # alignment padding after a jump: dead
@@ -500,6 +602,11 @@ def _got_pinned(cfg: "_Cfg", i: int, reg: str, arch: str) -> str | None:
 def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
     """Name a recognized compiler/std indirect-call idiom at insns[i].
 
+    io_os_functions: a call through `core::io::error::os_functions::
+    OS_FUNCTIONS`, the table std installs with its errno helpers
+    (decode_error_kind / error_string / is_interrupted), in a function that
+    loads that table.
+
     io_error_drop: dropping a `std::io::Error` whose bit-packed repr holds a
     custom payload (tag 0b01). std stores the payload's owner drop function in
     the box; the inlined drop is `leaq -1(%r), %rdi ; call *0x17(%r)` behind
@@ -512,12 +619,17 @@ def _idiom(insns: list[Insn], i: int, arch: str) -> str | None:
         m = re.match(r"^\*0x17\(%(\w+)\)$", ins.ops)
         if m:
             r = m.group(1)
-            window = insns[max(0, i - 8):i]
-            untag = any((w.mn.startswith("lea") and w.ops == f"-0x1(%{r}), %rdi")
-                        or w.mn.startswith("dec") and w.ops == "%rdi" for w in window[-3:])
+            window = insns[max(0, i - 16):i]
+            untag = any((w.mn.startswith("lea") and w.ops.startswith("-0x1(%"))
+                        or (w.mn.startswith("dec") and w.ops == "%rdi") for w in window[-4:])
             tagtest = any(w.mn.startswith("and") and w.ops.startswith("$0x3,") for w in window)
             if untag and tagtest:
                 return "io_error_drop"
+        if re.match(r"^\*0x[0-9a-f]+\(%\w+\)$", ins.ops) and any(
+                "OS_FUNCTIONS" in t for w in insns for _, t in w.relocs):
+            # std's io::Error OS-function table (errno decoding): a call
+            # through the table in a function that loads OS_FUNCTIONS.
+            return "io_os_functions"
     return None
 
 
@@ -535,6 +647,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
                       and "(%rip)" not in ins.ops)
                      or (arch == "arm64" and ins.mn == "br"))
                  and _is_switch_dispatch(insns, k, arch)}
+    node.switches = len(switch_at)
     cfg_box: list = []
 
     def cfg() -> _Cfg:
@@ -576,6 +689,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
                 node.indirect_calls += 1
             else:
                 node.indirect_jmps += 1
+            node.sites.append(f"+{ins.addr:#x} {ins.mn} {ins.ops}")
             continue
         # arm64
         if _is_branch(ins, arch):
@@ -599,6 +713,7 @@ def analyze_node(node: Node, insns: list[Insn], arch: str):
                 node.indirect_calls += 1
             else:
                 node.indirect_jmps += 1
+            node.sites.append(f"+{ins.addr:#x} {ins.mn} {ins.ops}")
 
 
 def parse_disassembly(archive: str, objdump: str) -> dict:
@@ -800,7 +915,9 @@ class Graph:
             out.append(x)
             d = self.dem.get(x, x)
             if d != x:
-                out.append(d)
+                # LTO-promoted locals carry a ` (.llvm.NNN)` suffix; rules
+                # match the plain name.
+                out.append(LLVM_SUFFIX.sub("", d))
         return out
 
 
@@ -858,12 +975,12 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
     named: dict[int, tuple[str, Rule]] = {}
     hits: dict[int, int] = collections.Counter()   # rule line -> node hits
     for i in range(len(g.nodes)):
-        for kind in ("poll", "js", "collector", "throw", "panic"):
+        for kind in ("poll", "js", "collector", "throw", "panic", "teardown"):
             r = _match_any(by_kind[kind], spell[i])
             if r is not None:
                 hits[r.line] += 1
                 named.setdefault(i, (kind, r))
-    dead = [r for r in rules if r.kind in ("poll", "js", "collector", "throw", "panic")
+    dead = [r for r in rules if r.kind in ("poll", "js", "collector", "throw", "panic", "teardown")
             and hits[r.line] == 0]
 
     exempt_ind: dict[int, Rule] = {}
@@ -915,6 +1032,25 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
                     forbidden.append(f"seeds.txt:{r.line}: {g.label(i)[:120]} calls {t}")
                     hits[r.line] += 1
 
+    # `closures` rules: a function that hands its own closure to a dyn-FnMut
+    # dispatcher (Once::call) gets that closure as an explicit callee.
+    if by_kind["closures"]:
+        by_prefix: dict[str, list[int]] = collections.defaultdict(list)
+        for t in range(len(g.nodes)):
+            for sp in spell[t]:
+                k = sp.find("::{closure#")
+                if k > 0:
+                    by_prefix[sp[:k]].append(t)
+        for i in range(len(g.nodes)):
+            r = _match_any(by_kind["closures"], spell[i])
+            if r is None:
+                continue
+            hits[r.line] += 1
+            for sp in spell[i]:
+                for t in by_prefix.get(sp, ()):
+                    if t != i:
+                        extra_pred[t].append(i)
+
     idiom_rules = {r.pattern: r for r in by_kind["idiom"]}
     unknown_idiom: dict[int, str] = {}
     for rl in idiom_rules.values():
@@ -953,7 +1089,7 @@ def classify(g: Graph, rules: list[Rule], table_filter=None) -> Classification:
             if kn is None:
                 return False
             k = kn[0]
-            if k == "panic":
+            if k in ("panic", "teardown"):
                 return True
             if mode in ("L2b", "L2b_throw") and k == "collector":
                 return True
@@ -1040,7 +1176,10 @@ def witness_path(g: Graph, res: Classification, name: str, mode: str) -> list[st
     seen = set()
     while i is not None and i not in seen:
         seen.add(i)
-        out.append(f"{bad.get(i, '?'):>28}  {g.label(i)[:200]}")
+        why = bad.get(i, "?")
+        if why.startswith("indirect") and g.nodes[i].sites:
+            why += " @" + g.nodes[i].sites[0]
+        out.append(f"{why:>28}  {g.label(i)[:200]}")
         i = nxt.get(i)
     return out
 
