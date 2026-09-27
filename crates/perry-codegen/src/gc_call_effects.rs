@@ -699,6 +699,23 @@ mod tests {
         out
     }
 
+    /// #11522's runtime split: the plain-array fast lane is a separate export
+    /// the graph proves leaf, and `js_array_length` itself stays collecting.
+    #[test]
+    fn array_length_is_split_into_a_leaf_lane_and_a_collecting_call() {
+        assert_eq!(
+            classify_direct_callee("js_array_length"),
+            GcCallEffect::Unknown,
+            "js_array_length reaches js_proxy_get / js_number_coerce"
+        );
+        assert_eq!(
+            classify_direct_callee("js_array_length_leaf"),
+            GcCallEffect::CannotCollect
+        );
+        assert!(!external_callee_cannot_collect("js_array_length"));
+        assert!(external_callee_cannot_collect("js_array_length_leaf"));
+    }
+
     #[test]
     fn register_global_root_tracks_the_barrier_it_wraps() {
         assert_eq!(
