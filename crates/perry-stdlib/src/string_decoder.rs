@@ -26,7 +26,7 @@
 //! so a chunk that isn't a multiple of 3 carries the leftover into
 //! the next write. `hex` / `latin1` / `ascii` are stateless.
 
-use crate::common::handle::{get_handle_mut, register_handle, with_handle};
+use crate::common::handle::{get_handle_mut, with_handle};
 use perry_runtime::buffer::{buffer_data, is_registered_buffer, BufferHeader};
 use perry_runtime::string::js_string_from_wtf8_bytes;
 use perry_runtime::{js_get_string_pointer_unified, js_string_from_bytes, JSValue, StringHeader};
@@ -744,7 +744,7 @@ pub unsafe extern "C" fn js_string_decoder_new(encoding_bits: i64) -> i64 {
             None => throw_unknown_encoding(&name),
         }
     };
-    register_handle(StringDecoderHandle::with_mode(mode))
+    crate::common::register_reclaimable_handle(StringDecoderHandle::with_mode(mode))
 }
 
 /// Direct FFI for `decoder.write(buf)`. Used by the static

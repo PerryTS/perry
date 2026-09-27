@@ -576,6 +576,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 offset: 0,
                 object_starts: new_object_start_bitmap(block.size),
                 dead_cycles: 0,
+                old_free_holes: false,
             });
         }
         ensure_usable_current_block(arena);
@@ -1134,6 +1135,7 @@ mod tombstone_tests {
             offset: 0,
             object_starts: Box::new([]),
             dead_cycles: 0,
+            old_free_holes: false,
         }
     }
 
@@ -1169,6 +1171,7 @@ mod tombstone_tests {
                 offset: 0,
                 object_starts: new_object_start_bitmap(SIZE),
                 dead_cycles: 0,
+                old_free_holes: false,
             }],
             current: 0,
             generation: HeapGeneration::Nursery,

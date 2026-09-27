@@ -17,9 +17,9 @@ use std::ffi::c_void;
 /// no native roots, silently, on exactly the platforms that cannot be debugged
 /// easily.
 ///
-/// 64-bit only: watchOS's `arm64_32` has 32-bit pointers, while the map stores
-/// function addresses as `u64` and this code does `usize` arithmetic on them.
-/// The compiler refuses that target for the same reason.
+/// 64-bit Mach-O only: this walks `LC_SEGMENT_64` load commands. (The map
+/// itself is pointer-width independent since v6 — its function fields are
+/// 32-bit blob-relative offsets on every target.)
 #[cfg(target_vendor = "apple")]
 pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
     use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide, _dyld_image_count};

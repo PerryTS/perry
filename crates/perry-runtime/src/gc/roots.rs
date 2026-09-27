@@ -126,8 +126,15 @@ crate::perry_thread_local! {
 /// locks in their root scanners: a GC request made while the same mutex is
 /// held records pending work, returns immediately, and the final guard drop
 /// runs the collection only after the scanner can reacquire the mutex.
+///
+/// A guard from [`lock_gc_root_registry_noncollecting`] never flushes: see
+/// that function for the contract it enforces instead.
 pub(crate) struct GcRootRegistryGuard<'a, T> {
     pub(super) guard: Option<MutexGuard<'a, T>>,
+    /// `None` for an ordinary guard. For a non-collecting one: whether a
+    /// deferred request was already pending when it was taken, so its release
+    /// can tell a request raised INSIDE its region from one it inherited.
+    pub(super) noncollecting: Option<bool>,
 }
 
 impl<T> std::ops::Deref for GcRootRegistryGuard<'_, T> {
@@ -151,7 +158,10 @@ impl<T> std::ops::DerefMut for GcRootRegistryGuard<'_, T> {
 impl<T> Drop for GcRootRegistryGuard<'_, T> {
     fn drop(&mut self) {
         drop(self.guard.take());
-        exit_gc_root_lock();
+        match self.noncollecting {
+            None => exit_gc_root_lock(),
+            Some(pending_at_entry) => exit_gc_root_lock_noncollecting(pending_at_entry),
+        }
     }
 }
 
@@ -160,7 +170,40 @@ pub(crate) fn lock_gc_root_registry<T>(mutex: &Mutex<T>) -> GcRootRegistryGuard<
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     enter_gc_root_lock();
-    GcRootRegistryGuard { guard: Some(guard) }
+    GcRootRegistryGuard {
+        guard: Some(guard),
+        noncollecting: None,
+    }
+}
+
+/// #11523: [`lock_gc_root_registry`] for a registry reached from helpers that
+/// `perry-codegen`'s `gc_call_effects` classifies `CannotCollect`.
+///
+/// Those calls are emitted as `"gc-leaf-function"`, so RS4GC relocates
+/// nothing across them. An ordinary guard's release flushes any GC request
+/// deferred while the lock was held, and that flush can run a moving
+/// collection (`flush_deferred_gc_request`) — inside a call the caller was
+/// told cannot collect, leaving its unrelocated pointers stale.
+///
+/// This guard's release never flushes, at any depth. Its contract is that
+/// nothing inside the locked region raises a deferred request (no Perry-heap
+/// allocation, no trigger check). A request raised inside the region is a
+/// broken contract: under `debug_assertions` (the `gcaudit` profile) and in
+/// tests the release panics; otherwise the request stays pending for the next
+/// ordinary release, and the trigger condition that raised it re-arms on the
+/// next allocation's check regardless. Either way this call does not collect.
+pub(crate) fn lock_gc_root_registry_noncollecting<T>(
+    mutex: &Mutex<T>,
+) -> GcRootRegistryGuard<'_, T> {
+    let guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let pending_at_entry = deferred_gc_request_pending();
+    enter_gc_root_lock();
+    GcRootRegistryGuard {
+        guard: Some(guard),
+        noncollecting: Some(pending_at_entry),
+    }
 }
 
 #[inline]
@@ -168,8 +211,9 @@ pub(super) fn enter_gc_root_lock() {
     GC_ROOT_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
 }
 
-pub(super) fn exit_gc_root_lock() {
-    let should_flush = GC_ROOT_LOCK_DEPTH.with(|depth| {
+/// Drop one level of root-lock depth; true when this released the outermost.
+fn release_gc_root_lock_depth() -> bool {
+    GC_ROOT_LOCK_DEPTH.with(|depth| {
         let current = depth.get();
         debug_assert!(current > 0, "GC root lock depth underflow");
         if current == 0 {
@@ -177,9 +221,33 @@ pub(super) fn exit_gc_root_lock() {
         }
         depth.set(current - 1);
         current == 1
-    });
-    if should_flush {
+    })
+}
+
+pub(super) fn exit_gc_root_lock() {
+    if release_gc_root_lock_depth() {
         flush_deferred_gc_request();
+    }
+}
+
+/// Whether a GC request deferred under a root lock is still waiting to flush.
+pub(super) fn deferred_gc_request_pending() -> bool {
+    GC_DEFERRED_REQUEST.with(|pending| !matches!(pending.get(), DeferredGcRequest::None))
+}
+
+/// Release half of [`lock_gc_root_registry_noncollecting`]: never flushes.
+fn exit_gc_root_lock_noncollecting(pending_at_entry: bool) {
+    release_gc_root_lock_depth();
+    if pending_at_entry || !deferred_gc_request_pending() {
+        return;
+    }
+    // Left pending, not taken: the panic below must not also lose the request.
+    if cfg!(any(debug_assertions, test)) && !std::thread::panicking() {
+        panic!(
+            "#11523: a GC request was deferred inside a non-collecting root-registry \
+             lock; its callers are classified CannotCollect, so nothing in the locked \
+             region may allocate in the Perry heap or check a GC trigger"
+        );
     }
 }
 

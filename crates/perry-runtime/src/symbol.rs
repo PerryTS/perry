@@ -990,6 +990,36 @@ pub fn symbol_pointer_registered_for_test(ptr: usize) -> bool {
         .is_some_and(|set| set.contains(&ptr))
 }
 
+/// Test probe (#11539): the id of the symbol registered at `ptr`, or `None`
+/// if `ptr` is not in the process-global symbol set.
+///
+/// An address alone cannot say WHICH symbol is registered: once a thread's
+/// `gc_malloc`'d `Symbol()` is freed at thread exit, the allocator can hand
+/// the same block to another thread's `Symbol()`, which registers the same
+/// address. A thread-exit test that asks "is the dead symbol's address still
+/// registered?" then sees the live newcomer. Ids are monotonic and never
+/// reissued, so `(address, id)` names one symbol for the life of the process.
+///
+/// The id is read under the `SYMBOL_POINTERS` lock. Thread-exit release
+/// (`release_symbol_tables_in_freed_ranges`) removes an entry under that lock
+/// BEFORE `MallocState`'s destructor frees the block, so an entry a
+/// thread-exit release has handled is never read here. An entry that release
+/// MISSED (the defect a caller is probing for) is read from a freed block;
+/// that is a test-only read whose purpose is to report exactly that defect.
+#[doc(hidden)]
+pub fn registered_symbol_id_for_test(ptr: usize) -> Option<u64> {
+    let guard = SYMBOL_POINTERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let set = guard.as_ref()?;
+    if !set.contains(&ptr) {
+        return None;
+    }
+    // SAFETY: see above; `ptr` was admitted by `register_symbol_pointer`, so it
+    // addresses a `SymbolHeader`-sized block.
+    Some(unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*(ptr as *const SymbolHeader)).id)) })
+}
+
 /// Test probe (#11471): does `owner` have a `SYMBOL_PROPERTIES` record, and a
 /// `SYMBOL_PROPERTY_ATTRS` entry for `sym`?
 #[doc(hidden)]

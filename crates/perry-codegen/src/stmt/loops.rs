@@ -320,9 +320,7 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
                 && matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == matched.array_id)
     );
     let (new_arr, bound_i32) = if is_len_bound {
-        let bound_i32 = ctx
-            .block()
-            .call(I32, "js_array_length", &[(I64, &arr_handle)]);
+        let bound_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &arr_handle);
         let new_arr = match matched.value {
             NumericBulkFillValue::Const(value) => {
                 let value_lit = crate::nanbox::double_literal(value);

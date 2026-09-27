@@ -26,8 +26,11 @@ use super::{StackMapDerived, StackMapLocation, StackMapRecord, GC_MAP_MAGIC, GC_
 /// blob using each header's `total_len` rather than assuming a single map —
 /// a decoder that reads only the first header silently drops every other
 /// object's roots, which is invisible until a collection frees a live object.
+///
+/// `origin` is the runtime address of `bytes[0]` (see [`function_address`]).
 pub(super) fn parse_gc_map(
     bytes: &[u8],
+    origin: usize,
 ) -> Option<(
     Vec<StackMapRecord>,
     Vec<StackMapLocation>,
@@ -52,16 +55,12 @@ pub(super) fn parse_gc_map(
         }
         let function_count = read_u32(bytes, base + 8)? as usize;
         let total_len = read_u32(bytes, base + 12)? as usize;
-        // Header flags, bit 0: the function-address field is 8 bytes wide. The
-        // emitter writes the TARGET's pointer width (watchOS `arm64_32` is
-        // ILP32), and compile target and run target are the same machine — so
-        // a mismatch here means the binary's map was produced for a different
-        // width and every function address would be misread. Fail closed.
-        let flags = read_u16(bytes, base + 6)?;
-        if (flags & 1 == 1) != (std::mem::size_of::<usize>() == 8) {
+        // v6 defines no header flags; anything set is a layout this decoder
+        // does not know. Fail closed.
+        if read_u16(bytes, base + 6)? != 0 {
             return None;
         }
-        let entry = if flags & 1 == 1 { 16 } else { 12 };
+        let entry = FUNCTION_ENTRY_BYTES;
         // A blob must at least cover its header, function table and v5
         // stream-offset array. Without this, a `total_len` of 0 leaves `base`
         // unchanged — and because the magic still matches at that offset the
@@ -107,17 +106,10 @@ pub(super) fn parse_gc_map(
         let mut record_index = 0usize;
 
         for index in 0..function_count {
-            // Address width follows the header flag checked above, so the
-            // stack-size and record-count offsets move with it.
             let base_off = table + index * entry;
-            let addr_bytes = entry - 8;
-            let function_address = if addr_bytes == 8 {
-                read_u64(bytes, base_off)? as usize
-            } else {
-                read_u32(bytes, base_off)? as usize
-            };
-            let stack_size = u64::from(read_u32(bytes, base_off + addr_bytes)?);
-            let record_count = read_u32(bytes, base_off + addr_bytes + 4)?;
+            let function_address = function_address(origin, base, read_u32(bytes, base_off)?)?;
+            let stack_size = u64::from(read_u32(bytes, base_off + 4)?);
+            let record_count = read_u32(bytes, base_off + 8)?;
 
             // v5: the recorded per-function offset must BE where the
             // sequential walk stands. The compiler proves this for every
@@ -186,6 +178,19 @@ pub(super) fn parse_gc_map(
     Some((records, roots, derived))
 }
 
+/// v6 function entry: `i32 function_offset, u32 stack_size, u32 record_count`.
+pub(super) const FUNCTION_ENTRY_BYTES: usize = 12;
+
+/// v6 (#11508): a function field is a signed 32-bit offset from the first byte
+/// of its own blob, resolved by the linker (`.long fn-_perry_gc_map`) so the
+/// section needs no load-time relocations. `origin` is the runtime address of
+/// the section slice's first byte and `blob` the blob's offset within it.
+pub(super) fn function_address(origin: usize, blob: usize, field: u32) -> Option<usize> {
+    origin
+        .checked_add(blob)?
+        .checked_add_signed(field as i32 as isize)
+}
+
 fn align_up(value: usize, alignment: usize) -> Option<usize> {
     value
         .checked_add(alignment.checked_sub(1)?)
@@ -211,6 +216,9 @@ pub(super) fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     ))
 }
 
+/// Only the ELF section lookup reads 64-bit fields since v6 dropped absolute
+/// function addresses.
+#[cfg(target_os = "linux")]
 pub(super) fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_le_bytes(
         bytes.get(offset..offset + 8)?.try_into().ok()?,

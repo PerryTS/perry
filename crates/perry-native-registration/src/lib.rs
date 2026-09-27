@@ -7,7 +7,7 @@
 
 #![deny(missing_docs)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -127,7 +127,12 @@ struct State {
     // Queue rows are non-owning numeric keys; dropping a row drops no lease.
     ordinary: Vec<i64>,
     deadlines: Vec<i64>,
-    free: Vec<i64>,
+    // First-in, first-out: a freed id goes to the back and is handed out only
+    // after every id freed before it. A stale numeric id held by a client the
+    // registry cannot see therefore names nothing for as long as possible
+    // (the whole free population must cycle first) instead of being handed to
+    // the very next registration, which is what a LIFO stack did.
+    free: VecDeque<i64>,
 }
 
 struct Inner {
@@ -207,7 +212,7 @@ impl NativeRegistrationRegistry {
                 slots: HashMap::new(),
                 ordinary: Vec::new(),
                 deadlines: Vec::new(),
-                free: Vec::new(),
+                free: VecDeque::new(),
             }),
         }))
     }
@@ -240,10 +245,10 @@ impl NativeRegistrationRegistry {
     ) -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
         let mut state = self.lock();
         let serial = issue_serial(&NEXT_SERIAL)?;
-        let id = if let Some(&id) = state.free.last() {
+        let id = if let Some(&id) = state.free.front() {
             let slot = &state.slots[&id];
             assert!(slot.phase == Phase::Reusable && slot.unleased());
-            state.free.pop();
+            state.free.pop_front();
             id
         } else {
             while state.next_id < self.0.end && state.slots.contains_key(&state.next_id) {
@@ -287,7 +292,9 @@ impl NativeRegistrationRegistry {
             }
         }
         let serial = issue_serial(&NEXT_SERIAL)?;
-        state.free.retain(|entry| *entry != id);
+        if let Some(pos) = state.free.iter().position(|entry| *entry == id) {
+            state.free.remove(pos);
+        }
         Ok(Self::insert_pending(&mut state, domain, kind, id, serial))
     }
 
@@ -433,6 +440,42 @@ impl NativeRegistrationRegistry {
         true
     }
 
+    /// Complete removal of an id its owner has PROVEN no client can still name
+    /// (for example: a full heap trace found no reference to it). It skips the
+    /// tick quarantine and joins the back of the freelist at once. A held lease
+    /// still orders reuse: the slot then waits in the ordinary quarantine for a
+    /// drain after the lease is released. Returns false for a stale identity.
+    pub fn finish_retirement_reusable(&self, identity: NativeRegistrationIdentity) -> bool {
+        let mut state = self.lock();
+        let Some(slot) = state.slots.get(&identity.numeric_id) else {
+            return false;
+        };
+        if slot.identity != identity || slot.phase != Phase::Retiring {
+            return false;
+        }
+        let phase = if slot.unleased() {
+            state.free.push_back(identity.numeric_id);
+            Phase::Reusable
+        } else if state.ordinary.len() < self.0.queue_cap {
+            state.ordinary.push(identity.numeric_id);
+            Phase::Quarantined(NativeQuarantine::NextDrain)
+        } else {
+            Phase::Abandoned
+        };
+        state.slots.get_mut(&identity.numeric_id).unwrap().phase = phase;
+        true
+    }
+
+    /// Ids a registration could still obtain right now: never-issued ids above
+    /// the fresh counter plus the freelist. Quarantined ids are not counted.
+    /// Owners that can reclaim ids use this to start reclaiming before the
+    /// band runs dry.
+    pub fn available_ids(&self) -> usize {
+        let state = self.lock();
+        let fresh = (self.0.end - state.next_id).max(0) as usize;
+        fresh + state.free.len()
+    }
+
     /// One drain boundary. `now` is explicit so deadline tests need no sleeping.
     /// Lease inspection and transition to the freelist use the acquisition mutex.
     pub fn drain(&self, now: Instant) -> usize {
@@ -461,7 +504,7 @@ impl NativeRegistrationRegistry {
             }
             if state.free.len() < self.0.queue_cap {
                 state.slots.get_mut(&id).unwrap().phase = Phase::Reusable;
-                state.free.push(id);
+                state.free.push_back(id);
                 promoted += 1;
             } else {
                 state.slots.get_mut(&id).unwrap().phase = Phase::Abandoned;

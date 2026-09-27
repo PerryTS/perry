@@ -341,9 +341,8 @@ fn emit_array_handle_length(
     if value_discarded {
         return double_literal(0.0);
     }
-    let blk = ctx.block();
-    let len_i32 = blk.call(I32, "js_array_length", &[(I64, array_handle)]);
-    blk.uitofp(I32, &len_i32, DOUBLE)
+    let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, array_handle);
+    ctx.block().uitofp(I32, &len_i32, DOUBLE)
 }
 
 fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: bool) -> String {

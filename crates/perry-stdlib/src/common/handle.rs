@@ -9,8 +9,8 @@ use std::any::Any;
 
 use dashmap::DashMap;
 use perry_ffi::{
-    NativeLeaseKind, NativeRegistrationIdentity, NativeRegistrationKind, NativeRegistrationLease,
-    NativeRegistrationRegistry, NativeRegistryDomain,
+    NativeLeaseKind, NativeRegistrationError, NativeRegistrationIdentity, NativeRegistrationKind,
+    NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
 };
 use std::sync::LazyLock as Lazy;
 
@@ -21,7 +21,8 @@ pub type Handle = i64;
 pub const INVALID_HANDLE: Handle = 0;
 
 /// Global handle registry using DashMap for concurrent access
-static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
+pub(super) static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> =
+    Lazy::new(DashMap::new);
 
 // Band boundary owned by `perry_runtime::value::addr_class`.
 #[cfg(test)]
@@ -39,7 +40,7 @@ const COMMON_HANDLE_ID_END: Handle =
 /// answered for the wrong object: `events.once(socket, 'connect')` found the
 /// emitter, parked its promise there, and never listened on the socket, so
 /// redis@6.1.0's `connect()` hung forever (#11196).
-static REGISTRATIONS: Lazy<NativeRegistrationRegistry> =
+pub(super) static REGISTRATIONS: Lazy<NativeRegistrationRegistry> =
     Lazy::new(perry_ffi::shared_handle_id_pool);
 static COMMON_DOMAIN: Lazy<NativeRegistryDomain> =
     Lazy::new(|| NativeRegistryDomain::new().expect("common native registry domains exhausted"));
@@ -65,18 +66,61 @@ pub fn acquire_common_handle_registration(
     REGISTRATIONS.acquire(identity, kind)
 }
 
-/// Native preparation API. Existing publication paths do not drive this drain,
-/// and common retirements are permanent (see `remove_payload`), so it never
-/// makes a common id reusable.
+/// Native preparation API. Common retirements are parked until a full heap
+/// trace proves them unreachable (see `handle_lifecycle`), never quarantined
+/// on a timer, so this drain never makes a common id reusable.
 pub fn drain_quarantined_common_handles() -> usize {
     REGISTRATIONS.drain(std::time::Instant::now())
 }
 
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
-    let identity = REGISTRATIONS
-        .begin_registration_in_domain(*COMMON_DOMAIN, NativeRegistrationKind::Payload)
-        .expect("common native handle registration exhausted");
+    let identity = match begin_common_registration() {
+        Ok(identity) => identity,
+        Err(error) => {
+            drop(value);
+            throw_ids_exhausted(error)
+        }
+    };
     publish_payload(value, identity)
+}
+
+/// Register a payload whose only owners are JavaScript values (#11453): it is
+/// dropped, and its id recycled, once a full heap trace finds no value naming
+/// it. Use it only for kinds no native table refers to by id — a digest, a
+/// cipher, a string decoder. A payload that later gains id-keyed native state
+/// must call [`retain_strongly`] first.
+pub fn register_reclaimable_handle<T: 'static + Send + Sync>(value: T) -> Handle {
+    let identity = match begin_common_registration() {
+        Ok(identity) => identity,
+        Err(error) => {
+            drop(value);
+            throw_ids_exhausted(error)
+        }
+    };
+    let handle = publish_payload(value, identity);
+    super::handle_lifecycle::park_reclaimable(identity);
+    handle
+}
+
+pub use super::handle_lifecycle::{parked_handle_count, retain_strongly};
+
+fn begin_common_registration() -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
+    super::handle_lifecycle::note_registration();
+    REGISTRATIONS.begin_registration_in_domain(*COMMON_DOMAIN, NativeRegistrationKind::Payload)
+}
+
+/// True exhaustion — every id in the shared band is live or still named by a
+/// reachable JS value — is a catchable `Error` with code
+/// `ERR_PERRY_HANDLE_IDS_EXHAUSTED`, not a process abort. Reclamation of
+/// parked ids is requested first, so a later registration can succeed.
+fn throw_ids_exhausted(error: NativeRegistrationError) -> ! {
+    super::handle_lifecycle::request_full_trace();
+    let message = format!(
+        "Perry native handle ids exhausted ({error:?}): all {} ids of the shared handle \
+         band are live or still referenced by JavaScript values",
+        perry_runtime::value::addr_class::COMMON_HANDLE_BAND_END - 1
+    );
+    perry_runtime::fs::validate::throw_error_with_code(&message, "ERR_PERRY_HANDLE_IDS_EXHAUSTED")
 }
 
 /// Explicit insertion rejects any slot that has not completed retirement,
@@ -235,17 +279,18 @@ pub fn drop_handle(handle: Handle) -> bool {
     remove_payload(handle).is_some()
 }
 
-/// Retirement tombstones the id. Before the pool was shared this registry's
-/// quarantine was never drained, so a common id was never reused; perry-ffi
-/// drains the shared pool at every tick, so an ordinary quarantine would now
-/// recycle ids that JS still holds as bare numbers, with no lease to stop it.
+/// Retirement parks the id until a full heap trace proves no JS value still
+/// holds it (`handle_lifecycle`), then recycles it. A timer quarantine would
+/// recycle ids that JS still holds as bare numbers, with no lease to stop it;
+/// before #11453 the id was tombstoned forever instead, which bounded a
+/// process to one band's worth of common handles.
 fn remove_payload(handle: Handle) -> Option<Box<dyn Any + Send + Sync>> {
     let identity = common_handle_registration(handle)?;
     if !REGISTRATIONS.begin_retirement_of(identity) {
         return None;
     }
     let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
-    assert!(REGISTRATIONS.finish_retirement_permanently(identity));
+    super::handle_lifecycle::park_retired(identity);
     removed
 }
 
@@ -324,7 +369,7 @@ pub fn clone_handle<T: 'static + Send + Sync + Clone>(handle: Handle) -> Option<
 // Adapter tests share ordering with the original handle tests. They do not
 // drive the process-global Common drain: other stdlib modules still use bare ids.
 #[cfg(test)]
-static REGISTRATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static REGISTRATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {

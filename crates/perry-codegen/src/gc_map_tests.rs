@@ -9,6 +9,9 @@ use super::*;
 /// record, two roots of which the second is the base/derived duplicate.
 fn sample_asm() -> String {
     let mut asm = String::new();
+    // The mapped function's definition. On ELF the map names it by a local
+    // label placed right after this line (see `elf_entry_labels`).
+    asm.push_str("\t.text\n_probe_fn:\n\tret\n");
     asm.push_str("\t.no_dead_strip\t__LLVM_StackMaps\n");
     asm.push_str("\t.section\t__LLVM_STACKMAPS,__llvm_stackmaps\n");
     asm.push_str("__LLVM_StackMaps:\n");
@@ -47,35 +50,106 @@ fn sample_asm() -> String {
 /// offset** and a `.word` **32-bit `Offset` field per location**, which is
 /// what makes the width of `.word` load-bearing rather than cosmetic.
 #[test]
-fn ilp32_targets_emit_a_pointer_sized_address_field() {
-    // watchOS `arm64_32` is ILP32. An 8-byte address slot there would need
-    // a relocation ld64 has no reason to emit, and the runtime would read
-    // two pointers as one — so the field follows the target's width and
-    // the header records which width was used.
-    let (out, stats) = compact_stack_map_asm(&sample_asm(), "arm64_32-apple-watchos")
-        .expect("an ILP32 stack map must parse")
-        .expect("an ILP32 stack map must be rewritten");
+fn every_target_emits_the_same_blob_with_a_relative_function_field() {
+    // v6 (#11508): the function field is `fn - blob_start`, a 32-bit link-time
+    // constant, on every target. An absolute `.quad fn` would put one dynamic
+    // relocation per function into the linked image (applied eagerly at load,
+    // dirtying the table's pages) and force the section writable.
+    let mut blobs = Vec::new();
+    for target in [
+        "arm64-apple-macosx15.0.0",
+        "arm64_32-apple-watchos",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+    ] {
+        let (out, stats) = compact_stack_map_asm(&sample_asm(), target)
+            .unwrap_or_else(|e| panic!("{target} must parse: {e}"))
+            .unwrap_or_else(|| panic!("{target} must be rewritten"));
+        // ELF names the entry by a local label (see
+        // `elf_names_each_function_by_a_local_entry_label`).
+        let entry = if target.contains("linux") {
+            ".Lperry_gcmap_fn0"
+        } else {
+            "_probe_fn"
+        };
+        assert!(
+            out.contains(&format!("\t.long\t{entry}-_perry_gc_map\n")),
+            "{target}: the function field must be relative to the blob:\n{out}"
+        );
+        assert!(
+            !out.contains(".quad"),
+            "{target}: an absolute address is a dynamic relocation:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
+            "the emitted blob must declare the version the runtime expects:\n{out}"
+        );
+        assert_eq!(GC_MAP_VERSION, 6);
+        // 16-byte header + one 12-byte function entry + one 4-byte v5 stream
+        // offset + one 4-byte instruction offset + a 3-byte root stream, on
+        // ILP32 and LP64 alike.
+        assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 4 + 3, "{target}");
+        // Everything after the section directive is format-independent.
+        let blob = &out[out.find("_perry_gc_map:").expect("label")..];
+        blobs.push(blob.replace(entry, "ENTRY"));
+    }
     assert!(
-        out.contains("\t.long\t_probe_fn"),
-        "the function address must be pointer-sized on ILP32:\n{out}"
+        blobs.windows(2).all(|pair| pair[0] == pair[1]),
+        "{blobs:#?}"
+    );
+}
+
+#[test]
+fn the_map_section_is_read_only_where_the_format_allows() {
+    // Nothing in a v6 blob needs a load-time fixup, so ELF drops SHF_WRITE
+    // (keeping SHF_GNU_RETAIN, or `--gc-sections` discards the map) and COFF
+    // is `dr`, not `dw`.
+    let (elf, _) = compact_stack_map_asm(&x86_64_elf_sample_asm(""), "x86_64-unknown-linux-gnu")
+        .expect("parses")
+        .expect("rewritten");
+    assert!(
+        elf.contains("\t.section\t.perry_gcmap,\"aR\",@progbits\n"),
+        "{elf}"
+    );
+    let (coff, _) = compact_stack_map_asm(&sample_asm(), "x86_64-pc-windows-msvc")
+        .expect("parses")
+        .expect("rewritten");
+    assert!(coff.contains("\t.section\t.pgcmap,\"dr\"\n"), "{coff}");
+}
+
+/// A Linux plugin is linked `cc -shared` without `-Bsymbolic`, so an exported
+/// function is preemptible there, and a PC-relative reference to it does not
+/// link (lld: `R_X86_64_PC32 cannot be used against symbol`; bfd: a
+/// DT_TEXTREL). The map therefore names each ELF function by a local label
+/// placed at its entry, which binds within the object whatever the output is.
+#[test]
+fn elf_names_each_function_by_a_local_entry_label() {
+    let (out, _) = compact_stack_map_asm(&x86_64_elf_sample_asm(""), "x86_64-unknown-linux-gnu")
+        .expect("parses")
+        .expect("rewritten");
+    assert!(
+        out.contains("probe_fn:                               # @probe_fn\n.Lperry_gcmap_fn0:\n"),
+        "the label must sit at the function's entry, right after its definition:\n{out}"
     );
     assert!(
-        !out.contains("\t.quad\t_probe_fn"),
-        "an 8-byte address slot on ILP32 is the bug this guards:\n{out}"
+        out.contains("\t.long\t.Lperry_gcmap_fn0-_perry_gc_map\n"),
+        "{out}"
     );
     assert!(
-        out.contains("\t.short\t0\n"),
-        "the header must record a 32-bit address width:\n{out}"
+        !out.contains("\t.long\tprobe_fn-"),
+        "a PC-relative reference to the global symbol does not link into a .so:\n{out}"
     );
-    assert!(
-        out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
-        "the emitted blob must declare the version the runtime expects:\n{out}"
-    );
-    // 16-byte header + one 12-byte function entry (4-byte address on ILP32)
-    // + one 4-byte v5 stream offset + one 4-byte instruction offset + a
-    // 3-byte root stream. The LP64 form of the same map is 4 bytes larger,
-    // which is the whole point of the address field being pointer-sized.
-    assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 4 + 3);
+}
+
+#[test]
+fn an_elf_function_with_no_definition_in_the_module_is_an_error() {
+    // The stack map only lists functions of its own module. If the label scan
+    // cannot find one, placing the label anywhere else would bind the map to
+    // the wrong code, so the rewrite refuses.
+    let asm = x86_64_elf_sample_asm("").replace("probe_fn:  ", "other_fn:  ");
+    let err = compact_stack_map_asm(&asm, "x86_64-unknown-linux-gnu")
+        .expect_err("an undefined mapped function must not be guessed at");
+    assert!(err.contains("probe_fn"), "{err}");
 }
 
 fn compact_and_assemble_refusal(target: &str) -> String {
@@ -127,13 +201,9 @@ fn coff_targets_use_a_name_a_pe_image_can_hold() {
     assert!(super::COFF_SECTION_NAME.len() <= 8);
 }
 
-/// Every Apple target Perry can build for must be accepted here, with the
-/// address width its ABI actually uses.
-///
-/// This is cheap and it is not redundant with the two width tests above.
-/// Those pin one ILP32 target and one LP64 target; this pins the *set*, so
-/// adding a triple to the compiler without deciding its width fails here
-/// rather than at someone's link step.
+/// Every Apple target Perry can build for must be accepted here. This pins
+/// the *set*, so adding a triple to the compiler without deciding whether its
+/// roots are supported fails here rather than at someone's link step.
 ///
 /// Measured 2026-08-04, `cargo check -p perry-runtime --target <t>`:
 /// macOS, iOS, iOS-sim, tvOS, watchOS and visionOS all compile. watchOS and
@@ -150,21 +220,20 @@ fn coff_targets_use_a_name_a_pe_image_can_hold() {
 /// programs that construct a function body at runtime — so watch and vision
 /// apps that never call `new Function` were always buildable.
 #[test]
-fn every_apple_target_is_accepted_with_its_own_address_width() {
-    // (triple, expects 64-bit addresses)
+fn every_apple_target_is_accepted() {
     let targets = [
-        ("arm64-apple-macosx15.0.0", true),
-        ("arm64-apple-ios", true),
-        ("arm64-apple-ios-sim", true),
-        ("arm64-apple-tvos", true),
-        ("arm64-apple-visionos", true),
-        ("arm64-apple-watchos", true),
-        // The one ILP32 Apple target. `arm64_32` must be tested before any
-        // `arm64` prefix match, which is why the emitter checks it first.
-        ("arm64_32-apple-watchos", false),
-        ("x86_64-apple-macosx15.0.0", true),
+        "arm64-apple-macosx15.0.0",
+        "arm64-apple-ios",
+        "arm64-apple-ios-sim",
+        "arm64-apple-tvos",
+        "arm64-apple-visionos",
+        "arm64-apple-watchos",
+        // The one ILP32 Apple target. Since v6 it emits exactly what LP64
+        // does: the function field is a 32-bit offset everywhere.
+        "arm64_32-apple-watchos",
+        "x86_64-apple-macosx15.0.0",
     ];
-    for (target, lp64) in targets {
+    for target in targets {
         assert_eq!(
             compact_and_assemble_refusal(target),
             "",
@@ -173,37 +242,20 @@ fn every_apple_target_is_accepted_with_its_own_address_width() {
         let (out, _) = compact_stack_map_asm(&sample_asm(), target)
             .unwrap_or_else(|e| panic!("{target} must parse: {e}"))
             .unwrap_or_else(|| panic!("{target} must be rewritten"));
-        let (want, reject) = if lp64 {
-            ("\t.quad\t_probe_fn", "\t.long\t_probe_fn")
-        } else {
-            ("\t.long\t_probe_fn", "\t.quad\t_probe_fn")
-        };
         assert!(
-            out.contains(want),
-            "{target} must emit a {}-bit address field:\n{out}",
-            if lp64 { 64 } else { 32 }
+            out.contains("\t.long\t_probe_fn-_perry_gc_map\n"),
+            "{target} must emit a blob-relative function field:\n{out}"
         );
         assert!(
-            !out.contains(reject),
-            "{target} emitted the wrong address width:\n{out}"
+            out.contains("__PERRY_GCMAP,__perry_gcmap"),
+            "{target} must emit the section the runtime looks up:\n{out}"
         );
     }
 }
 
-#[test]
-fn lp64_targets_keep_the_eight_byte_address_field() {
-    let (out, _) = compact_stack_map_asm(&sample_asm(), "arm64-apple-ios")
-        .expect("an LP64 stack map must parse")
-        .expect("an LP64 stack map must be rewritten");
-    assert!(out.contains("\t.quad\t_probe_fn"), "{out}");
-    assert!(
-        out.contains("\t.short\t1\n"),
-        "the header must record a 64-bit address width:\n{out}"
-    );
-}
-
 fn aarch64_elf_sample_asm() -> String {
     let mut asm = String::new();
+    asm.push_str("\t.text\nprobe_fn:                               // @probe_fn\n\tret\n");
     asm.push_str("\t.section\t.llvm_stackmaps,\"a\",@progbits\n");
     asm.push_str("__LLVM_StackMaps:\n");
     asm.push_str("\t.byte\t3\n\t.byte\t0\n\t.hword\t0\n");
@@ -246,7 +298,7 @@ fn aarch64_elf_word_directives_decode_to_the_right_root() {
     // Four locations in, one root out: the three preamble constants drop.
     assert_eq!(stats.roots, 1, "the SP-relative root must survive");
     assert!(out.contains("_perry_gc_map:"));
-    assert!(out.contains(".quad\tprobe_fn"));
+    assert!(out.contains(".long\t.Lperry_gcmap_fn0-_perry_gc_map"));
     assert!(!out.contains("llvm_stackmaps"));
 }
 
@@ -300,7 +352,7 @@ fn compacts_and_keeps_only_real_roots() {
         stats.original_bytes
     );
     assert!(out.contains("_perry_gc_map:"));
-    assert!(out.contains(".quad\t_probe_fn"));
+    assert!(out.contains(".long\t_probe_fn-_perry_gc_map"));
     // The old section must be gone, and nothing may still name its label.
     assert!(!out.contains("__llvm_stackmaps"));
     assert!(!out.contains("__LLVM_StackMaps"));
@@ -366,6 +418,7 @@ fn elf_symbol_assignments_parse_as_zero_width() {
 /// attributes of the NEXT symbol it is about to define.
 fn x86_64_elf_sample_asm(tail: &str) -> String {
     let mut asm = String::new();
+    asm.push_str("\t.text\nprobe_fn:                               # @probe_fn\n\tretq\n");
     asm.push_str("\t.section\t.llvm_stackmaps,\"a\",@progbits\n");
     asm.push_str("\t.p2align\t3, 0x0\n");
     asm.push_str("__LLVM_StackMaps:\n");

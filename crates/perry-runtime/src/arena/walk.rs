@@ -983,19 +983,27 @@ pub fn longlived_end() -> usize {
 /// `invalidate_dead_old_arena_header` preserves exactly so holes remain
 /// traversable. `block_filter` receives GLOBAL block indices (same base as
 /// `arena_walk_objects_filtered`'s old-gen region).
-pub(crate) fn old_arena_walk_all_headers_filtered(
+///
+/// #11505: this is the old-gen free-list rebuild's walk, and it keeps
+/// `ArenaBlock::old_free_holes` in step with the list it rebuilds. The
+/// callback returns whether it listed the header; a selected block's bit
+/// becomes "listed at least one", and every block the filter skips is
+/// cleared, because the rebuild has just emptied the list.
+pub(crate) fn old_arena_walk_all_headers_listing_holes(
     mut block_filter: impl FnMut(usize) -> bool,
-    mut callback: impl FnMut(*mut u8, usize),
+    mut callback: impl FnMut(*mut u8, usize) -> bool,
 ) {
     use crate::gc::GcHeader;
     let old_block_start = longlived_end();
     OLD_ARENA.with(|arena| {
-        let arena = unsafe { &*arena.get() };
-        for (i, block) in arena.blocks.iter().enumerate() {
+        let arena = unsafe { &mut *arena.get() };
+        for (i, block) in arena.blocks.iter_mut().enumerate() {
             let block_idx = old_block_start + i;
+            block.old_free_holes = false;
             if block.data.is_null() || !block_filter(block_idx) {
                 continue;
             }
+            let mut listed = false;
             let mut offset = 0usize;
             while offset < block.offset {
                 let aligned = (offset + 7) & !7;
@@ -1009,12 +1017,50 @@ pub(crate) fn old_arena_walk_all_headers_filtered(
                     if total_size == 0 || total_size > block.size {
                         break;
                     }
-                    callback(header_ptr, block_idx);
+                    listed |= callback(header_ptr, block_idx);
                     offset = aligned + total_size;
                 }
             }
+            block.old_free_holes = listed;
         }
     });
+}
+
+/// #11505 (tests): mark the old block holding `addr` as holding a listed hole,
+/// for a hole listed outside a rebuild.
+#[cfg(test)]
+pub(crate) fn old_arena_note_listed_hole_for_test(addr: usize) {
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &mut *arena.get() };
+        let block = arena
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                let base = block.data as usize;
+                !block.data.is_null() && addr >= base && addr < base + block.size
+            })
+            .expect("a listed hole must lie in an old block");
+        block.old_free_holes = true;
+    });
+}
+
+/// #11505 (tests): the old block holding `addr`, as its GLOBAL block index and
+/// its `old_free_holes` bit.
+#[cfg(test)]
+pub(crate) fn old_arena_block_for_test(addr: usize) -> Option<(usize, bool)> {
+    let old_block_start = longlived_end();
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        arena
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| {
+                let base = block.data as usize;
+                !block.data.is_null() && addr >= base && addr < base + block.size
+            })
+            .map(|(i, block)| (old_block_start + i, block.old_free_holes))
+    })
 }
 
 /// `PERRY_GC_CENSUS` (gc/census.rs): per-space block accounting in walk

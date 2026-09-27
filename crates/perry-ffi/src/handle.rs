@@ -298,6 +298,21 @@ extern "C" {
 // real definition — which is present whenever runtime-link is on, or at a
 // wrapper's final link against libperry_runtime.a, neither of which is a
 // perry-ffi `test` build.
+// Same reason: `register_handle`'s exhaustion path references the runtime's
+// throw entry, which this unit-test binary does not link. No test here
+// exhausts the process-wide band; if one ever does, it aborts loudly.
+#[cfg(all(test, not(feature = "runtime-link")))]
+#[no_mangle]
+unsafe extern "C" fn js_throw_error_with_code(
+    _msg_ptr: *const u8,
+    _msg_len: usize,
+    _code_ptr: *const u8,
+    _code_len: usize,
+    _kind: i32,
+) -> ! {
+    std::process::abort()
+}
+
 #[cfg(all(test, not(feature = "runtime-link")))]
 #[no_mangle]
 unsafe extern "C" fn js_register_ffi_handle_exists_probe(
@@ -430,9 +445,13 @@ impl<'a> GcRootVisitor<'a> {
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     crate::event_pump::ensure_handle_tick_hook_registered();
     ensure_handle_exists_probe_registered();
-    let identity = REGISTRATIONS
-        .begin_registration(NativeRegistrationKind::Payload)
-        .expect("perry-ffi native handle registration exhausted");
+    let identity = match REGISTRATIONS.begin_registration(NativeRegistrationKind::Payload) {
+        Ok(identity) => identity,
+        Err(error) => {
+            drop(value);
+            throw_handle_ids_exhausted(error)
+        }
+    };
     let handle = identity.numeric_id();
     // Pending blocks acquisition/reuse while the payload-map lock is held.
     let previous = HANDLES.insert(handle, Box::new(value));
@@ -444,6 +463,24 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     index_note_registered(TypeId::of::<T>(), handle);
     assert!(REGISTRATIONS.publish(identity));
     handle
+}
+
+/// True exhaustion of the shared band — every id live, quarantined, or still
+/// named by a reachable JS value — is a catchable `Error` with code
+/// `ERR_PERRY_HANDLE_IDS_EXHAUSTED` rather than a process-aborting panic
+/// (#11453). Steady-state churn cannot reach it: FFI ids recycle through the
+/// tick quarantine and common ids through the collector.
+fn throw_handle_ids_exhausted(error: crate::NativeRegistrationError) -> ! {
+    let message = format!(
+        "Perry native handle ids exhausted ({error:?}): all {} ids of the shared handle \
+         band are live or still referenced",
+        FFI_HANDLE_ID_END - FFI_HANDLE_ID_START
+    );
+    crate::throw_with_code(
+        &message,
+        "ERR_PERRY_HANDLE_IDS_EXHAUSTED",
+        crate::ErrorKind::Error,
+    )
 }
 
 /// Reserve from the shared numeric pool without inserting an FFI payload.

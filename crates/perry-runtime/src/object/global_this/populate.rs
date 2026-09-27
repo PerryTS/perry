@@ -571,10 +571,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             );
         }
     }
-    // The hidden `%AsyncFunction%` tower is allocated before the constructor
-    // loop, but its two parents are the `Function` values installed by that
+    // The hidden async/generator towers are allocated before the constructor
+    // loop, but their parents are the `Function` values installed by that
     // loop. Complete those links now that both are available.
-    wire_async_function_intrinsic_parents();
+    wire_function_intrinsic_parents();
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {

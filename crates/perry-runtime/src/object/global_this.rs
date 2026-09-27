@@ -133,7 +133,7 @@ pub(crate) use generator::append_async_function_root_snapshot;
 pub(crate) use generator::{
     ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, set_intrinsic_data_prop, set_intrinsic_to_string_tag,
-    wire_async_function_intrinsic_parents,
+    wire_function_intrinsic_parents,
 };
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub use install_static::js_promise_static_function_value;

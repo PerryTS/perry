@@ -1280,6 +1280,21 @@ mod prototype_identity_tests {
         assert_ne!(u1, PROTO_ID_NULL);
         assert!(u1 >= PROTO_ID_UNIQUE);
     }
+
+    /// Consecutive unique identities never collide, whatever the counter's
+    /// parity when the test starts. The old `...FE` mask dropped bit 0, so
+    /// serials 2k and 2k+1 shared an identity; minting several in a row always
+    /// covers such a pair.
+    #[test]
+    fn consecutive_unique_identities_never_collide() {
+        let ids: Vec<u64> = (0..8).map(|_| fresh_unique_proto_id()).collect();
+        for (i, a) in ids.iter().enumerate() {
+            assert!(*a >= PROTO_ID_UNIQUE && *a != PROTO_ID_NULL);
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b, "unique proto ids collided: {ids:x?}");
+            }
+        }
+    }
 }
 
 /// Step 4b stage 1: the region guard word. Every refusal path must yield the

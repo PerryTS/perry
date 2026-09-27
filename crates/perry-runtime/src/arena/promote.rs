@@ -393,6 +393,7 @@ fn take_block(block: PromotedBlock) -> Option<ArenaBlock> {
                 offset: 0,
                 object_starts: Box::new([]),
                 dead_cycles: 0,
+                old_free_holes: false,
             },
         ))
     };
