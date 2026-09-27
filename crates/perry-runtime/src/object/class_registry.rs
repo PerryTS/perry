@@ -84,13 +84,13 @@ pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
 pub(crate) use state::{
-    class_decl_prototype_method_names, class_decl_prototype_object, class_decl_prototype_value,
-    class_decl_prototype_value_for_instance_class, class_delete_own_dynamic_prop,
-    class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
-    class_is_key_deleted, class_mark_key_deleted, class_object_value_for_cid,
-    class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
-    class_own_static_field_value, class_own_string_member_names, class_parent_closure,
-    class_parent_closure_root_store, class_prototype_member_names,
+    builtin_parent_ctor_in_chain, class_decl_prototype_method_names, class_decl_prototype_object,
+    class_decl_prototype_value, class_decl_prototype_value_for_instance_class,
+    class_delete_own_dynamic_prop, class_dynamic_prop_root_store, class_has_own_dynamic_prop,
+    class_id_for_decl_prototype_object, class_is_key_deleted, class_mark_key_deleted,
+    class_object_value_for_cid, class_object_value_root_store, class_own_dynamic_prop_names,
+    class_own_enumerable_field_names, class_own_static_field_value, class_own_string_member_names,
+    class_parent_closure, class_parent_closure_root_store, class_prototype_member_names,
     class_prototype_method_is_enumerable, class_prototype_method_set_enumerable,
     class_prototype_method_value_cache_root_store, class_prototype_object_addr_index_contains,
     class_prototype_object_addr_index_rekey, class_prototype_object_root_store,

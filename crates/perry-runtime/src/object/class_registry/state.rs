@@ -865,6 +865,32 @@ pub(crate) fn parent_closure_in_chain(class_id: u32) -> Option<usize> {
     None
 }
 
+/// Walk the class parent chain for the nearest ancestor that `extends` a
+/// global built-in constructor (`class X extends Array`, or `class Y extends X`
+/// above it) and return that built-in's constructor value. A built-in parent
+/// registers only its reserved class id as the chain edge, never a
+/// parent-closure edge, so its static surface (`Array[Symbol.species]`) is
+/// reached through the parent value `js_register_class_parent_dynamic` stashed
+/// at definition time (#11193).
+pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while depth < 32 && cid != 0 {
+        let parent = super::parent_static::template_dynamic_parent_value(cid);
+        if identify_global_builtin_constructor(parent).is_some() {
+            return Some(parent);
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
 /// vtable accessors as own properties of the prototype object, and by

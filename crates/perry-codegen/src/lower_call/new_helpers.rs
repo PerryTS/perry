@@ -133,6 +133,44 @@ pub(crate) fn native_instance_base_in_chain(
     ctx: &FnCtx<'_>,
     class: &Class,
 ) -> Option<NativeInstanceBase> {
+    ctorless_builtin_base(ctx, class).and_then(native_instance_base)
+}
+
+/// The exotic built-in base (`RegExp`, `ArrayBuffer`, the typed arrays) a
+/// no-own-ctor class constructs through its implicit `super(...args)`, found by
+/// the same ctor-less walk as [`native_instance_base_in_chain`]. Its instances
+/// carry internal slots that cannot be stamped onto Perry's provisional object,
+/// so the base's own `Construct` must produce `this` (#11193).
+/// `SharedArrayBuffer` is absent: the synthesized constructor already reaches it
+/// through the dynamic-parent super dispatch.
+pub(crate) fn exotic_builtin_base_in_chain<'c>(
+    ctx: &FnCtx<'c>,
+    class: &'c Class,
+) -> Option<&'c str> {
+    ctorless_builtin_base(ctx, class).filter(|name| {
+        matches!(
+            *name,
+            "RegExp"
+                | "ArrayBuffer"
+                | "Int8Array"
+                | "Uint8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float32Array"
+                | "Float64Array"
+                | "BigInt64Array"
+                | "BigUint64Array"
+        )
+    })
+}
+
+/// The non-class name the ctor-less `extends_name` walk from `class` ends at,
+/// or `None` when an ancestor owns construction (see
+/// [`native_instance_base_in_chain`]).
+fn ctorless_builtin_base<'c>(ctx: &FnCtx<'c>, class: &'c Class) -> Option<&'c str> {
     let mut cur = class.extends_name.as_deref();
     for _ in 0..32 {
         let name = cur?;
@@ -160,7 +198,7 @@ pub(crate) fn native_instance_base_in_chain(
                 cur = parent.extends_name.as_deref();
             }
             // Not a class in this module — the chain has reached a builtin.
-            None => return native_instance_base(name),
+            None => return Some(name),
         }
     }
     None
