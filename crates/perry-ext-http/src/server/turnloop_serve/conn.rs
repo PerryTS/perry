@@ -239,9 +239,22 @@ pub(crate) fn connections_of(server_handle: i64) -> Vec<i64> {
         .collect()
 }
 
-/// Whether a connection has a request in flight (`closeIdleConnections`).
+/// Whether a connection has a request in flight (`closeIdleConnections`,
+/// and `server.close()` since Node 19): a response under way, a request whose
+/// head has been decoded, or bytes of a request whose head has not completed
+/// yet. The decoder accepts a head only once it is whole (turnloop-http's
+/// `is_mid_message` is false until then: "bytes of a head the host has
+/// buffered but not yet completed are the host's to know"), so those bytes sit
+/// in `input` with `building` still `None`. Node counts that connection as
+/// active and leaves it open; treating it as idle destroyed a client mid-way
+/// through sending its request (#11586, `test_issue_4971_tls_connect_options`
+/// — the tokio implementation tracked this as `read_active`, and the turnloop
+/// port in b77aba634 dropped it).
 pub(crate) fn is_busy(id: i64) -> bool {
-    with_conn(id, |c| c.active.is_some() || c.building.is_some()).unwrap_or(false)
+    with_conn(id, |c| {
+        c.active.is_some() || c.building.is_some() || !c.input.is_empty()
+    })
+    .unwrap_or(false)
 }
 
 // ── Completion sink ─────────────────────────────────────────────────────────
