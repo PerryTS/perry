@@ -603,6 +603,7 @@ STEM_EMITTER_ARG_INDEX = {
     "emit_write_barrier_slot_value_and_generation_tested": 5,
     "emit_jsvalue_slot_store_pointer_tested": 11,
     "emit_guarded_inbounds_array_store": 4,
+    "emit_guarded_inbounds_array_store_keyed": 4,
     # The static-key store IC (`expr/put_value_store_ic.rs`): its bookkeeping
     # emitter takes the stem after the value.
     "emit_static_store_ic_bookkeeping": 7,
@@ -611,7 +612,10 @@ STEM_EMITTER_ARG_INDEX = {
 # Emitter wrappers that forward a caller-supplied stem: their INTERNAL emitter
 # call passes an identifier, and the stem literal lives at THEIR call sites
 # (which the census scans through the same table above).
-STEM_FORWARDERS = {"emit_guarded_inbounds_array_store"}
+STEM_FORWARDERS = {
+    "emit_guarded_inbounds_array_store",
+    "emit_guarded_inbounds_array_store_keyed",
+}
 
 STEM_REGISTRY_PATH = "crates/perry-codegen/src/expr/barrier_stem_census_tests.rs"
 STEM_REGISTRY_HEADER = "VERIFIED_BARRIER_STEMS"

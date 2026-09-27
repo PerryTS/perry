@@ -91,6 +91,7 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("apush", StemKind::GenerationTested),
     ("class_field_set", StemKind::PointerTestedStore),
     ("ctor_prologue", StemKind::ValueAndGenerationTested),
+    ("dynarr.set", StemKind::ValueAndGenerationTested),
     ("idxset.inbounds", StemKind::ValueAndGenerationTested),
     ("idxset.recv_captured", StemKind::ValueAndGenerationTested),
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
@@ -798,6 +799,49 @@ fn idxset_runtime_key_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// `probe(a: any, k: any, v: any) { a[k] = v }` — the untyped store's
+/// ordinary-Array arm (#10513), whose inline in-bounds store must keep the
+/// value-and-generation-tested barrier for an arbitrary value.
+fn dynarr_set_ir() -> String {
+    const ARR_ID: u32 = 31;
+    let mut m = Module::new("dynarr_set_census.ts");
+    let param = |id: u32, name: &str| Param {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    };
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(ARR_ID, "a"), param(IDX_ID, "k"), param(VAL_ID, "v")],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(ARR_ID)),
+                index: Box::new(Expr::LocalGet(IDX_ID)),
+                value: Box::new(Expr::LocalGet(VAL_ID)),
+            }),
+            Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 /// `class Boxed { v: any; constructor(v) { this.v = v } }` plus an escaping
 /// `new Boxed(1)` — the complete parameter-to-field constructor is what selects
 /// constructor-free prologue stores, and the boxed field requires their
@@ -813,6 +857,7 @@ fn probe_ir(stem: &str) -> String {
         "apush" => apush_ir(),
         "class_field_set" => super::class_field_barrier_tests::ir(),
         "ctor_prologue" => ctor_prologue_ir(),
+        "dynarr.set" => dynarr_set_ir(),
         "idxset.inbounds" => idxset_inbounds_ir(),
         "idxset.recv_captured" => idxset_recv_captured_ir(),
         "idxset.recv_global" => idxset_recv_global_ir(),
