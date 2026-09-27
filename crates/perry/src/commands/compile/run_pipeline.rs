@@ -6305,10 +6305,15 @@ pub fn run_with_parse_cache(
             .output
             .clone()
             .unwrap_or_else(|| output_path::default_output_path(false, false, Some("wasi"), &stem));
-        let runtime_lib = find_runtime_library(Some("wasi"))?;
-        super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
-        if let OutputFormat::Text = format {
-            println!("Wrote WASI component: {}", exe_path.display());
+        // `--no-link`: the objects, already written where `-o` points
+        // (#7167), are the product. Linking would read that object and
+        // overwrite it with the component.
+        if !args.no_link {
+            let runtime_lib = find_runtime_library(Some("wasi"))?;
+            super::link::wasi::link_wasi(&obj_paths, &runtime_lib, &exe_path, verbose)?;
+            if let OutputFormat::Text = format {
+                println!("Wrote WASI component: {}", exe_path.display());
+            }
         }
         return Ok(CompileResult {
             output_path: exe_path,
