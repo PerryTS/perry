@@ -63,6 +63,7 @@ mod leaf_marks;
 mod map_store;
 mod mark_slot_hoists;
 mod object_create;
+mod old_free_intrusive;
 mod oldgen;
 mod os_tag;
 mod promote_in_place;
