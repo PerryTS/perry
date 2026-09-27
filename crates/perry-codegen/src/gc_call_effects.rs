@@ -150,6 +150,17 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `typed_feedback.rs`: counters/registries only. This intentionally
         // does not include feedback wrappers that perform the actual object
         // get/set operation.
+        //
+        // #11523: these, the layout helpers above (via `layout_mark_unknown`
+        // -> `invalidate_representation_change`) and the closure capture
+        // setters below take the typed-feedback registry's
+        // `GcRootRegistryGuard` — the only root-registry lock any entry in
+        // this table reaches. An ordinary guard's release flushes a GC request
+        // deferred under it, which runs a collection. The typed-feedback
+        // registry therefore uses `lock_gc_root_registry_noncollecting`: its
+        // release never flushes, and a request raised inside the region panics
+        // under `debug_assertions`/tests (`gc/tests/noncollecting_root_lock.rs`).
+        // Any new registry lock reachable from an entry here must use it too.
         | "js_typed_feedback_record_guard_pass"
         | "js_typed_feedback_record_guard_fail"
         | "js_typed_feedback_record_fallback_call"

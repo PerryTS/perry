@@ -396,8 +396,18 @@ fn read_static_str(ptr: *const u8, len: usize) -> String {
     std::str::from_utf8(bytes).unwrap_or("").to_string()
 }
 
+/// #11523: the non-flushing lock. The `js_typed_feedback_*` record/observe/
+/// guard helpers are `CannotCollect` in `perry-codegen`'s `gc_call_effects`,
+/// and so are the layout helpers that reach `invalidate_representation_change`
+/// (`js_gc_note_slot_layout[_aware]`, `js_closure_set_capture_*`), so the
+/// release of this lock must never run a collection. Every critical section
+/// below touches only Rust-heap state (`HashMap`/`Vec`/`String`) and reads GC
+/// headers; none allocates in the Perry heap or checks a trigger.
 fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> {
-    crate::gc::lock_gc_root_registry(&REGISTRY)
+    let guard = crate::gc::lock_gc_root_registry_noncollecting(&REGISTRY);
+    #[cfg(test)]
+    leaf_lock_test_hooks::run_planted_locked_region_hook();
+    guard
 }
 
 /// Has this process observed anything at all?
@@ -3070,3 +3080,7 @@ pub(crate) fn reset_typed_feedback_for_tests() {
 #[cfg(test)]
 #[path = "typed_feedback/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "typed_feedback/leaf_lock_test_hooks.rs"]
+pub(crate) mod leaf_lock_test_hooks;
