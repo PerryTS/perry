@@ -1546,14 +1546,27 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         compile_env="-u PERRY_NO_AUTO_OPTIMIZE $compile_env"
         auto_optimize_on=1
     fi
-    # Two ways this compile can spend a `cargo build` on native artifacts:
-    # auto-optimize (or the explicit no-auto HTTP regression) plus an
-    # ext-routed module (runtime+stdlib+wrapper), or a
-    # WebAssembly fixture (perry-wasm-host plus a wasm-host runtime, with or
-    # without auto-optimize). See PERRY_TOOLCHAIN_COMPILE_TIMEOUT at the top
-    # for the measurements.
+    # Three ways this compile can spend a `cargo build` on native artifacts:
+    #
+    #  - ANY auto-optimize compile. Auto-optimize rebuilds a feature-stripped
+    #    runtime+stdlib into `target/perry-auto-<hash>` once per distinct
+    #    feature set, whether or not an ext wrapper is involved; the hash keys
+    #    on ~30 `uses_*` flags, so the full tier's parity corpus has hundreds
+    #    of distinct sets. #11560: gating this on `ext_routed` gave every
+    #    plain fixture the 300s budget in the full tier (auto-optimize on for
+    #    the whole corpus) — 36 of that run's 47 new failures were plain
+    #    fixtures killed at 300.1s whose log ends on
+    #    `auto-optimize: rebuilding runtime+stdlib`, codegen done in 0.0 min.
+    #  - the explicit no-auto HTTP regression with an ext-routed module
+    #    (runtime+stdlib+wrapper).
+    #  - a WebAssembly fixture (perry-wasm-host plus a wasm-host runtime, with
+    #    or without auto-optimize).
+    #
+    # The fast tiers set PERRY_NO_AUTO_OPTIMIZE, so there a plain compile
+    # links prebuilt archives and keeps the ordinary 300s hang bound. See
+    # PERRY_TOOLCHAIN_COMPILE_TIMEOUT at the top for the measurements.
     compile_timeout="$PERRY_COMPILE_TIMEOUT"
-    if (( (auto_optimize_on || force_no_auto) && ext_routed )) || test_builds_wasm_host "$parity_test_file"; then
+    if (( auto_optimize_on || (force_no_auto && ext_routed) )) || test_builds_wasm_host "$parity_test_file"; then
         compile_timeout="$PERRY_TOOLCHAIN_COMPILE_TIMEOUT"
     fi
     compile_flags=()

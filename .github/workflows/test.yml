@@ -226,6 +226,11 @@ jobs:
           python3 tests/test_release_pipeline.py
           node --test scripts/publish/platform-visibility.test.mjs
 
+      # #11560: the parity harness gave auto-optimize compiles of plain fixtures
+      # the 300s budget, so the full tier killed ~36 per run mid-rebuild.
+      - name: Parity harness compile-budget regression
+        run: ./tests/test_parity_compile_budget.sh
+
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
