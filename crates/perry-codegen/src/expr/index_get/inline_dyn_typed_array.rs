@@ -499,15 +499,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     {
         let blk = ctx.block();
         let is_buffer = blk.icmp_eq(I8, &gc_type, "10"); // GC_TYPE_BUFFER
-        let slot = blk.lshr(I64, &object_raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_U8_INLINE_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry = blk.load(I64, &entry_ptr);
-        let admitted = blk.icmp_eq(I64, &entry, &object_raw);
+        let admitted = crate::expr::u8_buffer_read::emit_u8_cache_holds(blk, &object_raw);
         let hit = blk.and(I1, &is_buffer, &admitted);
         blk.cond_br(&hit, &u8_bounds_label, &object_miss_label);
     }

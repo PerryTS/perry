@@ -158,18 +158,7 @@ fn lower_u8_buffer_checked_load(
         let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
         let tagged = blk.and(I64, &obj_bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        // Slot formula duplicates `buffer/header.rs::u8_inline_cache_slot`.
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_U8_INLINE_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        // Full-address compare — an empty slot (0) can never match a real
-        // pointer, so no separate emptiness test.
-        let hit = blk.icmp_eq(I64, &entry_val, &raw);
+        let hit = emit_u8_cache_holds(blk, &raw);
         let g = blk.and(I1, &is_ptr, &hit);
         blk.cond_br(&g, &chk_label, &slow_label);
         raw
@@ -260,17 +249,34 @@ fn emit_u8_cache_admission(ctx: &mut FnCtx<'_>, obj_box: &str) -> (String, Strin
     let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
     let tagged = blk.and(I64, &obj_bits, &tag_mask);
     let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-    // Slot formula duplicates `buffer/header.rs::u8_inline_cache_slot`.
-    let slot = blk.lshr(I64, &raw, "3");
-    let slot = blk.and(I64, &slot, "63");
-    let entry_ptr = blk.gep(
+    let admitted = emit_u8_cache_holds(blk, &raw);
+    (blk.and(I1, &is_ptr, &admitted), raw)
+}
+
+/// `i1`: `PERRY_U8_INLINE_CACHE` holds exactly `raw`. The cache is two-way
+/// set-associative (#10515): `raw` may sit in either slot of the pair
+/// `(raw >> 3) & 62`, which duplicates
+/// `perry-runtime/src/buffer/header.rs::u8_inline_cache_pair` — keep in sync.
+/// Full-address compares, so an empty slot (0) never matches a real pointer.
+pub(crate) fn emit_u8_cache_holds(blk: &mut crate::block::LlBlock, raw: &str) -> String {
+    let shifted = blk.lshr(I64, raw, "3");
+    let pair = blk.and(I64, &shifted, "62");
+    let second = blk.or(I64, &pair, "1");
+    let first_ptr = blk.gep(
         "[64 x i64]",
         "@PERRY_U8_INLINE_CACHE",
-        &[(I64, "0"), (I64, &slot)],
+        &[(I64, "0"), (I64, &pair)],
     );
-    let entry_val = blk.load(I64, &entry_ptr);
-    let admitted = blk.icmp_eq(I64, &entry_val, &raw);
-    (blk.and(I1, &is_ptr, &admitted), raw)
+    let second_ptr = blk.gep(
+        "[64 x i64]",
+        "@PERRY_U8_INLINE_CACHE",
+        &[(I64, "0"), (I64, &second)],
+    );
+    let first = blk.load(I64, &first_ptr);
+    let second = blk.load(I64, &second_ptr);
+    let in_first = blk.icmp_eq(I64, &first, raw);
+    let in_second = blk.icmp_eq(I64, &second, raw);
+    blk.or(I1, &in_first, &in_second)
 }
 
 /// `idx ult length` against an admitted buffer's `u32` length at offset 0.

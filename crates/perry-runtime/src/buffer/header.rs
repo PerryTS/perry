@@ -975,56 +975,79 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
 ///    and `register_buffer` clears it again when the address is re-issued
 ///    (belt and suspenders, mirroring its own-props clear).
 ///
-/// Slot formula `(addr >> 3) & 63` is duplicated by codegen — keep in sync.
+/// #10515: TWO-WAY set-associative. An address maps to the slot PAIR
+/// `(addr >> 3) & 62` and may live in either of its two slots,
+/// so two hot buffers that hash together (nanoid's pool + its alphabet table)
+/// no longer evict each other on every alternate access — each miss re-ran the
+/// admission probes, which cost more than the access itself. The pair formula
+/// is duplicated by codegen (`u8_buffer_read.rs::emit_u8_cache_admission`) —
+/// keep in sync.
 pub const U8_INLINE_CACHE_SLOTS: usize = 64;
 #[no_mangle]
 pub static PERRY_U8_INLINE_CACHE: [std::sync::atomic::AtomicU64; U8_INLINE_CACHE_SLOTS] =
     [const { std::sync::atomic::AtomicU64::new(0) }; U8_INLINE_CACHE_SLOTS];
 
-#[inline]
-fn u8_inline_cache_slot(addr: usize) -> usize {
-    (addr >> 3) & (U8_INLINE_CACHE_SLOTS - 1)
+/// The first slot of `addr`'s pair; the pair is `[p, p + 1]`.
+#[inline(always)]
+fn u8_inline_cache_pair(addr: usize) -> usize {
+    (addr >> 3) & (U8_INLINE_CACHE_SLOTS - 2)
 }
 
 /// Test-only: does the admission cache currently hold exactly `addr`?
-/// Reads the slot the way the emitted guard does — full-address compare.
+/// Reads the pair the way the emitted guard does — full-address compares.
 #[cfg(test)]
 pub(crate) fn test_u8_inline_cache_holds(addr: usize) -> bool {
-    PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)].load(std::sync::atomic::Ordering::Relaxed)
-        == addr as u64
+    u8_inline_cache_hit(addr)
 }
 
 #[inline]
 pub(crate) fn u8_inline_cache_invalidate(addr: usize) {
-    let slot = u8_inline_cache_slot(addr);
-    if PERRY_U8_INLINE_CACHE[slot].load(std::sync::atomic::Ordering::Relaxed) == addr as u64 {
-        PERRY_U8_INLINE_CACHE[slot].store(0, std::sync::atomic::Ordering::Relaxed);
+    let pair = u8_inline_cache_pair(addr);
+    for slot in [pair, pair + 1] {
+        if PERRY_U8_INLINE_CACHE[slot].load(std::sync::atomic::Ordering::Relaxed) == addr as u64 {
+            PERRY_U8_INLINE_CACHE[slot].store(0, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
 /// `addr` holds an admission in [`PERRY_U8_INLINE_CACHE`]: it is a live
 /// owning byte view whose `length` is the `u32` at offset 0 and whose bytes
-/// are inline at `addr + 8`. One load and one compare.
+/// are inline at `addr + 8`. Two loads and two compares.
 #[inline(always)]
 pub(crate) fn u8_inline_cache_hit(addr: usize) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let pair = u8_inline_cache_pair(addr);
     addr != 0
-        && PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)]
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == addr as u64
+        && (PERRY_U8_INLINE_CACHE[pair].load(Relaxed) == addr as u64
+            || PERRY_U8_INLINE_CACHE[pair + 1].load(Relaxed) == addr as u64)
 }
 
 /// Admit `addr` to the inline-access cache iff it satisfies the cache
 /// contract above. Called from the codegen slow arms (`js_u8_buffer_read_f64`
 /// and the #10515 i32 get/set twins) and from the runtime byte accessors'
-/// registry arm, so a miss primes the next access.
+/// registry arm, so a miss primes the next access. A new admission takes an
+/// empty slot of its pair, else the first slot, demoting that slot's entry to
+/// the second (which drops the older of the two).
 pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if u8_inline_cache_hit(addr) {
+        return;
+    }
     if super::exotic_view::is_uint8_view_buffer(addr)
         && foreign_backing(addr).is_none()
         && super::view::lookup(addr).is_none()
     {
         register_thread_exit_hook();
-        PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)]
-            .store(addr as u64, std::sync::atomic::Ordering::Relaxed);
+        let pair = u8_inline_cache_pair(addr);
+        let first = PERRY_U8_INLINE_CACHE[pair].load(Relaxed);
+        if first == 0 {
+            PERRY_U8_INLINE_CACHE[pair].store(addr as u64, Relaxed);
+        } else {
+            // The first way's entry moves to the second (dropping whatever was
+            // older there); the new admission takes the first.
+            PERRY_U8_INLINE_CACHE[pair + 1].store(first, Relaxed);
+            PERRY_U8_INLINE_CACHE[pair].store(addr as u64, Relaxed);
+        }
     }
 }
 
