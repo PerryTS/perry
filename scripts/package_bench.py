@@ -1225,6 +1225,7 @@ def main() -> None:
     pf.add_argument("--owner", default=os.environ.get("USER", "unknown") + ":package_bench profile")
     pf.add_argument("--lock-timeout", type=float, default=4 * 3600)
     pf.add_argument("--tmp-dir", help="where perf.data files go (default $TMPDIR)")
+    pf.add_argument("--exact", action="store_true", help="--filter values are exact workload ids, not substrings")
     pf.add_argument("--reanalyze", action="store_true",
                     help="with --callgraph: rebuild --out's tables from its saved <out>-stacks/ (no perf runs)")
     for a in pr._actions:

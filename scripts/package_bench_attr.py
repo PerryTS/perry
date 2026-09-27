@@ -60,8 +60,13 @@ GEN_PREFIXES = ("perry_fn_", "perry_closure_", "perry_method_", "perry_class_", 
 GEN_EXACT = {"main"}
 
 
+# Module init bodies and class constructors carry no `perry_` prefix:
+# `<module>__init`, `<module>__init_body`, `<module>__<Class>_constructor`.
+GEN_RX = re.compile(r"^(?!__)[A-Za-z0-9_]*[A-Za-z0-9]__(?:init|init_body|[A-Za-z0-9_]+_constructor)$")
+
+
 def is_generated(sym: str) -> bool:
-    return sym in GEN_EXACT or sym.startswith(GEN_PREFIXES)
+    return sym in GEN_EXACT or sym.startswith(GEN_PREFIXES) or bool(GEN_RX.match(sym))
 
 
 STARTUP_RX = re.compile(r"^(_start|__libc_start|main$|start_thread|clone3?$|\[unknown\]|0x)")
@@ -100,14 +105,14 @@ BUCKET_RULES = [
                         r"|js_native_call|bound_method|method_cache|resolve_method"),
     ("buffer_typedarray", r"is_registered_buffer|is_uint8array_buffer|buffer::|buffer_data|uint8array|typed_array"
                           r"|typedarray|js_buffer_|dataview|array_buffer"),
-    ("dyn_index", r"js_dyn_index|dyn_index|array::indexing|js_array_get|js_array_set|array::named_props"
+    ("dyn_index", r"js_dyn_index|dyn_index|arraylike_index|js_packed_|array::indexing|js_array_get|js_array_set|array::named_props"
                   r"|element_shape|js_array_|array::|holes"),
     ("map_set", r"js_map_|js_set_|::map::|::set::|weakmap|weak_map|collections::"),
     ("number_string", r"number_to_string|num_to_str|dtoa|ryu|fmt::float|parse_float|parse_int|js_number_to_|to_fixed"
                       r"|float_to|f64_to_str|js_parse"),
     ("string", r"^perry_runtime::string::|js_string|char_ops|js_str_|to_lower|to_upper|string_builder|rope"
                r"|substring|char_code|template|js_concat"),
-    ("numeric_conv", r"fmod|trunc|to_int32|to_uint32|js_dynamic_bit|js_math|libm|floor|ceil|round|pow|js_number"),
+    ("numeric_conv", r"fmod|trunc|js_dynamic_mod|js_dynamic_arith|to_int32|to_uint32|js_dynamic_bit|js_math|libm|floor|ceil|round|pow|js_number"),
     ("closure_box_args", r"closure::|js_closure|box::|js_box_|capture|arguments|js_make_closure|bound_function"),
     ("symbol", r"symbol::|js_symbol"),
     ("prop_write", r"set_field|js_object_set|field_set|add_transition|key_add|set_property|store_ic|write_ic"
@@ -141,6 +146,7 @@ SUBSYSTEM_RULES = [
     ("private_fields", r"private_member|private_evaluation|private_value|js_private_|private_brand|private_field"),
     ("proto_chain_read", r"prototype_property_value|ordinary_object_prototype_property|proto_chain_get"),
     ("closure_box_args", r"js_arguments_|arguments_bundle"),
+    ("alloc", r"^js_object_alloc|^js_array_alloc|^js_new_object|^js_object_new|^js_alloc_"),
 ]
 _SUB_RX = [(b, re.compile(r)) for b, r in SUBSYSTEM_RULES]
 _GC_RX = [(b, re.compile(r)) for b, r in GC_COLLECT]
@@ -232,6 +238,8 @@ def js_name(sym: str) -> str:
     becomes `<module>::<Class>.<m>` with private/escaped names decoded."""
     m = re.match(r"^(perry_(?:fn|closure|method|static|getter|setter)_)(.*)$", sym)
     if not m:
+        m = re.match(r"^()(.*__(?:init|init_body|[A-Za-z0-9_]+_constructor))$", sym) if GEN_RX.match(sym) else None
+    if not m:
         return sym
     kind, rest = m.groups()
     base, sep, suffix = rest.partition("$")
@@ -290,6 +298,8 @@ class SourceIndex:
 
     def file_of(self, sym: str):
         m = re.match(r"^perry_(?:fn|closure|method|static|getter|setter)_(.*)$", sym)
+        if not m and GEN_RX.match(sym):
+            m = re.match(r"^(.*)$", sym)
         if not m:
             return None, None
         rest = m.group(1).split("$")[0]
@@ -539,10 +549,15 @@ def aggregate(data: Path, binary: Path, gen_addr: dict) -> dict:
 
 
 def derive(stacks: Counter) -> dict:
-    bucket_c, mech_c, entry_c, site_c, chain_c = (Counter() for _ in range(5))
+    bucket_c, mech_c, entry_c, site_c, chain_c, be_c, rx_c = (Counter() for _ in range(7))
     for key, w in stacks.items():
         rtp, site = key.split(JSSEP)
         rt = rtp.split(SEP) if rtp else []
+        # stacks saved by an older generated-symbol detector: re-split at the
+        # first frame the current detector calls generated (address unknown)
+        cut = next((i for i, f in enumerate(rt) if is_generated(f)), None)
+        if cut is not None:
+            rt, site = rt[:cut], rt[cut] + "@"
         fn = site.split("@")[0]
         syms = rt + ([fn] if fn != "<no JS frame>" else [])
         b, mech = classify(syms) if syms else ("unknown", "unknown")
@@ -553,7 +568,33 @@ def derive(stacks: Counter) -> dict:
         entry_c[entry] += w
         site_c[site] += w
         chain_c[f"{b}\t{leaf}\t{entry}\t{site}"] += w
-    return {"bucket": bucket_c, "mech": mech_c, "entry": entry_c, "site": site_c, "chain": chain_c}
+        be_c[f"{b}\t{entry}"] += w
+        if b == "regex":
+            rx_c[regex_detail(rt)] += w
+    return {"bucket": bucket_c, "mech": mech_c, "entry": entry_c, "site": site_c, "chain": chain_c,
+            "bucket_entry": be_c, "regex_detail": rx_c}
+
+
+_RX_COMPILE = re.compile(r"perex::compiler|Prepared|regex_compile|compile_pattern|js_regexp_new|regexp_create|parse_pattern")
+_RX_EXEC = re.compile(r"perex::executor|Vm>|perex_runtime|find_near|execute_output|perex::")
+_RX_PROTO = re.compile(r"get_field|shape_descriptor|keys_find|try_data_get|ic_miss|native_get|prototype|lookup|species"
+                       r"|flags|last_index|descriptor")
+
+
+def regex_detail(rt: list) -> str:
+    """Split the regex bucket: pattern compilation, the matcher itself, the
+    spec protocol around it (flags/@@species/lastIndex property gets), and the
+    rest (result arrays, substring building, replacement expansion)."""
+    for f in rt:
+        if _RX_COMPILE.search(f):
+            return "compile"
+    for f in rt:
+        if _RX_EXEC.search(f):
+            return "execute"
+    for f in rt:
+        if _RX_PROTO.search(f):
+            return "protocol_property_gets"
+    return "result_building_other"
 
 
 def per_iter_diff(a2: Counter, a1: Counter, dn: int) -> dict:
@@ -610,8 +651,17 @@ def analyze(rec: dict, a1: dict, a2: dict, binary: Path, srcidx, args) -> None:
     rec["incl_js_top"] = top({js_name(k): v for k, v in incl.items() if is_generated(k) and k != "main"},
                              k_top, base)
     rec["entry_top"] = top(d("entry"), k_top, base)
+    # Liveness of the subject: the package's own compiled code must be on the
+    # stack. Inclusive shares cannot be unioned per sample, so the largest
+    # single node_modules function's inclusive share is a LOWER bound.
+    pk = [v for k, v in incl.items() if is_generated(k) and "node_modules_" in k]
+    rec["pkg_code_on_stack_min_pct"] = round(100 * max(pk) / base, 1) if pk and base else 0.0
     rec["mechanisms"] = {k: round(v) for k, v in sorted(d("mech").items(), key=lambda kv: -kv[1])
                          if abs(v) >= 0.5}
+    rec["bucket_entry"] = {k: round(v) for k, v in sorted(d("bucket_entry").items(), key=lambda kv: -kv[1])
+                           if v >= 0.005 * base}
+    rec["regex_detail"] = {k: round(v) for k, v in sorted(d("regex_detail").items(), key=lambda kv: -kv[1])
+                           if abs(v) >= 0.5}
     chain_raw = d("chain")
     site_raw = d("site")
     # resolve the JS sites that matter to file:line, then regroup chains
@@ -646,7 +696,7 @@ def analyze(rec: dict, a1: dict, a2: dict, binary: Path, srcidx, args) -> None:
         mh = re.search(r":(\d+)(?: `|$)", loc or "")
         if mh:
             hint = int(mh.group(1))
-        found = srcidx.locate(fn, hint) if fn.startswith("perry_") else None
+        found = srcidx.locate(fn, hint) if is_generated(fn) and fn != "main" else None
         if loc and found and "(orig" not in found:
             return loc
         return found or loc
@@ -680,6 +730,8 @@ def run(args, pb) -> None:
     manifest = pb.load_manifest()
     wls = [w for w in pb.select_workloads(manifest, args.filter)
            if not w["id"].startswith("control/") or args.include_control]
+    if getattr(args, "exact", False) and args.filter:
+        wls = [w for w in wls if w["id"] in args.filter]
     out_json = Path(args.out)
     doc = json.loads(out_json.read_text()) if out_json.exists() else {"workloads": {}}
     if getattr(args, "reanalyze", False):
@@ -805,7 +857,7 @@ def run(args, pb) -> None:
         pb.log(f"{wid}: perry {perry_pi:,.0f}/iter node {node_pi or 0:,.0f}/iter; unwind->main "
                f"{rec['unwind_reached_main']:.0%}; top buckets "
                + ", ".join(f"{k} {100 * v / (rec['perry_per_iter'] or 1):.0f}%"
-                           for k, v in list(rec["buckets"].items())[:4]))
+                           for k, v in bysize(rec["buckets"])[:4]))
         save()
     if args.lock:
         pb.lock_release()
@@ -885,6 +937,11 @@ def fmt_n(x):
     return f"{x:.0f}"
 
 
+def bysize(d: dict) -> list:
+    """JSON round-trips with sort_keys, so re-rank by value, largest first."""
+    return sorted(d.items(), key=lambda kv: -kv[1])
+
+
 def short_rt(sym: str) -> str:
     s = sym if sym.startswith("<") and sym.endswith(">") else re.sub(r"<[^<>]*>", "", sym)
     s = s.replace("perry_runtime::", "").replace("perry_stdlib::", "")
@@ -926,17 +983,56 @@ def write_markdown(doc: dict, path: Path) -> None:
           "|---|" + "---:|" * len(top_b)]
     for p in sorted(pkg_share):
         L.append(f"| {p} | " + " | ".join(f"{100 * pkg_share[p].get(b, 0):.0f}" for b in top_b) + " |")
+    # (bucket, runtime entry) pairs: which runtime API, called from generated
+    # code, carries each bucket -- equal-weight over packages like the ranking.
+    be_pkg: dict = defaultdict(list)
+    rx_pkg: dict = defaultdict(list)
+    for w, r in wl.items():
+        ex = r["excess_per_iter"]
+        be_pkg[pkg(w)].append({k: v / ex for k, v in (r.get("bucket_entry") or {}).items()})
+        rx_pkg[pkg(w)].append({k: v / ex for k, v in (r.get("regex_detail") or {}).items()})
+
+    def eqw(per_pkg):
+        tot: Counter = Counter()
+        for p, lst in per_pkg.items():
+            for x in lst:
+                for k, v in x.items():
+                    tot[k] += v / len(lst)
+        n = len(per_pkg) or 1
+        return {k: 100 * v / n for k, v in tot.items()}
+    be = eqw(be_pkg)
+    by_entry: Counter = Counter()
+    for k, v in be.items():
+        by_entry[k.split("\t")[1]] += v
+    L += ["", "## Construct view: runtime entry points called from generated code", "",
+          "Everything beneath each entry up to the next JS frame (all buckets combined), equal-weight % of excess. "
+          "`<inline JS>` is generated code's own instructions; `<no JS frame>` is work with no JS caller "
+          "(GC cycles, event loop).", "", "| % of excess | runtime entry |", "|---:|---|"]
+    for e, v in by_entry.most_common(20):
+        L.append(f"| {v:.1f} | `{short_rt(e)}` |")
+    L += ["", "## Top (bucket, runtime entry) pairs", "",
+          "Which runtime entry point — the function generated code called — carries each bucket, equal-weight "
+          "% of excess over packages.", "", "| % of excess | bucket | runtime entry called from generated code |",
+          "|---:|---|---|"]
+    for k, v in sorted(be.items(), key=lambda kv: -kv[1])[:30]:
+        b, e = k.split("\t")
+        L.append(f"| {v:.1f} | {b} | `{short_rt(e)}` |")
+    rx = eqw(rx_pkg)
+    if rx:
+        L += ["", "Regex bucket split (equal-weight % of excess): " + ", ".join(
+            f"{k} {v:.1f}" for k, v in sorted(rx.items(), key=lambda kv: -kv[1]))]
     L += ["", "## Workloads", "",
-          "| workload | perry/iter | node/iter | ratio | unwind→main | top buckets (% of Perry) |",
-          "|---|---:|---:|---:|---:|---|"]
+          "| workload | perry/iter | node/iter | ratio | unwind→main | package code on stack (≥) | top buckets (% of Perry) |",
+          "|---|---:|---:|---:|---:|---:|---|"]
     for w, r in sorted(doc["workloads"].items()):
         if r.get("status") != "OK":
-            L.append(f"| {w} | {r.get('status')} | | | | {str(r.get('reason', ''))[:120].replace('|', '/')} |")
+            L.append(f"| {w} | {r.get('status')} | | | | | {str(r.get('reason', ''))[:120].replace('|', '/')} |")
             continue
         base = r["perry_per_iter"] or 1
-        tb = ", ".join(f"{k} {100 * v / base:.0f}%" for k, v in list(r["buckets"].items())[:4])
+        tb = ", ".join(f"{k} {100 * v / base:.0f}%" for k, v in bysize(r["buckets"])[:4])
         L.append(f"| {w} | {fmt_n(r['perry_per_iter'])} | {fmt_n(r.get('node_per_iter'))} | "
-                 f"{(r.get('ratio') or 0):.1f}× | {r.get('unwind_reached_main', 0):.0%} | {tb} |")
+                 f"{(r.get('ratio') or 0):.1f}× | {r.get('unwind_reached_main', 0):.0%} | "
+                 f"{r.get('pkg_code_on_stack_min_pct', 0):.0f}% | {tb} |")
     for w, r in sorted(doc["workloads"].items(), key=lambda kv: -(kv[1].get("excess_per_iter") or 0)):
         if r.get("status") != "OK":
             continue
@@ -952,7 +1048,7 @@ def write_markdown(doc: dict, path: Path) -> None:
             f"`{short_rt(n)}` {p}%" for n, _v, p in r["incl_top"][:8])]
         L += ["", "Top self: " + "; ".join(f"`{short_rt(n)}` {p}%" for n, _v, p in r["self_top"][:8])]
         L += ["", "Mechanism view (leaf-first): " + ", ".join(
-            f"{k} {100 * v / (r['perry_per_iter'] or 1):.0f}%" for k, v in list(r.get("mechanisms", {}).items())[:6])]
+            f"{k} {100 * v / (r['perry_per_iter'] or 1):.0f}%" for k, v in bysize(r.get("mechanisms", {}))[:6])]
     path.write_text("\n".join(L) + "\n")
 
 
@@ -962,9 +1058,14 @@ def cmd_floor(a) -> None:
     method, outputs checked equal, plus the top runtime entries of each Perry
     probe from one DWARF-call-graph profile at n2."""
     root = Path(__file__).resolve().parent.parent
-    src_dir = root / "benchmarks" / "packages" / "_callfloor"
-    out = Path(a.out_dir)
+    out = Path(a.out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    # Compile a COPY outside benchmarks/packages: a compile under that tree
+    # rewrites its node_modules/.cache/perry/audit.json, the census the
+    # `compile` subcommand's liveness check reads -- a concurrent package
+    # compile would then see this probe's census instead of its own.
+    src_dir = out / "src"
+    shutil.copytree(root / "benchmarks" / "packages" / "_callfloor", src_dir, dirs_exist_ok=True)
     env = dict(os.environ, TZ="UTC")
     env.pop("NODE_OPTIONS", None)
     res = {}
