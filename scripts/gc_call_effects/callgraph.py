@@ -1416,16 +1416,21 @@ def cmd_check(a):
                 for step in witness_path(g, res, name, mode)[:12]:
                     print(f"      {step}", file=sys.stderr)
     if safe:
-        rc = 1
-        print(f"\nDRIFT: {len(safe)} symbol(s) differ in the safe direction (new symbols, new "
-              f"leaves, or already-conservative changes). Regenerate {a.table}:", file=sys.stderr)
+        if not a.allow_safe_drift:
+            rc = 1
+        level = "warning" if a.allow_safe_drift else "error"
+        print(f"\n::{level}::DRIFT: {len(safe)} symbol(s) differ in the safe direction (new "
+              f"symbols, new leaves, or already-conservative changes). Codegen treats them "
+              f"conservatively until {a.table} is regenerated:", file=sys.stderr)
         for name, c, f in safe[:40]:
             print(f"  {name}: committed {c}, archives say {f}", file=sys.stderr)
         if len(safe) > 40:
             print(f"  ... {len(safe) - 40} more", file=sys.stderr)
-    if rc == 0:
+    if not unsafe and not safe:
         print(f"[gc-call-effects] {a.table}: {len(committed)} symbols, identical to the archives",
               file=sys.stderr)
+    elif not unsafe:
+        print(f"[gc-call-effects] {a.table}: no UNSAFE drift ({len(safe)} safe)", file=sys.stderr)
     return rc
 
 
@@ -1490,6 +1495,9 @@ def main(argv=None):
     pc.add_argument("--target", required=True)
     pc.add_argument("--table", required=True)
     pc.add_argument("--write-fresh", help="also write the regenerated table here")
+    pc.add_argument("--allow-safe-drift", action="store_true",
+                    help="fail only on UNSAFE drift (a committed class weaker than the "
+                         "archives prove); report safe drift as a warning")
     pc.add_argument("--min-symbols", type=int, default=1000)
     pc.add_argument("archives", nargs="+")
     pl = sub.add_parser("lint")

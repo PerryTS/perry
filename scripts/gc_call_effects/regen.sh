@@ -40,6 +40,9 @@ table="crates/perry-codegen/src/gc_effects/$target.tsv"
 if [[ "$mode" == "--check" ]]; then
   fresh=()
   if [[ -n "${GC_EFFECTS_FRESH_OUT:-}" ]]; then fresh=(--write-fresh "$GC_EFFECTS_FRESH_OUT"); fi
+  # GC_EFFECTS_ALLOW_SAFE_DRIFT=1: fail only on UNSAFE drift (the PR tier, where
+  # a PR is tested merged with a main that may have added runtime symbols).
+  if [[ -n "${GC_EFFECTS_ALLOW_SAFE_DRIFT:-}" ]]; then fresh+=(--allow-safe-drift); fi
   exec python3 scripts/gc_call_effects/callgraph.py check --target "$target" --table "$table" \
     ${fresh[@]+"${fresh[@]}"} "${paths[@]}"
 fi

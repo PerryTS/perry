@@ -3162,6 +3162,8 @@ jobs:
   # prove (UNSAFE drift: codegen would skip a statepoint the runtime needs).
   # On failure the regenerated table is uploaded as `gc-effects-<target>`:
   # commit it (or run scripts/gc_call_effects/regen.sh <target> locally).
+  # On a PR only UNSAFE drift fails (new symbols from main read as Unknown,
+  # which is safe); on main-line tiers any drift fails, so it gets regenerated.
   #
   # Linux reuses gap-suite-build's archives (same build command as regen.sh);
   # in the full tier, where gap-suite-build does not run, it builds them.
@@ -3199,6 +3201,10 @@ jobs:
         env:
           GC_EFFECTS_SKIP_BUILD: "1"
           GC_EFFECTS_FRESH_OUT: gc-effects/linux-x86_64.tsv
+          # PRs are tested merged with a main that may have added runtime
+          # symbols since the PR last regenerated; those only read as Unknown
+          # (safe). UNSAFE drift always fails. Main-line tiers are strict.
+          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           mkdir -p gc-effects
           scripts/gc_call_effects/regen.sh linux-x86_64 --check
@@ -3260,6 +3266,7 @@ jobs:
       - name: Build the archives and compare the committed table
         env:
           GC_EFFECTS_FRESH_OUT: gc-effects/${{ matrix.target }}.tsv
+          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           mkdir -p gc-effects
           scripts/gc_call_effects/regen.sh "${{ matrix.target }}" --check
