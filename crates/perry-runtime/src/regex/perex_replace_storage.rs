@@ -632,7 +632,7 @@ impl<'a> Pieces<'a> {
         // Nothing below allocates or collects: both subject views and the
         // output's data pointer are reacquired inside one scope.
         output.with_mut_ptr::<StringHeader, _>(|header| {
-            let data = unsafe { crate::string::string_data(header).cast_mut() };
+            let data = crate::string::string_data(header).cast_mut();
             let mut written = 0usize;
             original_subject
                 .with_view(|original| {
