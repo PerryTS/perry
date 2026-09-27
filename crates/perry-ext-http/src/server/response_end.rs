@@ -7,7 +7,6 @@
 //! `EndTail`, which parks every snapshot the sequence consumes in the
 //! runtime's transient-root stack before any of it crosses a JS call.
 
-use http::StatusCode;
 use perry_ffi::{get_handle, get_handle_mut, JsClosure, JsValue, RawClosureHeader};
 
 use crate::server::request::emit_no_arg_to_listeners;
@@ -15,6 +14,7 @@ use crate::server::response::{
     callback_from_bits, finalize_buffered_end, pick_trailing_callback, socket_write_str,
     take_event_listeners, ServerResponse,
 };
+use crate::server::turnloop_serve::wire::{self, Framing};
 use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
 
 /// `res.end([chunk][, encoding][, callback])` — the full Node surface routed
@@ -145,39 +145,48 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         }
         sr.headers_sent = true;
         sr.writable_ended = true;
-        sr.ensure_content_length();
+        let auto_content_length = sr.ensure_content_length();
         let body = std::mem::take(&mut sr.buffered_body);
-        // Fast path: with no custom `statusMessage`, a common status code has a
-        // precomputed `HTTP/1.1 <code> <canonical reason>\r\n` status line,
-        // skipping the per-response `format!`. The interned bytes equal exactly
-        // what the `format!` produced for `(code, canonical reason)`. A custom
-        // message, or an uncommon code, falls back so its reason still reaches
-        // the wire byte-for-byte.
-        let mut head = match sr.status_message.as_deref() {
-            None => {
-                crate::server::response_fast::status_line_bytes(sr.status_code).map(str::to_string)
+        let mut headers = sr.snapshot_headers();
+        let framing = wire::framing_for(
+            &headers,
+            sr.status_code,
+            sr.standalone_req_method.as_deref().unwrap_or("GET"),
+            1,
+            None,
+            false,
+        );
+        wire::align_headers(&mut headers, framing, auto_content_length);
+        let head = match wire::encode_head(
+            sr.status_code,
+            sr.status_message.as_deref(),
+            &headers,
+            framing,
+        ) {
+            Ok(head) => head,
+            Err(message) => {
+                perry_ffi::throw_with_code(
+                    &message,
+                    "ERR_HTTP_INVALID_HEADER_VALUE",
+                    perry_ffi::ErrorKind::TypeError,
+                );
             }
-            Some(_) => None,
-        }
-        .unwrap_or_else(|| {
-            let reason = sr.status_message.clone().unwrap_or_else(|| {
-                StatusCode::from_u16(sr.status_code)
-                    .ok()
-                    .and_then(|s| s.canonical_reason())
-                    .unwrap_or("")
-                    .to_string()
-            });
-            format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason)
-        });
-        for (k, v) in sr.snapshot_headers() {
-            head.push_str(&k);
-            head.push_str(": ");
-            head.push_str(&v);
-            head.push_str("\r\n");
-        }
-        head.push_str("\r\n");
-        let mut bytes = head.into_bytes();
-        if sr.standalone_req_method.as_deref() != Some("HEAD") {
+        };
+        let mut bytes = head.bytes;
+        if let Some(mut encoder) = head.encoder {
+            if !body.is_empty() {
+                let _ = encoder.body(&body, &mut bytes);
+            }
+            let trailers = sr
+                .snapshot_trailers()
+                .into_iter()
+                .map(|(name, value)| turnloop_http::http1::Header {
+                    name,
+                    value: value.into_bytes(),
+                })
+                .collect::<Vec<_>>();
+            let _ = encoder.finish(&trailers, &mut bytes);
+        } else if framing != Framing::NoBody {
             bytes.extend_from_slice(&body);
         }
         payload = bytes;

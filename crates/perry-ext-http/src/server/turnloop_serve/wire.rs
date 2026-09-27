@@ -60,9 +60,10 @@ pub(crate) fn body_forbidden(status: u16, request_method: &str) -> bool {
 
 /// Decide the framing for a response, from the headers the handler committed.
 ///
-/// `known_len` is `Some` for a fully buffered body and `None` while streaming
-/// (`res.write(...)` before `res.end()`), which is exactly Node's condition for
-/// falling back to chunked on HTTP/1.1.
+/// `known_len` may be supplied only while the header block is open. A body
+/// buffered after `writeHead()` must retain the committed framing, just like
+/// a streaming response. Callers that already synthesized Content-Length
+/// pass `None` and let the header select the framing.
 pub(crate) fn framing_for(
     shape_headers: &[(String, String)],
     status: u16,
@@ -196,6 +197,12 @@ pub(crate) fn encode_head(
 }
 
 fn write_status_line(out: &mut Vec<u8>, status: u16, message: Option<&str>) {
+    if message.is_none() {
+        if let Some(line) = crate::server::response_fast::status_line_bytes(status) {
+            out.extend_from_slice(line.as_bytes());
+            return;
+        }
+    }
     let reason = message
         .map(str::to_string)
         .or_else(|| {

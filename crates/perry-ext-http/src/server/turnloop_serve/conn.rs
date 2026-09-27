@@ -785,9 +785,20 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
             shape.status,
             &method,
             version,
-            Some(body.len() as u64),
+            // end() already synthesized a length if the headers were open.
+            // A buffered body cannot change framing committed by writeHead().
+            None,
             eof_framed,
         );
+        if framing == Framing::UntilClose {
+            shape.headers.retain(|(name, _)| {
+                !name.eq_ignore_ascii_case("connection") && !name.eq_ignore_ascii_case("keep-alive")
+            });
+            shape.headers.push(("Connection".into(), "close".into()));
+            if let Some(active) = c.active.as_mut() {
+                active.keep_alive = false;
+            }
+        }
         wire::align_headers(&mut shape.headers, framing, shape.auto_content_length);
         let head = match wire::encode_head(
             shape.status,
