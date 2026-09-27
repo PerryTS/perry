@@ -449,8 +449,7 @@ fn target_callable_at_creation(target: f64) -> bool {
                 .unwrap_or(false)
         }),
         None => {
-            crate::object::is_class_object_value(target)
-                || crate::object::value_is_callable(target)
+            crate::object::is_class_object_value(target) || crate::object::value_is_callable(target)
         }
     }
 }
