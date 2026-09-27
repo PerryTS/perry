@@ -110,8 +110,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// * `obj_bits` — the receiver's full, UNMASKED NaN-box bits.
 /// * `key` — the interned property-name `StringHeader`, already masked.
 /// * `site_id` — the typed-feedback site id, used only by the class-ref arm.
+///
+/// `extern "C-unwind"`: the nullish arm throws (and the by-name arms can run a
+/// getter that throws). Under `panic=unwind` — every dev-profile / test build of
+/// the runtime — a plain `extern "C"` frame carries an abort-on-unwind guard,
+/// so a caught `o.foo` on `undefined` aborted the process with "panic in a
+/// function that cannot unwind" instead of reaching the `catch` (#11560; the
+/// three `issue_5247_property_read_source_location` tests). Release builds
+/// use `panic=abort` and plant no guard, which is why only debug runtimes saw
+/// it.
 #[no_mangle]
-pub extern "C" fn js_object_get_field_ic_nonptr(
+pub extern "C-unwind" fn js_object_get_field_ic_nonptr(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,
@@ -219,8 +228,11 @@ unsafe fn overflow_arm(
 ///   null: `pic_slot_peek` answers null and the miss handler resolves it when
 ///   it actually primes.
 /// * `packed` — the site's compact MRU word (`@perry_ic_N_packed_get`).
+///
+/// `extern "C-unwind"` for the same reason as [`js_object_get_field_ic_nonptr`]:
+/// the miss handler can run a throwing getter.
 #[no_mangle]
-pub extern "C" fn js_object_get_field_ic_slow(
+pub extern "C-unwind" fn js_object_get_field_ic_slow(
     obj_handle: i64,
     key: *const crate::StringHeader,
     cache_slot: *mut PicCacheSlot,
