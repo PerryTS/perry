@@ -2181,7 +2181,18 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
-            return crate::object::null_stub_value();
+            // Nothing on the function's own properties or its prototype chain
+            // answers `method_name` (the Function.prototype and Object.prototype
+            // builtins were dispatched above; a deleted key reads as absent), so
+            // the member call has no callee: a TypeError, as in node. This used
+            // to return the null-object stub, so `delete f.m; f.m()` produced
+            // `{}` and the program carried on.
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
         }
 
         if let Some(r) = crate::builtins::try_console_instance_method_dispatch(
