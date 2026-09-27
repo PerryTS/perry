@@ -239,6 +239,24 @@ struct Entry {
 /// sentinel to a site as if it were a field offset.
 const NEGATIVE_SLOT: u32 = u32::MAX;
 
+/// `slot` for an ABSENT entry: the walk reached the end of the chain
+/// (`%Object.prototype%`, whose `[[Prototype]]` is null) without finding the
+/// key on any hop, and the generic getter confirmed `undefined` for the same
+/// read. A hit answers `undefined` without loading anything. `holder` names
+/// the last hop, so the collector keeps every address in the entry alive and
+/// rewritten exactly as it does for a data entry.
+///
+/// Adjacent to [`NEGATIVE_SLOT`] and descending, per the requirement stated
+/// there.
+const ABSENT_SLOT: u32 = u32::MAX - 1;
+
+/// `validity` of an entry that has been written but not yet CONFIRMED by the
+/// generic getter (see [`inherited_read_cache_prime`]). The counter starts at
+/// 1, so this value never matches and a pending entry can never be served —
+/// not even to a read re-entered from inside the confirming getter — while the
+/// collector still sees (and rewrites) every address it names.
+const PENDING_VALIDITY: u64 = 0;
+
 /// What a table lookup found.
 pub(crate) enum Lookup {
     /// An entry proved its claim; this is the value.
@@ -506,6 +524,9 @@ unsafe fn proved_entry(
         }
         return Err(Lookup::Declined);
     }
+    // An ABSENT entry reads no holder slot, so it skips nothing below: the
+    // receiver's kind, recorded prototype and address facts are proved for it
+    // exactly as for a data entry.
     // Only NOW, once the entry has matched on three identities, is it worth
     // proving the receiver really is an object. A non-object cell's word at
     // +4 is a `capacity` or a `func_ptr` half (design doc rule 3), so the
@@ -566,6 +587,12 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
         Ok(entry) => entry,
         Err(answer) => return answer,
     };
+    if entry.slot == ABSENT_SLOT {
+        if stats_enabled() {
+            HITS.fetch_add(1, Ordering::Relaxed);
+        }
+        return Lookup::Hit(JSValue::undefined());
+    }
     let holder = entry.holder as *const ObjectHeader;
     let field = (holder as *const u8)
         .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
@@ -654,6 +681,22 @@ struct DeclineNote {
     holder: usize,
     hops: [usize; MAX_HOPS],
     hop_count: u8,
+    /// Set when the walk wrote a PENDING entry (see [`PENDING_VALIDITY`]) that
+    /// the generic getter must confirm before it may be served.
+    pending: Option<Pending>,
+}
+
+/// A written-but-unconfirmed entry: where it is, and what it has to still say
+/// when the confirming getter returns.
+#[derive(Clone, Copy)]
+struct Pending {
+    index: usize,
+    recv_class_id: u32,
+    recv_shape: u32,
+    slot: u32,
+    /// `proto_validity()` when the walk ran. The entry commits with exactly
+    /// this value and only if the counter still holds it after the getter.
+    validity: u64,
 }
 
 /// Walk `obj`'s prototype chain for `key`, and record the result — the holder
@@ -678,10 +721,85 @@ pub(crate) unsafe fn inherited_read_cache_prime(
     }
     let mut note = DeclineNote::default();
     let result = inherited_read_cache_walk(obj, key, None, &mut note);
+    if let Some(pending) = note.pending {
+        return Some(confirm_pending(obj, key, pending));
+    }
     if result.is_none() {
         record_decline(&note);
     }
     result
+}
+
+/// Answer a read whose walk left a PENDING entry, and decide that entry.
+///
+/// The walk claims an answer from the chain's KEYS: `undefined` for an
+/// ABSENT entry, the holder's slot for a data entry reached through the
+/// default `%Object.prototype%` link. The generic getter is the arbiter of
+/// what the read really answers — it also consults everything a key list does
+/// not show (names the runtime synthesizes, lazily resolved intrinsics) — so
+/// the entry is committed only when the two agree, and only when nothing the
+/// validity word stands for happened while the getter ran. Otherwise the
+/// entry becomes a NEGATIVE one (under the same condition) so the pair is not
+/// walked again, or is dropped. Either way the getter's value is the answer.
+///
+/// The getter may collect. Nothing here reuses `obj` or `key` after it: the
+/// pending entry sits in the table, where the root scanner marks and rewrites
+/// the key and every hop, and the verdict re-reads the holder from there.
+///
+/// # Safety
+/// As [`inherited_read_cache_prime`].
+unsafe fn confirm_pending(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    pending: Pending,
+) -> JSValue {
+    let answer = super::field_get_set::get_field_by_name_past_inherited_cache(obj, key);
+    INHERITED_READ_CACHE.with(|cell| {
+        let entry = &mut (*cell.get())[pending.index];
+        // Someone else's entry now (a re-entrant prime from inside the
+        // getter): leave it alone.
+        if entry.key_ptr == 0
+            || entry.validity != PENDING_VALIDITY
+            || entry.recv_class_id != pending.recv_class_id
+            || entry.recv_shape != pending.recv_shape
+            || entry.slot != pending.slot
+        {
+            return;
+        }
+        let agrees = if entry.slot == ABSENT_SLOT {
+            answer.is_undefined()
+        } else {
+            let field = (entry.holder as *const u8)
+                .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
+                as *const u64;
+            let bits = *field;
+            let value = JSValue::from_bits(bits);
+            bits == answer.bits()
+                && bits != crate::value::TAG_HOLE
+                && !value.is_undefined()
+                && !value.is_null()
+        };
+        if crate::object::proto_validity::proto_validity() != pending.validity {
+            *entry = EMPTY_ENTRY;
+            return;
+        }
+        if !agrees {
+            // The chain's keys and the getter disagree about this pair — a
+            // synthesized name, a lazily resolved intrinsic. That is a fact
+            // about the shapes involved, not about a slot's value, so the
+            // refusal is remembered like any other (a negative entry is never
+            // wrong; it only keeps the read on the generic path).
+            entry.slot = NEGATIVE_SLOT;
+            entry.accessor = false;
+            if stats_enabled() {
+                DECLINES.fetch_add(1, Ordering::Relaxed);
+            }
+        } else if stats_enabled() {
+            PRIMES.fetch_add(1, Ordering::Relaxed);
+        }
+        entry.validity = pending.validity;
+    });
+    answer
 }
 
 /// A declining walk: write the NEGATIVE entry that stops the walk from being
@@ -909,6 +1027,18 @@ unsafe fn inherited_read_cache_walk(
     let mut current = obj;
     let mut current_class_id = recv_class_id;
     let mut current_meta = recv_meta;
+    // Set once the walk has taken the default `%Object.prototype%` link. What
+    // it then claims is a claim about the ordinary-object fallback of the
+    // generic getter, which consults more than key lists, so every entry
+    // written after it is PENDING until that getter confirms it.
+    let mut via_default_link = false;
+    // `%Object.prototype%` for this realm, resolved once per walk (0 when the
+    // realm has none yet, in which case the default link is never taken).
+    let object_prototype = if write.is_none() {
+        crate::array::object_prototype_addr()
+    } else {
+        0
+    };
 
     loop {
         // Resolve the next prototype the way `try_data_get_bytes` does.
@@ -919,6 +1049,19 @@ unsafe fn inherited_read_cache_walk(
                 return None;
             }
             prototype.as_pointer()
+        } else if object_prototype != 0
+            && current as usize != object_prototype
+            && default_links_to_object_prototype(current, current_class_id)
+        {
+            // An ordinary object with no recorded `[[Prototype]]` and no
+            // class of its own — an object literal, or a plain object used as
+            // a prototype — inherits from `%Object.prototype%`, which is where
+            // `ordinary_object_prototype_property_value` sends the generic
+            // getter. Before this link existed, every read on such a receiver
+            // that was not an own property declined here, unrecorded, and
+            // re-ran the whole generic walk on every execution.
+            via_default_link = true;
+            object_prototype as *const ObjectHeader
         } else {
             let synthetic = current_class_id >= 0x8000_0000
                 && current_class_id
@@ -1053,6 +1196,12 @@ unsafe fn inherited_read_cache_walk(
                         Some(acc) if acc.raw_get != 0 || acc.raw_set != 0 => {}
                         _ => return None,
                     }
+                    // An accessor entry runs its getter on the prime itself,
+                    // so it cannot wait for the generic getter's confirmation
+                    // the default link requires. Keep such a read generic.
+                    if via_default_link {
+                        return None;
+                    }
                     let entry = Entry {
                         key_ptr: key_addr,
                         validity: crate::object::proto_validity::proto_validity(),
@@ -1106,6 +1255,10 @@ unsafe fn inherited_read_cache_walk(
                     slot,
                     accessor: false,
                 };
+                if via_default_link {
+                    write_pending(entry, note);
+                    return None;
+                }
                 let index = entry_index(recv_class_id, recv_shape, key_addr);
                 INHERITED_READ_CACHE.with(|cell| {
                     (*cell.get())[index] = entry;
@@ -1120,10 +1273,79 @@ unsafe fn inherited_read_cache_walk(
             }
         }
 
+        // The key is on no hop up to and including `%Object.prototype%`,
+        // whose `[[Prototype]]` is null: the chain has ended and the read
+        // answers `undefined`. Recorded as a PENDING absent entry for the
+        // generic getter to confirm (see `confirm_pending`). Read-only: a
+        // write never resolves `object_prototype`, so it never gets here.
+        if object_prototype != 0 && next_addr == object_prototype {
+            if !meta.is_null() && (*meta).prototype != 0 {
+                return None;
+            }
+            let entry = Entry {
+                key_ptr: key_addr,
+                validity: crate::object::proto_validity::proto_validity(),
+                recv_proto_bits,
+                recv_class_id,
+                recv_shape,
+                holder: next_addr,
+                hops,
+                hop_count: hop_count as u8,
+                slot: ABSENT_SLOT,
+                accessor: false,
+            };
+            write_pending(entry, note);
+            return None;
+        }
+
         current = next;
         current_class_id = (*next).class_id;
         current_meta = meta;
     }
+}
+
+/// Does `obj` (a proved ordinary `GC_TYPE_OBJECT` with no recorded
+/// `[[Prototype]]`) inherit from `%Object.prototype%` by default?
+///
+/// True for an object with no class of its own: class id 0 or an anonymous
+/// literal shape's id, not born with a null prototype, and with no prototype
+/// object registered for that id in either class registry — the same two
+/// tables `prototype_chain::class_link_prototype` consults, so a receiver the
+/// generic path would route elsewhere is refused here. A declared class's
+/// instance or prototype object carries its class's id and is never taken.
+///
+/// # Safety
+/// `obj` is a live object whose `GcHeader` precedes it.
+unsafe fn default_links_to_object_prototype(obj: *const ObjectHeader, class_id: u32) -> bool {
+    if class_id != 0 && !super::is_anon_shape_class_id(class_id) {
+        return false;
+    }
+    match crate::value::addr_class::try_read_gc_header_known_plausible(obj as usize) {
+        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO == 0 => {}
+        _ => return false,
+    }
+    class_id == 0
+        || (super::class_decl_prototype_object(class_id).is_null()
+            && super::class_prototype_object(class_id).is_null())
+}
+
+/// Write `entry` PENDING and tell the prime where it is (see
+/// [`confirm_pending`]). The walk then returns `None`; the prime, not the walk,
+/// produces the read's value.
+unsafe fn write_pending(mut entry: Entry, note: &mut DeclineNote) {
+    let index = entry_index(entry.recv_class_id, entry.recv_shape, entry.key_ptr);
+    let validity = entry.validity;
+    entry.validity = PENDING_VALIDITY;
+    INHERITED_READ_CACHE.with(|cell| {
+        (*cell.get())[index] = entry;
+    });
+    note.pending = Some(Pending {
+        index,
+        recv_class_id: entry.recv_class_id,
+        recv_shape: entry.recv_shape,
+        slot: entry.slot,
+        validity,
+    });
 }
 
 // --- GC ---------------------------------------------------------------------
