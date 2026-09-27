@@ -62,12 +62,30 @@ fn package_entry_aliases(addon: &NativeAddonModule) -> Vec<String> {
     let main = manifest
         .get("main")
         .and_then(|v| v.as_str())
-        .unwrap_or("index.node");
-    if addon.package_dir.join(main).canonicalize().ok().as_ref() == Some(&addon.source_path) {
+        .unwrap_or("index");
+    let resolved = resolve_main_file(&addon.package_dir.join(main))
+        .or_else(|| resolve_main_file(&addon.package_dir.join("index")));
+    if resolved.as_ref() == Some(&addon.source_path) {
         vec![name.to_string()]
     } else {
         Vec::new()
     }
+}
+
+fn resolve_main_file(path: &Path) -> Option<PathBuf> {
+    let mut candidates = vec![path.to_path_buf()];
+    for extension in ["js", "json", "node"] {
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(format!(".{extension}"));
+        candidates.push(PathBuf::from(candidate));
+    }
+    for extension in ["js", "json", "node"] {
+        candidates.push(path.join(format!("index.{extension}")));
+    }
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .and_then(|path| path.canonicalize().ok())
 }
 
 pub(super) fn sidecar_root(executable: &Path) -> Result<PathBuf> {
@@ -293,6 +311,39 @@ mod tests {
         stage_native_addon_sidecar(&ctx, &output, None).unwrap();
         let second = fs::read(root.join("manifest.json")).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn package_entry_aliases_preserve_js_and_exports_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().canonicalize().unwrap();
+        let entry = package.join("index.node");
+        fs::write(&entry, "fixture").unwrap();
+        let addon = NativeAddonModule {
+            logical_id: "demo/index.node".into(),
+            package: "demo".into(),
+            version: "1".into(),
+            source_path: entry,
+            package_dir: package.clone(),
+            entry_relative: "index.node".into(),
+            ship_package_payload: true,
+        };
+        fs::write(package.join("package.json"), r#"{"name":"demo"}"#).unwrap();
+        assert_eq!(package_entry_aliases(&addon), vec!["demo"]);
+        fs::write(package.join("index.js"), "module.exports = {};").unwrap();
+        assert!(package_entry_aliases(&addon).is_empty());
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"demo","main":"index.node"}"#,
+        )
+        .unwrap();
+        assert_eq!(package_entry_aliases(&addon), vec!["demo"]);
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"demo","main":"index.node","exports":"./index.js"}"#,
+        )
+        .unwrap();
+        assert!(package_entry_aliases(&addon).is_empty());
     }
 
     #[test]
