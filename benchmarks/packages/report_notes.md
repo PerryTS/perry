@@ -35,7 +35,7 @@ control is subtracted from any workload.**
 | `node-cron/match` | `task.match(date)` returns `null` for tasks created inside `Array.map` (checksum `00000000`) | #11446 |
 | `pg/select`, `pg/insert_batch` | first parameterized query segfaults; plain queries work | #11459 |
 | `mongodb/insert_find` | `insertOne` after `deleteMany` rejects with `reading 'state'`, then the process hangs — now skipped as `known_hang` | #11460 |
-| `rate-limiter-flexible/consume` | awaiting non-Error rejections in `try/catch` trips the async step driver's runaway re-entry guard (n=20000; n=5000 fine) | #11449 |
+| `rate-limiter-flexible/consume` | awaiting non-Error rejections in `try/catch` trips the async step driver's runaway re-entry guard (n=20000; n=5000 fine) | #11449 — fixed by #11457, which landed after this measurement |
 | `fastify/inject` | `setHeader is not a function` (light-my-request `ServerResponse` subclass) | #10454 (existing) |
 | `axios/*` (portability) | a compiled binary `require()`s `mime-db/db.json` through the **build host's absolute path**; the binary breaks when moved to another machine or when the tree moves. The mini run avoided it only by building and running under the same `/private/tmp/claude-pkg-bench` path. | #11448 |
 

@@ -153,7 +153,7 @@ Per-iteration cost uses the **two-N method**: every workload is run at two itera
 
 140 workload×arm instruction measurements ran while the host's 1-minute load exceeded the flag threshold (8.0); the shared build host was never below it for long. `instructions:u` counts only the measured process's user-mode instructions, so load changes them far less than wall time — the evidence is the spread of the 3 samples per N, reported per arm in the JSON (`instr_spread` = (max−min)/median over both N). Worst spread among flagged arms: 83.4%. Arms with spread > 5%:
 
-Worst spread per arm: bun 83.4%, node 7.2%, perry 5.6%. Bun's and Node's counts include their JIT/GC helper threads, whose work varies run to run even on an idle host; Perry's single-threaded counts are the stable ones.
+Worst spread per arm: bun 83.4%, node 7.2%, perry 5.6%. Bun's and Node's counts include their JIT/GC helper threads, whose work varies run to run even on an idle host; Perry's counts are the stable ones (worst Perry spread above).
 
 - `node-forge/sha256` [bun]: spread 83.4%, load max 52.37
 - `control/bare_loop` [bun]: spread 31.8%, load max 18.64
@@ -310,7 +310,7 @@ control is subtracted from any workload.**
 | `node-cron/match` | `task.match(date)` returns `null` for tasks created inside `Array.map` (checksum `00000000`) | #11446 |
 | `pg/select`, `pg/insert_batch` | first parameterized query segfaults; plain queries work | #11459 |
 | `mongodb/insert_find` | `insertOne` after `deleteMany` rejects with `reading 'state'`, then the process hangs — now skipped as `known_hang` | #11460 |
-| `rate-limiter-flexible/consume` | awaiting non-Error rejections in `try/catch` trips the async step driver's runaway re-entry guard (n=20000; n=5000 fine) | #11449 |
+| `rate-limiter-flexible/consume` | awaiting non-Error rejections in `try/catch` trips the async step driver's runaway re-entry guard (n=20000; n=5000 fine) | #11449 — fixed by #11457, which landed after this measurement |
 | `fastify/inject` | `setHeader is not a function` (light-my-request `ServerResponse` subclass) | #10454 (existing) |
 | `axios/*` (portability) | a compiled binary `require()`s `mime-db/db.json` through the **build host's absolute path**; the binary breaks when moved to another machine or when the tree moves. The mini run avoided it only by building and running under the same `/private/tmp/claude-pkg-bench` path. | #11448 |
 
