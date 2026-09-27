@@ -476,7 +476,18 @@ const ZLIB_STREAM_OPTS: &[ParamSpec] = &[ParamSpec::Named {
 }];
 /// `zlib.gzip(buffer[, options], callback)` and the other callback-form
 /// one-shot codecs: the dispatch table takes three slots since #10309.
-const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[p_any("buffer"), ZLIB_OPTIONS_PARAM, p_any("callback")];
+/// `callback` is optional here only so the emitted `.d.ts` stays valid
+/// TypeScript (a required parameter may not follow an optional one); both
+/// `gzip(buf, cb)` and `gzip(buf, opts, cb)` type-check against it.
+const ZLIB_CALLBACK_ARGS: &[ParamSpec] = &[
+    p_any("buffer"),
+    ZLIB_OPTIONS_PARAM,
+    ParamSpec::Named {
+        name: "callback",
+        ty: TypeSpec::Any,
+        optional: true,
+    },
+];
 /// #2935 — optional `{ level, ... }` options object for one-shot codecs.
 const ZLIB_OPTIONS_PARAM: ParamSpec = ParamSpec::Named {
     name: "options",
