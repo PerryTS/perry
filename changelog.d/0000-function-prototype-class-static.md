@@ -1,0 +1,9 @@
+### Fixed
+
+- **A member added to `Function.prototype` is now reachable through class constructors (#11492).** After `Function.prototype.myHelper = fn`, `C.myHelper()` on a class threw `TypeError: myHelper is not a function`, `typeof C.myHelper` was `"undefined"`, and `"myHelper" in C` was `false`. Plain functions already saw it. A class constructor's `[[Prototype]]` chain ends at `%Function.prototype%`, but the class-ref paths stopped at the class registry:
+  - **Read** (`get_field_by_name.rs`, INT32 ClassRef arm): after every own/static/inherited-static lookup misses, it now falls back to `%Function.prototype%`. A `defineProperty` accessor there runs with the class as `this`.
+  - **Call** (`js_class_static_method_call`, `parent_static.rs`): the fused `C.m(...)` static-call lowering now tries `%Function.prototype%` before it reports a true miss. The member is invoked with `this` = the class.
+  - **`in`** (`has_property.rs`): a class ref answers `true` for a key present on `%Function.prototype%`, without invoking a getter.
+
+  All three use one helper, `closure::function_prototype_inherited_get`, which is the closure path's existing Function.prototype fallback lifted out of `closure_get_dynamic_prop`. Closures and classes now resolve through the same code. Own and inherited statics still shadow Function.prototype. Prototype refs (`C.prototype`) are excluded, because their chain is `Object.prototype`. No new side table: the lookup reads the real `%Function.prototype%` object.
+- New gap test `test_gap_11492_function_prototype_class_static.ts` covers own/inherited statics winning, direct and dynamic calls with the right `this`, value reads, `in` vs `hasOwnProperty`, a Function.prototype accessor, instances not seeing the member, and `delete` removing it. Its output is byte-identical to Node.

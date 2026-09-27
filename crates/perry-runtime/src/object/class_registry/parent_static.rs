@@ -1844,6 +1844,24 @@ pub unsafe extern "C" fn js_class_static_method_call(
             return result;
         }
     }
+    // #11492: the constructor chain ends at %Function.prototype% — a user
+    // method installed there (`Function.prototype.myHelper = fn`) is callable
+    // as `C.myHelper()` with `this` = the class, exactly as on a closure.
+    let fn_proto_member = if crate::object::class_prototype_ref_id(receiver).is_none() {
+        crate::closure::function_prototype_inherited_get(0, name, receiver)
+    } else {
+        None
+    };
+    if let Some(member) = fn_proto_member {
+        if crate::collection_iter::is_callable(member) {
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
+            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            return result;
+        }
+    }
     // True miss: no static method and no callable static field resolved on the
     // class chain. Keep the two compatibility no-ops introduced for Effect's
     // schema initialization (#687), but otherwise follow JavaScript semantics:
