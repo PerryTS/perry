@@ -97,6 +97,7 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 mod harness_self_tests;
+mod ic_fast_split;
 mod mechanics;
 mod specialized_calls;
 

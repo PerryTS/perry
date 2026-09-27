@@ -53,7 +53,10 @@ pub(crate) fn emit_hole_declining_split(
     ctx.current_block = merge_idx;
     ctx.block().phi(
         DOUBLE,
-        &[(fast_val.as_str(), fast_end.as_str()), (slow_val.as_str(), slow_end.as_str())],
+        &[
+            (fast_val.as_str(), fast_end.as_str()),
+            (slow_val.as_str(), slow_end.as_str()),
+        ],
     )
 }
 
@@ -114,7 +117,10 @@ pub(crate) fn emit_template_string_coerce(ctx: &mut FnCtx<'_>, v: &str) -> Strin
     ctx.current_block = merge_idx;
     ctx.block().phi(
         DOUBLE,
-        &[(v, entry_end.as_str()), (coerced.as_str(), slow_end.as_str())],
+        &[
+            (v, entry_end.as_str()),
+            (coerced.as_str(), slow_end.as_str()),
+        ],
     )
 }
 
@@ -150,6 +156,9 @@ pub(crate) fn emit_checked_callee_unbox(ctx: &mut FnCtx<'_>, callee: &str) -> St
     ctx.current_block = merge_idx;
     ctx.block().phi(
         I64,
-        &[(handle.as_str(), entry_end.as_str()), (checked.as_str(), slow_end.as_str())],
+        &[
+            (handle.as_str(), entry_end.as_str()),
+            (checked.as_str(), slow_end.as_str()),
+        ],
     )
 }

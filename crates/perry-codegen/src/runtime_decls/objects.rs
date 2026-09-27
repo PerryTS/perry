@@ -244,7 +244,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, I32, I32, I64, I32, I32],
     );
-    module.declare_function("js_class_field_get_ic_fast_miss", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_class_field_get_ic_fast_miss",
+        DOUBLE,
+        &[I64, DOUBLE, I64],
+    );
     module.declare_function(
         "js_class_field_set_ic_fast",
         I32,
@@ -413,7 +417,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // S2: its MRU hit as a GC-leaf call answering TAG_HOLE on a decline, and
     // the collecting rest of the ladder. Same operands as the full helper.
     module.declare_function("js_object_get_field_ic_fast", DOUBLE, &[I64, I64, I64, PTR]);
-    module.declare_function("js_object_get_field_ic_fast_miss", DOUBLE, &[I64, I64, I64, PTR]);
+    module.declare_function(
+        "js_object_get_field_ic_fast_miss",
+        DOUBLE,
+        &[I64, I64, I64, PTR],
+    );
     // T1: the two exits of the inline generic-get tower. Every guard failure —
     // SSO / INT32 class ref / nullish / non-object receiver / overflow slot /
     // deleted slot / named prefix / miss+prime — branches to one of these

@@ -119,7 +119,9 @@ mod tests {
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
         let k = scope.root_string_ptr(key_of(b"split_present"));
-        obj.with_mut_ptr(|o| k.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, 7.0)));
+        obj.with_mut_ptr(|o| {
+            k.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, 7.0))
+        });
         let mut cache: PicCache = [0; PIC_CACHE_WORDS];
         let mut slot: PicCacheSlot = &mut cache;
         let slot_ptr: *mut PicCacheSlot = &mut slot;
@@ -130,10 +132,16 @@ mod tests {
                 // answers and primes.
                 let first = js_object_get_field_ic_fast(boxed(o), kp, 0, slot_ptr);
                 assert_eq!(first.to_bits(), crate::value::TAG_HOLE);
-                assert_eq!(js_object_get_field_ic_fast_miss(boxed(o), kp, 0, slot_ptr), 7.0);
+                assert_eq!(
+                    js_object_get_field_ic_fast_miss(boxed(o), kp, 0, slot_ptr),
+                    7.0
+                );
                 // Primed: the fast entry now serves the hit itself.
                 let hit = js_object_get_field_ic_fast(boxed(o), kp, 0, slot_ptr);
-                assert_eq!(hit, 7.0, "a primed monomorphic read must be served by the leaf entry");
+                assert_eq!(
+                    hit, 7.0,
+                    "a primed monomorphic read must be served by the leaf entry"
+                );
                 assert_eq!(
                     super::super::js_object_get_field_ic(boxed(o), kp, 0, slot_ptr),
                     7.0
