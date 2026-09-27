@@ -173,7 +173,12 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
             }
         };
         let mut bytes = head.bytes;
-        if let Some(mut encoder) = head.encoder {
+        if matches!(framing, Framing::Sized(_)) {
+            // Preserve the standalone response's existing permissive writes:
+            // Content-Length is framing metadata, not an implicit strict
+            // length check that may discard the caller's final chunk.
+            bytes.extend_from_slice(&body);
+        } else if let Some(mut encoder) = head.encoder {
             if !body.is_empty() {
                 let _ = encoder.body(&body, &mut bytes);
             }
