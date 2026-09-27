@@ -15027,13 +15027,8 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
-    // An object receiver's call goes through the method-call site
-    // (`expr/method_site.rs`), whose miss `js_method_site_miss` takes the same
-    // feedback site id and rodata method id and runs the same typed-feedback
-    // dispatcher; the method-id ABI is unchanged.
     assert!(
-        ir.contains("call double @js_typed_feedback_native_call_method_by_id")
-            || ir.contains("call double @js_method_site_miss("),
+        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
         "static-name dynamic method fallback should use typed-feedback method-id ABI:\n{ir}"
     );
     assert!(

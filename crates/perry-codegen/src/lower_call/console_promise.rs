@@ -822,6 +822,8 @@ fn emit_native_method_str_dispatch_with(
             lowered_args,
             &site_id,
             &method_id,
+            &args_ptr,
+            &args_len_str,
         );
     }
     ctx.block().call(

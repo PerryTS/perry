@@ -621,15 +621,8 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
         "dispatching feedback wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
-    // A default build puts the method-call site (`expr/method_site.rs`) in
-    // front of the dispatcher: its miss, `js_method_site_miss`, receives this
-    // call's feedback site id and method id and calls
-    // `js_typed_feedback_native_call_method` with them, so the dispatching
-    // wrapper is still what every unmemoized call reaches. (A profiling build
-    // emits the wrapper directly; see the test above.)
     assert!(
-        ir.contains("call double @js_typed_feedback_native_call_method")
-            || ir.contains("call double @js_method_site_miss("),
+        ir.contains("call double @js_typed_feedback_native_call_method"),
         "dispatching feedback wrappers must still be emitted in a default build \
          (method call):\n{ir}"
     );

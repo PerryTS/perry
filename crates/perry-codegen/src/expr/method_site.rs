@@ -7,7 +7,8 @@
 //! claims and why it cannot go stale). Emitted:
 //!
 //! ```text
-//!   t   = bits - RECEIVER_BIAS ; t <u SPAN && site != null   else MISS
+//!   t   = bits - RECEIVER_BIAS ; t <u SPAN                 else PRIMITIVE
+//!         site != null                                       else MISS
 //!   w   = load [recv]           ; (class_id | ShapeId)
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
@@ -18,6 +19,7 @@
 //!         h = handle(v) ; f = site.func
 //!   CALL: this = recv ; r = f(h, args...) ; restore this
 //!   MISS: js_method_site_miss(slot, feedback_site, recv, method_id, args)
+//!   PRIMITIVE: js_typed_feedback_native_call_method_by_id(feedback_site, recv, method_id, args)
 //! ```
 //!
 //! The miss primes the entry when its facts hold and otherwise performs the
@@ -39,20 +41,6 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     // header and compares an 8-byte receiver word.
     let triple = ctx.target_triple;
     if !(triple.starts_with("x86_64") || triple.starts_with("aarch64")) || triple.contains("32") {
-        return false;
-    }
-    // A String.prototype method name keeps the dispatcher: its receiver is
-    // most often a primitive string, which the site cannot describe (it would
-    // only add a miss call in front of the dispatcher's string arm), and the
-    // tag-guarded String lowering's non-string arm and the invalid-arity
-    // fallback must stay the plain universal dispatch.
-    if crate::lower_string_method::is_known_string_method_name(property) {
-        return false;
-    }
-    // Object.prototype own methods (hasOwnProperty, valueOf, ...)
-    // resolve to builtins the site never memoizes, so it would only add a miss
-    // call in front of the dispatcher.
-    if crate::lower_call::property_get::is_inherited_object_prototype_method(property) {
         return false;
     }
     // A typed-feedback (profiling) build records every method call in the
@@ -77,6 +65,8 @@ pub(crate) fn emit_method_site(
     lowered_args: &[String],
     feedback_site: &str,
     method_id: &str,
+    args_ptr: &str,
+    argc: &str,
 ) -> String {
     use crate::expr::receiver_range::{
         emit_field_ptr, emit_fused_receiver_test, emit_handle, RECEIVER_BIAS, RECEIVER_SPAN,
@@ -127,16 +117,25 @@ pub(crate) fn emit_method_site(
     let miss_l = ctx.block_label(miss_idx);
     let merge_l = ctx.block_label(merge_idx);
 
-    // Entry: the fused receiver test, folded with "the site has a memo".
+    // Entry: the fused receiver test decides the RECEIVER KIND. A primitive
+    // (a string, a number, a boolean, undefined, ...) is not the site's: it
+    // takes the universal dispatcher directly, with its string and primitive
+    // arms, exactly as without a site. A heap object takes the site: its memo
+    // if the site has one, else the miss, which primes it.
     let ic = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let (biased, ok) = {
+    let prim_idx = ctx.new_block("msite.primitive");
+    let object_idx = ctx.new_block("msite.object");
+    let prim_l = ctx.block_label(prim_idx);
+    let object_l = ctx.block_label(object_idx);
+    let biased = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
         let fused = emit_fused_receiver_test(blk, &bits);
-        let ok = blk.and(I1, &fused.is_object_pointer, &ic.present);
-        (fused.biased, ok)
+        blk.cond_br(&fused.is_object_pointer, &object_l, &prim_l);
+        fused.biased
     };
-    ctx.block().cond_br(&ok, &deref_l, &miss_l);
+    ctx.current_block = object_idx;
+    ctx.block().cond_br(&ic.present, &deref_l, &miss_l);
 
     // deref: the receiver word against each entry's word, in order.
     ctx.current_block = deref_idx;
@@ -389,20 +388,8 @@ pub(crate) fn emit_method_site(
         ctx.block().br(&merge_l);
     }
 
-    // miss: prime + the universal dispatcher.
+    // miss (heap object): prime + the universal dispatcher.
     ctx.current_block = miss_idx;
-    let (args_ptr, argc) = if lowered_args.is_empty() {
-        ("null".to_string(), "0".to_string())
-    } else {
-        let n = lowered_args.len();
-        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-        let blk = ctx.block();
-        for (i, value) in lowered_args.iter().enumerate() {
-            let p = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-            blk.store(DOUBLE, value, &p);
-        }
-        (buf, n.to_string())
-    };
     let miss_value = ctx.block().call(
         DOUBLE,
         "js_method_site_miss",
@@ -411,8 +398,8 @@ pub(crate) fn emit_method_site(
             (I64, feedback_site),
             (DOUBLE, recv_box),
             (I64, method_id),
-            (PTR, &args_ptr),
-            (I64, &argc),
+            (PTR, args_ptr),
+            (I64, argc),
         ],
     );
     let miss_end = ctx.block().label.clone();
@@ -420,7 +407,31 @@ pub(crate) fn emit_method_site(
         ctx.block().br(&merge_l);
     }
 
+    // primitive: the universal dispatcher, as without a site.
+    ctx.current_block = prim_idx;
+    let prim_value = ctx.block().call(
+        DOUBLE,
+        "js_typed_feedback_native_call_method_by_id",
+        &[
+            (I64, feedback_site),
+            (DOUBLE, recv_box),
+            (I64, method_id),
+            (PTR, args_ptr),
+            (I64, argc),
+        ],
+    );
+    let prim_end = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
+    }
+
     ctx.current_block = merge_idx;
-    ctx.block()
-        .phi(DOUBLE, &[(&hit_value, &hit_end), (&miss_value, &miss_end)])
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (&hit_value, &hit_end),
+            (&miss_value, &miss_end),
+            (&prim_value, &prim_end),
+        ],
+    )
 }
