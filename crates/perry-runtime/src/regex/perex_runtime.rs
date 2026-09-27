@@ -201,10 +201,14 @@ impl<T: Copy + Default, const N: usize> std::ops::DerefMut for Slots<'_, T, N> {
 /// fewer: `/^[a-z]+_[0-9]+$/` needs 2. Frames and undo entries start empty and
 /// only grow through `rebuffer`, so they are never inline.
 const INLINE_REGISTERS: usize = 8;
-/// Registers the lent cell holds. This array is allocated once per thread, not
-/// per call, so it is sized for the programs a search may bring rather than
-/// for what is cheap to move.
-const LENT_REGISTERS: usize = 32;
+/// The most registers the lent cell grows to. The cell keeps whatever an
+/// earlier search needed, so a loop reaches a steady state that allocates
+/// nothing; a program past this bound takes the owned path instead, so one
+/// huge pattern cannot pin a large cell for the thread's lifetime. It was a
+/// fixed 32-register array, which sent every search of a pattern with more
+/// (dotenv's line pattern has 42) down the owned path to build and grow its
+/// buffers on every call.
+const LENT_REGISTERS: usize = 1024;
 /// Capture spans an `exec` result can have and still be read without
 /// allocating.
 const INLINE_CAPTURES: usize = 16;
@@ -253,7 +257,7 @@ impl ScratchOwner for MatchBuffers<'_> {
 /// frames and undo entries are the engine's own opaque scratch, exactly as in
 /// the owned buffers this replaces (see this module's header).
 struct ScratchCell {
-    registers: [usize; LENT_REGISTERS],
+    registers: Vec<usize>,
     frames: Vec<Frame>,
     undo: Vec<Undo>,
 }
@@ -270,7 +274,7 @@ crate::perry_thread_local! {
     /// costing a `_tlv_get_addr` call — the opposite of what this change is for.
     static LENT_SCRATCH: std::cell::RefCell<ScratchCell> = const {
         std::cell::RefCell::new(ScratchCell {
-            registers: [0; LENT_REGISTERS],
+            registers: Vec::new(),
             frames: Vec::new(),
             undo: Vec::new(),
         })
@@ -414,7 +418,14 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             .ok_or(StorageError::Limit)?;
         let _charge = Charge::new(memory, bytes)?;
         let scratch = Scratch {
-            registers: &mut cell.registers[..registers],
+            registers: {
+                if cell.registers.len() < registers {
+                    // Once per thread and size, never per call: no GC
+                    // allocation, and nothing is traced in this cell.
+                    cell.registers.resize(registers, 0);
+                }
+                &mut cell.registers[..registers]
+            },
             frames: &mut cell.frames[..],
             undo: &mut cell.undo[..],
         };
