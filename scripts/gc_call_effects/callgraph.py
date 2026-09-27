@@ -50,7 +50,8 @@ USAGE
 
   callgraph.py generate --target T --out FILE ARCHIVE...
   callgraph.py check    --target T --table FILE ARCHIVE...
-  callgraph.py why      SYMBOL... -- ARCHIVE...     (see why.py)
+  callgraph.py why      --archive A [--archive B] SYMBOL...   (see why.py)
+  callgraph.py lint     (archive-free: rules and committed tables parse)
   callgraph.py --self-test
 
 The committed tables live in crates/perry-codegen/src/gc_effects/<target>.tsv
@@ -81,10 +82,11 @@ CLASS_RANK = {c: i for i, c in enumerate(CLASSES)}
 
 def find_tool(name: str) -> str:
     """llvm-objdump / llvm-cxxfilt / clang / llvm-ar, preferring LLVM 22."""
-    env = os.environ.get("PERRY_LLVM_BIN")
     cands = []
-    if env:
-        cands.append(os.path.join(env, name))
+    for var, sub in (("PERRY_LLVM_BIN", ""), ("LLVM_SYS_221_PREFIX", "bin")):
+        env = os.environ.get(var)
+        if env:
+            cands.append(os.path.join(env, sub, name))
     for d in ("/usr/lib/llvm-22/bin", "/opt/homebrew/opt/llvm@22/bin",
               "/usr/local/opt/llvm@22/bin", "/opt/homebrew/opt/llvm/bin"):
         cands.append(os.path.join(d, name))
@@ -1228,6 +1230,8 @@ TABLE_HEADER = """\
 # Regenerate: scripts/gc_call_effects/regen.sh {target}   (or take the CI artifact)
 # Classes (RFC deferred collection): Leaf < AllocOnly < ThrowOnly < Reenters.
 # Codegen reads every target's file and uses the most conservative class.
+# A symbol another workspace crate also defines (ext crates, UI stubs) is
+# Reenters whatever its runtime body does: the linked body may be the other one.
 # Known reclassifications kept here on purpose (the graph proves them):
 #   #11522 js_array_length / js_object_alloc_class_inline_keys* /
 #          js_object_get_own_field_or_undef reach JS or a collector -> not Leaf.
@@ -1297,10 +1301,44 @@ def compare(committed: dict[str, str], fresh: dict[str, str]):
 # CLI
 
 
+CHECKED_CRATES = {"perry-runtime", "perry-stdlib", "perry-runtime-static", "perry-stdlib-static"}
+EXTERN_DEF = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(\w+)')
+
+
+def shadowed_symbols(root: str = ROOT) -> set[str]:
+    """Exported functions that another workspace crate ALSO defines.
+
+    The graph proves what the runtime/stdlib archives' definition does, but an
+    ext crate (perry-ext-nodemailer, ...), a UI crate or a stub file can supply
+    the definition that is actually linked. Every such symbol is Reenters: the
+    graph cannot see the body that runs. Only definitions count (`extern "C"
+    fn name` in the signature); declarations inside `extern "C" {}` blocks do
+    not."""
+    out: set[str] = set()
+    crates_dir = os.path.join(root, "crates")
+    for crate in sorted(os.listdir(crates_dir)):
+        if crate in CHECKED_CRATES:
+            continue
+        src = os.path.join(crates_dir, crate, "src")
+        for dirpath, _, files in os.walk(src):
+            for f in files:
+                if f.endswith(".rs"):
+                    with open(os.path.join(dirpath, f), encoding="utf-8", errors="replace") as fh:
+                        out.update(EXTERN_DEF.findall(fh.read()))
+    return out
+
+
 def run_classification(archives: list[str], rules_path: str, strict_rules: bool = True):
     rules = load_rules(rules_path)
     g = build_graph(archives)
     res = classify(g, rules, table_filter=perry_member)
+    shadow = shadowed_symbols()
+    demoted = sorted(n for n in res.cls if n in shadow and res.cls[n] != "Reenters")
+    for n in demoted:
+        res.cls[n] = "Reenters"
+    res.stats["shadowed_demoted"] = demoted
+    if res.stats["classes"]:
+        res.stats["classes"] = dict(collections.Counter(res.cls.values()))
     if res.stats["forbidden_calls"]:
         raise SystemExit("callgraph: a `forbid` premise is violated -- an exemption's "
                          "reason no longer holds:\n  " + "\n  ".join(res.stats["forbidden_calls"][:20]))
@@ -1317,7 +1355,8 @@ def print_stats(res: Classification, out=sys.stderr):
           f"indirect_call_nodes={s['indirect_call_nodes']} indirect_jump_nodes={s['indirect_jump_nodes']} "
           f"exempted_indirect={s['exempted_indirect_nodes']} trusted_indirect={s['trusted_indirect_nodes']} named_seeds={s['named_seed_nodes']}", file=out)
     print(f"[gc-call-effects] classes={dict(sorted(s['classes'].items()))} "
-          f"unresolved_externs={len(s['unresolved_externs'])}", file=out)
+          f"unresolved_externs={len(s['unresolved_externs'])} "
+          f"shadowed_demoted={len(s.get('shadowed_demoted', []))}", file=out)
     if s["unused_exemptions"]:
         print("[gc-call-effects] exemptions that matched nothing on this target (fine on "
               "another target, stale if on none):\n  " + "\n  ".join(s["unused_exemptions"]), file=out)
@@ -1381,6 +1420,38 @@ def cmd_why(a):
     return 0
 
 
+def cmd_lint(a):
+    """Archive-free structural check (runs in `lint`): the rules parse, every
+    committed table parses, names its target and is not vacuous."""
+    rules = load_rules(a.rules)
+    kinds = collections.Counter(r.kind for r in rules)
+    for need in ("collector", "poll", "js", "throw", "panic", "extern"):
+        if not kinds[need]:
+            print(f"callgraph lint: seeds.txt has no `{need}` rule", file=sys.stderr)
+            return 1
+    rc = 0
+    for target in TARGETS:
+        path = os.path.join(TABLE_DIR, f"{target}.tsv")
+        if not os.path.exists(path):
+            print(f"callgraph lint: missing {path}", file=sys.stderr)
+            rc = 1
+            continue
+        with open(path, encoding="utf-8") as fh:
+            head = fh.read(4096)
+        if f"# target: {target}\n" not in head:
+            print(f"callgraph lint: {path} does not name target {target}", file=sys.stderr)
+            rc = 1
+        table = read_table(path)
+        n_leaf = sum(1 for c in table.values() if c == "Leaf")
+        if len(table) < a.min_symbols or n_leaf == 0:
+            print(f"callgraph lint: {path}: {len(table)} rows, {n_leaf} Leaf -- vacuous", file=sys.stderr)
+            rc = 1
+        else:
+            print(f"[gc-call-effects] {target}: {len(table)} symbols, {n_leaf} Leaf", file=sys.stderr)
+    print(f"[gc-call-effects] seeds.txt: {len(rules)} rules {dict(sorted(kinds.items()))}", file=sys.stderr)
+    return rc
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--self-test":
@@ -1401,11 +1472,14 @@ def main(argv=None):
     pc.add_argument("--write-fresh", help="also write the regenerated table here")
     pc.add_argument("--min-symbols", type=int, default=1000)
     pc.add_argument("archives", nargs="+")
+    pl = sub.add_parser("lint")
+    pl.add_argument("--min-symbols", type=int, default=1000)
     pw = sub.add_parser("why")
     pw.add_argument("--archive", dest="archives", action="append", required=True)
     pw.add_argument("symbols", nargs="+")
     a = p.parse_args(argv)
-    return {"generate": cmd_generate, "check": cmd_check, "why": cmd_why}[a.cmd](a)
+    return {"generate": cmd_generate, "check": cmd_check, "why": cmd_why,
+            "lint": cmd_lint}[a.cmd](a)
 
 
 if __name__ == "__main__":

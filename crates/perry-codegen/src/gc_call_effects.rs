@@ -89,8 +89,14 @@ impl RuntimeClass {
 /// never edit by hand.
 pub(crate) const GENERATED_TABLES: &[(&str, &str)] = &[
     ("linux-x86_64", include_str!("gc_effects/linux-x86_64.tsv")),
-    ("macos-aarch64", include_str!("gc_effects/macos-aarch64.tsv")),
-    ("windows-x86_64", include_str!("gc_effects/windows-x86_64.tsv")),
+    (
+        "macos-aarch64",
+        include_str!("gc_effects/macos-aarch64.tsv"),
+    ),
+    (
+        "windows-x86_64",
+        include_str!("gc_effects/windows-x86_64.tsv"),
+    ),
 ];
 
 /// Symbols the archives cannot speak for, each with its reason. Kept tiny on
@@ -501,7 +507,10 @@ mod tests {
             );
         }
         let merged = generated();
-        let leaves = merged.values().filter(|c| **c == RuntimeClass::Leaf).count();
+        let leaves = merged
+            .values()
+            .filter(|c| **c == RuntimeClass::Leaf)
+            .count();
         assert!(
             merged.len() >= 1000 && leaves >= 200,
             "merged table: {} symbols, {leaves} Leaf",
@@ -560,10 +569,7 @@ mod tests {
     #[test]
     fn overrides_name_only_symbols_the_graph_cannot_see() {
         for (name, _, reason) in OVERRIDES {
-            assert!(
-                reason.len() >= 20,
-                "override {name} needs a real reason"
-            );
+            assert!(reason.len() >= 20, "override {name} needs a real reason");
             assert!(
                 !generated().contains_key(*name),
                 "override {name} shadows a symbol the generated table already classifies"
@@ -587,7 +593,11 @@ mod tests {
         for name in ISSUE_11522 {
             assert_ne!(runtime_class(name), RuntimeClass::Leaf, "{name}");
             assert_ne!(runtime_class(name), RuntimeClass::AllocOnly, "{name}");
-            assert_eq!(classify_direct_callee(name), GcCallEffect::Unknown, "{name}");
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::Unknown,
+                "{name}"
+            );
         }
     }
 

@@ -4,6 +4,8 @@
 # Regenerate: scripts/gc_call_effects/regen.sh linux-x86_64   (or take the CI artifact)
 # Classes (RFC deferred collection): Leaf < AllocOnly < ThrowOnly < Reenters.
 # Codegen reads every target's file and uses the most conservative class.
+# A symbol another workspace crate also defines (ext crates, UI stubs) is
+# Reenters whatever its runtime body does: the linked body may be the other one.
 # Known reclassifications kept here on purpose (the graph proves them):
 #   #11522 js_array_length / js_object_alloc_class_inline_keys* /
 #          js_object_get_own_field_or_undef reach JS or a collector -> not Leaf.
@@ -38,11 +40,11 @@ js_aggregateerror_new_full	Reenters
 js_arena_alloc	AllocOnly
 js_arena_stats	Leaf
 js_argon2_hash	Reenters
-js_argon2_hash_options	Leaf
+js_argon2_hash_options	Reenters
 js_argon2_hash_sync	Reenters
-js_argon2_needs_rehash	Leaf
+js_argon2_needs_rehash	Reenters
 js_argon2_verify	Reenters
-js_argon2_verify_sync	Leaf
+js_argon2_verify_sync	Reenters
 js_arguments_bundle_get_slow	Reenters
 js_arguments_bundle_index_get	Reenters
 js_arguments_object_alloc	Reenters
@@ -272,7 +274,7 @@ js_async_local_storage_disable	Reenters
 js_async_local_storage_enter_with	Reenters
 js_async_local_storage_exit	Reenters
 js_async_local_storage_get_store	Reenters
-js_async_local_storage_new	Leaf
+js_async_local_storage_new	Reenters
 js_async_local_storage_run	Reenters
 js_async_local_storage_static_bind_direct	Reenters
 js_async_local_storage_static_snapshot_direct	Reenters
@@ -305,10 +307,10 @@ js_atomics_wait_async	Reenters
 js_atomics_xor	Reenters
 js_aux_has_active	Reenters
 js_await_any_promise	Leaf
-js_await_js_promise	Leaf
+js_await_js_promise	Reenters
 js_await_loop_tick_timers	Reenters
 js_bcrypt_compare	Reenters
-js_bcrypt_compare_sync	Leaf
+js_bcrypt_compare_sync	Reenters
 js_bcrypt_gen_salt	Reenters
 js_bcrypt_hash	Reenters
 js_bcrypt_hash_sync	Reenters
@@ -529,8 +531,8 @@ js_callback_timer_next_deadline	Reenters
 js_callback_timer_tick	Reenters
 js_cancel_frame	Leaf
 js_checkpoint	Leaf
-js_cheerio_load	Leaf
-js_cheerio_load_fragment	Leaf
+js_cheerio_load	Reenters
+js_cheerio_load_fragment	Reenters
 js_cheerio_select	Reenters
 js_cheerio_selection_attr	Reenters
 js_cheerio_selection_attrs	Reenters
@@ -701,11 +703,11 @@ js_console_warn_i32	Leaf
 js_console_warn_number	Leaf
 js_console_warn_spread	Reenters
 js_count_queuing_strategy_new	Reenters
-js_create_callback	Leaf
+js_create_callback	Reenters
 js_create_namespace	Reenters
 js_create_native_module_namespace	Reenters
-js_cron_timer_has_pending	Leaf
-js_cron_timer_tick	Leaf
+js_cron_timer_has_pending	Reenters
+js_cron_timer_tick	Reenters
 js_crypto_aes256_decrypt	Reenters
 js_crypto_aes256_encrypt	Reenters
 js_crypto_aes256_gcm_decrypt	Reenters
@@ -1108,9 +1110,9 @@ js_fetch_post	Reenters
 js_fetch_post_with_auth	Reenters
 js_fetch_response_count	Leaf
 js_fetch_response_json	Reenters
-js_fetch_response_ok	Leaf
+js_fetch_response_ok	Reenters
 js_fetch_response_redirected	Leaf
-js_fetch_response_status	Leaf
+js_fetch_response_status	Reenters
 js_fetch_response_status_text	Reenters
 js_fetch_response_text	Reenters
 js_fetch_response_type	Reenters
@@ -1118,10 +1120,10 @@ js_fetch_response_url	Reenters
 js_fetch_set_global_proxy	Reenters
 js_fetch_set_pending_redirect	Leaf
 js_fetch_set_pending_signal	Leaf
-js_fetch_stream_close	Leaf
+js_fetch_stream_close	Reenters
 js_fetch_stream_poll	Reenters
 js_fetch_stream_start	Reenters
-js_fetch_stream_status	Leaf
+js_fetch_stream_status	Reenters
 js_fetch_take_pending_redirect	Leaf
 js_fetch_take_pending_signal	Leaf
 js_fetch_text	Reenters
@@ -1353,7 +1355,7 @@ js_get_current_step_closure	Leaf
 js_get_dynamic_parent_value	Reenters
 js_get_empty_string	Leaf
 js_get_exception	Leaf
-js_get_export	Leaf
+js_get_export	Reenters
 js_get_function_prototype_method	Reenters
 js_get_global_this	Reenters
 js_get_global_this_builtin_value	Reenters
@@ -1510,7 +1512,7 @@ js_jsx	Reenters
 js_jsx_render_stream_from_value	Reenters
 js_jsxs	Reenters
 js_keccak256_native	Reenters
-js_keccak256_native_bytes	AllocOnly
+js_keccak256_native_bytes	Reenters
 js_lazy_array_index_probe	Leaf
 js_le	Reenters
 js_leave_finally	Leaf
@@ -1520,26 +1522,26 @@ js_load_module	Leaf
 js_lodash_camel_case	Reenters
 js_lodash_capitalize	Reenters
 js_lodash_chunk	Reenters
-js_lodash_clamp	Leaf
+js_lodash_clamp	Reenters
 js_lodash_compact	Reenters
 js_lodash_concat	Reenters
 js_lodash_difference	Reenters
 js_lodash_drop	Reenters
 js_lodash_drop_right	Reenters
-js_lodash_ends_with	Leaf
-js_lodash_escape	Leaf
+js_lodash_ends_with	Reenters
+js_lodash_escape	Reenters
 js_lodash_fill	Reenters
 js_lodash_first	Reenters
 js_lodash_flatten	Reenters
-js_lodash_in_range	Leaf
-js_lodash_includes	Leaf
+js_lodash_in_range	Reenters
+js_lodash_includes	Reenters
 js_lodash_initial	Reenters
 js_lodash_is_empty	Reenters
 js_lodash_is_nil	Leaf
 js_lodash_kebab_case	Reenters
 js_lodash_last	Reenters
 js_lodash_lower_case	Reenters
-js_lodash_lower_first	Leaf
+js_lodash_lower_first	Reenters
 js_lodash_max	Reenters
 js_lodash_max_by	Reenters
 js_lodash_mean	Reenters
@@ -1549,16 +1551,16 @@ js_lodash_min_by	Reenters
 js_lodash_pad	Reenters
 js_lodash_pad_end	Reenters
 js_lodash_pad_start	Reenters
-js_lodash_random	Leaf
+js_lodash_random	Reenters
 js_lodash_range	Reenters
 js_lodash_repeat	Reenters
-js_lodash_replace	Leaf
+js_lodash_replace	Reenters
 js_lodash_reverse	Reenters
 js_lodash_size	Reenters
 js_lodash_snake_case	Reenters
-js_lodash_split	Leaf
-js_lodash_start_case	Leaf
-js_lodash_starts_with	Leaf
+js_lodash_split	Reenters
+js_lodash_start_case	Reenters
+js_lodash_starts_with	Reenters
 js_lodash_sum	Reenters
 js_lodash_sum_by	Reenters
 js_lodash_tail	Reenters
@@ -1569,10 +1571,10 @@ js_lodash_trim	Reenters
 js_lodash_trim_end	Reenters
 js_lodash_trim_start	Reenters
 js_lodash_truncate	Reenters
-js_lodash_unescape	Leaf
+js_lodash_unescape	Reenters
 js_lodash_uniq	Reenters
 js_lodash_upper_case	Reenters
-js_lodash_upper_first	Leaf
+js_lodash_upper_first	Reenters
 js_loose_eq	Reenters
 js_lt	Reenters
 js_main_thread_notified	Leaf
@@ -1784,7 +1786,7 @@ js_new_from_handle	Leaf
 js_new_function_construct	Reenters
 js_new_function_construct_apply	Reenters
 js_new_function_construct_with_new_target	Reenters
-js_new_instance	Leaf
+js_new_instance	Reenters
 js_new_target_get	Leaf
 js_new_target_set	Leaf
 js_new_target_value	Leaf
@@ -2045,7 +2047,7 @@ js_node_test_snapshot_set_default_serializers	Reenters
 js_node_test_snapshot_set_resolve_snapshot_path	Reenters
 js_node_test_suite	Reenters
 js_node_test_todo	Reenters
-js_nodemailer_create_transport	Leaf
+js_nodemailer_create_transport	Reenters
 js_nodemailer_send_mail	Reenters
 js_nodemailer_verify	Reenters
 js_notify_main_thread	Reenters
@@ -2592,7 +2594,7 @@ js_rangeerror_new	Reenters
 js_readable_stream_cancel	Reenters
 js_readable_stream_controller_byob_request	Reenters
 js_readable_stream_controller_close	Reenters
-js_readable_stream_controller_desired_size	Leaf
+js_readable_stream_controller_desired_size	Reenters
 js_readable_stream_controller_enqueue	Reenters
 js_readable_stream_controller_error	Reenters
 js_readable_stream_deferred_byte_source	Reenters
@@ -2602,7 +2604,7 @@ js_readable_stream_from_response	Reenters
 js_readable_stream_get_byob_reader	Reenters
 js_readable_stream_get_reader	Reenters
 js_readable_stream_get_reader_with_options	Reenters
-js_readable_stream_locked	Leaf
+js_readable_stream_locked	Reenters
 js_readable_stream_new	Reenters
 js_readable_stream_new_from_source_object	Reenters
 js_readable_stream_new_with_source_type	Reenters
@@ -2617,7 +2619,7 @@ js_reader_cancel	Reenters
 js_reader_closed	Reenters
 js_reader_read	Reenters
 js_reader_read_with_view	Reenters
-js_reader_release_lock	Leaf
+js_reader_release_lock	Reenters
 js_readline_clear_line_args	Reenters
 js_readline_clear_screen_down_args	Reenters
 js_readline_close	Reenters
@@ -2641,11 +2643,11 @@ js_readline_set_prompt	Reenters
 js_readline_set_raw_mode	Reenters
 js_readline_stdin_destroy	Reenters
 js_readline_stdin_on	Reenters
-js_readline_stdin_pause	Leaf
-js_readline_stdin_ref	Leaf
-js_readline_stdin_remove_listener	Leaf
+js_readline_stdin_pause	Reenters
+js_readline_stdin_ref	Reenters
+js_readline_stdin_remove_listener	Reenters
 js_readline_stdin_resume	Reenters
-js_readline_stdin_unref	Leaf
+js_readline_stdin_unref	Reenters
 js_readline_terminal	Reenters
 js_readline_write	Reenters
 js_readonly_set_has	Reenters
@@ -2752,7 +2754,7 @@ js_register_event_emitter_property_dispatch	Leaf
 js_register_event_emitter_set_domain	Leaf
 js_register_ext_pump	Leaf
 js_register_fetch_handle_kind_probe	Leaf
-js_register_ffi_handle_exists_probe	Leaf
+js_register_ffi_handle_exists_probe	Reenters
 js_register_filehandle_readable_web_stream_factory	Leaf
 js_register_foreach_render_handler	Leaf
 js_register_foreign_promise_adapter	Leaf
@@ -2860,7 +2862,7 @@ js_response_subclass_init	Reenters
 js_run_ext_pump	Reenters
 js_run_module_init_catching	Reenters
 js_run_stdlib_pump	Reenters
-js_runtime_init	Leaf
+js_runtime_init	Reenters
 js_runtime_validate_crypto_key_arg	Reenters
 js_runtime_validate_integer_arg	Reenters
 js_runtime_validate_string_arg	Reenters
@@ -2942,7 +2944,7 @@ js_set_native_webcrypto_dispatch	Leaf
 js_set_native_zlib_dispatch	Leaf
 js_set_new_from_handle_v8	Leaf
 js_set_process_entry_path	Leaf
-js_set_property	Leaf
+js_set_property	Reenters
 js_set_prototype_property	Reenters
 js_set_size	Reenters
 js_set_symmetric_difference	Reenters
@@ -3008,7 +3010,7 @@ js_sqlite_stmt_columns	Reenters
 js_sqlite_stmt_get	Reenters
 js_sqlite_stmt_raw	Reenters
 js_sqlite_stmt_run	Reenters
-js_sqlite_transaction	AllocOnly
+js_sqlite_transaction	Reenters
 js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
@@ -3294,9 +3296,9 @@ js_to_property_key	Reenters
 js_trace_events_flush_output	Leaf
 js_transform_stream_new	Reenters
 js_transform_stream_new_from_transformer_object	Reenters
-js_transform_stream_readable	Leaf
+js_transform_stream_readable	Reenters
 js_transform_stream_subclass_init	Reenters
-js_transform_stream_writable	Leaf
+js_transform_stream_writable	Reenters
 js_transition_ic_note_hit	Leaf
 js_transition_ic_probe_report	Leaf
 js_transition_ic_spill_append	Reenters
@@ -3724,7 +3726,7 @@ js_worker_threads_worker_unref	Reenters
 js_writable_stream_abort	Reenters
 js_writable_stream_close	Reenters
 js_writable_stream_get_writer	Reenters
-js_writable_stream_locked	Leaf
+js_writable_stream_locked	Reenters
 js_writable_stream_new	Reenters
 js_writable_stream_new_from_sink_object	Reenters
 js_writable_stream_new_with_sink_type	Reenters
@@ -3738,9 +3740,9 @@ js_write_barrier_slot_validated_parent	Leaf
 js_writer_abort	Reenters
 js_writer_close	Reenters
 js_writer_closed	Reenters
-js_writer_desired_size	Leaf
+js_writer_desired_size	Reenters
 js_writer_ready	Reenters
-js_writer_release_lock	Leaf
+js_writer_release_lock	Reenters
 js_writer_write	Reenters
 js_yoga_calculate_layout	Reenters
 js_yoga_child_count	Leaf
@@ -3823,10 +3825,10 @@ perry_ffi_gc_register_mutable_root_scanner_named	Leaf
 perry_ffi_gc_register_root_scanner	Leaf
 perry_ffi_gc_request_handle_collection	Leaf
 perry_ffi_gc_root_visitor_is_full_mark	Leaf
-perry_ffi_native_async_attach_handle	Leaf
+perry_ffi_native_async_attach_handle	Reenters
 perry_ffi_native_async_cancel	Reenters
 perry_ffi_native_async_new	Reenters
-perry_ffi_native_async_promise	Leaf
+perry_ffi_native_async_promise	Reenters
 perry_ffi_native_async_reject_bits	Reenters
 perry_ffi_native_async_reject_string	Reenters
 perry_ffi_native_async_resolve_bits	Reenters
@@ -3932,23 +3934,23 @@ perry_tui_state_setter_trampoline	AllocOnly
 perry_update_notify_startup	Leaf
 perry_updater_check_headers	Reenters
 perry_updater_check_url	Reenters
-perry_updater_clear_sentinel	Leaf
-perry_updater_compare_versions	Leaf
+perry_updater_clear_sentinel	Reenters
+perry_updater_compare_versions	Reenters
 perry_updater_compute_file_sha256	Reenters
 perry_updater_get_backup_path	Reenters
 perry_updater_get_config	Reenters
 perry_updater_get_exe_path	Reenters
 perry_updater_get_sentinel_path	Reenters
-perry_updater_install	Leaf
-perry_updater_perform_rollback	Leaf
+perry_updater_install	Reenters
+perry_updater_perform_rollback	Reenters
 perry_updater_read_sentinel	Reenters
 perry_updater_record_response	Reenters
 perry_updater_refresh_due	Leaf
 perry_updater_relaunch	Reenters
-perry_updater_sha256_buffer	AllocOnly
-perry_updater_verify_hash	Leaf
+perry_updater_sha256_buffer	Reenters
+perry_updater_verify_hash	Reenters
 perry_updater_verify_signature	Reenters
 perry_updater_verify_signature_v2	Reenters
-perry_updater_write_sentinel	Leaf
+perry_updater_write_sentinel	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters

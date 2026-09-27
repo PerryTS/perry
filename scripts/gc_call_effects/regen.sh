@@ -38,7 +38,9 @@ paths=()
 for l in "${libs[@]}"; do paths+=("$libdir/$l"); done
 table="crates/perry-codegen/src/gc_effects/$target.tsv"
 if [[ "$mode" == "--check" ]]; then
+  fresh=()
+  if [[ -n "${GC_EFFECTS_FRESH_OUT:-}" ]]; then fresh=(--write-fresh "$GC_EFFECTS_FRESH_OUT"); fi
   exec python3 scripts/gc_call_effects/callgraph.py check --target "$target" --table "$table" \
-    --write-fresh "${GC_EFFECTS_FRESH_OUT:-/dev/null}" "${paths[@]}"
+    ${fresh[@]+"${fresh[@]}"} "${paths[@]}"
 fi
 exec python3 scripts/gc_call_effects/callgraph.py generate --target "$target" --out "$table" "${paths[@]}"
