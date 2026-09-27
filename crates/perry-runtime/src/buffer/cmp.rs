@@ -204,14 +204,11 @@ fn sso_needle_bytes(needle: f64, encoding: i32) -> Option<Vec<u8>> {
     if str_ptr.is_null() {
         return None;
     }
-    unsafe {
-        let len = (*str_ptr).byte_len as usize;
-        let data_ptr = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data_ptr, len);
-        Some(super::from::buffer_string_bytes_for_encoding(
-            bytes, encoding,
-        ))
-    }
+    let owned = unsafe { crate::string::OwnedStringBytes::copy_from_header(str_ptr) };
+    Some(super::from::buffer_string_bytes_for_encoding(
+        owned.as_bytes(),
+        encoding,
+    ))
 }
 
 fn buffer_search_needle_with_encoding(
