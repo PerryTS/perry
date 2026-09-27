@@ -431,7 +431,13 @@ fn upgraded_stream_adoption_is_on_the_callers_loop_or_refused() {
         );
 
         // Off the owner: a second thread of THIS agent, while the owner lives.
-        let sockets_before = statics::sockets().lock().unwrap().len();
+        // Counted per agent: other tests insert into the same process-wide
+        // table without this lock, and an adoption is stamped with its agent.
+        let agent_sockets = move || {
+            let sockets = statics::sockets().lock().unwrap();
+            sockets.values().filter(|s| s.owner_agent == agent).count()
+        };
+        let sockets_before = agent_sockets();
         let (refused, could_submit) = std::thread::spawn(move || {
             perry_runtime::agent::enter_agent_for_test(agent);
             let id = adopt_upgraded_tcp_stream(connect());
@@ -450,7 +456,7 @@ fn upgraded_stream_adoption_is_on_the_callers_loop_or_refused() {
             "a thread that does not own the loop must not get a socket id"
         );
         assert_eq!(
-            statics::sockets().lock().unwrap().len(),
+            agent_sockets(),
             sockets_before,
             "a refused adoption must leave no socket registered"
         );
