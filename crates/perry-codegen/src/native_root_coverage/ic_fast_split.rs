@@ -146,7 +146,7 @@ fn split_module() -> Module {
         ],
         is_async: false,
         is_generator: false,
-        is_strict: false,
+        is_strict: true,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
