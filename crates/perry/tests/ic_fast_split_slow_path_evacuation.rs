@@ -13,8 +13,9 @@
 //! print node's output AND report copying minors that moved objects — a green
 //! run with zero moves would say nothing.
 //!
-//! Sabotage (run for the PR, 2026-09-27): classifying the three `_fast_miss`
-//! continuations `CannotCollect` makes this test fail.
+//! Sabotage (run for the PR, 2026-09-27): classifying the four slow
+//! continuations `CannotCollect` makes the evacuating run fault in retired
+//! from-space (`[gc-fromspace-protect] FAULT`, obj_type=1).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

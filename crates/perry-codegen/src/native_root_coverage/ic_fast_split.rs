@@ -13,10 +13,10 @@
 //!   fast call DOES produce a statepoint there, so the absence is the
 //!   attribute's doing and not a parse miss.
 //!
-//! Sabotage run by hand for the PR (2026-09-27): classifying the three
-//! `_fast_miss` continuations `CannotCollect` too makes
+//! Sabotage run by hand for the PR (2026-09-27): classifying the four slow
+//! continuations `CannotCollect` too makes
 //! `split_sites_keep_their_slow_call_as_the_only_statepoint` fail at
-//! `Statepoints::at("js_object_get_field_ic_fast_miss")` — no subject.
+//! `Statepoints::at("js_put_value_set_packed_miss")` — no subject.
 
 use super::*;
 use perry_hir::{Class, ClassField};
