@@ -4012,10 +4012,6 @@
     },
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ASYNC_STEP_GUARD"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
       "name": "INLINE_TRAP"
     },
     {

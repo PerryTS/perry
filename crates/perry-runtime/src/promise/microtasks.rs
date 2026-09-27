@@ -952,69 +952,11 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step_closure));
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(next));
-                    // Issue #712 + #921 + #922 defensive guard. Track
-                    // consecutive is_error=true dispatches; reject the
-                    // chain if it crosses ASYNC_STEP_REENTRY_BOUND.
-                    //
-                    // Originally (#712) the guard required SAME `step_closure`
-                    // to count up — but the #921/#922 production loops
-                    // (gscmaster-api Fastify route handlers) alternate
-                    // between two async-step closures (route handler ↔
-                    // middleware ↔ inner await), each one rethrowing the
-                    // same TypeError. With the same-closure check, the
-                    // counter resets every other dispatch and the loop
-                    // never trips the guard — the user observed 5.7M
-                    // identical `value is not a function` lines before PM2
-                    // restarted the process.
-                    //
-                    // Drop the same-closure check: count ANY consecutive
-                    // run of `is_error=true` dispatches. A legitimate
-                    // throw-in-a-loop pattern interleaves `is_error=false`
-                    // steps (the loop's post-catch state) between throws,
-                    // so its consecutive count never grows beyond 1.
-                    if is_error {
-                        let prev = ASYNC_STEP_GUARD.with(|c| c.get());
-                        let new_count = prev.consecutive_error_count.saturating_add(1);
-                        if new_count > ASYNC_STEP_REENTRY_BOUND {
-                            ASYNC_STEP_GUARD.with(|c| {
-                                c.set(AsyncStepGuard {
-                                    consecutive_error_count: 0,
-                                })
-                            });
-                            if !next.is_null() {
-                                let msg = b"async step driver detected runaway re-entry (issue #712/#921/#922 guard); rejecting Promise to prevent unbounded loop. Common cause: throw across an await boundary inside try/catch; convert to a result-tag pattern.";
-                                let msg_str = crate::string::js_string_from_bytes(
-                                    msg.as_ptr(),
-                                    msg.len() as u32,
-                                );
-                                let err = crate::error::js_typeerror_new(msg_str);
-                                let err_val = crate::value::js_nanbox_pointer(err as i64);
-                                let next = CURRENT_MICROTASK_NEXT
-                                    .with(|c| c.replace(std::ptr::null_mut()));
-                                js_promise_reject(next, err_val);
-                            }
-                            CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-                            CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-                            CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-                            restore_microtask_context();
-                            if !box_activation.is_null() {
-                                pop_async_box_execution_ref(box_activation);
-                            }
-                            crate::r#box::release_async_box_activation(box_activation);
-                            *ran += 1;
-                            continue;
-                        }
-                        ASYNC_STEP_GUARD.with(|c| {
-                            c.set(AsyncStepGuard {
-                                consecutive_error_count: new_count,
-                            })
-                        });
-                    } else {
-                        ASYNC_STEP_GUARD.with(|c| {
-                            c.set(AsyncStepGuard {
-                                consecutive_error_count: 0,
-                            })
-                        });
+                    // Rejected awaits can make arbitrary forward progress: a catch
+                    // may immediately await another rejection (#11449). Counting
+                    // consecutive error resumptions cannot detect a stuck state
+                    // machine and must not reject a valid async activation.
+                    if !is_error {
                         // Issue #922: a non-error step dispatched, signalling
                         // forward progress through the user's async state
                         // machine. Reset the throw_not_callable counter so a
@@ -1059,9 +1001,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         prev_trap.current_step as *const crate::closure::ClosureHeader,
                     );
                     // #7497: seed the trap from the HANDLES, not from the locals.
-                    // Between the re-read at the top of this arm and here sit the
-                    // runaway-reentry guard (which allocates a TypeError on its
-                    // bounded path) and two handle pushes; a stale `next` stored
+                    // Re-read after the two handle pushes; a stale `next` stored
                     // into the trap is what `js_async_step_done` later settles
                     // and RETURNS as the async function's own result promise.
                     let next = rooted_promise(&next_handle);
