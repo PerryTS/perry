@@ -108,7 +108,11 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         );
         // static [sym] = [] on a (process-global) class id (CLASS_STATIC_SYMBOLS).
         unsafe {
-            s::js_class_register_static_symbol(STATIC_SYMBOL_CLASS, sym.get_nanbox_f64(), value_value())
+            s::js_class_register_static_symbol(
+                STATIC_SYMBOL_CLASS,
+                sym.get_nanbox_f64(),
+                value_value(),
+            )
         };
 
         let owner = obj.get_raw_mut_ptr::<u8>() as usize;
