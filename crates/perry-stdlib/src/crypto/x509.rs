@@ -1264,6 +1264,12 @@ pub(super) fn nanbox_ptr<T>(ptr: *mut T) -> f64 {
 }
 
 pub(super) fn arg_ptr(arg: f64) -> i64 {
+    // #11430: an SSO short string (`String(7)`, `` `${n}` ``) carries its
+    // characters inline in the NaN-box — masking it yields a garbage address
+    // that `bytes_from_ptr` then dereferences. Materialize it on the heap.
+    if perry_runtime::JSValue::from_bits(arg.to_bits()).is_short_string() {
+        return perry_runtime::js_get_string_pointer_unified(arg);
+    }
     (arg.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
 }
 

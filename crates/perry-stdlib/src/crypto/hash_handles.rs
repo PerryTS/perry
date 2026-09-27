@@ -131,7 +131,8 @@ fn js_true() -> f64 {
 }
 
 fn unbox_to_i64(value: f64) -> i64 {
-    (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
+    // SSO-aware (#11430): a short string argument is materialized first.
+    arg_ptr(value)
 }
 
 fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
@@ -510,7 +511,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                 {
                     output_encoding.to_ascii_lowercase()
                 } else {
-                    let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                    let enc_ptr = arg_ptr(args[0]);
                     let enc_bytes = bytes_from_ptr(enc_ptr);
                     std::str::from_utf8(&enc_bytes)
                         .unwrap_or("hex")
@@ -769,7 +770,7 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let buf = alloc_buffer_from_slice(&digest);
                 f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
             } else {
-                let enc_ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+                let enc_ptr = arg_ptr(args[0]);
                 let enc_bytes = bytes_from_ptr(enc_ptr);
                 let enc = std::str::from_utf8(&enc_bytes)
                     .unwrap_or("hex")

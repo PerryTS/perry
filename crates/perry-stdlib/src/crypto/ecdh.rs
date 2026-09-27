@@ -159,7 +159,7 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
@@ -473,7 +473,7 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
     }
     match method {
         "update" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            let ptr = arg_ptr(args[0]);
             let bytes = bytes_from_ptr(ptr);
             h.data.lock().unwrap().extend_from_slice(&bytes);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
