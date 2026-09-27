@@ -73,9 +73,137 @@ fn is_typescript_importer(path: &Path) -> bool {
     )
 }
 
+/// A user module's static named/default import of a bare package that did
+/// not resolve, whose binding the module reads as a value. Perry has nothing to
+/// bind it to: codegen emitted an extern reference named after the LOCAL
+/// binding, and the program failed in the linker on `_nanoid` / `_uuidv4` /
+/// `_fastify` with no mention of the missing package (#11576). Node fails the
+/// same program at load time with ERR_MODULE_NOT_FOUND, so a compile error is
+/// the faithful answer. Deliberately narrow:
+///
+/// * only bare package specifiers — relative paths, `node:`/builtin names
+///   (runtime-backed or not), and Perry's own `perry/*` modules keep today's
+///   behaviour;
+/// * only importers outside `node_modules`, and never CJS-wrapped
+///   `require()`s: packages routinely `require` optional peers inside a
+///   `try` (`debug` → `supports-color`), which must stay non-fatal;
+/// * only bindings the module CALLS directly (see [`called_import_names`]) —
+///   exactly the shape that used to die in the linker. A property read or a
+///   `new` on an unresolved binding still warns and continues as before (it
+///   links, and throws where it is reached), and a type-only use of an
+///   uninstalled `@types`-style import still compiles.
+fn enforce_resolved_bare_imports(ctx: &CompilationContext) -> Result<()> {
+    let mut missing = Vec::new();
+    for (importer, module) in &ctx.native_modules {
+        if importer
+            .components()
+            .any(|component| component.as_os_str() == "node_modules")
+        {
+            continue;
+        }
+        let mut called: Option<HashSet<String>> = None;
+        for import in &module.imports {
+            if import.resolved_path.is_some()
+                || import.is_native
+                || import.type_only
+                || import.runtime_erased
+                || import.is_dynamic
+                || import.is_adopted_require
+                || !is_bare_package_specifier(&import.source)
+            {
+                continue;
+            }
+            for specifier in &import.specifiers {
+                let local = match specifier {
+                    ImportSpecifier::Named { local, .. } | ImportSpecifier::Default { local } => {
+                        local
+                    }
+                    // Namespace imports already hard-error at collection (#629).
+                    ImportSpecifier::Namespace { .. } => continue,
+                };
+                if called
+                    .get_or_insert_with(|| called_import_names(module))
+                    .contains(local)
+                {
+                    missing.push((importer.clone(), import.source.clone(), local.clone()));
+                }
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    if let Some((importer, source, _)) = missing.first().cloned() {
+        let package = package_name(&source);
+        // Every binding from the SAME package in the same importer, so the
+        // message names all of them (`uuidv4` and `nanoid` in one snippet).
+        let locals: Vec<String> = missing
+            .iter()
+            .filter(|(i, s, _)| *i == importer && package_name(s) == package)
+            .map(|(_, _, local)| format!("'{local}'"))
+            .collect();
+        let others: Vec<&str> = {
+            let mut v: Vec<&str> = missing
+                .iter()
+                .map(|(_, s, _)| package_name(s))
+                .filter(|p| *p != package)
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let also = if others.is_empty() {
+            String::new()
+        } else {
+            format!("\nAlso not installed: {}.", others.join(", "))
+        };
+        bail!(
+            "Cannot find package '{package}' imported from {} (binding {} of `import ... from \"{source}\"`).\n\
+             Perry compiles npm packages from their installed source, and '{package}' is not installed \
+             in any node_modules directory above the importer. Install it (e.g. `npm install {package}`) \
+             and compile again.{also}",
+            importer.display(),
+            locals.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// `lodash` / `@scope/pkg` / `pkg/sub/path`, but not `./x`, `/abs`, `node:fs`,
+/// a Node builtin name, `perry/ui`, or a URL-like specifier.
+fn is_bare_package_specifier(source: &str) -> bool {
+    if source.is_empty()
+        || source.starts_with('.')
+        || source.starts_with('/')
+        || source.starts_with('#')
+        || source.contains(':')
+        || source == "perry"
+        || source.starts_with("perry/")
+    {
+        return false;
+    }
+    let name = package_name(source);
+    !perry_hir::is_node_builtin_module(name) && !perry_hir::is_node_builtin_module(source)
+}
+
+/// The package part of a bare specifier: `@scope/pkg/sub` → `@scope/pkg`,
+/// `pkg/sub` → `pkg`.
+fn package_name(source: &str) -> &str {
+    let mut parts = source.splitn(3, '/');
+    let first = parts.next().unwrap_or(source);
+    if first.starts_with('@') {
+        match parts.next() {
+            Some(second) => &source[..first.len() + 1 + second.len()],
+            None => source,
+        }
+    } else {
+        first
+    }
+}
+
 /// Reject statically absent named exports while module/source context is still
 /// available, instead of inventing a perry_fn symbol that fails in the linker.
 pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
+    enforce_resolved_bare_imports(ctx)?;
     let mut edges = Vec::new();
     let mut value_refs: HashMap<PathBuf, HashSet<String>> = HashMap::new();
     for (importer, module) in &ctx.native_modules {
@@ -135,7 +263,30 @@ pub(super) fn enforce(ctx: &mut CompilationContext) -> Result<()> {
 /// form missing from this list only means that import is not pre-checked and
 /// falls back to the linker, never that a valid program is rejected.
 pub(super) fn value_reference_names(module: &Module) -> HashSet<String> {
-    let mut out = HashSet::new();
+    collect_refs(module).values
+}
+
+/// Imported bindings `module` CALLS directly (`nanoid()`, `uuidv4()`): the
+/// shape that codegen lowers to a call of an extern symbol named after the
+/// local binding, so an unresolved one fails in the linker (#11576).
+fn called_import_names(module: &Module) -> HashSet<String> {
+    collect_refs(module).called
+}
+
+#[derive(Default)]
+struct Refs {
+    values: HashSet<String>,
+    called: HashSet<String>,
+}
+
+impl Refs {
+    fn insert(&mut self, name: String) {
+        self.values.insert(name);
+    }
+}
+
+fn collect_refs(module: &Module) -> Refs {
+    let mut out = Refs::default();
     visit_stmts(&module.init, &mut out);
     for function in &module.functions {
         visit_function(function, &mut out);
@@ -151,7 +302,7 @@ pub(super) fn value_reference_names(module: &Module) -> HashSet<String> {
     out
 }
 
-fn visit_class(class: &Class, out: &mut HashSet<String>) {
+fn visit_class(class: &Class, out: &mut Refs) {
     if let Some(parent) = &class.extends_name {
         out.insert(parent.clone());
     }
@@ -180,7 +331,7 @@ fn visit_class(class: &Class, out: &mut HashSet<String>) {
     }
 }
 
-fn visit_decorators(decorators: &[Decorator], out: &mut HashSet<String>) {
+fn visit_decorators(decorators: &[Decorator], out: &mut Refs) {
     for decorator in decorators {
         out.insert(decorator.name.clone());
         for arg in &decorator.args {
@@ -189,7 +340,7 @@ fn visit_decorators(decorators: &[Decorator], out: &mut HashSet<String>) {
     }
 }
 
-fn visit_function(function: &Function, out: &mut HashSet<String>) {
+fn visit_function(function: &Function, out: &mut Refs) {
     visit_decorators(&function.decorators, out);
     for param in &function.params {
         visit_decorators(&param.decorators, out);
@@ -200,7 +351,12 @@ fn visit_function(function: &Function, out: &mut HashSet<String>) {
     visit_stmts(&function.body, out);
 }
 
-fn visit_expr(expr: &Expr, out: &mut HashSet<String>) {
+fn visit_expr(expr: &Expr, out: &mut Refs) {
+    if let Expr::Call { callee, .. } = expr {
+        if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+            out.called.insert(name.clone());
+        }
+    }
     match expr {
         Expr::ExternFuncRef { name, .. } | Expr::ClassRef(name) => {
             out.insert(name.clone());
@@ -226,13 +382,13 @@ fn visit_expr(expr: &Expr, out: &mut HashSet<String>) {
     walk_expr_children(expr, &mut |child| visit_expr(child, out));
 }
 
-fn visit_stmts(stmts: &[Stmt], out: &mut HashSet<String>) {
+fn visit_stmts(stmts: &[Stmt], out: &mut Refs) {
     for stmt in stmts {
         visit_stmt(stmt, out);
     }
 }
 
-fn visit_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+fn visit_stmt(stmt: &Stmt, out: &mut Refs) {
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(expr) = init {
@@ -298,5 +454,46 @@ fn visit_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
         }
         Stmt::Labeled { body, .. } => visit_stmt(body, out),
         Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod unresolved_import_tests {
+    use super::{is_bare_package_specifier, package_name};
+
+    #[test]
+    fn bare_specifiers_are_the_packages_node_would_look_up() {
+        for bare in [
+            "nanoid",
+            "uuid",
+            "@scope/pkg",
+            "@scope/pkg/sub",
+            "mysql2/promise",
+        ] {
+            assert!(is_bare_package_specifier(bare), "{bare}");
+        }
+        for not_bare in [
+            "./x",
+            "../y",
+            "/abs/z",
+            "#internal",
+            "node:fs",
+            "fs",
+            "fs/promises",
+            "perry/ui",
+            "perry",
+            "https://x.dev/m.js",
+            "",
+        ] {
+            assert!(!is_bare_package_specifier(not_bare), "{not_bare}");
+        }
+    }
+
+    #[test]
+    fn package_name_strips_subpaths_and_keeps_scopes() {
+        assert_eq!(package_name("nanoid"), "nanoid");
+        assert_eq!(package_name("mysql2/promise"), "mysql2");
+        assert_eq!(package_name("@scope/pkg"), "@scope/pkg");
+        assert_eq!(package_name("@scope/pkg/deep/path"), "@scope/pkg");
     }
 }
