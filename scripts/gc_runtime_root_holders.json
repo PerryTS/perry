@@ -2723,6 +2723,18 @@
       "name": "ADD_SITES",
       "verdict": "not_a_gc_pointer",
       "why": "The registry of static-key store sites that published a key-add memo: each entry is the address of a site record, a module global emitted by codegen (`@perry_ic_N_packed_set`, `[4 x i64]`) that lives for the process, or a leaked Box in a unit test. A site record holds only numbers (ShapeIds, a slot, a generation, and a pointer to a Box-leaked way array of the same numbers), never a GC heap address or a NaN-boxed value. The registry is walked after every full trace only to NOTE the named ShapeIds as cache carriers (`note_packed_add_carriers`); it neither marks nor rewrites anything."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer.rs",
+      "name": "PROFILE_CALLBACK_TIMER_REGISTRATIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic profiling counter bumped once per timer registration (crate::promise::bump); a plain u64 count, never a heap address. Surfaced by rule B only because #11583 made timer.rs call an allocator (the timer handle object is now built before the async_hooks init)."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer.rs",
+      "name": "PROFILE_INTERVAL_TIMER_REGISTRATIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic profiling counter bumped once per timer registration (crate::promise::bump); a plain u64 count, never a heap address. Surfaced by rule B only because #11583 made timer.rs call an allocator (the timer handle object is now built before the async_hooks init)."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
