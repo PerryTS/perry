@@ -41,6 +41,25 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
     if !(triple.starts_with("x86_64") || triple.starts_with("aarch64")) || triple.contains("32") {
         return false;
     }
+    // A String.prototype method name keeps the dispatcher: its receiver is
+    // most often a primitive string, which the site cannot describe (it would
+    // only add a miss call in front of the dispatcher's string arm), and the
+    // tag-guarded String lowering's non-string arm and the invalid-arity
+    // fallback must stay the plain universal dispatch.
+    if crate::lower_string_method::is_known_string_method_name(property) {
+        return false;
+    }
+    // Object.prototype own methods (hasOwnProperty, valueOf, ...)
+    // resolve to builtins the site never memoizes, so it would only add a miss
+    // call in front of the dispatcher.
+    if crate::lower_call::property_get::is_inherited_object_prototype_method(property) {
+        return false;
+    }
+    // A typed-feedback (profiling) build records every method call in the
+    // dispatcher; a site hit would skip that recording.
+    if super::typed_feedback::typed_feedback_emission_enabled() {
+        return false;
+    }
     !(property.is_empty()
         || property.starts_with('#')
         || property.starts_with("__perry_")
