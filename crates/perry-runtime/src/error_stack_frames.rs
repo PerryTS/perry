@@ -403,8 +403,18 @@ fn dladdr_info(ip: usize) -> Option<libc::Dl_info> {
 /// Static executable symbolization is deliberately opt-in: `nm` is a process
 /// spawn and can consume seconds on a large retained-symbol binary. Read the
 /// switch once so every default-path miss pays only a cached boolean load.
+///
+/// #11541: served by the `gc-instruments` feature. The `nm` table (process
+/// spawn, output parse, Rust demangler: ~67 KB) was linked into every binary
+/// because `PERRY_GC_DIAG`'s charge report can reach it; without the feature
+/// this is a constant `false` and the table drops out of the link, and a
+/// binary built without it aborts at startup when the knob is set (see
+/// `gc::instruments::INSTRUMENT_KNOBS`).
 #[cfg(unix)]
 fn stack_symbols_enabled() -> bool {
+    if !cfg!(feature = "gc-instruments") {
+        return false;
+    }
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *crate::once_init::get_or_init(&ENABLED, || {
         crate::gc::env_flag_enabled("PERRY_STACK_SYMBOLS")
@@ -418,7 +428,9 @@ fn stack_symbols_enabled() -> bool {
 fn executable_image_base() -> Option<usize> {
     static IMAGE_BASE: OnceLock<usize> = OnceLock::new();
     let base = *crate::once_init::get_or_init(&IMAGE_BASE, || {
-        dladdr_info(load_static_symbol_index as *const () as usize)
+        // Anchored on `describe_ip`, which every caller already links: an
+        // anchor inside the `nm` table would keep that table live.
+        dladdr_info(describe_ip as *const () as usize)
             .map(|info| info.dli_fbase as usize)
             .unwrap_or(0)
     });
@@ -993,7 +1005,9 @@ mod tests {
     /// table. Exercise a missing dynamic name explicitly because Mach-O can
     /// expose local symbols through dladdr. This isolated child opts into
     /// `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
-    #[cfg(unix)]
+    /// The table is served by `gc-instruments` (#11541): without the feature
+    /// the knob aborts at startup, so there is no opted-in state to test.
+    #[cfg(all(unix, feature = "gc-instruments"))]
     #[test]
     fn describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in() {
         const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_NM_CHILD";

@@ -214,12 +214,26 @@ impl Default for ContextOptions {
 
 static VM_SCRIPTS: OnceLock<Mutex<HashMap<usize, ScriptMetadata>>> = OnceLock::new();
 
+// #11541: both tables register their thread-exit hook when they are first
+// created (every insert goes through these accessors; the dead-owner sweep
+// and the lookups read the `OnceLock` directly), instead of being named in
+// `arena::thread_exit`'s dispatcher, which linked `node:vm` into every binary.
 fn scripts() -> &'static Mutex<HashMap<usize, ScriptMetadata>> {
-    crate::once_init::get_or_init(&VM_SCRIPTS, || Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&VM_SCRIPTS, || {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_vm_owner_entries_in_freed_ranges,
+        );
+        Mutex::new(HashMap::new())
+    })
 }
 
 fn compiled_function_sources() -> &'static Mutex<HashMap<usize, String>> {
-    crate::once_init::get_or_init(&VM_COMPILED_FUNCTION_SOURCES, || Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&VM_COMPILED_FUNCTION_SOURCES, || {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_vm_owner_entries_in_freed_ranges,
+        );
+        Mutex::new(HashMap::new())
+    })
 }
 
 pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<String> {

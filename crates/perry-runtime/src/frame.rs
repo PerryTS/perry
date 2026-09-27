@@ -88,6 +88,7 @@ pub extern "C" fn js_on_frame_callback(callback: i64) -> i64 {
     // triggered a collection.
     let context = crate::async_context::capture_context();
 
+    register_thread_exit_release();
     FRAME_CALLBACKS.lock().unwrap().push(FrameCallback {
         id,
         // Re-read below the allocation: `capture_context` may have moved it.
@@ -195,6 +196,20 @@ pub extern "C" fn js_frame_tick(timestamp_ms: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_frame_pump_default() -> i32 {
     js_frame_tick(crate::timer::js_timer_now())
+}
+
+/// Register [`release_frame_callbacks_in_freed_ranges`] before the first
+/// callback is queued (#11541): named in `arena::thread_exit`'s dispatcher it
+/// was linked into every binary, `onFrame` or not. `LAST_FIRE_BY_CLOSURE` is
+/// only written for a callback taken from `FRAME_CALLBACKS`, so this one
+/// registration covers both tables.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_frame_callbacks_in_freed_ranges,
+        );
+    });
 }
 
 /// Thread-exit release (#11471): drop every pending `onFrame` callback whose
