@@ -57,7 +57,7 @@ fn u8_cache_holds(addr: usize) -> bool {
 
 #[test]
 fn thread_exit_releases_the_threads_symbol_side_table_entries() {
-    const CLASS_ID: u32 = 0x0B11_4711;
+    const STATIC_SYMBOL_CLASS: u32 = 0x0B11_4711;
     let ((owner, sym), alive) = std::thread::spawn(|| {
         use perry_runtime::symbol as s;
         let scope = RuntimeHandleScope::new();
@@ -108,7 +108,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         );
         // static [sym] = [] on a (process-global) class id (CLASS_STATIC_SYMBOLS).
         unsafe {
-            s::js_class_register_static_symbol(CLASS_ID, sym.get_nanbox_f64(), value_value())
+            s::js_class_register_static_symbol(STATIC_SYMBOL_CLASS, sym.get_nanbox_f64(), value_value())
         };
 
         let owner = obj.get_raw_mut_ptr::<u8>() as usize;
@@ -121,7 +121,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
             s::symbol_property_tables_hold_for_test(owner, sym).0,
             s::symbol_property_tables_hold_for_test(owner, sym2).1,
             s::symbol_accessor_held_for_test(owner, sym3),
-            s::class_static_symbol_held_for_test(CLASS_ID, sym),
+            s::class_static_symbol_held_for_test(STATIC_SYMBOL_CLASS, sym),
         ];
         ((owner, [sym, sym2, sym3]), alive)
     })
@@ -146,7 +146,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         "a dead thread's symbol accessor outlived its heap"
     );
     assert!(
-        !s::class_static_symbol_held_for_test(CLASS_ID, sym[0]),
+        !s::class_static_symbol_held_for_test(STATIC_SYMBOL_CLASS, sym[0]),
         "a dead thread's class-static symbol member outlived its heap"
     );
 }
