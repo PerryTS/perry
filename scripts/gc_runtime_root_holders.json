@@ -80,7 +80,7 @@
       "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "PENDING_CONNECTION_EVENTS",
       "verdict": "not_a_gc_pointer",
-      "why": "Vec of (server_handle, socket_handle) registry-id pairs drained by js_node_http_server_process_pending to fire 'connection' listeners; socket_handle is a connection-socket IncomingMessage handle (alloc_connection_socket). Both are perry-ffi registry ids, not NaN-boxed values — the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots, and the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage>."
+      "why": "Vec of (server_handle, socket_handle) registry-id pairs drained by js_node_http_server_process_pending to fire 'connection' listeners; socket_handle is a connection-socket IncomingMessage handle (alloc_connection_socket). Both are perry-ffi registry ids, not NaN-boxed values \u2014 the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots, and the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage>."
     },
     {
       "file": "crates/perry-ext-http/src/server/server.rs",
@@ -2729,7 +2729,7 @@
       "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
       "name": "CLOSED",
       "verdict": "not_a_gc_pointer",
-      "why": "Vec<i64> of connection-socket handle ids (alloc_connection_socket) whose TCP connection fully closed, queued by note_closed_socket/on_closed and drained by the pump — same shape and same file as the pre-existing ABORTED/aborted() request-handle queue this crate already uses for 'aborted'. A registry id, not a NaN-boxed value: the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage> in server/mod.rs's scan_http_server_roots."
+      "why": "Vec<i64> of connection-socket handle ids (alloc_connection_socket) whose TCP connection fully closed, queued by note_closed_socket/on_closed and drained by the pump \u2014 same shape and same file as the pre-existing ABORTED/aborted() request-handle queue this crate already uses for 'aborted'. A registry id, not a NaN-boxed value: the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage> in server/mod.rs's scan_http_server_roots."
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
@@ -2760,6 +2760,18 @@
       "name": "PROFILE_INTERVAL_TIMER_REGISTRATIONS",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic profiling counter bumped once per timer registration (crate::promise::bump); a plain u64 count, never a heap address. Surfaced by rule B only because #11583 made timer.rs call an allocator (the timer handle object is now built before the async_hooks init)."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
+      "name": "BY_NAME_SEEN",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10495/#10753: per-thread direct-mapped filter of u32 words, each a FINGERPRINT of a (receiver ShapeId, key address) pair plus a 2-bit sighting count, so hook D primes the inherited-read cache on a pair's second or third by-name miss only and then stops trying. A fingerprint is a hash, never dereferenced or compared as an address; a moved or recycled key can only cost one extra or one skipped prime."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/inherited_read_cache.rs",
+      "name": "NOT_ANON_MEMO",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10495: per-thread direct-mapped memo of u32 CLASS IDS proved not to be an anonymous literal shape's (is_anon_shape_class_id == false). Class ids are integers from the class registry, never heap addresses."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
