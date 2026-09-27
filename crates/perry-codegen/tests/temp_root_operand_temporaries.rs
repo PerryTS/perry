@@ -828,18 +828,28 @@ fn string_literal_array_element_is_re_derived_below_an_allocating_element() {
 /// literal form to `operand_needs_root`'s suppression list without also adding
 /// it to `operand_is_reloadable` drops it to `Reuse` — #7114, for that form —
 /// and no other test in this file would notice. This one goes red.
+///
+/// LOWERING (#11593). The two lowerings now discharge that root differently,
+/// so each is pinned and asserted on its own:
+///
+/// - **shadow stack**: the temp root is a bound frame slot the collector
+///   rewrites in place — exactly one temp root, stored before the allocating
+///   sibling and re-read after it ([`wtf8_literal_operand_is_rooted_under_shadow_lowering`]);
+/// - **native roots**: the slot's only heap value is a copy of the handle
+///   global, which is immutable after module init and rewritten by the
+///   collector, so `precise_roots/remat.rs` stops relocating it and re-reads
+///   the global at the use instead
+///   ([`wtf8_literal_operand_is_re_derived_under_native_lowering`]). That is
+///   #7114's *other* discharge — re-derive from collector-rewritten storage
+///   below the collection point — and the native arm asserts it on the value
+///   the consuming call receives, not on the absence of a root.
+///
+/// Both arms still go red on the #7114 shape: the operand's pre-collection
+/// register reaching the concat.
 #[test]
-fn wtf8_literal_operand_is_rooted_not_merely_reused() {
-    // 0xED 0xA0 0x80 is U+D800 in WTF-8: a lone surrogate, which is what routes
-    // a literal to `Expr::WtfString` instead of `Expr::String`.
-    let ir = ir_for(
-        "wtf8_operand.ts",
-        vec![Stmt::Expr(Expr::Binary {
-            op: perry_hir::BinaryOp::Add,
-            left: Box::new(Expr::WtfString(vec![0xED, 0xA0, 0x80])),
-            right: Box::new(allocating_numeric()),
-        })],
-    );
+fn wtf8_literal_operand_is_rooted_under_shadow_lowering() {
+    let _pin = NativeRootsPin::shadow();
+    let ir = wtf8_operand_ir();
 
     let f = init_ir(&ir);
     let slots = temp_root_slots(f);
@@ -877,6 +887,167 @@ fn wtf8_literal_operand_is_rooted_not_merely_reused() {
          carried across the collection point in a register, which is #7114 for \
          lone-surrogate literals:\n{f}"
     );
+}
+
+/// The native-roots arm of the WTF-8 test above; see its doc comment.
+#[test]
+fn wtf8_literal_operand_is_re_derived_under_native_lowering() {
+    let _pin = NativeRootsPin::native();
+    let ir = wtf8_operand_ir();
+    let f = init_ir(&ir);
+
+    wtf8_operand_is_re_derived(f).unwrap_or_else(|why| panic!("{why}\n{f}"));
+
+    // The check above must be able to fail. Rewire the concat to consume the
+    // operand's FIRST handle load — the one above the collection point — which
+    // is precisely the #7114 `Reuse` shape (suppressed, not re-derived).
+    let alloc = f
+        .lines()
+        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .expect("the positive check counted it");
+    let stale = f
+        .lines()
+        .take(alloc)
+        .filter_map(|l| l.trim().split_once(" = "))
+        .find(|(_, rhs)| rhs.starts_with(WTF8_HANDLE_LOAD))
+        .map(|(reg, _)| reg.trim().to_string())
+        .expect("the operand is lowered (its handle loaded) before the sibling");
+    let concat_arg =
+        perry_codegen::testing::temp_slots::call_operands(f, "js_string_concat_value_box")
+            .and_then(|ops| ops.into_iter().next())
+            .expect("the positive check found the concat");
+    let sabotaged: String = f
+        .lines()
+        .map(|l| {
+            if l.contains("@js_string_concat_value_box(") {
+                l.replacen(&format!("i64 {concat_arg},"), &format!("i64 {stale},"), 1)
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(
+        sabotaged, f,
+        "the sabotage must actually rewrite the concat"
+    );
+    assert!(
+        wtf8_operand_is_re_derived(&sabotaged).is_err(),
+        "the re-derivation check accepted the #7114 shape — it can no longer fail:\n{sabotaged}"
+    );
+}
+
+/// `"\u{D800}" + <allocating numeric>` in `@main`, under whatever lowering the
+/// caller pinned. 0xED 0xA0 0x80 is U+D800 in WTF-8: a lone surrogate, which is
+/// what routes a literal to `Expr::WtfString` instead of `Expr::String`.
+fn wtf8_operand_ir() -> String {
+    ir_for(
+        "wtf8_operand.ts",
+        vec![Stmt::Expr(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::WtfString(vec![0xED, 0xA0, 0x80])),
+            right: Box::new(allocating_numeric()),
+        })],
+    )
+}
+
+const WTF8_HANDLE_LOAD: &str = "load double, ptr @wtf8_operand_ts_.str.";
+
+/// `remat.rs`'s `REMAT_MARK` ("this slot holds the backing global's value"),
+/// as the `i64` literal the pooled temp slot is stored with.
+const REMAT_MARK_I64: i64 = 0x7FFC_0000_0000_4D52_u64 as i64;
+
+/// #7114's re-derivation discharge, checked on the value the concat receives:
+///
+/// 1. the operand reaches its slot BEFORE the allocating sibling, as the remat
+///    marker (not as a register a relocation would have to fix up);
+/// 2. every handle-global load the concat's string operand depends on sits
+///    BELOW the allocating sibling, and there is at least one — the value is
+///    re-read from the collector-rewritten global after the collection point,
+///    and no pre-collection register leaks into it.
+fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
+    if f.matches("call i64 @js_object_alloc(").count() != 1 {
+        return Err("expected exactly one allocating sibling in @main".into());
+    }
+    if f.matches("@js_string_concat_value_box(").count() != 1 {
+        return Err("expected exactly one fused string+value concat in @main".into());
+    }
+    let lines: Vec<&str> = f.lines().map(str::trim).collect();
+    let alloc = lines
+        .iter()
+        .position(|l| l.contains("call i64 @js_object_alloc("))
+        .expect("just counted it");
+    let concat = lines
+        .iter()
+        .position(|l| l.contains("@js_string_concat_value_box("))
+        .expect("just counted it");
+    if concat < alloc {
+        return Err("the concat must consume the operand after the sibling ran".into());
+    }
+
+    let marker_store = format!("store i64 {REMAT_MARK_I64}, ptr %");
+    if !lines[..alloc].iter().any(|l| l.starts_with(&marker_store)) {
+        return Err(format!(
+            "the WTF-8 operand must reach its slot as the remat marker \
+             ({REMAT_MARK_I64}) before the allocating sibling. No marker store \
+             means it was neither rooted nor rematerialized"
+        ));
+    }
+    if !temp_root_slots(f).is_empty() {
+        return Err(format!(
+            "a rematerialized operand is not a relocated root; unexpected temp \
+             roots: {:?}",
+            temp_root_slots(f)
+        ));
+    }
+
+    // Def map, then every value the concat's string operand transitively uses.
+    let defs: std::collections::HashMap<&str, (usize, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let (reg, rhs) = l.split_once(" = ")?;
+            reg.starts_with('%').then_some((reg.trim(), (i, rhs)))
+        })
+        .collect();
+    let arg = perry_codegen::testing::temp_slots::call_operands(f, "js_string_concat_value_box")
+        .and_then(|ops| ops.into_iter().next())
+        .ok_or("the concat has no string operand")?;
+    let mut stack = vec![arg];
+    let mut seen = std::collections::HashSet::new();
+    let mut handle_loads = Vec::new();
+    while let Some(reg) = stack.pop() {
+        if !seen.insert(reg.clone()) {
+            continue;
+        }
+        let Some(&(line, rhs)) = defs.get(reg.as_str()) else {
+            continue;
+        };
+        if rhs.starts_with(WTF8_HANDLE_LOAD) {
+            handle_loads.push(line);
+            continue;
+        }
+        stack.extend(
+            rhs.split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
+                .filter(|w| w.starts_with('%'))
+                .map(str::to_string),
+        );
+    }
+    if handle_loads.is_empty() {
+        return Err(
+            "the concat's string operand does not come from the handle global at \
+             all, so nothing re-derives it after the collection point (#7114)"
+                .into(),
+        );
+    }
+    if let Some(stale) = handle_loads.iter().find(|&&l| l < alloc) {
+        return Err(format!(
+            "#7114: the concat's string operand depends on the handle load at \
+             line {stale}, ABOVE the allocating sibling (line {alloc}) — a \
+             pre-collection register carried across the collection point"
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- #7154 ----

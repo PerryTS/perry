@@ -28,3 +28,11 @@ Tests: `remat::tests` (plan, controls, RS4GC pipeline), and
 copying-minor relocations, a nursery sweep and a `PERRY_GEN_GC=0` control).
 Sabotage: making the rewrite keep the stale stored address instead of
 re-reading the global SIGSEGVs the default run.
+
+`temp_root_operand_temporaries.rs`'s WTF-8 operand test is now split by
+lowering. The shadow arm keeps the one-temp-root contract. Under native roots
+the operand's slot is rematerialized, so the native arm checks #7114's
+re-derivation on the value the concat receives: the marker is stored before the
+allocating sibling, and every handle load the operand depends on sits below it.
+The arm also rewires the concat to the pre-collection register and requires
+that sabotaged IR to be rejected.

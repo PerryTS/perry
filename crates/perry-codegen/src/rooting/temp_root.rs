@@ -517,9 +517,13 @@ pub(in crate::rooting) struct RootedOperands {
 /// The failure mode to guard against is not the asymmetry, it is *half*-closing
 /// it: adding a literal form to [`operand_needs_root`]'s suppression list
 /// without adding it here leaves it on `Reuse`, which is #7114 for that form.
-/// `wtf8_literal_operand_is_rooted_not_merely_reused` in
-/// `tests/temp_root_operand_temporaries.rs` pins the current answer so that edit
-/// goes red instead of shipping another silent wrong answer.
+/// `wtf8_literal_operand_is_rooted_under_shadow_lowering` and
+/// `wtf8_literal_operand_is_re_derived_under_native_lowering` in
+/// `tests/temp_root_operand_temporaries.rs` pin the current answer so that edit
+/// goes red instead of shipping another silent wrong answer. (Under native
+/// roots the WTF-8 operand's temp root is rematerialized from its handle global
+/// by `function/precise_roots/remat.rs`, #11593, so the native arm asserts the
+/// re-derivation rather than the slot.)
 pub(in crate::rooting) fn operand_is_reloadable(expr: &Expr) -> bool {
     // ONLY provably immutable sources. A string literal always re-lowers to a
     // load of the same `__perry_init_strings_*` handle, so re-reading it can
