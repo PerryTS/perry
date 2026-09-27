@@ -1,9 +1,12 @@
 # RFC: deferred collection
 
-**Status:** proposed, design only. Nothing in this page is implemented beyond
-what [the current state](#1-where-a-collection-can-begin-today) describes; it
-is written for the owner's review before any code. Lever name in the GC-cost
-census: **L2b**.
+**Status:** accepted with amendments; migrating. The owner's decisions of
+2026-09-27 are recorded in [§8](#8-decisions-2026-09-27) and folded into the
+text. Where a decision overrides the original proposal, the text says so.
+Nothing here is implemented beyond what
+[the current state](#1-where-a-collection-can-begin-today) describes. S0
+(#11500) is PR #11531, and S1 and S3 are in progress
+([§6](#6-migration-plan)). Lever name in the GC-cost census: **L2b**.
 **Problem:** relocation fan-out under RS4GC statepoints (#8583), and the
 hand-kept safepoint allowlist that has already been wrong twice (#11522,
 #11523).
@@ -119,6 +122,57 @@ nothing.
 Together that is about 46 % of the re-entering sites. `js_box_get_bits` is
 re-entrant only through a `PERRY_DEBUG` `eprintln!` and the TDZ throw.
 
+**Fast/slow split census** (MEASURED with the same tools, a follow-up run).
+In this run, 17 helpers are treated as leaves whose re-entering work happens
+only on their slow paths: the property-get IC, the class-field get/set IC, the
+box reads, the callee unbox, the packed index get and put-miss, class
+allocation, template coercion, and a few more. Fourteen of the 17 are new
+leaves relative to the L2b + throw-cut set. The rest were already leaves there
+because they are throw-only (`js_box_get_bits_trusted`,
+`js_closure_unbox_callee_checked`). The 14:
+
+- the IC helpers: `js_object_get_field_ic`, `js_class_field_get_ic`,
+  `js_class_field_set_ic`, `js_packed_arraylike_index_get`,
+  `js_typed_feedback_array_index_get_fallback_boxed`,
+  `js_put_value_set_packed_miss`;
+- `js_box_get_bits`, `js_template_string_coerce_box`,
+  `js_ctor_return_override`, `js_array_push_f64`;
+- the class-allocation family: `js_object_alloc_class_inline_keys`,
+  `js_object_alloc_class_inline_keys_stamped`, `js_build_class_keys_array`,
+  `js_gc_typed_shape_id_for_keys`.
+
+Stacking all 17 on L2b + throw cut gives:
+
+| | today | L2b + throw cut | **+ splits** | + splits + L1 |
+|---|---:|---:|---:|---:|
+| relocations | 13.89 M | 7.39 M | **3.23 M (−77 %)** | 2.88 M |
+| safepoints | 2.11 M | 1.17 M | **0.53 M** | 0.53 M |
+
+Live values per remaining safepoint, with splits: 69 k safepoints have 0,
+323 k have 1–4, 111 k have 5–16, 25 k have 17–64, 4.3 k have 65–256, 340 have
+257–1024, and 20 have more than 1024.
+
+Relocations in the top functions, today → with splits:
+
+| function | today | with splits |
+|---|---:|---:|
+| `__25747` | 3.31 M | 615 k |
+| `GW7` | 380 k | 151 k |
+| `__27679` | 408 k | 57 k |
+| `m_A` | 108 k | 39 k |
+| `__28905` | 107 k | 33 k |
+| `__14872` | 72 k | 47 k |
+| `__52336` | 80 k | 0 |
+
+The former spill cases `__84092`, `__85198` and `__80686` each fall below 4 k.
+
+**Caveat, and it matters for the plan.** The −77 % is measured with the splits
+*stacked on* L2b + throw cut. The splits land first in the revised plan (S2 in
+[§6](#6-migration-plan)), where their standalone gain on today's runtime is
+smaller and **has not been measured**. The S2 work measures it before claiming
+a number, and part of the 17 are leaves only under deferral anyway
+([§5](#5-fastslow-splits-for-ic-helpers)).
+
 ## 1. Where a collection can begin today
 
 The nursery half of this idea **already ships**, which changes how the RFC
@@ -189,9 +243,11 @@ anything. A-assist, D and every leaf misclassification are not.
 >
 > **D2.** An allocation may take a new block, arm the poll word
 > (`set_safepoint_pending`), run *heap-only* budgeted work (mark propagation,
-> weak processing, sweep, reclaim), or, only when the valve fires, run a
-> conservative non-moving collection. It never starts a root-reading or moving
-> phase.
+> weak processing, sweep, reclaim), or run a conservative non-moving
+> collection in exactly two cases: the valve fires, or the OldReclaim arm
+> becomes due (kept at the allocation point by
+> [decision 1](#8-decisions-2026-09-27)). It never starts a phase that reads
+> frame roots *precisely*, and it never starts a moving phase.
 >
 > **D3.** A call site is a safepoint iff its callee *may reach a declared
 > poll*. The throw cut refines this: reaching a poll only through the unwind
@@ -199,12 +255,15 @@ anything. A-assist, D and every leaf misclassification are not.
 
 The runtime changes needed for D1/D2, all in `gc/policy.rs` and `gc/cycle.rs`:
 
-- **A-old becomes a deferral.** It sets the pending flag with the same slack
-  valve A-nur uses. The existing precise OldReclaim arm in
-  `gc_safepoint_moving_minor` (`:3855-3875`) already runs the identical full at
-  the poll. #5476's guarantee changes from "one `gc_check_trigger` completes
-  the reclaim" to "the next poll completes it", and that needs owner sign-off
-  ([open question 1](#8-open-questions-for-the-owner)).
+- **A-old stays at the allocation point.** This is
+  [decision 1](#8-decisions-2026-09-27), and it overrides the original
+  proposal to defer it. A-old is a forced-conservative, non-moving full, so it
+  is compatible with D1, and #5476's "one `gc_check_trigger` completes the
+  reclaim" guarantee stands. The existing precise OldReclaim arm in
+  `gc_safepoint_moving_minor` (`:3855-3875`) keeps racing it to the poll.
+  Moving A-old is revisited only once a measurement shows no RSS cost. Its
+  count (`OldReclaimAllocPoint`) is reported in [§7](#7-validation-plan), not
+  gated.
 - **A-assist stops before root-reading subphases.** `RootScan` and
   `FinalRootRemark` become "requires a declared safepoint": an assist that
   reaches one returns and arms the poll. The heap-only phases may still run in
@@ -298,7 +357,7 @@ The result classifies every exported `js_*` symbol:
 | `ThrowOnly`: reaches a poll only through the throw cut | leaf, only after D1/D2 ship | +274 (3,157) |
 | `Reenters` | statepoint | 2,551 |
 
-**Source of truth.** I recommend a **generated, committed table**,
+**Source of truth** ([decision 4](#8-decisions-2026-09-27)): a **generated, committed table**,
 `crates/perry-codegen/src/gc_effects.generated.tsv`, which
 `classify_direct_callee` reads through `include_str!`. The checker
 regenerates it in CI and **fails hard** on drift in the unsafe direction (a
@@ -320,10 +379,10 @@ things:
    failure prints the shortest witness path (`why.py`). A sabotage test plants
    a `js_proxy_get` call in a leaf helper and asserts red.
 2. **Per target.** Inlining and `cfg` arms differ between targets. The checker
-   runs on the Linux x86-64 archives and the macOS aarch64 archives at
-   minimum, and the table is the *intersection* of leaves. Whether Windows
-   (`cargo xwin`) is also required is
-   [open question 4](#8-open-questions-for-the-owner).
+   runs on three targets: the Linux x86-64 archives, the macOS aarch64
+   archives, and Windows through `cargo xwin`
+   ([decision 4](#8-decisions-2026-09-27)). The table is the *intersection*
+   of the leaves found on those three.
 3. **An unmapped-frame verifier at runtime.** At every precise collection
    under `cfg(test)`, `gcaudit` or `PERRY_GC_VERIFY_FRAMES=1`, a frame whose
    return address falls inside a Perry-generated function but matches no
@@ -349,8 +408,9 @@ The design:
 
 1. **The nursery grows by blocks while a poll is pending.** This is today's
    A-nur behaviour, unchanged.
-2. **The valve is the only allocation-point collection left (A-valve,
-   A-emerg).** It is sound without statepoints at the allocation site because:
+2. **The conservative arms are the only allocation-point collections left:**
+   A-valve, A-emerg, and A-old, which [decision 1](#8-decisions-2026-09-27)
+   keeps. They are sound without statepoints at the allocation site because:
    - it scans the whole native stack and the `setjmp`-captured callee-saved
      registers, including Rust runtime frames;
    - it resolves interior pointers (`gc/trace.rs:552`);
@@ -364,8 +424,10 @@ The design:
    not widen it. The cost is known: a conservative cycle retains ambiguously
    and runs no copying minor. Firing on every cycle measured +364 % to
    +5371 % `heap_used_bytes` on the ratchet probes (`gc/scan_fallback.rs:12-14`).
-   So the valve must stay exceptional, and the `scan_fallback` census turns
-   that into a gate ([§7](#7-validation-plan)).
+   So the valve must stay exceptional. [Decision 5](#8-decisions-2026-09-27)
+   keeps the 64 MiB slack and makes a valve firing on the gap suite or the
+   ratchet probes a **hard `pr-gate` failure**, backed by a counter that
+   proves the check ran ([§7](#7-validation-plan)).
 3. **Heavy runtime calls fall into three kinds:**
    - *Output-dominated* (`JSON.parse` result, `Array.from`, `join`, `repeat`):
      what they allocate is their result, which is live, so a collection partway
@@ -385,13 +447,15 @@ The design:
 4. **Straight-line code** is bounded by *allocation sites × per-site size*,
    which is finite but not small. ESTIMATED: unknown for the bundle's init
    chunks, so it has to be measured first (a new `bytes_since_last_poll`
-   high-water mark in the `[gc]` exit summary). If the measurement says it is
-   needed, emit a **statement-boundary poll** every K allocating top-level
-   statements in bodies above a site threshold, following the precedent of
-   `STRAIGHT_LINE_STORE_OUTLINE_MIN_SITES` (`codegen/helpers.rs`). At a
-   top-level statement boundary few values are live, and #8583-spilled bodies
-   use shadow frames anyway. This step is gated on the measurement, not
-   proposed blind.
+   high-water mark in the `[gc]` exit summary).
+   [Decision 3](#8-decisions-2026-09-27) makes this a hard rule: if a
+   module-init body or large entry chunk exceeds the RSS bar of
+   [decision 8](#8-decisions-2026-09-27), codegen adds
+   **statement-boundary polls** to *those bodies only*, one every K
+   allocating top-level statements. `STRAIGHT_LINE_STORE_OUTLINE_MIN_SITES`
+   (`codegen/helpers.rs`) is the precedent for a size-gated body
+   transformation. At a top-level statement boundary few values are live, and
+   #8583-spilled bodies use shadow frames anyway.
 5. **Hard emergency:** unchanged. `gc_try_emergency_reclaim` (`gc/mod.rs:876`)
    runs when the OS refuses a block, and the valve slack scales with the heap
    budget (`gc/heap_budget.rs`).
@@ -399,15 +463,13 @@ The design:
 **Against the owner's rule ("minimize RSS, never trade compute").** Compute:
 collection *work* does not change, and the wins are compile time plus fewer
 statepoint spills on hot paths. RSS: the nursery half of the deferral already
-ships, so the new RSS exposure is two things:
-
-- OldReclaim moving from the allocation point to the next poll. ESTIMATED at
-  most one growth quantum, 32 MiB (`GC_OLD_GEN_RECLAIM_GROWTH_BYTES`), in
-  compute-only code, and zero in event-loop code, which reaches a poll first.
-- A budgeted cycle waiting for a poll to remark.
-
-Both are measured before step S3 flips, with acceptance criteria in
-[§7](#7-validation-plan). The design adds no new RSS-for-compute trade.
+ships, and OldReclaim stays where it is ([decision 1](#8-decisions-2026-09-27)).
+The only new RSS exposure is a budgeted cycle waiting for a poll to remark,
+plus whatever straight-line bodies turn out to allocate between polls. Both
+are measured before the runtime-invariant step flips. The acceptance bar is
+[decision 8](#8-decisions-2026-09-27): at most +2 % peak RSS on any single
+probe, no regression of the median across the ratchet corpus and the cc
+bundle, and no compute regression.
 
 ## 4. Interactions
 
@@ -419,7 +481,8 @@ polls, so its initial mark and its final remark move to polls. Pause
 accounting (`[gc-step-bounds]`) is unchanged, because the remark is already
 atomic ([step bounds](gc-step-bounds.md#final-root-remark-is-atomic-on-purpose)).
 What does change is *latency*: a cycle whose marking finishes between polls
-waits for the next one.
+waits for the next one. [Decision 6](#8-decisions-2026-09-27) accepts this,
+provided pause and remark latency are measured on a server fixture.
 
 ### 4.2 Generational promotion
 
@@ -436,8 +499,9 @@ poll word is a process-global superset (`gc/poll_arm.rs`). An agent armed by
 another thread's deferral pays one spurious out-of-line call, which is today's
 behaviour. `SerializedValue` deep copies mean no cross-heap pointers exist.
 `GC_UNSAFE_ZONES` blocks polls and the valve alike, so growth during an unsafe
-zone is unbounded, exactly as today. That is out of scope, but it is noted in
-the open questions.
+zone is unbounded, exactly as today. [Decision 10](#8-decisions-2026-09-27)
+keeps that out of scope, but adds a diagnostic counter for the bytes
+allocated inside unsafe zones.
 
 ### 4.4 Event loop, microtasks, async and generators
 
@@ -472,7 +536,10 @@ unchanged.
   - The *fatal* throw (`try_depth == 0`) runs `exit` listeners (JS) with the
     stack intact (`exception.rs:378-388`). This is sound only because none of
     those frames ever resumes: the process exits. The cut list names
-    `print_uncaught` for exactly this reason.
+    `print_uncaught` for exactly this reason. [Decision 7](#8-decisions-2026-09-27)
+    accepts the carve-out on one condition: a test that throws uncaught into
+    an allocation-heavy `exit` listener and runs under forced evacuation and
+    the unmapped-frame verifier.
   - `Error.prepareStackTrace` is evaluated lazily when `.stack` is read, not at
     construction (`error.rs:1280-1296`), so building an error runs no JS.
 - **The residue.** `js_box_get_bits` is `ThrowOnly` once its `PERRY_DEBUG`
@@ -526,91 +593,178 @@ join:
   %r = phi i64 [ %v, %entry ], [ %s, %slow ]
 ```
 
-- **Contract of `_fast`.** It is a `Leaf` or `AllocOnly` symbol in the
-  generated table: it serves a data-property hit and returns `TAG_HOLE` for a
-  getter, proxy, dictionary miss or anything else it cannot serve. The
-  classification comes from the checker, not from a comment.
+### Why a fast path is a sound leaf on *today's* runtime
+
+This argument is why the owner moved splits ahead of the runtime invariant
+(to S2). On today's runtime a collection can begin inside a call only through
+the entries tabled in [§1](#1-where-a-collection-can-begin-today):
+
+- an allocation reaching `gc_check_trigger` (A1–A3, and through them
+  A-assist, the arm that reads precise frame roots);
+- a root-lock exit flushing a deferred request (D);
+- a JS re-entry reaching a poll, or `gc()` (P, E);
+- an indirect call or an unresolved external, whose target is unknown.
+
+A fast entry whose **whole call graph** does none of these reaches no
+collector entry. That is exactly the checker's **L2 `Leaf`** class, and L2
+needs no runtime invariant, because it is sound against every entry above as
+the runtime stands. It excludes three things:
+
+- *Any allocation*, even a small one. Today an allocation can land in
+  A-assist, which reads precise frame roots, and a leaf-marked frame would be
+  skipped silently (`stack_maps.rs:1824`).
+- *Any `GcRootRegistryGuard`*, because of #11523.
+- *Any throw.* Throwing makes a helper `ThrowOnly`, which waits for the throw
+  cut. A fast entry therefore answers `TAG_HOLE` where the full helper would
+  throw: the TDZ read, not-callable, and a derived-constructor primitive
+  return.
+
+The source of truth is the S1 checker run over the `_fast` symbol, not the
+reading below. The reading below says which of the split census's helpers
+have a hit path that qualifies (read at `24a5262bd`):
+
+| helper (sites) | hit path | today? |
+|---|---|---|
+| `js_object_get_field_ic` (191 k) | `pic_outlined_mru_hit` (`object/field_get_set/ic_miss.rs:1378`): shape-stamp compare plus slot load; feedback counters are `CannotCollect` | **L2 leaf** |
+| `js_class_field_get_ic` / `_set_ic` (74 k) | guard (`CannotCollect`) plus slot load, or slot store with `js_object_set_field` plus barrier (`typed_feedback/guards.rs:732-830`) | **L2 leaf** (the set path's barrier and layout note are `CannotCollect`; verify `js_object_set_field`'s tail) |
+| `js_box_get_bits` (163 k) | registered box, non-TDZ value: one load (`box.rs:1115-1150`); the TDZ throw and the `PERRY_DEBUG` print go to the slow path | **L2 leaf** |
+| `js_box_get_bits_trusted`, `js_closure_unbox_callee_checked` | value or closure-header read; the only other arm throws | **L2 leaf** once the throw arm is on the slow path |
+| `js_packed_arraylike_index_get`, `js_typed_feedback_array_index_get_fallback_boxed` (60 k with put-miss) | dense element read, or the `CannotCollect` lazy-array probe (`array/subclass_packed_index.rs:35-80`); the `js_array_get_f64` / `js_dyn_index_get` fallbacks go to the slow path | **L2 leaf** |
+| `js_put_value_set_packed_miss` | the existing-key way store (`packed_ways_store`, whose own comment says "nothing here allocates or runs user code") is L2 leaf; the key-add memo `packed_add_try` stores through overflow storage and may allocate | **split**: the way store is a leaf today; the add memo is `AllocOnly` |
+| `js_template_string_coerce_box` (20 k) | string input returns itself; number input allocates (`builtins/numbers.rs:774-783`) | **split**: the string arm is a leaf today; the number arm is `AllocOnly` |
+| `js_ctor_return_override` | object, undefined or base-primitive: returns a value; a derived primitive throws | **L2 leaf** once the throw arm is on the slow path |
+| `js_array_push_f64` | in-capacity push is a store plus length; growth allocates | **split**: the in-capacity push is a leaf if the checker agrees; growth is `AllocOnly` |
+| class allocation: `js_object_alloc_class_inline_keys{,_stamped}`, `js_build_class_keys_array`, `js_gc_typed_shape_id_for_keys` (31 k) | allocation *is* the operation | **`AllocOnly`**: a leaf only after L2b deferral (S6) |
+
+Consequence: everything above marked "L2 leaf" can land in S2. Class
+allocation, and the allocating arms of put-miss, template coercion and push,
+are carried by S2's machinery but switched to leaf only in S6.
+
+### How the split is emitted, and what it does to the static count
+
+- **The `_fast` contract.** Serve the hit, and return `TAG_HOLE` for anything
+  else: a getter, a proxy, a dictionary miss, a throw condition. Its class
+  comes from the generated table.
 - **Relocation stays confined to the cold block.** RS4GC places
   `gc.relocate`s only at the slow statepoint. Its relocation-via-alloca
   rewrite, followed by `mem2reg`, produces phis at `%join` that merge each
-  live value with its relocated copy. The hot path keeps its values in
-  registers, with no statepoint spill or reload. Codegen can additionally
-  outline the slow block to a per-function cold stub so the spills do not
-  inflate the hot function's frame.
-- **What splits do *not* change.** The slow call is still a statepoint with
-  the full live set, so the **static** relocation count and RS4GC compile time
-  hardly move. Splits are a runtime lever (spills on the hot path), not a
-  compile-time lever. Their measurement is dynamic: executed statepoints per
-  `perf stat` run, plus cc bundle wall time.
-- **Order.** Property get first (191 k sites), then class-field get/set, then
-  the packed index get/put miss, then class allocation. `js_box_get_bits`
-  needs no split. The throw cut plus removing the `eprintln!` makes the whole
-  helper `ThrowOnly`.
+  live value with its relocated copy. On the hot path, values stay in
+  registers, with no statepoint spill or reload.
+- **Read the census number with care.** The split census counted each split
+  site as a *leaf call*, which models the hot path. If the slow call stays an
+  ordinary statepoint in an inline cold block, that statepoint carries the
+  same live set, and the **static** relocation count and RS4GC compile time
+  fall far less than −77 %. The win is then mostly at run time.
+- **Getting the static number too.** The slow call itself must stop being an
+  RS4GC statepoint. The candidate form is a **per-call-site shadow spill**:
+  - mark the slow call `gc-leaf-function`;
+  - store the frame's live GC values into shadow slots before it, and reload
+    them after. This is the #8583 shadow-frame mechanism applied per call site
+    instead of per function.
+
+  The walker skips the frame's unmapped PC and finds the values in the shadow
+  frame. This needs the pre-RS4GC live set, which is what the linear liveness
+  estimator (S4) computes, and it has to satisfy the
+  [rooting invariant](gc-rooting-invariant.md)'s dominance rule for the slot
+  stores. Until it exists, S2 is measured as a runtime lever. The S2 work
+  measures both its static and its dynamic gain on today's runtime before
+  claiming either.
 
 ## 6. Migration plan
 
-Each step lands on its own, carries its own gate, and can be reverted alone.
+Revised order ([decision](#8-decisions-2026-09-27) of 2026-09-27). Each step
+lands on its own, carries its own gate, and can be reverted alone. The
+percentages are the census's cumulative figures, and each is valid only for
+the configuration it was measured in.
 
-| step | change | removes (MEASURED unless marked) | gate | risk |
+| step | change | removes | gate | risk |
 |---|---|---|---|---|
-| **S0** | #11500: leaf-mark audited helpers on `invoke` too | −12 % relocations | codegen unit test + sabotage; `gc.statepoint` count on a try-heavy fixture | low: same audited table |
-| **S1** | #11522 (`js_array_length` Proxy arm, and the other flagged symbols) and #11523 (root-lock flush) fixed; land the call-graph checker and the census tools in `scripts/`; switch `classify_direct_callee` to the generated **L2** table | −18 % cumulative (L2). L2 is sound under **today's** runtime: a symbol that reaches no collector entry cannot collect | checker in `lint` with sabotage test; unmapped-frame verifier in `gc-stress` | low for code, medium for the checker's own completeness (exemption list) |
-| **S2** | replace #8583's `(slots + sites) × sites` with a linear liveness estimator: per function, backward liveness of root allocas across the classified safepoints of the pre-RS4GC IR, O(instructions + roots) | today's 100× overestimate; spurious shadow-frame spills (`__87158`: 134.5 M estimated vs 42 k measured) | estimator vs census rank correlation on the bundle; the #8586 post-RS4GC budget stays as backstop | low: backstop exists |
-| **S3** | runtime D1/D2: A-old deferred, assist stops before root phases, root-lock flush sets pending, contract becomes the invariant (heal arm deleted); indirect-entry and recursive-SCC polls; poll-coverage checker | no relocations yet; enables S4/S5 | [§7](#7-validation-plan) RSS and valve gates; `strict` panic under test and `gcaudit` | **medium: RSS (#5476) and remark latency** |
-| **S4** | L2b: `AllocOnly` → leaf | −28 % cumulative | same checker; seeded schedule with verifier | low once S3 holds |
-| **S5** | throw cut: `ThrowOnly` → leaf; `js_box_get_bits` debug print made JS-free | −47 % cumulative; spill-threshold functions 5 → 0; `__25747` 125 s → 41 s, 2.44 → 0.75 GB | landing-pad fixtures under forced evacuation + verifier | low |
-| **S6** | fast/slow splits, property get first | runtime only; ESTIMATED up to ~46 % of re-entering sites get a leaf hot path | dynamic statepoint count; bench suite | low per IC |
+| **S0** | #11500 (PR #11531): leaf-mark audited helpers on `invoke` too | −12 % relocations (MEASURED) | codegen unit test + sabotage; `gc.statepoint` count on a try-heavy fixture | low: same audited table |
+| **S1** *(in progress)* | generated call-effects table + call-graph checker; census tools into `scripts/`; **conservative reclassification** of the #11522 helpers (`js_array_length`'s Proxy arm and the other flagged symbols) and the #11523 root-lock-flush helpers to `Unknown` (the flush itself changes in S5); `classify_direct_callee` switched to the generated **L2** table | −18 % cumulative (L2, MEASURED). L2 is sound on **today's** runtime | checker in `lint` on three targets, with a sabotage test; unmapped-frame verifier in `gc-stress` | low for code; medium for the checker's own completeness (the exemption list) |
+| **S2** | **fast/slow IC splits** for the helpers marked "L2 leaf" in [§5](#5-fastslow-splits-for-ic-helpers), property get first | the census's −77 % is stacked on L2b + throw cut and counts split sites as leaf calls; the standalone gain on today's runtime is **not yet measured**, and S2 measures it (static and dynamic) first | each `_fast` symbol is L2 `Leaf` in the checker; forced evacuation + seeded schedule + verifier over the IC fixtures; bench suite | low per IC |
+| **S3** *(in progress, `perf/remat-global-backed-roots`)* | rematerialize global-backed roots: string-literal handles and class-key arrays are reloaded from their global after a safepoint instead of relocated | 90 % of what remains in `__25747` under L2b + throw cut is global-backed (MEASURED); the whole-bundle figure is measured by S3 | root-dominance corpus; forced evacuation | low |
+| **S4** | linear liveness estimator replaces #8583's `(slots + sites) × sites`: per function, backward liveness of root allocas across the classified safepoints of the pre-RS4GC IR, O(instructions + roots) | today's ~100× overestimate; spurious shadow-frame spills (`__87158`: 134.5 M estimated vs 42 k measured) | estimator vs census rank correlation; the #8586 post-RS4GC budget stays as backstop | low: backstop exists |
+| **S5** | runtime invariant D1/D2: assist stops before root phases, root-lock flush sets pending, contract becomes the invariant (heal arm deleted), OldReclaim **unchanged** (decision 1); indirect-entry and recursive-SCC polls; poll-coverage checker; straight-line measurement (decision 3) | no relocations by itself; enables S6/S7 | [§7](#7-validation-plan): RSS bar, valve hard gate, remark latency; `strict` panic under test and `gcaudit` | **medium: RSS and remark latency** |
+| **S6** | L2b: `AllocOnly` → leaf, including the allocating fast arms of S2 | −28 % cumulative on its own configuration (MEASURED, without splits) | same checker; seeded schedule + verifier | low once S5 holds |
+| **S7** | throw cut: `ThrowOnly` → leaf; `js_box_get_bits` debug print made JS-free | −47 % cumulative without splits (MEASURED); spill-threshold functions 5 → 0; `__25747` 125 s → 41 s, 2.44 → 0.75 GB; with splits stacked, 13.89 M → 3.23 M | landing-pad fixtures under forced evacuation + verifier; the fatal-throw test (decision 7) | low |
 
-**One deviation from the proposed order.** The throw cut cannot precede S3.
-The throw-only helpers *allocate* the error (and `js_array_from_values` /
-`js_array_alloc` allocate unboundedly). Under today's runtime that allocation
-can reach A-assist, a precise root scan at an unmapped frame, which is the
-silent-skip hazard. One sub-step can land early: throw helpers whose *only*
-allocation is the error object, if they allocate it through a no-collect path.
-`arena_alloc_gc_no_collect` (`arena/allocators.rs:78`) is the precedent, but
-today it is a try-current-block probe, so this needs a no-collect "take a block"
-variant.
+**Ordering constraints that remain.**
+
+- **The throw cut (S7) must follow the runtime invariant (S5).** The
+  throw-only helpers *allocate* the error, and `js_array_from_values` /
+  `js_array_alloc` allocate without bound. Today that allocation can reach
+  A-assist, a precise root scan at an unmapped frame. S2 avoids this by moving
+  every throw arm to the slow path.
+- **L2b (S6) must follow S5.** That is D2's whole point.
+- **The static half of S2's gain needs S4's liveness.** The per-call-site
+  shadow spill in [§5](#5-fastslow-splits-for-ic-helpers) depends on it. S2
+  can ship its runtime half without it.
 
 ## 7. Validation plan
 
 | instrument | what it must show | when |
 |---|---|---|
 | `gc-stress` (required) under `PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1` | green, with `copied_objects > 0` asserted (a gate must assert its subject ran) | S1 onward |
-| `PERRY_GC_SCHEDULE_SEED=<s> PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0` + `PERRY_GC_PROTECT_FROMSPACE=1` + unmapped-frame verifier | zero verifier panics over the gap suite and the root-dominance corpus; `loop_polls=` and forced-collection counters non-zero | S1, S3, S4, S5 |
+| `PERRY_GC_SCHEDULE_SEED=<s> PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_ALLOC_KB=0` + `PERRY_GC_PROTECT_FROMSPACE=1` + unmapped-frame verifier | zero verifier panics over the gap suite, the root-dominance corpus and the IC split fixtures; `loop_polls=` and forced-collection counters non-zero | S1, S2, S5–S7 |
 | `gc-root-dominance.yml` over `gc_root_dominance_corpus.sh` | allowlist stays empty; hand lists replaced by the generated table with a containment test | S1 |
-| call-graph checker + sabotage test | red on a planted `js_proxy_get` in a leaf; table drift reported | S1 onward |
-| cc bundle census (appendix) | the numbers in [the evidence](#the-evidence-claude-code-bundle-census) reproduced within ±1 % at each step's landing; a nightly ratchet on relocations and safepoints | every step |
-| `scan_fallback` census | `NurseryChurnSlackValve` and `OldReclaimAllocPoint` = 0 on the gc-ratchet probes and the gap suite; `safepoint_drain_count` > 0 | S3 |
-| peak RSS on allocation-heavy straight-line fixtures (new: a 100 k-string pool init, a 50 MB object-literal chunk, a recursive tree build without loops) and the cc bundle (startup plus a scripted session) | ≤ 2 % peak-RSS regression against pre-S3 (proposed bar, owner to confirm); the recursive fixture's RSS bounded by its live set, which proves the SCC poll | S3 |
-| `[gc-step-bounds]`, `final_remark_max_us` | no pause regression; remark latency distribution reported | S3 |
-| compile time and RSS for the bundle build | S5: `__25747` class of functions off the #8583 spill list; total build wall reported | S2, S5 |
+| call-graph checker + sabotage test, on Linux x86-64, macOS aarch64 and Windows (`cargo xwin`) | red on a planted `js_proxy_get` in a leaf; unsafe drift fails, safe drift reported | S1 onward |
+| census as a **ratchet** (decision 9): relocation and safepoint totals may only go down | a small representative corpus in regular CI; the full cc census nightly through `/root/perry-heavy.sh` | S1 onward |
+| valve **hard `pr-gate` failure** (decision 5) | `NurseryChurnSlackValve` = 0 on the gap suite and ratchet probes, with a live counter proving the check ran; `safepoint_drain_count` > 0; `OldReclaimAllocPoint` reported, not gated (decision 1) | S5 |
+| peak RSS on allocation-heavy straight-line fixtures (a 100 k-string pool init, a 50 MB object-literal chunk, a recursive tree build with no loops), the ratchet corpus, and the cc bundle (startup plus a scripted session) | decision 8: at most +2 % peak RSS on any single probe, no median regression across the corpus and the bundle, no compute regression. The recursive fixture's RSS is bounded by its live set, which proves the SCC poll. A body over the bar gets statement-boundary polls (decision 3) | S5 |
+| server fixture: pause and remark latency (decision 6) | `[gc-step-bounds]` / `final_remark_max_us` distribution reported against pre-S5; no pause regression | S5 |
+| fatal-throw test (decision 7) | an uncaught throw with an allocation-heavy `exit` listener, under forced evacuation + verifier, matches node | S7 |
+| unsafe-zone growth counter (decision 10) | bytes allocated inside `GC_UNSAFE_ZONES` reported in the `[gc]` exit summary (diagnostic, not gated) | S5 |
+| compile time and RSS for the bundle build | functions leave the #8583 spill list; `__25747` class timed; total build wall reported | S2, S4, S7 |
 
-## 8. Open questions for the owner
+## 8. Decisions (2026-09-27)
 
-1. **#5476's guarantee.** Accept OldReclaim moving from "this allocation" to
-   "the next poll" (ESTIMATED ≤ 32 MiB extra old-gen residency in compute-only
-   code)? If not, OldReclaim stays at the allocation point behind the forced
-   conservative scan, which is sound under D1 because it is non-moving, and
-   S3 keeps only the other three runtime changes.
-2. **Poll placement.** Indirect-entry prologue plus recursive-SCC entry polls,
-   as proposed, against all-function entry polls. The latter is simpler but
-   measured at 12.18 M instead of 7.39 M relocations.
-3. **Straight-line polls.** Measure first (proposed) or add statement-boundary
-   polls to large init bodies pre-emptively?
-4. **The table's authority.** A generated, committed table (proposed) or
-   annotations? Which targets must the checker run on: Linux x86-64 plus macOS
-   aarch64, or also Windows through `cargo xwin`?
-5. **The valve.** Keep 64 MiB of slack? Should a valve firing on the gap suite
-   or the ratchet probes be a hard `pr-gate` failure?
-6. **Budgeted-cycle latency.** Accept that root-reading phases wait for a poll?
-7. **The fatal-throw carve-out.** Exit listeners run on an intact stack whose
-   frames never resume. Accept this as part of the throw cut?
-8. **The RSS acceptance bar** for S3 (proposed: ≤ 2 % peak RSS on the ratchet
-   probes and the bundle).
-9. **The census as CI.** A nightly job on the measurement host with ratcheted
-   relocation and safepoint totals, or run by hand at each step?
-10. **`GC_UNSAFE_ZONES`.** Growth during an unsafe zone stays unbounded. Leave
-    it out of scope?
+All ten open questions of the first draft are **resolved**. The owner's
+decisions ([PR comment](https://github.com/PerryTS/perry/pull/11528#issuecomment-5855338615)):
+
+1. **#5476 / OldReclaim:** not moved for now. OldReclaim stays at the
+   allocation point. It is non-moving, so it is sound under D1. Revisit only
+   once measurement shows no RSS cost.
+2. **Poll placement:** as proposed. Indirect-entry prologue polls, one poll per
+   recursive SCC, and loop back-edge polls. Measured: 7.39 M vs 12.18 M
+   relocations for polls at every function entry.
+3. **Straight-line polls:** measure first, with a hard rule. If a module-init
+   body or large entry chunk exceeds the RSS bar (item 8), codegen adds
+   statement-boundary polls to those bodies only.
+4. **Table authority:** a generated, committed table plus the call-graph
+   checker in CI, run on Linux x86-64, macOS aarch64, **and** Windows via
+   `cargo xwin`.
+5. **Valve:** keep 64 MiB slack. A valve firing on the gap suite or the
+   ratchet probes is a **hard `pr-gate` failure**, with a counter asserting
+   the check actually ran.
+6. **Budgeted-cycle latency:** accepted. Measure pause and latency on a server
+   fixture.
+7. **Fatal-throw carve-out:** accepted, with a test: an uncaught throw plus an
+   allocation-heavy exit listener.
+8. **RSS bar for S5** (S3 in the first draft's numbering): at most +2 % peak
+   RSS on any single probe, AND no regression of the median across the ratchet
+   corpus and the cc bundle. Compute must not regress either.
+9. **Census as CI:** a ratchet; relocation and safepoint totals may only go
+   down. A small representative corpus in regular CI, and the full cc census
+   nightly through `/root/perry-heavy.sh`.
+10. **`GC_UNSAFE_ZONES`:** out of scope, but add a diagnostic counter for
+    growth inside unsafe zones.
+
+**Plan order, decided afterwards:**
+
+- S0 = #11500 (PR #11531).
+- S1 = the generated table, the checker, and the conservative reclassification
+  for #11522/#11523.
+- S2 = fast/slow IC splits, moved up because an IC hit on a plain data
+  property neither allocates nor re-enters.
+- S3 = rematerializing global-backed roots.
+- Then the liveness estimator, the runtime invariant and polls, L2b, and the
+  throw cut.
+
+**One new item for the owner, raised by the split census:** the static
+relocation figure (−77 %) is realized only if the split's slow call stops
+being an RS4GC statepoint, through the per-call-site shadow spill in
+[§5](#5-fastslow-splits-for-ic-helpers). Is that form wanted, or should S2
+stay a runtime-only lever?
 
 ## Appendix: the census and how to reproduce it
 
