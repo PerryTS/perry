@@ -28,6 +28,8 @@ mod construct;
 mod element_read_receiver_tests;
 mod iterate;
 mod slice_ops;
+#[cfg(test)]
+mod thread_exit_tests;
 mod transform;
 
 // `#[no_mangle] pub extern "C"` FFI entry points are compiled regardless (the
@@ -323,6 +325,27 @@ fn inline_owning_u32_cache_invalidate(addr: usize) {
     let slot = inline_owning_u32_cache_slot(addr);
     if INLINE_OWNING_U32_CACHE[slot].load(Ordering::Relaxed) == addr as u64 {
         INLINE_OWNING_U32_CACHE[slot].store(0, Ordering::Relaxed);
+    }
+}
+
+/// Forget process-wide admission facts before a retiring arena block can be
+/// reused by another thread (#11463). The per-thread registry disappears at
+/// thread exit, but these two atomic caches otherwise outlive its allocations.
+/// Do not touch TLS here: its destruction order is not guaranteed.
+pub(crate) fn invalidate_caches_in_range(start: usize, end: usize) {
+    for (cache, shift) in [
+        (&PERRY_TA_KIND_CACHE[..], 8),
+        (&INLINE_OWNING_U32_CACHE[..], 0),
+    ] {
+        for slot in cache {
+            let entry = slot.load(Ordering::Relaxed);
+            let address = (entry >> shift) as usize;
+            if (start..end).contains(&address) {
+                // A different thread can replace a colliding slot while we
+                // inspect it. Clear only the entry from the retiring block.
+                let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
+            }
+        }
     }
 }
 
