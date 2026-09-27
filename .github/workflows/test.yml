@@ -522,6 +522,20 @@ jobs:
           python3 scripts/thread_exit_address_globals.py --self-test
           python3 scripts/thread_exit_address_globals.py
 
+      # #11511. The holder audit above proves a table is SCANNED, not that it
+      # ever SHRINKS. The Web Fetch handle registries were `remove`d only in
+      # tests, so a server leaked every request/response until the id band ran
+      # out and panicked (#11164/#11165). Every map-like static in the runtime,
+      # stdlib, ffi and ext crates must have a production removal path or a
+      # written verdict; a new unclassified one fails, and so does a stale
+      # entry. `--self-test` plants a test-only-removal registry and requires
+      # it to fail. Build-free, so it lives in `lint`.
+      - name: Registry lifetime audit (#11511)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/registry_lifetime_check.py --self-test
+          python3 scripts/registry_lifetime_check.py
+
       # #8821. The poll-reach audit is static, build-free and sub-second, but it
       # lived ONLY in `gc-root-dominance.yml`, which is label-gated behind
       # `run-extended-tests` — so it is skipped on every PR and speaks only on
