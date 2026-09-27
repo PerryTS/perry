@@ -1576,20 +1576,18 @@
    "names": [
     "PERRY_TA_KIND_CACHE"
    ],
-   "verdict": "pending_fix",
-   "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); a thread exit left positive entries for freed blocks (#11463). PR #11470 clears them from Arena::drop.",
-   "hook": "invalidate_kind_caches_in_ranges",
-   "pr": "#11470"
+   "verdict": "thread_exit_invalidated",
+   "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); Arena::drop clears every slot naming a freed block with a compare-exchange (#11463/#11467).",
+   "hook": "invalidate_caches_in_range"
   },
   {
    "file": "crates/perry-runtime/src/typedarray/mod.rs",
    "names": [
     "INLINE_OWNING_U32_CACHE"
    ],
-   "verdict": "pending_fix",
-   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; same thread-exit staleness as PERRY_TA_KIND_CACHE, fixed by the same PR #11470 hook.",
-   "hook": "invalidate_kind_caches_in_ranges",
-   "pr": "#11470"
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; cleared for freed blocks by the same Arena::drop call (#11467).",
+   "hook": "invalidate_caches_in_range"
   },
   {
    "file": "crates/perry-runtime/src/typedarray/mod.rs",
@@ -3202,51 +3200,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Code address of the platform UI ForEach render handler, stored by js_register_foreach_render_handler."
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
-    "ROOT_CERTS_CACHE"
-   ],
-   "verdict": "pending_fix",
-   "why": "Process-global AtomicU64 GC root caching a JS array built on whichever thread asked first; pins/dangles after that thread exits. PR #11462 makes it per-thread, which deletes this static (the entry then goes stale and must be removed).",
-   "pr": "#11462"
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
-    "DEFAULT_CA_CACHE"
-   ],
-   "verdict": "pending_fix",
-   "why": "Process-global AtomicU64 GC root caching a JS array built on whichever thread asked first; pins/dangles after that thread exits. PR #11462 makes it per-thread, which deletes this static (the entry then goes stale and must be removed).",
-   "pr": "#11462"
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
-    "SYSTEM_CA_CACHE"
-   ],
-   "verdict": "pending_fix",
-   "why": "Process-global AtomicU64 GC root caching a JS array built on whichever thread asked first; pins/dangles after that thread exits. PR #11462 makes it per-thread, which deletes this static (the entry then goes stale and must be removed).",
-   "pr": "#11462"
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
-    "EXTRA_CA_CACHE"
-   ],
-   "verdict": "pending_fix",
-   "why": "Process-global AtomicU64 GC root caching a JS array built on whichever thread asked first; pins/dangles after that thread exits. PR #11462 makes it per-thread, which deletes this static (the entry then goes stale and must be removed).",
-   "pr": "#11462"
-  },
-  {
-   "file": "crates/perry-runtime/src/tls.rs",
-   "names": [
-    "SHARED_SIGALGS_CACHE"
-   ],
-   "verdict": "pending_fix",
-   "why": "Process-global AtomicU64 GC root caching a JS array built on whichever thread asked first; pins/dangles after that thread exits. PR #11462 makes it per-thread, which deletes this static (the entry then goes stale and must be removed).",
-   "pr": "#11462"
   },
   {
    "file": "crates/perry-runtime/src/tls.rs",
