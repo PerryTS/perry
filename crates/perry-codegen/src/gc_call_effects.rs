@@ -109,6 +109,34 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // slow call. Listed so nothing is spilled or reloaded around it on
         // the declined-guard edge of every generic property read.
         | "js_inherited_read_cache_hit_f64"
+        // S2 of the deferred-collection RFC (`expr/ic_fast_split.rs`): the
+        // GC-leaf hits of the three full-outline inline caches. Each answers
+        // a decline (TAG_HOLE, or a status) for every case it cannot serve,
+        // and the emitted code takes the collecting `_fast_miss` call instead.
+        // Audited 2026-09-27 against the runtime bodies, the checked items
+        // being: no Perry-heap allocation, no `GcRootRegistryGuard`, no
+        // throw, no call into generated code, no poll, no indirect call.
+        //   `js_object_get_field_ic_fast` (`object/field_get_set/ic_miss/
+        //   outline_split.rs`): tag compare, `pic_outlined_mru_hit` (a
+        //   OnceLock<bool> env read, `pic_slot_peek` — never the allocating
+        //   `pic_slot_resolve` —, a ShapeId compare, one slot load), then on
+        //   a hit the two `CannotCollect` feedback calls listed above.
+        //   `js_class_field_{get,set}_ic_fast` (`typed_feedback/guards.rs`):
+        //   the `CannotCollect` guard above, then one slot load, or one slot
+        //   store through `runtime_store_jsvalue_slot` (addref, layout note,
+        //   slot barrier — the bodies of `js_string_addref`,
+        //   `js_gc_note_slot_layout`, `js_write_barrier_slot`). The two
+        //   `js_object_set_field` edges that are NOT leaf — its diagnostics'
+        //   formatting (an indirect call; the census seeds it there) and a
+        //   live-bound widening that mints a descriptor — are declined BEFORE
+        //   they can run and replayed on the cold arm.
+        // The S1 generated table and its call-graph checker must pick these
+        // three up and are the authority over this comment; until S1 lands
+        // the census checker (`callgraph.py`) was run over the built
+        // archives and reported all three L2 leaf (see the S2 PR).
+        | "js_object_get_field_ic_fast"
+        | "js_class_field_get_ic_fast"
+        | "js_class_field_set_ic_fast"
         | "js_transition_ic_spill_append"
         | "js_write_barrier_slot"
         | "js_write_barrier_slot_validated_parent"

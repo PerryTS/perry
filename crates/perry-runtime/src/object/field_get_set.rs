@@ -337,6 +337,11 @@ pub use ic_slot::{
     pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slot_resolve_init, pic_slots_resolved,
 };
 pub use ic_slow::{js_object_get_field_ic_nonptr, js_object_get_field_ic_slow};
+/// S2 of the deferred-collection RFC: the full-outline read as a GC-leaf hit
+/// plus a collecting miss continuation.
+#[path = "field_get_set/ic_miss/outline_split.rs"]
+mod outline_split;
+pub use outline_split::{js_object_get_field_ic_fast, js_object_get_field_ic_fast_miss};
 
 #[cfg(test)]
 mod buffer_ic_miss_tests {

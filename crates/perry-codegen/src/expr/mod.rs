@@ -3072,6 +3072,7 @@ pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
+pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;

@@ -235,6 +235,26 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[I64, DOUBLE, I32, I32, I64, I32, I32],
     );
+    // S2 (deferred-collection RFC): the two full-outline class-field ICs as a
+    // GC-leaf hit (`_fast`, same operands as the full helper) plus a
+    // collecting miss continuation (`_fast_miss`). The SET miss takes the
+    // fast entry's status first.
+    module.declare_function(
+        "js_class_field_get_ic_fast",
+        DOUBLE,
+        &[I64, DOUBLE, I32, I32, I64, I32, I32],
+    );
+    module.declare_function("js_class_field_get_ic_fast_miss", DOUBLE, &[I64, DOUBLE, I64]);
+    module.declare_function(
+        "js_class_field_set_ic_fast",
+        I32,
+        &[I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
+    );
+    module.declare_function(
+        "js_class_field_set_ic_fast_miss",
+        VOID,
+        &[I32, I64, DOUBLE, I32, I32, I64, I32, DOUBLE, I32],
+    );
     module.declare_function(
         "js_typed_feedback_native_call_method",
         DOUBLE,
@@ -390,6 +410,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // single call for oversized modules. Args: (obj_bits, key_handle, site_id,
     // per-site IC cache global) -> field value.
     module.declare_function("js_object_get_field_ic", DOUBLE, &[I64, I64, I64, PTR]);
+    // S2: its MRU hit as a GC-leaf call answering TAG_HOLE on a decline, and
+    // the collecting rest of the ladder. Same operands as the full helper.
+    module.declare_function("js_object_get_field_ic_fast", DOUBLE, &[I64, I64, I64, PTR]);
+    module.declare_function("js_object_get_field_ic_fast_miss", DOUBLE, &[I64, I64, I64, PTR]);
     // T1: the two exits of the inline generic-get tower. Every guard failure —
     // SSO / INT32 class ref / nullish / non-object receiver / overflow slot /
     // deleted slot / named prefix / miss+prime — branches to one of these

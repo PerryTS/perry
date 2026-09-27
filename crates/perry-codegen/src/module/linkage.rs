@@ -291,7 +291,12 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         "js_object_get_field_ic_miss_packed"
         | "js_object_get_field_ic_slow"
         | "js_object_get_field_ic_nonptr"
-        | "js_write_barrier_root_nanbox" => " cold",
+        | "js_write_barrier_root_nanbox"
+        // S2 (`expr/ic_fast_split.rs`): the collecting continuations behind
+        // a declined GC-leaf hit. Still throwing, still GC-capable.
+        | "js_object_get_field_ic_fast_miss"
+        | "js_class_field_get_ic_fast_miss"
+        | "js_class_field_set_ic_fast_miss" => " cold",
         // PURE — each verified: pure bit tests/masking on the f64/i64 args,
         // total over arbitrary bits, no memory access anywhere in the body.
         //   js_nanbox_pointer        value/nanbox.rs — tag ladder, 0 → TAG_NULL
@@ -338,7 +343,16 @@ pub(crate) fn helper_decl_attrs(name: &str) -> &'static str {
         | "js_typed_feedback_plain_array_index_set_guard"
         | "js_typed_feedback_numeric_array_index_set_guard"
         | "js_typed_feedback_numeric_array_push_guard"
-        | "js_array_numeric_value_to_raw_f64" => " #4",
+        | "js_array_numeric_value_to_raw_f64"
+        // S2 GC-leaf hits (`expr/ic_fast_split.rs`), each `extern "C"` with
+        // no throw anywhere in its call graph — every case that would throw
+        // (nullish receiver, setter/getter, TDZ) is declined to the `_fast_miss`
+        // continuation instead — and no loop outside the audited guards'
+        // bounded ones. Being nounwind is also what keeps them a plain `call`
+        // inside a `try`, so the leaf marking never depends on the invoke arm.
+        | "js_object_get_field_ic_fast"
+        | "js_class_field_get_ic_fast"
+        | "js_class_field_set_ic_fast" => " #4",
         _ => "",
     }
 }

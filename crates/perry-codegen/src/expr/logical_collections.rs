@@ -1177,9 +1177,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::TemplateStringCoerce(operand) => {
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_template_string_coerce_box", &[(DOUBLE, &v)]))
+            // S2: a string operand is answered inline; see `ic_fast_split.rs`.
+            Ok(crate::expr::ic_fast_split::emit_template_string_coerce(ctx, &v))
         }
 
         // -------- Object(value) coercion (#3149) --------

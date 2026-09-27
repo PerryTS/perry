@@ -766,7 +766,10 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
         let ir = ir_for(build());
-        assert!(ir.contains("call void @js_class_field_set_ic"));
+        // S2: the outlined call is a GC-leaf hit plus a cold collecting miss.
+        assert!(ir.contains("call i32 @js_class_field_set_ic_fast("));
+        assert!(ir.contains("call void @js_class_field_set_ic_fast_miss("));
+        assert!(!ir.contains("call void @js_class_field_set_ic("));
         assert!(!ir.contains("class_field_set.fast"));
         assert!(!ir.contains("class_field_set.fallback"));
         assert!(!ir.contains("call i32 @js_typed_feedback_class_field_set_guard"));
@@ -809,7 +812,10 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
     {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
         let ir = ir_for(build());
-        assert!(ir.contains("call double @js_class_field_get_ic"));
+        // S2: the outlined call is a GC-leaf hit plus a cold collecting miss.
+        assert!(ir.contains("call double @js_class_field_get_ic_fast("));
+        assert!(ir.contains("call double @js_class_field_get_ic_fast_miss("));
+        assert!(!ir.contains("call double @js_class_field_get_ic("));
         assert!(!ir.contains("class_field_get.fast"));
         assert!(!ir.contains("class_field_inline.deref"));
         assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard("));

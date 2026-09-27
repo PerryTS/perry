@@ -1375,7 +1375,7 @@ fn outlined_mru_hit_enabled() -> bool {
 /// the caller has established that the tag was `POINTER`. `cache_slot` is the
 /// codegen-emitted per-site slot or null.
 #[inline]
-unsafe fn pic_outlined_mru_hit(
+pub(super) unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<f64> {
@@ -1422,6 +1422,19 @@ pub extern "C" fn js_object_get_field_ic(
     key: *const crate::StringHeader,
     site_id: u64,
     cache_slot: *mut PicCacheSlot,
+) -> f64 {
+    get_field_ic_dispatch(obj_bits, key, site_id, cache_slot, true)
+}
+
+/// The whole full-outline read ladder; `probe_mru` is false only on the cold
+/// arm of the S2 split, whose leaf entry has already asked the MRU word.
+#[inline(always)]
+pub(super) fn get_field_ic_dispatch(
+    obj_bits: i64,
+    key: *const crate::StringHeader,
+    site_id: u64,
+    cache_slot: *mut PicCacheSlot,
+    probe_mru: bool,
 ) -> f64 {
     // POINTER_MASK: lower 48 bits — strips the NaN-box tag to a raw heap pointer.
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -1476,7 +1489,7 @@ pub extern "C" fn js_object_get_field_ic(
         // values — a heap STRING's `+4` is a `StringHeader` field that rule 3
         // deliberately does not bound. The kind test used to be what turned a
         // string away here; the tag does it now, one compare earlier.
-        if tag == 0x7FFD {
+        if probe_mru && tag == 0x7FFD {
             if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
                 crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
                 return value;

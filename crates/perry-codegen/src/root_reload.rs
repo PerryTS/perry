@@ -203,6 +203,10 @@ const NON_COLLECTING: &[&str] = &[
     "perry_transition_cache_base",
     "js_transition_ic_note_hit",
     "js_inherited_read_cache_hit_f64",
+    // S2 GC-leaf IC hits; audited in `gc_call_effects.rs`.
+    "js_object_get_field_ic_fast",
+    "js_class_field_get_ic_fast",
+    "js_class_field_set_ic_fast",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",
     "js_write_barrier_slot_validated_parent",

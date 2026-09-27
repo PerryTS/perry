@@ -485,6 +485,10 @@ NONCOLLECTING = {
     # per-thread table probe plus one load through the holder; no allocation,
     # no user code, no chain walk (declines answer TAG_HOLE).
     "js_inherited_read_cache_hit_f64",
+    # S2 GC-leaf IC hits (`expr/ic_fast_split.rs`); audit in gc_call_effects.rs.
+    "js_object_get_field_ic_fast",
+    "js_class_field_get_ic_fast",
+    "js_class_field_set_ic_fast",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",
     "js_gc_register_global_root",

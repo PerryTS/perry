@@ -1324,8 +1324,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                         ctx,
                                         super::store_census::CFIELD_IC_CALL,
                                     );
-                                    ctx.block().call_void(
-                                        "js_class_field_set_ic",
+                                    // S2: guard + store is a GC-leaf call; only
+                                    // a decline takes the collecting call.
+                                    crate::expr::ic_fast_split::emit_class_field_set_split(
+                                        ctx,
                                         &[
                                             (I64, &site_id),
                                             (DOUBLE, &recv_box),

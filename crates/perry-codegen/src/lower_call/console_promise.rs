@@ -1615,20 +1615,15 @@ fn lower_closure_call_rooted<'a>(
     // below it — hoisting the unbox above the argument list instead is not an
     // option, because its throw is observable and the spec evaluates arguments
     // before it.
-    let closure_handle = {
-        let blk = ctx.block();
-        match method_recv {
-            Some(ref this_val) => blk.call(
-                I64,
-                "js_closure_unbox_callee_checked_rebind",
-                &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
-            ),
-            None => blk.call(
-                I64,
-                "js_closure_unbox_callee_checked",
-                &[(DOUBLE, &recv_box)],
-            ),
-        }
+    let closure_handle = match method_recv {
+        Some(ref this_val) => ctx.block().call(
+            I64,
+            "js_closure_unbox_callee_checked_rebind",
+            &[(DOUBLE, &recv_box), (DOUBLE, this_val)],
+        ),
+        // S2: the POINTER_TAG hit is inline; only a non-callable value calls
+        // (and throws from) the checked unbox. See `ic_fast_split.rs`.
+        None => crate::expr::ic_fast_split::emit_checked_callee_unbox(ctx, &recv_box),
     };
 
     // Re-read the arguments BELOW the unbox. `closure_handle` itself is a raw

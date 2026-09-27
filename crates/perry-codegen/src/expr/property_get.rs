@@ -1703,9 +1703,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                                 blk.and(I64, &key_bits, POINTER_MASK_I64)
                             };
-                            let val = ctx.block().call(
-                                DOUBLE,
-                                "js_class_field_get_ic",
+                            // S2: guard + load is a GC-leaf call; the by-name
+                            // fallback is the cold collecting arm.
+                            let val = crate::expr::ic_fast_split::emit_hole_declining_split(
+                                ctx,
+                                "class_field_get",
+                                "js_class_field_get_ic_fast",
                                 &[
                                     (I64, &site_id),
                                     (DOUBLE, &recv_box),
@@ -1715,6 +1718,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I32, &field_idx_str),
                                     (I32, requires_raw_f64_str),
                                 ],
+                                "js_class_field_get_ic_fast_miss",
+                                &[(I64, &site_id), (DOUBLE, &recv_box), (I64, &key_raw)],
                             );
                             return Ok(val);
                         }
