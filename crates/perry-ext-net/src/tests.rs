@@ -1,7 +1,10 @@
 use super::*;
 use std::sync::{Mutex, MutexGuard};
 
-static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
+/// Serialises every test that touches the process-global socket, listener and
+/// pending-event tables against every test that drains them
+/// (`js_net_process_pending` dispatches whatever is queued, for every handle).
+pub(crate) static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct GcTestGuard {
     frame: u64,
@@ -204,76 +207,175 @@ const UNDEFINED: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
 ///   `turnloop_net::live_handles` (the independent witness: it counts the
 ///   handles this thread's loop actually holds) moves by one;
 /// * another thread owns it — the socket is published as a loop socket and
-///   the submission is posted to that owner, so nothing is registered here;
-/// * no loop exists for the agent — the connect is refused with `ENOTSUP`
-///   and the socket is NOT left marked as a loop socket.
+///   the submission is posted to that owner, so nothing is registered here,
+///   and the owner's next turn runs it;
+/// * no loop exists for the agent — here, a thread declined while another
+///   owned the route, connecting after that owner exited (a decline is for the
+///   thread's life, so it does not re-claim) — the connect is refused with
+///   `ENOTSUP` and the socket is NOT left marked as a loop socket.
 ///
-/// **The route is observed, not assumed**, because an agent's route is claimed
-/// once per thread by the first thread to ask
-/// (`event_pump::agent_loop::claim_route`) and every other thread acting for
-/// that agent is declined for life — so which harness thread this lands on
-/// decides the route. Every arm asserts something; none is a skip.
+/// **Every route runs on every run, each on an agent this test mints.** An
+/// agent's route is claimed once per thread by the first thread to ask
+/// (`event_pump::agent_loop::claim_route`), for as long as that thread lives.
+/// This test used to observe the route of the PRIMARY agent from a libtest
+/// thread, so which arm ran was chosen by other tests, and the non-owner arms
+/// could not be decided at all: whether a post lands depends on another
+/// test's thread still being alive with its loop built, which can change
+/// between this test's snapshot and its `connect()` (#11597). A fresh agent's
+/// slot is one nobody else can name.
 #[test]
 fn deferred_connect_reaches_the_loop_on_every_route() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// Allocate a socket, `connect()` it to loopback port 1, and report
+    /// `(handle, on_loop, awaiting, live handles before, live handles after)`.
+    /// Port 1: the submission is under test, not the connect's outcome.
+    /// turnloop connects asynchronously, so a refused peer arrives as a later
+    /// completion and cannot make this pass.
+    fn connect_and_observe() -> (i64, bool, bool, usize, usize) {
+        let handles_before = perry_ffi::turnloop_net::live_handles();
+        let h = unsafe { js_net_socket_alloc() };
+        {
+            let sockets = statics::sockets().lock().unwrap();
+            assert!(
+                !sockets[&h].turnloop && sockets[&h].awaiting_connect,
+                "fixture must start unconnected, or the verdict below is vacuous"
+            );
+        }
+        unsafe {
+            js_net_socket_method_connect(h, 1.0, UNDEFINED, UNDEFINED);
+        }
+        let (on_loop, awaiting) = {
+            let sockets = statics::sockets().lock().unwrap();
+            (sockets[&h].turnloop, sockets[&h].awaiting_connect)
+        };
+        let handles_after = perry_ffi::turnloop_net::live_handles();
+        (h, on_loop, awaiting, handles_before, handles_after)
+    }
+
     let _lock = GC_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let owns_loop = turnloop_io::enabled();
-    let can_post = perry_ffi::agent_post::available();
-    let handles_before = perry_ffi::turnloop_net::live_handles();
 
-    let h = unsafe { js_net_socket_alloc() };
-    let _cleanup = NetHandleCleanup::new(vec![h]);
-    {
-        let sockets = statics::sockets().lock().unwrap();
+    // Routes 1 and 2: an owner, and a second thread of its agent.
+    std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
         assert!(
-            !sockets[&h].turnloop && sockets[&h].awaiting_connect,
-            "fixture must start unconnected, or the verdict below is vacuous"
+            turnloop_io::enabled(),
+            "the first thread of a fresh agent must own its loop"
         );
-    }
-
-    // Port 1 on loopback: the submission is what is under test, not the
-    // connect's outcome. turnloop resolves and connects asynchronously, so a
-    // refused peer arrives as a later completion and cannot make this pass.
-    unsafe {
-        js_net_socket_method_connect(h, 1.0, UNDEFINED, UNDEFINED);
-    }
-
-    let (on_loop, awaiting) = {
-        let sockets = statics::sockets().lock().unwrap();
-        (sockets[&h].turnloop, sockets[&h].awaiting_connect)
-    };
-    let handles_after = perry_ffi::turnloop_net::live_handles();
-    assert!(
-        !awaiting,
-        "connect() must consume the awaiting-connect state"
-    );
-    if owns_loop {
+        let (h, on_loop, awaiting, handles_before, handles_after) = connect_and_observe();
+        let _cleanup = NetHandleCleanup::new(vec![h]);
         // Leave no in-flight connect behind for a sibling test's pump.
         crate::lifecycle::js_ext_net_destroy_socket(h);
-    }
-    let _ = unsafe { js_net_process_pending() };
-
-    if owns_loop {
+        let _ = unsafe { js_net_process_pending() };
+        assert!(
+            !awaiting,
+            "connect() must consume the awaiting-connect state"
+        );
         assert!(on_loop, "an owned loop must take the connect");
         assert_eq!(
             handles_after,
             handles_before + 1,
             "the flag says turnloop but the driver holds no new handle"
         );
-    } else if can_post {
+
+        // The owner's loop exists now; a turn publishes its postbox.
+        let limit = Instant::now() + Duration::from_secs(10);
+        while !perry_ffi::agent_post::available() {
+            assert!(Instant::now() < limit, "the owner never published a route");
+            perry_runtime::event_pump::js_loop_turn_bounded(0);
+        }
+
+        let ran_before = perry_ffi::agent_post::dispatched();
+        let (owns, can_post, (h, on_loop, awaiting, handles_before, handles_after)) =
+            std::thread::spawn(move || {
+                perry_runtime::agent::enter_agent_for_test(agent);
+                let owns = turnloop_io::enabled();
+                let can_post = perry_ffi::agent_post::available();
+                (owns, can_post, connect_and_observe())
+            })
+            .join()
+            .expect("the posting thread does not panic");
+        let _cleanup = NetHandleCleanup::new(vec![h]);
+        assert!(!owns, "a second thread of the agent must not own its loop");
+        assert!(can_post, "the agent has a live, built loop to post to");
+        assert!(
+            !awaiting,
+            "connect() must consume the awaiting-connect state"
+        );
         assert!(on_loop, "a posted connect still makes this a loop socket");
         assert_eq!(
             handles_after, handles_before,
             "a posted connect must not register a handle on the posting thread"
         );
-    } else {
-        assert!(
-            !on_loop,
-            "a refused connect must not leave the socket marked as a loop socket"
-        );
-        assert_eq!(handles_after, handles_before);
-    }
+        // The owner runs the posted submission on its next turn.
+        let limit = Instant::now() + Duration::from_secs(10);
+        while perry_ffi::agent_post::dispatched() == ran_before {
+            assert!(
+                Instant::now() < limit,
+                "the owner never ran the posted connect"
+            );
+            perry_runtime::event_pump::js_loop_turn_bounded(10);
+        }
+        crate::lifecycle::js_ext_net_destroy_socket(h);
+        let _ = unsafe { js_net_process_pending() };
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .expect("the owner thread does not panic");
+
+    // Route 3: declined by a live owner, connecting after that owner exited.
+    let (claimed_tx, claimed_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let claimant = std::thread::spawn(move || {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        // Asking claims the route slot, without building a loop.
+        let claimed = turnloop_io::enabled();
+        claimed_tx
+            .send((agent, claimed))
+            .expect("the test is waiting");
+        let _ = release_rx.recv();
+        perry_runtime::agent::retire_agent(agent);
+    });
+    let (agent, claimed) = claimed_rx.recv().expect("the claimant reports");
+    assert!(
+        claimed,
+        "the first thread of a fresh agent claims its route"
+    );
+    let (declined_tx, declined_rx) = mpsc::channel();
+    let (gone_tx, gone_rx) = mpsc::channel::<()>();
+    let refused = std::thread::spawn(move || {
+        perry_runtime::agent::enter_agent_for_test(agent);
+        let owns = turnloop_io::enabled();
+        declined_tx.send(()).expect("the test is waiting");
+        gone_rx.recv().expect("the test reports the owner gone");
+        let can_post = perry_ffi::agent_post::available();
+        (owns, can_post, connect_and_observe())
+    });
+    declined_rx.recv().expect("the declined thread reports");
+    release_tx.send(()).expect("the claimant is waiting");
+    claimant.join().expect("the claimant does not panic");
+    gone_tx.send(()).expect("the declined thread is waiting");
+    let (owns, can_post, (h, on_loop, awaiting, handles_before, handles_after)) =
+        refused.join().expect("the refused thread does not panic");
+    let _cleanup = NetHandleCleanup::new(vec![h]);
+    let _ = unsafe { js_net_process_pending() };
+    assert!(!owns, "the route was held by a live claimant when asked");
+    assert!(
+        !can_post,
+        "the owner is gone, so there is nothing to post to"
+    );
+    assert!(
+        !awaiting,
+        "connect() must consume the awaiting-connect state"
+    );
+    assert!(
+        !on_loop,
+        "a refused connect must not leave the socket marked as a loop socket"
+    );
+    assert_eq!(handles_after, handles_before);
 }
 
 /// #11155: `adopt_upgraded_tcp_stream` adopts on the calling thread's own loop
