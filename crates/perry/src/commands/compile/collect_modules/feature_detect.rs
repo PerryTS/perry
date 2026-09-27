@@ -502,6 +502,14 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("UrlCanParse")
             || hir_debug.contains("UrlPatternNew")
             || hir_debug.contains("UrlSearchParams")
+            // `node:url` factories hand back WHATWG URL instances too
+            // (`pathToFileURL(p).href`), and since a9c6b0202 their components
+            // are `URL.prototype` accessors that are populated only under this
+            // feature: without it `.href` reads `undefined` (#11560). Same
+            // tokens as the url-engine gate's node:url arm.
+            || hir_debug.contains("module: \"url\"")
+            || hir_debug.contains("String(\"node:url\")")
+            || hir_debug.contains("String(\"url\")")
         {
             ctx.uses_global_url = true;
         }
@@ -826,6 +834,24 @@ class C {
 
         let control = detect_for_source("class C { static f(x: number) { return x + 1; } }\n");
         assert!(!control.uses_global_url && !control.uses_url);
+    }
+
+    /// #11560: `pathToFileURL(p)` returns a WHATWG URL whose `href` is a
+    /// `URL.prototype` accessor, populated only under `global-url`. A program
+    /// that reaches URLs only through a `node:url` factory used to leave the
+    /// feature off, so `pathToFileURL(p).href` read `undefined` and every
+    /// `import(pathToFileURL(p).href, { with: { type } })` failed.
+    #[test]
+    fn node_url_factory_enables_the_global_url_members() {
+        for source in [
+            "import { pathToFileURL } from \"node:url\";\nconsole.log(pathToFileURL(\"/tmp/x\").href);\n",
+            "import * as url from \"url\";\nconsole.log(url.pathToFileURL(\"/tmp/x\").href);\n",
+            "const url = require(\"node:url\");\nconsole.log(url.pathToFileURL(\"/tmp/x\").href);\n",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(ctx.uses_global_url, "global-url must be enabled: {source}");
+            assert!(ctx.uses_url, "url-engine must be enabled: {source}");
+        }
     }
 
     #[test]
