@@ -10,3 +10,5 @@ none ext-routed, 36 of its 47 new parity failures. Introduced when #10757
 300s hang bound for plain compiles. `tests/test_parity_compile_budget.sh`
 (wired into `lint`) drives the harness with a mock compiler slower than the
 ordinary budget and fails on the old predicate.
+The parity shard `timeout-minutes` also goes from 210 to 300: shard 3 of the
+09-27 run already took 3h24m while those rebuilds were still being cut off.
