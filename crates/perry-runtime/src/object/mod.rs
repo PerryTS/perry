@@ -321,7 +321,6 @@ pub use with_env::*;
 pub(crate) use class_meta_registry::{
     builtin_error_prototype_name, class_generic_origin, extends_builtin_error, fetch_parent_kind,
     lookup_has_instance_hook, lookup_to_string_tag_hook, register_fetch_parent_kind,
-    CLASS_REGISTRY,
 };
 pub use class_meta_registry::{
     js_register_class_extends_error, js_register_class_generic_origin,

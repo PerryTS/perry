@@ -1,6 +1,7 @@
 use super::*;
 use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::object::class_image::ImageTable;
+use crate::object::class_meta_registry::{any_registered_ancestor, parent_edge_count_bound};
 
 /// The calling image's set of class IDs that extend the built-in DataView
 /// class (#8546 — see `object/class_image.rs`).
@@ -22,27 +23,10 @@ pub extern "C" fn js_register_class_extends_data_view(class_id: u32) {
 /// Check if a class id extends the built-in DataView class.
 pub(crate) fn extends_builtin_data_view(class_id: u32) -> bool {
     let registry = EXTENDS_DATA_VIEW_REGISTRY.read().unwrap();
-    if let Some(reg) = registry.as_ref() {
-        if reg.contains(&class_id) {
-            return true;
-        }
-        let mut current = class_id;
-        let parent_reg = super::CLASS_REGISTRY.read().unwrap();
-        if let Some(pr) = parent_reg.as_ref() {
-            for _ in 0..32 {
-                match pr.get(&current).copied() {
-                    Some(parent) if parent != 0 => {
-                        if reg.contains(&parent) {
-                            return true;
-                        }
-                        current = parent;
-                    }
-                    _ => break,
-                }
-            }
-        }
-    }
-    false
+    let Some(reg) = registry.as_ref() else {
+        return false;
+    };
+    reg.contains(&class_id) || any_registered_ancestor(class_id, 32, |p| reg.contains(&p))
 }
 
 #[no_mangle]
@@ -66,26 +50,11 @@ pub(crate) fn extends_builtin_typed_array(class_id: u32) -> bool {
     let Some(registered) = registry.as_ref() else {
         return false;
     };
-    if registered.contains(&class_id) {
-        return true;
-    }
-    let mut current = class_id;
-    let parent_reg = super::CLASS_REGISTRY.read().unwrap();
-    if let Some(parents) = parent_reg.as_ref() {
-        // A valid parent chain cannot visit more entries than the registry
-        // contains. This follows arbitrarily deep user hierarchies while still
-        // terminating if malformed registry data contains a cycle.
-        for _ in 0..=parents.len() {
-            match parents.get(&current).copied() {
-                Some(parent) if parent != 0 => {
-                    if registered.contains(&parent) {
-                        return true;
-                    }
-                    current = parent;
-                }
-                _ => break,
-            }
-        }
-    }
-    false
+    // A valid parent chain cannot visit more entries than the registry
+    // contains. This follows arbitrarily deep user hierarchies while still
+    // terminating if malformed registry data contains a cycle.
+    registered.contains(&class_id)
+        || any_registered_ancestor(class_id, parent_edge_count_bound(), |p| {
+            registered.contains(&p)
+        })
 }

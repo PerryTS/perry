@@ -33,14 +33,9 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
     // Parent linking changes what a class chain can intercept — flush cached
     // store plans (`object::prop_plan`).
     crate::object::prop_plan::prop_plan_epoch_bump();
-    // Publish into the dense mirror BEFORE the map, so no reader can observe
-    // the edge through the map without it also being visible densely.
-    crate::object::class_meta_registry::parent_dense_store(class_id, parent_class_id);
-    let mut registry = CLASS_REGISTRY.write().unwrap();
-    if registry.is_none() {
-        *registry = Some(crate::fast_hash::new_ptr_hash_map());
-    }
-    registry.as_mut().unwrap().insert(class_id, parent_class_id);
+    // An in-window child's edge goes to the dense table only, everything else
+    // to the map (#11502) — no write lock for the common case.
+    crate::object::class_meta_registry::publish_parent_edge(class_id, parent_class_id);
 }
 
 /// Public registration entry point used by codegen module init.
@@ -1867,7 +1862,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
 }
 
 // `get_parent_class_id` now lives in `object::class_meta_registry` next to the
-// dense mirror it reads; it is re-exported through `object::mod` unchanged.
+// dense parent table it reads; it is re-exported through `object::mod` unchanged.
 pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 
 /// Look up a method by name in the class vtable, walking the parent chain.

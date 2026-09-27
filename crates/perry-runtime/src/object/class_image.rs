@@ -133,10 +133,13 @@ pub struct ClassImageTables {
     pub(crate) registered_class_ids: RwLock<Option<PtrHashSet<u32>>>,
     pub(crate) parents: RwLock<Option<PtrHashMap<u32, u32>>>,
     /// `parent + 1` for every registered edge whose child id is
-    /// `< PARENT_DENSE_CAP`; `0` means "no edge". Heap-allocated per image
-    /// (256 KiB) on the first edge registration. Images that never register
-    /// an in-window parent edge answer absent reads without allocating it.
-    /// Once published, the backing allocation never moves or changes size.
+    /// `< PARENT_DENSE_CAP`; `0` means "no edge". The ONLY copy of those
+    /// edges: `parents` holds just the children outside the window (#11502).
+    /// Allocated zeroed per image (256 KiB of address space) on the first
+    /// edge registration, so only the pages holding a registered child ever
+    /// become resident. Images that never register an in-window parent edge
+    /// answer absent reads without allocating it. Once published, the backing
+    /// allocation never moves or changes size.
     pub(crate) parent_dense: OnceLock<Box<[AtomicU32]>>,
     pub(crate) fetch_parent_kind: RwLock<Option<PtrHashMap<u32, u8>>>,
     pub(crate) generic_origin: RwLock<Option<PtrHashMap<u32, u32>>>,
@@ -343,8 +346,19 @@ pub(crate) fn parent_dense_load(idx: usize) -> u32 {
 pub(crate) fn parent_dense_store(idx: usize, biased_parent: u32) {
     current()
         .parent_dense
-        .get_or_init(|| (0..PARENT_DENSE_CAP).map(|_| AtomicU32::new(0)).collect())[idx]
+        .get_or_init(|| zeroed_atomic_table(PARENT_DENSE_CAP))[idx]
         .store(biased_parent, Ordering::Release);
+}
+
+/// A `len`-slot table of `AtomicU32`s, every slot `0`, obtained from the
+/// allocator's zeroed path rather than written element by element (#11502).
+/// A fresh zeroed allocation is backed by the OS's shared zero page, so a
+/// slot that is never stored to never costs a resident page: a program with
+/// one `extends` touches one 4 KiB page of `parent_dense`, not all 64 of them.
+fn zeroed_atomic_table(len: usize) -> Box<[AtomicU32]> {
+    // SAFETY: `AtomicU32` has the same size and bit validity as `u32`, so the
+    // all-zero bit pattern is a valid `AtomicU32::new(0)` in every slot.
+    unsafe { Box::<[AtomicU32]>::new_zeroed_slice(len).assume_init() }
 }
 
 /// Slot count of the per-image anon-shape mirror. Power of two.
@@ -366,7 +380,7 @@ fn anon_fast_index(class_id: u32) -> usize {
 fn anon_fast_table() -> &'static [AtomicU32] {
     current()
         .anon_shape_fast
-        .get_or_init(|| (0..ANON_FAST_SLOTS).map(|_| AtomicU32::new(0)).collect())
+        .get_or_init(|| zeroed_atomic_table(ANON_FAST_SLOTS))
 }
 
 /// `Some(verdict)` when the calling image's mirror can answer; `None` when the
