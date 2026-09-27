@@ -65,6 +65,7 @@ js_array_copy_within_value	f64	f64,f64,f64,i32s,f64
 js_array_create	i64	
 js_array_declare_all_pointer_elements	void	ptr
 js_array_delete	i32s	ptr,i32u
+js_array_destructure_needs_iterator	i32s	f64
 js_array_element_shape_check	i32s	ptr,i32s,i64
 js_array_element_shape_class	i32s	ptr
 js_array_element_shape_epoch	i64	
@@ -1269,6 +1270,7 @@ js_fetch_take_pending_signal	f64
 js_fetch_text	ptr	ptr
 js_fetch_unwrap_handle	f64	f64
 js_fetch_with_options	ptr	ptr,ptr,ptr,ptr
+js_ffi_arg_ptr	i64	f64
 js_ffi_root_get_heap_addr	i64	usize
 js_ffi_root_get_nanbox	i64	usize
 js_ffi_root_push_heap_addr	usize	i64
@@ -1974,6 +1976,8 @@ js_native_call_method_apply	f64	f64,ptr,usize,i64
 js_native_call_method_apply_by_id	f64	f64,i64,i64
 js_native_call_method_by_id	f64	f64,i64,ptr,usize
 js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
+js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
+js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
 js_native_call_method_str_key	f64	f64,i64,ptr,usize
 js_native_call_method_value	f64	f64,f64,ptr,usize
 js_native_call_method_value_apply	f64	f64,f64,i64
@@ -2078,7 +2082,7 @@ js_net_socket_get_writable_need_drain	f64	i64
 js_net_socket_get_writable_state	ptr	i64
 js_net_socket_listener_count	f64	i64,i64
 js_net_socket_listeners	i64	i64,i64
-js_net_socket_method_connect	void	i64,f64,i64
+js_net_socket_method_connect	void	i64,f64,f64,f64
 js_net_socket_noop_self	i64	i64
 js_net_socket_on	void	i64,i64,i64
 js_net_socket_once	i64	i64,i64,i64
@@ -2725,6 +2729,7 @@ js_perf_supported_entry_types	f64
 js_perf_timerify	f64	f64,f64
 js_perf_to_json	f64	
 js_performance_now	f64	
+js_perry_agent_current	i64	
 js_perry_agent_post	i32s	ptr,ptr
 js_perry_agent_post_available	i32s	
 js_perry_agent_post_dispatched	i64	
@@ -3218,7 +3223,6 @@ js_register_handle_prototype_dispatch	void	ptr
 js_register_http_agent_handle_probe	void	ptr
 js_register_imported_class_shape_slot	void	i32u,i32u,ptr,ptr,ptr
 js_register_jsx_render_stream	void	ptr
-js_register_native_inflight	void	ptr
 js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
 js_register_path_init	void	ptr,i64,i64
@@ -3240,7 +3244,6 @@ js_register_stream_handle_kind_probe	void	ptr
 js_register_stream_handle_probe	void	ptr
 js_register_text_id_handler	void	ptr
 js_register_tls_handle_kind_probe	void	ptr
-js_register_wait_driver	void	ptr,ptr,ptr
 js_register_widget_hidden_handler	void	ptr
 js_register_worker_threads_messaging_constructors	void	ptr,ptr
 js_register_worker_threads_namespace_getters	void	ptr,ptr,ptr,ptr,ptr
@@ -3277,6 +3280,7 @@ js_request_input_to_url	ptr	f64
 js_request_json	ptr	f64
 js_request_new	f64	ptr,ptr,ptr,f64,ptr,ptr,ptr,ptr,ptr,ptr,ptr,f64,ptr,f64
 js_request_new_from_init	f64	ptr,f64
+js_request_new_from_input	f64	f64,f64
 js_request_subclass_init	f64	f64,f64,f64
 js_request_text	ptr	f64
 js_require_json_disk	f64	f64
@@ -3392,6 +3396,7 @@ js_set_timeout_callback	i64	i64,f64
 js_set_timeout_callback_args	i64	i64,f64,ptr,i32s
 js_set_timeout_value	ptr	f64,f64
 js_set_timeout_value_ref	ptr	f64,f64,i32s
+js_set_tls_connect_provider	void	ptr
 js_set_to_array	ptr	ptr
 js_set_union	ptr	ptr,f64
 js_set_value_at	f64	ptr,i32u
@@ -4254,9 +4259,9 @@ js_yoga_set_gap	f64	f64,f64,f64,f64
 js_yoga_set_measure_func	f64	f64,f64
 js_yoga_set_number	f64	f64,f64,f64,f64
 js_yoga_unset_measure_func	f64	f64
-js_zlib_brotli_compress	void	f64,f64
+js_zlib_brotli_compress	void	f64,f64,f64
 js_zlib_brotli_compress_sync	ptr	i64
-js_zlib_brotli_decompress	void	f64,f64
+js_zlib_brotli_decompress	void	f64,f64,f64
 js_zlib_brotli_decompress_sync	ptr	i64
 js_zlib_crc32	f64	f64,f64
 js_zlib_create_brotli_compress	i64	f64
@@ -4270,30 +4275,30 @@ js_zlib_create_inflate_raw	i64	f64
 js_zlib_create_unzip	i64	f64
 js_zlib_create_zstd_compress	i64	f64
 js_zlib_create_zstd_decompress	i64	f64
-js_zlib_deflate	void	f64,f64
-js_zlib_deflate_raw	void	f64,f64
+js_zlib_deflate	void	f64,f64,f64
+js_zlib_deflate_raw	void	f64,f64,f64
 js_zlib_deflate_raw_sync	ptr	f64,f64
 js_zlib_deflate_sync	ptr	i64,f64
-js_zlib_gunzip	void	f64,f64
+js_zlib_gunzip	void	f64,f64,f64
 js_zlib_gunzip_sync	ptr	i64
-js_zlib_gzip	void	f64,f64
+js_zlib_gzip	void	f64,f64,f64
 js_zlib_gzip_sync	ptr	i64,f64
-js_zlib_inflate	void	f64,f64
-js_zlib_inflate_raw	void	f64,f64
+js_zlib_inflate	void	f64,f64,f64
+js_zlib_inflate_raw	void	f64,f64,f64
 js_zlib_inflate_raw_sync	ptr	f64
 js_zlib_inflate_sync	ptr	i64
 js_zlib_native_dispatch	f64	ptr,usize,ptr,usize
 js_zlib_process_pending	i32s	
 js_zlib_resolve_level	i32s	f64
-js_zlib_unzip	void	f64,f64
+js_zlib_unzip	void	f64,f64,f64
 js_zlib_unzip_sync	ptr	f64
 js_zlib_validate_buffer_arg	void	i64
 js_zlib_validate_callback	i64	f64
 js_zlib_validate_options	void	f64,i32s
 js_zlib_validate_params	i32s	f64,f64
-js_zlib_zstd_compress	void	f64,f64
+js_zlib_zstd_compress	void	f64,f64,f64
 js_zlib_zstd_compress_sync	ptr	f64,f64
-js_zlib_zstd_decompress	void	f64,f64
+js_zlib_zstd_decompress	void	f64,f64,f64
 js_zlib_zstd_decompress_sync	ptr	f64,f64
 main	i32s	
 napi_acquire_threadsafe_function	i32s	ptr
@@ -4471,6 +4476,7 @@ perry_ffi_callback_dispatch	i64	usize,ptr,ptr
 perry_ffi_gc_register_fetch_trace	void	ptr,ptr
 perry_ffi_gc_register_mutable_root_scanner	void	ptr
 perry_ffi_gc_register_mutable_root_scanner_named	void	ptr,usize,usize,ptr
+perry_ffi_gc_register_pool_handle_trace	void	ptr,ptr
 perry_ffi_gc_register_root_scanner	void	ptr
 perry_ffi_gc_request_handle_collection	void	
 perry_ffi_gc_root_visitor_is_full_mark	bool	ptr
@@ -4490,9 +4496,7 @@ perry_ffi_promise_reject_deferred	void	ptr,ptr,ptr
 perry_ffi_promise_resolve_bits	void	ptr,i64
 perry_ffi_promise_resolve_deferred	void	ptr,ptr,ptr
 perry_ffi_run_pending	void	i64
-perry_ffi_spawn_async	void	ptr
 perry_ffi_spawn_blocking	void	ptr,ptr
-perry_ffi_spawn_blocking_with_reactor	void	ptr,ptr
 perry_geisterhand_find_by_shortcut	f64	ptr,usize
 perry_geisterhand_free_string	void	ptr,usize
 perry_geisterhand_get_closure	f64	i64,i8u
@@ -4596,6 +4600,7 @@ perry_set_wake_callback	void	ptr,ptr
 perry_store_census_arm	void	
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr
+perry_thread_exit_probe_object_prototype_recorded	bool	usize
 perry_transition_cache_base	ptr	
 perry_tui_state_setter_trampoline	f64	ptr,f64
 perry_update_notify_startup	void	ptr,i32s
