@@ -26,7 +26,6 @@ extern "C" {
     );
     fn perry_thread_exit_probe_object_prototype_recorded(owner: usize) -> bool;
     fn js_u8_buffer_read_f64(target: *const u8, index: i32) -> f64;
-    static PERRY_U8_INLINE_CACHE: [std::sync::atomic::AtomicU64; 64];
 }
 
 extern "C" fn probe_thunk(_closure: *const perry_runtime::ClosureHeader) -> f64 {
@@ -48,11 +47,6 @@ fn key(text: &str) -> *const perry_runtime::StringHeader {
 
 fn addr_of(value: f64) -> usize {
     (value.to_bits() & ADDR_MASK) as usize
-}
-
-fn u8_cache_holds(addr: usize) -> bool {
-    let slot = (addr >> 3) & 63;
-    unsafe { PERRY_U8_INLINE_CACHE[slot].load(std::sync::atomic::Ordering::Relaxed) == addr as u64 }
 }
 
 #[test]
@@ -270,12 +264,23 @@ fn thread_exit_releases_the_threads_buffer_own_props() {
     );
 }
 
-/// Membership of `addr` in the three process-global external-buffer
-/// registries and `PERRY_U8_INLINE_CACHE`, in that order. Reads no
-/// thread-local, so the thread-exit probe below may call it.
-fn external_buffer_registrations(addr: usize) -> [bool; 4] {
-    let [ext, u8a, meta] = perry_runtime::buffer::external_registries_hold_for_test(addr);
-    [ext, u8a, meta, u8_cache_holds(addr)]
+/// Membership of the CryptoKey buffer `key` in the three process-global
+/// external-buffer registries, and of the byte view `view` in
+/// `PERRY_U8_INLINE_CACHE`, in that order. Reads no thread-local, so the
+/// thread-exit probe below may call it.
+///
+/// Two addresses because since #11589 key material is never admitted to the
+/// inline-access cache (a key is not integer-indexed), so the key buffer can
+/// no longer witness the cache's release; an ordinary `Buffer` on the same
+/// thread does.
+fn external_buffer_registrations(key: usize, view: usize) -> [bool; 4] {
+    let [ext, u8a, meta] = perry_runtime::buffer::external_registries_hold_for_test(key);
+    [
+        ext,
+        u8a,
+        meta,
+        perry_runtime::buffer::u8_inline_cache_holds_for_test(view),
+    ]
 }
 
 /// #11547: the external-buffer test's buffer address, and what the tables held
@@ -290,18 +295,23 @@ fn external_buffer_registrations(addr: usize) -> [bool; 4] {
 /// thread-exit range hook that runs after the external-buffer registries' own
 /// hook, while the block is still owned by the exiting thread and so cannot
 /// belong to anyone else.
-static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, Option<[bool; 4]>)> =
-    std::sync::Mutex::new((0, None));
+///
+/// Holds `(key, view, seen)`: the CryptoKey buffer, the cache-admitted byte
+/// view, and the verdict.
+#[allow(clippy::type_complexity)]
+static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, usize, Option<[bool; 4]>)> =
+    std::sync::Mutex::new((0, 0, None));
 
 fn record_external_buffer_release(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
     let mut probe = EXTERNAL_BUFFER_EXIT_PROBE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (addr, seen) = *probe;
-    // First release only: once the address is back with the allocator, a later
-    // tenant's own thread exit reports it again.
-    if addr != 0 && seen.is_none() && freed.contains(addr) {
-        probe.1 = Some(external_buffer_registrations(addr));
+    let (key, view, seen) = *probe;
+    // First release only: once the addresses are back with the allocator, a
+    // later tenant's own thread exit reports them again. Both live on the same
+    // thread, so its one release covers both.
+    if key != 0 && seen.is_none() && freed.contains(key) && freed.contains(view) {
+        probe.2 = Some(external_buffer_registrations(key, view));
     }
 }
 
@@ -331,17 +341,32 @@ fn thread_exit_releases_the_threads_external_buffer_registrations() {
         // This also registers their thread-exit hook, so it runs before the
         // probe registered below.
         unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
-        // The codegen inline-read slow arm primes PERRY_U8_INLINE_CACHE.
+        // The codegen inline-read slow arm primes PERRY_U8_INLINE_CACHE — for
+        // a byte view. It must refuse the key (#11589: key material is not
+        // integer-indexed), so an ordinary Buffer carries the cache probe.
+        let view = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
+        let view_addr = view.get_raw_mut_ptr::<u8>() as usize;
         unsafe { js_u8_buffer_read_f64(addr as *const u8, 0) };
-        *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, None);
+        unsafe { js_u8_buffer_read_f64(view_addr as *const u8, 0) };
+        let key_admitted = perry_runtime::buffer::u8_inline_cache_holds_for_test(addr);
+        *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, view_addr, None);
         perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
             record_external_buffer_release,
         );
-        external_buffer_registrations(addr)
+        (external_buffer_registrations(addr, view_addr), key_admitted)
     })
     .join()
     .unwrap();
-    let seen = std::mem::replace(&mut *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap(), (0, None)).1;
+    let (alive, key_admitted) = alive;
+    let seen = std::mem::replace(
+        &mut *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap(),
+        (0, 0, None),
+    )
+    .2;
+    assert!(
+        !key_admitted,
+        "key material must never enter the inline element-access cache"
+    );
     assert_eq!(
         alive, [true; 4],
         "every registration must exist while its thread lives"

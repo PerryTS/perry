@@ -1000,6 +1000,15 @@ pub(crate) fn test_u8_inline_cache_holds(addr: usize) -> bool {
     u8_inline_cache_hit(addr)
 }
 
+/// Test probe (#11589): does the admission cache hold exactly `addr`, in
+/// either way of its pair? The public twin of `test_u8_inline_cache_holds`
+/// for out-of-crate tests, so they never re-derive the slot formula. Reads no
+/// thread-local, so a thread-exit range hook may call it.
+#[doc(hidden)]
+pub fn u8_inline_cache_holds_for_test(addr: usize) -> bool {
+    u8_inline_cache_hit(addr)
+}
+
 #[inline]
 pub(crate) fn u8_inline_cache_invalidate(addr: usize) {
     let pair = u8_inline_cache_pair(addr);

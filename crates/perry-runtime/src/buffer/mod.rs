@@ -68,7 +68,7 @@ pub use header::{
     is_uint8array_buffer, js_set_crypto_key_death_hook, mark_as_array_buffer,
     mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view, mark_as_secret_key,
     mark_as_shared_array_buffer, mark_as_uint8array, register_buffer, resolve_buffer_ab_alias,
-    set_buffer_ab_alias, CryptoKeyDeathHookFn,
+    set_buffer_ab_alias, u8_inline_cache_holds_for_test, CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
     buffer_alloc_foreign, collect_dead_registered_buffers_post_trace,
