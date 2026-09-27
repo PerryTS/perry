@@ -1,5 +1,6 @@
 use super::*;
-use perry_hir::{Export, Import, ImportSpecifier, Module, ModuleKind};
+use perry_hir::types::Type;
+use perry_hir::{Export, Expr, Import, ImportSpecifier, Module, ModuleKind, Stmt};
 
 fn fixture(source: &str, name: &str) -> CompilationContext {
     let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
@@ -20,6 +21,12 @@ fn fixture(source: &str, name: &str) -> CompilationContext {
         is_deferred_require: false,
         is_adopted_require: false,
     });
+    // Read the binding as a value so the TypeScript importer is held to it.
+    importer.init.push(Stmt::Expr(Expr::ExternFuncRef {
+        name: "local_alias".into(),
+        param_types: vec![],
+        return_type: Type::Any,
+    }));
     ctx.native_modules
         .insert(PathBuf::from("/repo/main.ts"), importer);
     let mut target = Module::new("target");
@@ -189,4 +196,55 @@ fn cjs_default_object_does_not_imply_named_exports() {
         .to_string();
     assert!(error.contains("default import"));
     assert!(error.contains("get"));
+}
+
+/// #11454: mongodb's `src/bson.ts` does `import { BSON, type DeserializeOptions,
+/// .. } from 'bson'`-style imports of names that only exist as types in the
+/// target (bson re-exports them with `export type { .. }`, which leaves no
+/// runtime export). TypeScript elides such a specifier because it is never
+/// read as a value, so a TypeScript importer must not be rejected for it.
+#[test]
+fn typescript_importer_is_held_only_to_names_used_as_values() {
+    let mut ctx = fixture("bson", "DeserializeOptions");
+    ctx.native_modules
+        .get_mut(Path::new("/repo/main.ts"))
+        .unwrap()
+        .init
+        .clear();
+    enforce_static_import_exports(&mut ctx).unwrap();
+
+    // Reading it as a value (here: `new local_alias()`) re-arms the check.
+    ctx.native_modules
+        .get_mut(Path::new("/repo/main.ts"))
+        .unwrap()
+        .init
+        .push(Stmt::Expr(Expr::New {
+            class_name: "local_alias".into(),
+            args: vec![],
+            type_args: vec![],
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }));
+    assert!(enforce_static_import_exports(&mut ctx)
+        .unwrap_err()
+        .to_string()
+        .contains("DeserializeOptions"));
+}
+
+/// A JavaScript importer has no type-only elision: Node rejects every named
+/// specifier that the target does not export, used or not.
+#[test]
+fn javascript_importer_is_held_to_every_named_specifier() {
+    let mut ctx = fixture("./target.ts", "missing");
+    let mut importer = ctx
+        .native_modules
+        .remove(Path::new("/repo/main.ts"))
+        .unwrap();
+    importer.init.clear();
+    ctx.native_modules
+        .insert(PathBuf::from("/repo/main.js"), importer);
+    assert!(enforce_static_import_exports(&mut ctx)
+        .unwrap_err()
+        .to_string()
+        .contains("main.js"));
 }

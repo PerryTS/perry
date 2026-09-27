@@ -111,4 +111,12 @@ fn valid_esm_cjs_default_and_type_imports_still_compile() {
         false,
         false,
     );
+    // #11454 (mongodb's src/bson.ts): a plain named import of a type-only
+    // export, used only in type positions, is elided by TypeScript.
+    compile(
+        "import { Options, existing } from './target.ts'; const o: Options = { a: existing }; console.log(o.a);",
+        "interface Options { a: number } export type { Options }; export const existing = 1;",
+        false,
+        false,
+    );
 }
