@@ -3840,6 +3840,10 @@
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "URL_INTRINSIC_PROTO_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
       "name": "TYPED_ARRAY_INTRINSIC_PTR_SLOT"
     },
     {

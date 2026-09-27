@@ -1345,6 +1345,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader
             };
             unsafe { install_web_builtin_to_string_tag(proto(), "URL") };
+            // Record %URL.prototype% for the native constructor (#11585): it
+            // must not re-read `globalThis.URL`, which user code can replace.
+            crate::object::URL_INTRINSIC_PROTO_PTR
+                .store(proto() as i64, std::sync::atomic::Ordering::Release);
             // Install order is Node's own key order: `toString`, then the
             // WebIDL component accessors, then `toJSON`.
             install_proto_method(

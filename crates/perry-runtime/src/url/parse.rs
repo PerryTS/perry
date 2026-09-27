@@ -453,7 +453,22 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         obj_h.get_nanbox_f64(),
     );
 
-    let proto = crate::object::builtin_prototype_value("URL");
+    // %URL.prototype%, not `globalThis.URL.prototype`: a module-level
+    // `function URL` shadowing the global made every native URL inherit the
+    // user function's prototype, so `.hostname` & co. read undefined (#11585).
+    // The global read only materializes the builtin the first time.
+    let intrinsic =
+        || crate::object::URL_INTRINSIC_PROTO_PTR.load(std::sync::atomic::Ordering::Acquire);
+    let proto = if intrinsic() != 0 {
+        crate::value::js_nanbox_pointer(intrinsic())
+    } else {
+        // Materializes the builtin (which records the intrinsic) on first use.
+        let global = crate::object::builtin_prototype_value("URL");
+        match intrinsic() {
+            0 => global,
+            ptr => crate::value::js_nanbox_pointer(ptr),
+        }
+    };
     if proto.to_bits() != crate::value::TAG_UNDEFINED {
         crate::object::prototype_chain::object_link_class_default_prototype(
             crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize,

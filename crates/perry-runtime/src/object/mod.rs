@@ -464,6 +464,7 @@ crate::perry_thread_local! {
     static ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static LOCAL_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static SESSION_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static URL_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 static HTTP_METHODS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&HTTP_METHODS_CACHE_SLOT);
@@ -498,6 +499,13 @@ pub(crate) static ASYNC_GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&ASYNC_GENERATOR_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&ASYNC_GENERATOR_PROTOTYPE_PTR_SLOT);
+/// `%URL.prototype%`, recorded when the `URL` builtin's prototype is built.
+/// `new URL(...)` links instances to THIS object rather than to whatever
+/// `globalThis.URL.prototype` currently is: a program may shadow or replace
+/// the global binding (a module-level `function URL`), and the instances the
+/// native constructor builds must keep the real component accessors (#11585).
+pub(crate) static URL_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&URL_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static LOCAL_STORAGE_PTR: RealmAtomicI64 = RealmAtomicI64::new(&LOCAL_STORAGE_PTR_SLOT);
 pub(crate) static SESSION_STORAGE_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&SESSION_STORAGE_PTR_SLOT);
@@ -1505,6 +1513,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &ASYNC_GENERATOR_PROTOTYPE_PTR,
         &LOCAL_STORAGE_PTR,
         &SESSION_STORAGE_PTR,
+        &URL_INTRINSIC_PROTO_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
