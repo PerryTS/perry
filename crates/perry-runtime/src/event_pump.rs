@@ -332,6 +332,21 @@ static PUMP: Pump = Pump {
 /// leaves the streak untouched (neither increments nor resets it); only
 /// an actual `cvar.wait_timeout` sleep counts as progress.
 static NOTIFIED: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// #11434: a notify issued by THIS thread, for this thread's own
+    /// `js_wait_for_event`. `NOTIFIED` is one process-wide flag, and every JS
+    /// agent (the main thread and each `worker_threads` worker) consumes it in
+    /// its own wait. A worker that queued work for itself outside its loop's
+    /// turn (perry-ext-net releasing buffered socket data after a
+    /// `'connection'` callback) set `NOTIFIED` and was not woken by
+    /// `wake_parked_agents` (it was not parked); if the main thread's wait
+    /// swapped the flag first, the worker then parked with its own events
+    /// queued and never woke. A same-thread notify is kept here as well, where
+    /// no other agent can consume it.
+    static SELF_NOTIFIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 static WAITER_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_NOTIFY_COUNT: AtomicI64 = AtomicI64::new(0);
 pub static PROFILE_NOTIFY_DURING_DRAIN_COUNT: AtomicI64 = AtomicI64::new(0);
@@ -423,7 +438,9 @@ pub extern "C" fn js_main_thread_notified() -> i32 {
 /// waits behind more than one slice. Does NOT consume the notify; the next
 /// `js_wait_for_event` fast path does.
 pub(crate) fn main_thread_wake_pending() -> bool {
-    NOTIFIED.load(Ordering::Acquire) || unsafe { js_microtasks_pending() } > 0
+    NOTIFIED.load(Ordering::Acquire)
+        || SELF_NOTIFIED.with(std::cell::Cell::get)
+        || unsafe { js_microtasks_pending() } > 0
 }
 
 /// Test-only: forget a notify left behind by an earlier test in the same
@@ -434,6 +451,7 @@ pub(crate) fn main_thread_wake_pending() -> bool {
 #[cfg(test)]
 pub(crate) fn clear_main_thread_notified_for_test() {
     NOTIFIED.store(false, Ordering::Release);
+    SELF_NOTIFIED.with(|flag| flag.set(false));
 }
 
 /// Wake the main thread from `js_wait_for_event` (or a future call).
@@ -453,6 +471,10 @@ pub extern "C" fn js_notify_main_thread() {
     // path it took (Release so subsequent producer side-effects are
     // visible).
     NOTIFIED.store(true, Ordering::Release);
+    // #11434: and for this thread's own next wait, which no other agent's wait
+    // can consume. `try_with`: a notify from a thread-local destructor is a
+    // no-op here rather than a panic.
+    let _ = SELF_NOTIFIED.try_with(|flag| flag.set(true));
     // PERRY_LOOP_STATS: stamp the notify for the wake-latency histogram before
     // any wake below can return the waiter. One relaxed load when off.
     loop_stats::note_notify();
@@ -668,7 +690,8 @@ pub extern "C" fn js_wait_for_event() {
     // queued microtasks. Either way we must run that JS, not park for the budget.
     // Drive turnloop briefly so pending JS work cannot starve native I/O.
     // #1114: do NOT reset the spin streak on this path.
-    let was_notified = NOTIFIED.swap(false, Ordering::Acquire);
+    let self_notified = SELF_NOTIFIED.with(|flag| flag.replace(false));
+    let was_notified = NOTIFIED.swap(false, Ordering::Acquire) || self_notified;
     if was_notified || unsafe { js_microtasks_pending() } > 0 {
         if crate::promise::mt_profile_enabled() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
