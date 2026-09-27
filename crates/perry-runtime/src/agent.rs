@@ -92,8 +92,13 @@ pub fn enter_worker_agent() -> AgentId {
 /// one. Models the second-thread-of-one-agent shape — Android's UI thread
 /// pumping on behalf of `perry-native` — which must be declined a loop of its
 /// own by `event_pump::agent_loop`.
-#[cfg(test)]
-pub(crate) fn enter_agent_for_test(id: AgentId) {
+///
+/// Public (and hidden) for `perry-stdlib`'s unit tests (#11472): a test that
+/// owns a loop as its own agent spawns a second thread of THAT agent to
+/// exercise the posting path. Programs never call it — a thread's agent is
+/// fixed by [`enter_worker_agent`] or by having none.
+#[doc(hidden)]
+pub fn enter_agent_for_test(id: AgentId) {
     CURRENT_AGENT.with(|slot| slot.set(Some(id)));
 }
 

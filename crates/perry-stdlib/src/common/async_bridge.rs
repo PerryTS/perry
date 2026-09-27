@@ -771,11 +771,16 @@ pub unsafe fn reject_promise_later(promise_ptr: *mut u8, message: String) {
 /// drains all of them, so a concurrent test's `clear_pending()` or pump takes
 /// entries another test just queued — the resolution then settles (or is
 /// scanned) on the wrong thread, or not at all.
+///
+/// The same holds for every OTHER queue [`js_stdlib_process_pending`] drains:
+/// a pump in one of these tests also consumes the process-global TLS event
+/// queue, so the TLS tests that snapshot that queue take this lock too
+/// (#11472 — a concurrent pump ate a `listening` event).
 #[cfg(test)]
 static PENDING_QUEUE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-fn pending_queue_test_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn pending_queue_test_lock() -> std::sync::MutexGuard<'static, ()> {
     PENDING_QUEUE_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
