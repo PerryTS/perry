@@ -340,13 +340,15 @@ unsafe fn call_primitive_closure_value(
     }
     // OrdinaryCallBindThis: a strict callee observes the raw primitive
     // receiver (`Number.prototype.f = function(){"use strict"; return
-    // typeof this}` must see `"number"` for `(5).f()`); only a sloppy
-    // callee gets the ToObject wrapper — boxed ONCE up front so writes
-    // through `this` land on the wrapper the body later observes.
+    // typeof this}` must see `"number"` for `(5).f()`), and so does a
+    // BUILT-IN (§10.3.1: its [[Call]] takes `thisArg` unchanged and coerces
+    // itself — every primitive prototype thunk accepts the raw primitive
+    // before it looks for a wrapper payload). Only a sloppy USER callee gets
+    // the ToObject wrapper — boxed ONCE up front so writes through `this`
+    // land on the wrapper the body later observes. For a string receiver
+    // that wrapper costs an own index property per UTF-16 code unit (#11509).
     let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
-    let strict_callee =
-        !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
-    let this_receiver = if strict_callee {
+    let this_receiver = if crate::closure::body_receives_primitive_this(func_ptr) {
         receiver_h.get_nanbox_f64()
     } else {
         crate::object::js_object_coerce(receiver_h.get_nanbox_f64())

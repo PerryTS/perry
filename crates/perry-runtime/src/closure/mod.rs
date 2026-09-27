@@ -39,6 +39,10 @@ pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow
     rows.extend(dynamic_props::dynamic_props_census());
     rows
 }
+pub(crate) use registry::{
+    body_receives_primitive_this, closure_body_is_non_constructor, register_closure_body_builtin,
+    register_closure_body_non_constructor,
+};
 pub use registry::{
     build_rest_array, build_rest_array_rooted, closure_arity, closure_is_arrow,
     closure_is_bound_method, closure_length, dispatch_rest_bundled, dispatch_with_arity,
@@ -53,7 +57,6 @@ pub use registry::{
     real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
     BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
-pub(crate) use registry::{closure_body_is_non_constructor, register_closure_body_non_constructor};
 
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
