@@ -1,0 +1,1 @@
+Keep literal require/createRequire calls for detected CommonJS source files on the lazy CommonJS loader path. Deep compiled-package imports now return the actual module.exports value (including classes and functions), preserve cached identity, and run only when the require call executes. ESM targets retain namespace semantics.
