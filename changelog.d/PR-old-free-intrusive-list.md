@@ -4,7 +4,15 @@
 
   Unlinking is where the shape costs something. A chain runs through every block that holds one of its holes, so a block reset must unlink that block's holes before its bytes are reused or released, and unlinking walks every chain by chasing links through the heap rather than scanning a dense vector. `ArenaBlock` therefore gains an `old_free_holes` bit, maintained by the rebuild walk: set on each old block where it listed a hole, cleared on every other block. The three old-block reset sites (`old_arena_reclaim_dead_blocks`, `old_arena_reclaim_selected_dead_blocks`, `OldArenaReclaimDeadBlocksState::process_block`) filter only a block whose bit is set. A full sweep rebuilds the list from its live blocks before its block cleanup, so every block that cleanup recycles has its bit clear, and full reclaims never walk the chains. Only a targeted (defrag) reclaim of a block that held listed holes pays for a walk. The defrag-time take (`old_free_take_exact` with excluded pages) stops at the first hole off the excluded pages instead of walking the rest of the chain.
 
-  MEASUREMENTS_PLACEHOLDER
+  Measured on a 4-core Linux VM, with the same release settings for both arms. The runtime-level churn fixture allocates 700k old objects, keeps every 64th live, and refills half the holes between sweeps, so about 24 MB of holes are listed per cycle. Allocation counts come from the `alloc-census` allocator wrapper and are exact:
+
+  | per sweep cycle | before | after |
+  |---|---:|---:|
+  | list rebuild: allocations / bytes | 48 / 6.29 MB | 0 / 0 |
+  | whole old-gen sweep: allocations / bytes | 4,726 / 6.97 MB | 4,678 / 0.68 MB |
+  | hole reuse (refill): allocations | 9,260 | 9,260 |
+
+  The rebuild was faster in both timing runs (median of 15 cycles: 5.4 → 4.7 ms and 7.5 → 6.2 ms). Whole-sweep and refill times moved within this machine's run-to-run noise. On the `12_large_live_set` ratchet probe, whose final full GC lists 37.6 MB of holes, peak RSS drops from 156.0 to 146.1 MB (median of 15 interleaved runs; a second run of 7 gave the same figures). Wall time and full-GC sweep time on probes 02, 06, 12 and 14 showed no difference distinguishable from noise.
 
   Tests (`gc/tests/old_free_intrusive.rs`, all driving real sweeps):
   - reuse and chain consistency across two sweeps, for both head kinds;
