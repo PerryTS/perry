@@ -265,13 +265,20 @@ pub extern "C" fn js_put_value_set_packed_miss(
 /// key add (the add memo can allocate), a refused receiver. The emitted code
 /// then calls [`js_put_value_set_packed_miss`] with its usual operands,
 /// which re-asks the same ways (a declined way declines again) and runs the
-/// full `[[Set]]`. Nothing here allocates, throws or runs user code.
+/// full `[[Set]]`. Nothing here allocates, throws or runs user code, and it
+/// declines everything while typed feedback is on (see the body).
 #[no_mangle]
 pub extern "C" fn js_put_value_set_packed_fast(
     target: f64,
     value: f64,
     cache_slot: *mut PackedSetWaysSlot,
 ) -> f64 {
+    // With typed feedback on, the store's layout note can retire feedback
+    // through the registry lock — a `GcRootRegistryGuard` whose release can
+    // flush a deferred collection (#11523). Decline; the miss entry stores.
+    if crate::typed_feedback::typed_feedback_active() {
+        return f64::from_bits(crate::value::TAG_HOLE);
+    }
     unsafe {
         let cache = crate::object::pic_slot_peek(cache_slot);
         if cache.is_null() {
