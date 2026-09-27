@@ -17,6 +17,8 @@
 //! lowering is the caller's to close, and `index_set.rs`'s `#5525` arm is one
 //! of the sites #7640 records as still open.
 
+use anyhow::Result;
+
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
 use super::FnCtx;
@@ -45,14 +47,73 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     idx_d: &str,
     val_double: &str,
     strict: bool,
-) -> String {
+    array_arm: Option<DynArrayStoreFacts>,
+) -> Result<String> {
     // As with the ordinary array store, an operand can throw before this
     // helper runs. Do not open fresh blocks using values dropped after the
     // terminator (#11450). No assignment value is consumed on this path.
     if ctx.block().is_terminated() {
-        return crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        return Ok(crate::nanbox::double_literal(f64::from_bits(
+            crate::nanbox::TAG_UNDEFINED,
+        )));
     }
+    let Some(facts) = array_arm else {
+        return Ok(emit_inline_ta_set_then_runtime(
+            ctx, obj_box, idx_d, val_double, strict,
+        ));
+    };
+    // #10513: the ordinary-Array arm. An untyped `d[j] = v` onto a live plain
+    // Array used to reach `js_dyn_index_set_strict` on EVERY store, which
+    // re-classifies the receiver through the proxy / symbol / typed-array /
+    // buffer-registry / collection / prototype / arguments ladder before the
+    // array setter runs (~450 instructions per element on node-forge's jsbn
+    // `am1`). The guarded in-bounds store the statically-typed receivers
+    // already use (`index_set_guarded.rs`) proves everything that ladder
+    // would conclude for this case from the receiver's own header: a
+    // non-forwarded (or once-forwarded, healed inline) `GC_TYPE_ARRAY`, no
+    // frozen/sealed/non-extensible/descriptor bits, the default prototype
+    // chain, and a canonical index strictly below `length`. Every other
+    // receiver and key — a typed array, a Buffer, a string or Symbol key,
+    // an append, a hole-creating sparse write — declines onto the unchanged
+    // typed-array tier and its `js_dyn_index_set_strict` exit.
+    let idx_i32 = super::index_set_guarded::emit_canonical_element_index_i32(ctx, idx_d);
+    super::index_set_guarded::emit_guarded_inbounds_array_store(
+        ctx,
+        obj_box,
+        &idx_i32,
+        val_double,
+        "dynarr.set",
+        facts.layout_note_needed,
+        facts.write_barrier_needed,
+        facts.value_is_numeric,
+        |ctx| {
+            let _ = emit_inline_ta_set_then_runtime(ctx, obj_box, idx_d, val_double, strict);
+            Ok(())
+        },
+    )?;
+    Ok(val_double.to_string())
+}
 
+/// What the caller knows statically about an untyped `obj[i] = v` store's
+/// VALUE, handed to the ordinary-Array arm of
+/// [`lower_inline_dyn_typed_array_set`]. Same three facts, same predicates, as
+/// every other caller of `emit_guarded_inbounds_array_store` passes.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DynArrayStoreFacts {
+    pub layout_note_needed: bool,
+    pub write_barrier_needed: bool,
+    pub value_is_numeric: bool,
+}
+
+/// The #5525 guarded inline typed-array store, exiting to
+/// `js_dyn_index_set_strict` on any guard miss. Returns the assignment's value.
+fn emit_inline_ta_set_then_runtime(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    val_double: &str,
+    strict: bool,
+) -> String {
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
     let pointer_mask = crate::nanbox::POINTER_MASK_I64;

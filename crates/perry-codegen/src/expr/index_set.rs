@@ -37,7 +37,7 @@ use crate::native_value::{
 };
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 use super::index_set_packed_loop::lower_packed_numeric_loop_index_set;
 use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
@@ -319,28 +319,8 @@ fn lower_array_index_set_via_runtime_key(
             // side has done this since #7286 (`aidx.canonical`). A rejected key
             // becomes index -1, which the guarded in-bounds store declines
             // onto the same helper arm, so the helper is emitted once.
-            let guard_idx_i32 = {
-                let blk = ctx.block();
-                let raw_ge_zero = blk.fcmp("oge", &idx_double, "0.0");
-                let raw_le_i32_max = blk.fcmp("ole", &idx_double, "2147483647.0");
-                let raw_in_range = blk.and(I1, &raw_ge_zero, &raw_le_i32_max);
-                // `fptosi` is poison for NaN/out-of-range input: convert the
-                // range-sanitized value.
-                let safe_raw = blk.select(I1, &raw_in_range, DOUBLE, &idx_double, "0.0");
-                let raw_i32 = blk.fptosi(DOUBLE, &safe_raw, I32);
-                let raw_round_trip = blk.sitofp(I32, &raw_i32, DOUBLE);
-                let raw_is_integral = blk.fcmp("oeq", &raw_round_trip, &idx_double);
-                let raw_is_canonical = blk.and(I1, &raw_in_range, &raw_is_integral);
-                let bits = blk.bitcast_double_to_i64(&idx_double);
-                let top16 = blk.lshr(I64, &bits, "48");
-                let is_boxed_i32 = blk.icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
-                let boxed_i32 = blk.trunc(I64, &bits, I32);
-                let boxed_nonnegative = blk.icmp_sge(I32, &boxed_i32, "0");
-                let boxed_is_canonical = blk.and(I1, &is_boxed_i32, &boxed_nonnegative);
-                let canonical = blk.or(I1, &raw_is_canonical, &boxed_is_canonical);
-                let idx_i32 = blk.select(I1, &is_boxed_i32, I32, &boxed_i32, &raw_i32);
-                blk.select(I1, &canonical, I32, &idx_i32, "-1")
-            };
+            let guard_idx_i32 =
+                super::index_set_guarded::emit_canonical_element_index_i32(ctx, &idx_double);
             super::index_set_guarded::emit_guarded_inbounds_array_store(
                 ctx,
                 &arr_box,
@@ -670,7 +650,8 @@ pub(crate) fn lower(
                                 &vals[1],
                                 &vals[2],
                                 assignment_strict,
-                            );
+                                None,
+                            )?;
                             let slow = LoweredValue::js_value(result.clone());
                             ctx.record_lowered_value_with_access_mode(
                                 "TypedArraySet",
@@ -704,7 +685,8 @@ pub(crate) fn lower(
                         &vals[1],
                         &vals[2],
                         assignment_strict,
-                    );
+                        None,
+                    )?;
                     let slow = LoweredValue::js_value(vals[2].clone());
                     ctx.record_lowered_value_with_access_mode(
                         "TypedArraySet",
@@ -794,6 +776,13 @@ pub(crate) fn lower(
             ) || is_string_expr(ctx, index);
             if recv_unknown && !index_is_static_string_or_symbol {
                 let strict = assignment_strict;
+                // #10513: the receiver's layout is unknown, so the layout note
+                // stays on; the barrier and numeric note follow the VALUE.
+                let array_facts = super::index_set_typed_array::DynArrayStoreFacts {
+                    layout_note_needed: true,
+                    write_barrier_needed: array_store_needs_write_barrier(ctx, value),
+                    value_is_numeric: is_numeric_expr(ctx, value),
+                };
                 return rooting::with_operands_rooted_across(
                     ctx,
                     &[object, index],
@@ -814,13 +803,14 @@ pub(crate) fn lower(
                         // at the access site, falling back to `js_dyn_index_set` on
                         // any guard miss. #7640: both the receiver and key are
                         // re-read after the allocating RHS.
-                        Ok(lower_inline_dyn_typed_array_set(
+                        lower_inline_dyn_typed_array_set(
                             ctx,
                             &vals[0],
                             &vals[1],
                             &val_double,
                             strict,
-                        ))
+                            Some(array_facts),
+                        )
                     },
                 );
             }

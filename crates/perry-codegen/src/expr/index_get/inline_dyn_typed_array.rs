@@ -119,6 +119,12 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let elem_bounds_idx = ctx.new_block("arrlike.elem.bounds");
     let elem_load_idx = ctx.new_block("arrlike.elem.load");
     let elem_value_idx = ctx.new_block("arrlike.elem.value");
+    let fwd_check_idx = ctx.new_block("arrlike.ic.fwd_check");
+    let fwd_follow_idx = ctx.new_block("arrlike.ic.fwd_follow");
+    let fwd_header_idx = ctx.new_block("arrlike.ic.fwd_header");
+    let fwd_check_label = ctx.block_label(fwd_check_idx);
+    let fwd_follow_label = ctx.block_label(fwd_follow_idx);
+    let fwd_header_label = ctx.block_label(fwd_header_idx);
     let object_miss_idx = ctx.new_block("arrlike.ic.miss");
     let merge_idx = ctx.new_block("arrlike.ic.merge");
     let object_header_label = ctx.block_label(object_header_idx);
@@ -185,8 +191,60 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let forwarded = ctx.block().and(I8, &gc_flags, "128");
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
     let header_ok = ctx.block().and(I1, &object_idx_is_int, &not_forwarded);
+    let header_end_label = ctx.block().label.clone();
     ctx.block()
-        .cond_br(&header_ok, &object_brand_label, &object_miss_label);
+        .cond_br(&header_ok, &object_brand_label, &fwd_check_label);
+
+    // #10514: heal ONE growth-forwarding hop inline. An Array that outgrew its
+    // storage leaves a forwarding stub at the old head, and every binding that
+    // is not the grown local itself — an object field (`this.data`, jsbn's
+    // BigInteger digits), a module global, a closure capture, a parameter —
+    // keeps that stub forever. Rejecting the stub sent every later read of such
+    // an array out of line through `js_packed_arraylike_index_get` →
+    // `js_array_get_f64`, which classifies the address again and follows the
+    // chain on every read (~470 instructions per element vs ~70 presized).
+    // The guarded store tier and `guarded_array.rs` already follow this edge:
+    // the stub's first payload word is the live user address. It is trusted
+    // only once it is in the heap band and its own header re-brands as a
+    // non-forwarded `GC_TYPE_ARRAY`; a longer or corrupt chain, and every
+    // forwarded non-Array, keeps the unchanged slow exit.
+    ctx.current_block = fwd_check_idx;
+    let follow = {
+        let blk = ctx.block();
+        let is_forwarded = blk.icmp_ne(I8, &forwarded, "0");
+        let forwarded_array = blk.and(I1, &is_array, &is_forwarded);
+        blk.and(I1, &forwarded_array, &object_idx_is_int)
+    };
+    ctx.block()
+        .cond_br(&follow, &fwd_follow_label, &object_miss_label);
+
+    ctx.current_block = fwd_follow_idx;
+    let fwd_target = {
+        let blk = ctx.block();
+        let stub_ptr = blk.inttoptr(I64, &object_raw);
+        let target = blk.load(I64, &stub_ptr);
+        let above_floor = blk.icmp_uge(I64, &target, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &target, &heap_ceiling);
+        let in_band = blk.and(I1, &above_floor, &below_ceiling);
+        blk.cond_br(&in_band, &fwd_header_label, &object_miss_label);
+        target
+    };
+
+    ctx.current_block = fwd_header_idx;
+    {
+        let blk = ctx.block();
+        let type_addr = blk.sub(I64, &fwd_target, "8");
+        let type_ptr = blk.inttoptr(I64, &type_addr);
+        let live_type = blk.load(I8, &type_ptr);
+        let live_is_array = blk.icmp_eq(I8, &live_type, "1");
+        let flags_addr = blk.sub(I64, &fwd_target, "7");
+        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+        let live_flags = blk.load(I8, &flags_ptr);
+        let live_forwarded = blk.and(I8, &live_flags, "128");
+        let live_not_forwarded = blk.icmp_eq(I8, &live_forwarded, "0");
+        let live_ok = blk.and(I1, &live_is_array, &live_not_forwarded);
+        blk.cond_br(&live_ok, &object_brand_label, &object_miss_label);
+    }
 
     // `GC_TYPE_ARRAY` takes the direct guarded load. Everything else is offered
     // to the typed-array arm, then to the elements-backed Array-subclass
@@ -194,7 +252,26 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // both brand tests and are classified by the slow exit. Both `tav.brand`
     // and `arrlike.elem.kind` re-test the brand they need before they read a
     // header word, so nothing else can reach those loads.
+    //
+    // From here on the receiver is `object_raw`: the original head, or the
+    // live head one forwarding hop away (which re-branded as an Array).
     ctx.current_block = object_brand_idx;
+    let fwd_header_label_s = ctx.block_label(fwd_header_idx);
+    let object_raw = ctx.block().phi(
+        I64,
+        &[
+            (object_raw.as_str(), header_end_label.as_str()),
+            (fwd_target.as_str(), fwd_header_label_s.as_str()),
+        ],
+    );
+    let gc_type = ctx.block().phi(
+        I8,
+        &[
+            (gc_type.as_str(), header_end_label.as_str()),
+            ("1", fwd_header_label_s.as_str()),
+        ],
+    );
+    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
     ctx.block()
         .cond_br(&is_array, &object_array_guard_label, &ta_brand_label);
 

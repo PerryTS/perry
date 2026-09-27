@@ -41,7 +41,7 @@
 use anyhow::Result;
 
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::write_barrier::{
     emit_jsvalue_slot_store_deferred_layout_note_on_block, emit_layout_note_slot_aware_on_block,
@@ -51,6 +51,39 @@ use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_write_barrier_slot_value_and_generation_tested, FnCtx,
 };
+
+/// The canonical element index a DOUBLE key names, as an `i32`, or `-1` when
+/// it names none (fractional, negative, non-finite, above `i32::MAX`, or any
+/// NaN-boxed non-number such as a string or Symbol key). `-1` is exactly the
+/// value [`emit_guarded_inbounds_array_store`]'s guard declines, so a caller
+/// can hand every key to it and keep ONE slow arm for the rejected ones.
+///
+/// Both numeric encodings are recognised: a plain double and an
+/// `INT32_TAG`-boxed integer (a loop counter that was boxed on the way in).
+/// The conversion never feeds `fptosi` an out-of-range or NaN input, which
+/// would be poison.
+pub(super) fn emit_canonical_element_index_i32(ctx: &mut FnCtx<'_>, idx_double: &str) -> String {
+    let blk = ctx.block();
+    let raw_ge_zero = blk.fcmp("oge", idx_double, "0.0");
+    let raw_le_i32_max = blk.fcmp("ole", idx_double, "2147483647.0");
+    let raw_in_range = blk.and(I1, &raw_ge_zero, &raw_le_i32_max);
+    // `fptosi` is poison for NaN/out-of-range input: convert the
+    // range-sanitized value.
+    let safe_raw = blk.select(I1, &raw_in_range, DOUBLE, idx_double, "0.0");
+    let raw_i32 = blk.fptosi(DOUBLE, &safe_raw, I32);
+    let raw_round_trip = blk.sitofp(I32, &raw_i32, DOUBLE);
+    let raw_is_integral = blk.fcmp("oeq", &raw_round_trip, idx_double);
+    let raw_is_canonical = blk.and(I1, &raw_in_range, &raw_is_integral);
+    let bits = blk.bitcast_double_to_i64(idx_double);
+    let top16 = blk.lshr(I64, &bits, "48");
+    let is_boxed_i32 = blk.icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
+    let boxed_i32 = blk.trunc(I64, &bits, I32);
+    let boxed_nonnegative = blk.icmp_sge(I32, &boxed_i32, "0");
+    let boxed_is_canonical = blk.and(I1, &is_boxed_i32, &boxed_nonnegative);
+    let canonical = blk.or(I1, &raw_is_canonical, &boxed_is_canonical);
+    let idx_i32 = blk.select(I1, &is_boxed_i32, I32, &boxed_i32, &raw_i32);
+    blk.select(I1, &canonical, I32, &idx_i32, "-1")
+}
 
 /// Emit the guarded diamond. `fallback` emits the original slow arm (the
 /// runtime call plus whatever bookkeeping it owns) into the block that is
