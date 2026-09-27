@@ -48,6 +48,7 @@ js_argon2_verify_sync	Reenters
 js_arguments_bundle_get_slow	Reenters
 js_arguments_bundle_index_get	Reenters
 js_arguments_object_alloc	Reenters
+js_arguments_object_alloc_mapped	Reenters
 js_arguments_object_map_index	Leaf
 js_array_alloc	Reenters
 js_array_alloc_literal	Reenters
@@ -718,6 +719,10 @@ js_crypto_argon2_sync	Reenters
 js_crypto_certificate_export_challenge	Reenters
 js_crypto_certificate_export_public_key	Reenters
 js_crypto_certificate_verify_spkac	Reenters
+js_crypto_chain_digest	Reenters
+js_crypto_chain_hash_init	Reenters
+js_crypto_chain_hmac_init	Reenters
+js_crypto_chain_update	Reenters
 js_crypto_check_prime_async	Reenters
 js_crypto_check_prime_sync	Leaf
 js_crypto_create_cipheriv	Reenters
@@ -1659,6 +1664,8 @@ js_message_channel_new	Reenters
 js_message_port_constructor_error	Reenters
 js_method_direct_shape_class	Leaf
 js_method_direct_shape_guard	Leaf
+js_method_site_miss	Reenters
+js_method_site_stats	Leaf
 js_microtasks_pending	Leaf
 js_migrate_stdin_listeners_to_provider	Reenters
 js_mod	Leaf
@@ -3892,6 +3899,7 @@ perry_i18n_plural_category	Reenters
 perry_i18n_set_currencies	Leaf
 perry_i18n_set_locale_index	Leaf
 perry_i18n_set_plural_locales	Leaf
+perry_implicit_this_cell	Leaf
 perry_init_guard_check_and_set	Leaf
 perry_key_content_hash	Leaf
 perry_macos_bundle_chdir	Leaf
