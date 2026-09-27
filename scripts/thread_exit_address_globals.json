@@ -1538,37 +1538,10 @@
   {
    "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
    "names": [
-    "CLOSURE_PROPS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Closure-address -> dynamic props map written by closure property sets on any thread; entries whose owner lies in the exiting arena's blocks are dropped by release_closure_side_table_owners_in_ranges (dynamic_props.rs:465), called from Arena::drop (arena/block.rs:539).",
-   "hook": "release_closure_side_table_owners_in_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-   "names": [
     "WASM_FUNCREF_EXTERNALS"
    ],
    "verdict": "thread_exit_invalidated",
    "why": "(wasm-host feature) closure-address -> host funcref handle map; entries in the exiting arena's ranges are removed and their handles dropped by release_closure_side_table_owners_in_ranges (dynamic_props.rs:474-491) from Arena::drop.",
-   "hook": "release_closure_side_table_owners_in_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-   "names": [
-    "CLOSURE_DELETED_KEYS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Closure-address -> deleted property names, written by closure_mark_key_deleted; purged over the exiting arena's ranges by release_closure_side_table_owners_in_ranges (dynamic_props.rs:471) from Arena::drop.",
-   "hook": "release_closure_side_table_owners_in_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
-   "names": [
-    "CLOSURE_STATIC_PROTOTYPES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Closure-address -> NaN-boxed prototype bits from Object.setPrototypeOf(fn, proto); purged by owner range in release_closure_side_table_owners_in_ranges (dynamic_props.rs:468, via get_closure_prototypes) from Arena::drop.",
    "hook": "release_closure_side_table_owners_in_ranges"
   },
   {

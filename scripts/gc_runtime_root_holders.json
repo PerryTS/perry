@@ -47,6 +47,12 @@
     },
     {
       "file": "crates/perry-runtime/src/closure/shape.rs",
+      "name": "VERDICT_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-agent (keyed Function ShapeId u32, verdict bits u8) pairs for the Function.prototype bind/call/apply arm. Ids and flag bits, never an address; ShapeIds are never reused, so an entry can go unused but not stale."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/shape.rs",
       "name": "FUNCTION_PROTOTYPE_SLOT",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_object_cache_roots_mut -> closure::shape::scan_function_prototype_roots_mut",

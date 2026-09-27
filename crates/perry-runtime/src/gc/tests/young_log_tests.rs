@@ -1001,4 +1001,3 @@ fn old_layout_records_are_skipped_by_a_minor() {
 
     crate::gc::layout_clear_for_ptr(owner as usize);
 }
-
