@@ -671,9 +671,9 @@ fn atom_bits(atom: usize) -> u64 {
 /// S3b: a key text has ONE string object in an agent — its atom — and every
 /// canonical list written after the atom exists holds it. The atom table holds
 /// its strings strongly and REWRITES them on a move (the intern-table root
-/// scanner), so after a moving minor the table, the list, a fresh intern and a
-/// fresh pool mint all name the atom at its NEW address, and none names the
-/// address it moved away from.
+/// scanner), so after a moving minor the table, the list and a fresh pool mint
+/// all name the atom at its NEW address, and none names the address it moved
+/// away from. Interning is separate: the intern cache never hands out an atom.
 #[test]
 fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -723,12 +723,13 @@ fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
             atom_bits(moved),
             "INVARIANT: the list follows its atom through the move"
         );
-        // After the move: interning another copy, and minting again, both
-        // return the moved atom — never a third string.
-        assert_eq!(
+        // After the move: minting again returns the moved atom — never a third
+        // string. Interning a copy does NOT: an atom is identity, not
+        // eligibility (`string::intern::AtomTable`).
+        assert_ne!(
             crate::string::js_string_intern(nursery_key("atom_mv_kind"), hash) as usize,
             moved,
-            "a copy interns to the moved atom"
+            "INVARIANT: the intern cache never hands out an atom"
         );
         assert_eq!(
             crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0) as usize,

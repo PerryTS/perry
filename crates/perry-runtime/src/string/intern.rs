@@ -57,10 +57,19 @@ crate::perry_thread_local! {
 /// collector rewrites the entries on move through the intern-table root
 /// scanner (`scan_intern_table_roots_mut`), exactly like the cache's.
 ///
-/// Two funnels consult it: the intern cache's miss paths (so a computed key
-/// with an atom's text interns TO the atom), and canonical key lists when they
-/// write a key (`canonical_keys::Appended::atomized`), so a read site's pooled
-/// key and the receiver's shape key are one pointer.
+/// One funnel consults it: canonical key lists when they write a key
+/// (`canonical_keys::Appended::atomized`), so a read site's pooled key and the
+/// receiver's shape key are one pointer.
+///
+/// An atom is NOT an interned string. It is minted by a plain allocation and
+/// never carries `GC_FLAG_INTERNED`, and the intern cache neither adopts nor
+/// hands out atoms. `GC_FLAG_INTERNED` is an ELIGIBILITY bit: the own-property
+/// read lane, the set fast paths, the chain store and the proxy put paths
+/// admit only interned keys. Minting atoms as interned strings silently widened
+/// every one of those lanes to every pool-literal key, and on Zod the widened
+/// read lane MISSES (the key is inherited, not own) at ~330 instructions each:
+/// +0.3% instructions, measured, with the atom table itself inert. Identity is
+/// the atom's job; eligibility stays exactly what it was.
 ///
 /// The table never decides an answer. A pointer match proves equal text; a
 /// pointer MISmatch proves nothing (a list written before its atom existed
@@ -205,9 +214,10 @@ pub(crate) unsafe fn atom_for_key(
 /// precomputed FNV-1a hash of the bytes — the same function as every other
 /// key hash here.
 ///
-/// Adopts the intern cache's string when it already holds this text, so the
-/// keys runtime code interned before this module initialised keep matching.
-/// Longer literals are not keys worth an atom and take the plain allocation.
+/// A plain allocation, exactly what the pool minted before atoms existed: the
+/// atom is not interned and does not adopt the intern cache's string (see
+/// `AtomTable`: identity, never eligibility). Longer literals are not keys
+/// worth an atom and take the plain allocation without a table entry.
 #[no_mangle]
 pub extern "C" fn js_string_pool_atom(
     bytes: *const u8,
@@ -226,20 +236,18 @@ pub extern "C" fn js_string_pool_atom(
     if let Some(atom) = atom_lookup(input, hash) {
         return atom as *mut StringHeader;
     }
-    // Finds the cache's string for this text or allocates one, marking it
-    // interned and immutable (`refcount = 0`). Nothing is held across the
-    // allocation: `bytes` is read-only data in the compiled image.
-    let atom = intern_dispatch_bytes(0, bytes, len as usize, 0, is_wtf8 != 0);
-    if atom.is_null() {
-        return js_string_from_bytes(bytes, len);
-    }
+    // Nothing is held across the allocation: `bytes` is read-only data in the
+    // compiled image. Shared (`refcount = 0`) like every pool literal.
+    let atom: *const StringHeader = if is_wtf8 != 0 {
+        js_string_from_wtf8_bytes(bytes, len)
+    } else {
+        js_string_from_bytes(bytes, len)
+    };
     let _ = ATOMS.try_with(|t| unsafe { (*t.get()).insert(hash, atom) });
     atom as *mut StringHeader
 }
 
-/// Test hook: evict `bytes` from the intern CACHE (a collision would), so the
-/// next atom mint for that text allocates a new string instead of adopting
-/// the cached one.
+/// Test hook: evict `bytes` from the intern CACHE (a collision would).
 #[cfg(test)]
 pub(crate) fn test_evict_interned(bytes: &[u8]) {
     let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
@@ -298,20 +306,6 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
         });
         if let Some(existing) = hit {
             return existing;
-        }
-
-        // An atom owns this text: the cache slot takes the ATOM, so a computed
-        // key interns to the same string a read site and a shape key list hold
-        // (see `AtomTable`), never to a second copy.
-        let bytes = std::slice::from_raw_parts(string_data(key), byte_len as usize);
-        if let Some(atom) = atom_lookup(bytes, hash) {
-            with_intern_table(|table| {
-                (*table)[slot] = InternEntry {
-                    hash,
-                    string_ptr: atom as usize,
-                };
-            });
-            return atom;
         }
 
         // Miss or collision — insert (evict on collision)
@@ -385,16 +379,6 @@ pub(crate) fn intern_dispatch_bytes(
     });
     if let Some(existing) = hit {
         return existing;
-    }
-    // An atom owns this text (see `AtomTable`): hand it out rather than a copy.
-    if let Some(atom) = atom_lookup(input, hash) {
-        with_intern_table(|table| unsafe {
-            (*table)[slot] = InternEntry {
-                hash,
-                string_ptr: atom as usize,
-            };
-        });
-        return atom;
     }
 
     let key = if is_wtf8 {

@@ -704,14 +704,30 @@ mod tests {
                 "INVARIANT: receiver {i}'s shape holds the atom, not the copy it grew with"
             );
         }
-        // A computed key with the text interns TO the atom.
+        // Identity is not eligibility: the atom is not an interned string, and
+        // a computed key with the text interns to its own string, never to the
+        // atom (`GC_FLAG_INTERNED` admits keys to the own-property lanes; an
+        // atom must not widen them).
+        let atom_flags = atom.with_const_ptr(|p: *const crate::StringHeader| unsafe {
+            (*((p as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))
+                .gc_flags
+        });
+        assert_eq!(
+            atom_flags & crate::gc::GC_FLAG_INTERNED,
+            0,
+            "INVARIANT: an atom is never flagged interned"
+        );
         let interned = copy.with_const_ptr(|p: *const crate::StringHeader| {
             crate::string::js_string_intern(
                 p,
                 crate::object::key_bytes_hash(text.as_ptr(), text.len()),
             ) as usize
         });
-        assert_eq!(interned, addr(&atom), "a copy interns to the atom");
+        assert_ne!(
+            interned,
+            addr(&atom),
+            "INVARIANT: interning never returns the atom"
+        );
         // The site holds the atom: every latched read is the receiver's own
         // value, answered by its shape.
         let by_atom = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
