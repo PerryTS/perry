@@ -7,7 +7,7 @@ pub unsafe extern "C" fn js_crypto_create_sign(alg_ptr: i64) -> f64 {
         Some(alg) => alg,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
-    let handle: Handle = register_handle(SignHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(SignHandle {
         alg,
         data: std::sync::Mutex::new(Vec::new()),
         finalized: std::sync::atomic::AtomicBool::new(false),
@@ -22,7 +22,7 @@ pub unsafe extern "C" fn js_crypto_create_verify(alg_ptr: i64) -> f64 {
         Some(alg) => alg,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
-    let handle: Handle = register_handle(VerifyHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(VerifyHandle {
         alg,
         data: std::sync::Mutex::new(Vec::new()),
         finalized: std::sync::atomic::AtomicBool::new(false),

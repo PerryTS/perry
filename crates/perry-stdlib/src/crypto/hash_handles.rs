@@ -454,7 +454,7 @@ pub unsafe extern "C" fn js_crypto_create_hash_options(alg_ptr: i64, options_bit
     };
     let output_len = object_field_bits(options_bits.to_bits(), b"outputLength")
         .and_then(|bits| nanboxed_to_usize(f64::from_bits(bits)));
-    let handle: Handle = register_handle(HashHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
         state: Mutex::new(Some(state)),
         output_len,
         stream: Mutex::new(CryptoDigestStream::default()),
@@ -469,6 +469,11 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // Stream use keys listeners, pipes and queued digest events by this id
+    // in native state, so the handle stops being GC-reclaimable (#11453).
+    if is_stream_method(method) {
+        crate::common::retain_strongly(handle);
+    }
     // #2944 — once `digest()` consumed the hasher state, Node throws
     // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` for any
     // subsequent `update`, `digest`, or `copy`. The `state` Mutex holds
@@ -550,7 +555,7 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
             let Some(state) = state else {
                 return f64::from_bits(0x7FFC_0000_0000_0001);
             };
-            let handle: Handle = register_handle(HashHandle {
+            let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
                 state: Mutex::new(Some(state)),
                 output_len: h.output_len,
                 stream: Mutex::new(CryptoDigestStream::default()),
@@ -636,6 +641,13 @@ pub unsafe fn dispatch_hash_property(handle: i64, property: &str) -> f64 {
     js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
 }
 
+fn is_stream_method(method: &str) -> bool {
+    matches!(
+        method,
+        "write" | "end" | "on" | "once" | "addListener" | "pipe" | "setEncoding"
+    )
+}
+
 #[inline]
 pub(super) fn is_undefined_f64(v: f64) -> bool {
     v.to_bits() == 0x7FFC_0000_0000_0001
@@ -717,7 +729,7 @@ pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f6
         },
         _ => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
-    let handle: Handle = register_handle(HmacHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(HmacHandle {
         state: Mutex::new(Some(state)),
         stream: Mutex::new(CryptoDigestStream::default()),
     });
@@ -731,6 +743,11 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
         Some(h) => h,
         None => return f64::from_bits(0x7FFC_0000_0000_0001),
     };
+    // Stream use keys listeners, pipes and queued digest events by this id
+    // in native state, so the handle stops being GC-reclaimable (#11453).
+    if is_stream_method(method) {
+        crate::common::retain_strongly(handle);
+    }
     // #2945 — after the MAC is finalized by `digest()`, Node keeps a second
     // `digest()` idempotent (returns `""` / empty Buffer) but throws
     // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` on `update()`.

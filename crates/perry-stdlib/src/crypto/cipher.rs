@@ -589,7 +589,7 @@ pub(super) unsafe fn create_cipher_handle(
     } else {
         0
     };
-    let handle: Handle = register_handle(CipherHandle {
+    let handle: Handle = crate::common::register_reclaimable_handle(CipherHandle {
         state: std::sync::Mutex::new(CipherState {
             kind,
             encrypt,

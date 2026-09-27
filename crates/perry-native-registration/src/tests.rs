@@ -497,3 +497,113 @@ fn permanent_retirement_is_never_reused_by_any_drain() {
     let fresh = live(&registry, NativeRegistrationKind::Payload);
     assert_ne!(fresh.numeric_id(), tombstoned.numeric_id());
 }
+
+// #11453: the freelist hands ids out oldest-freed first, so a stale numeric id
+// names nothing until every id freed before it has been reused.
+#[test]
+fn freelist_reuses_the_oldest_freed_id_first() {
+    let registry = NativeRegistrationRegistry::new(1, 8, 8);
+    let ids: Vec<_> = (0..4)
+        .map(|_| live(&registry, NativeRegistrationKind::Payload))
+        .collect();
+    for identity in &ids {
+        retire(&registry, *identity, NativeQuarantine::NextDrain);
+    }
+    assert_eq!(registry.drain(Instant::now()), 4);
+    let reissued: Vec<_> = (0..4)
+        .map(|_| live(&registry, NativeRegistrationKind::Payload).numeric_id())
+        .collect();
+    let freed: Vec<_> = ids.iter().map(|identity| identity.numeric_id()).collect();
+    assert_eq!(reissued, freed, "ids must come back in the order they were freed");
+}
+
+#[test]
+fn a_most_recently_freed_id_waits_behind_the_whole_free_population() {
+    let registry = NativeRegistrationRegistry::new(1, 64, 64);
+    let ids: Vec<_> = (0..63)
+        .map(|_| live(&registry, NativeRegistrationKind::Payload))
+        .collect();
+    for identity in &ids {
+        retire(&registry, *identity, NativeQuarantine::NextDrain);
+    }
+    registry.drain(Instant::now());
+    let stale = ids.last().unwrap().numeric_id();
+    for n in 0..62 {
+        let identity = live(&registry, NativeRegistrationKind::Payload);
+        assert_ne!(identity.numeric_id(), stale, "reissued after only {n} registrations");
+        retire(&registry, identity, NativeQuarantine::NextDrain);
+        registry.drain(Instant::now());
+    }
+}
+
+#[test]
+fn proven_unreachable_retirement_skips_the_tick_quarantine() {
+    let registry = registry();
+    let identity = live(&registry, NativeRegistrationKind::Payload);
+    assert!(registry.begin_retirement_of(identity));
+    assert!(registry.finish_retirement_reusable(identity));
+    assert!(
+        !registry.finish_retirement_reusable(identity),
+        "a second completion of the same retirement is rejected"
+    );
+    let again = live(&registry, NativeRegistrationKind::Payload);
+    assert_eq!(again.numeric_id(), identity.numeric_id());
+    assert!(again.serial() > identity.serial());
+    assert!(registry.acquire(identity, NativeLeaseKind::Operation).is_none());
+}
+
+#[test]
+fn proven_unreachable_retirement_still_waits_for_a_held_lease() {
+    let registry = NativeRegistrationRegistry::new(1, 3, 8);
+    let identity = live(&registry, NativeRegistrationKind::Payload);
+    let lease = registry.acquire(identity, NativeLeaseKind::Wrapper).unwrap();
+    assert!(registry.begin_retirement_of(identity));
+    assert!(registry.finish_retirement_reusable(identity));
+    let other = live(&registry, NativeRegistrationKind::Payload);
+    assert_ne!(other.numeric_id(), identity.numeric_id());
+    assert_eq!(
+        registry.begin_registration(NativeRegistrationKind::Payload),
+        Err(NativeRegistrationError::IdExhausted),
+        "the leased id must not be reissued"
+    );
+    assert_eq!(registry.drain(Instant::now()), 0, "lease still held");
+    drop(lease);
+    assert_eq!(registry.drain(Instant::now()), 1);
+    assert_eq!(
+        live(&registry, NativeRegistrationKind::Payload).numeric_id(),
+        identity.numeric_id()
+    );
+}
+
+#[test]
+fn available_ids_counts_fresh_and_free_but_not_quarantined() {
+    let registry = NativeRegistrationRegistry::new(1, 11, 8);
+    assert_eq!(registry.available_ids(), 10);
+    let a = live(&registry, NativeRegistrationKind::Payload);
+    let b = live(&registry, NativeRegistrationKind::Payload);
+    assert_eq!(registry.available_ids(), 8);
+    retire(&registry, a, NativeQuarantine::NextDrain);
+    assert_eq!(registry.available_ids(), 8, "quarantined ids are not available");
+    registry.drain(Instant::now());
+    assert_eq!(registry.available_ids(), 9);
+    assert!(registry.begin_retirement_of(b));
+    assert!(registry.finish_retirement_reusable(b));
+    assert_eq!(registry.available_ids(), 10);
+}
+
+/// Steady-state churn far past the band: with retirement feeding the
+/// freelist, the fresh counter stops moving once the live set is minted.
+#[test]
+fn a_million_register_retire_cycles_fit_a_small_band() {
+    let registry = NativeRegistrationRegistry::new(1, 1025, 1024);
+    let mut window = std::collections::VecDeque::new();
+    for _ in 0..1_000_000 {
+        window.push_back(live(&registry, NativeRegistrationKind::Payload));
+        if window.len() > 512 {
+            let identity = window.pop_front().unwrap();
+            assert!(registry.begin_retirement_of(identity));
+            assert!(registry.finish_retirement_reusable(identity));
+        }
+    }
+    assert!(registry.next_fresh_id_for_tests() <= 514);
+}
