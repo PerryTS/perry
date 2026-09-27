@@ -43,7 +43,7 @@
 //! async/generator transforms (which box locals into cells and split
 //! expressions at `await`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use perry_hir::crypto_chain::{CHAIN_DIGEST, CHAIN_INIT_HASH, CHAIN_INIT_HMAC, CHAIN_UPDATE};
 use perry_hir::types::{LocalId, Type};
@@ -51,12 +51,16 @@ use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{Decorator, Expr, Function, Module, Param, Stmt};
 
 pub fn run(module: &mut Module) {
-    if !module_has_create_call(module) {
+    let aliases = cjs_crypto_aliases(module);
+    if !module_has_create_call(module, &aliases) {
         return;
     }
     let counts = count_module_occurrences(module);
+    let placeholders = count_placeholder_lets(module);
     let mut rw = Rewriter {
         counts: &counts,
+        aliases: &aliases,
+        placeholders: &placeholders,
         require_const: true,
     };
     // Module scope: a top-level binding can be exported or become a script
@@ -89,15 +93,21 @@ pub fn run(module: &mut Module) {
 // Shape recognition
 // ---------------------------------------------------------------------------
 
-fn is_crypto(expr: &Expr) -> bool {
-    matches!(expr, Expr::NativeModuleRef(n) if n == "crypto")
+/// The `node:crypto` namespace: the import binding, or a CommonJS
+/// `var crypto = require('crypto')` alias (see [`cjs_crypto_aliases`]).
+fn is_crypto(expr: &Expr, aliases: &HashSet<LocalId>) -> bool {
+    match expr {
+        Expr::NativeModuleRef(n) => n == "crypto",
+        Expr::LocalGet(id) => aliases.contains(id),
+        _ => false,
+    }
 }
 
 /// `crypto.createHash(alg, ..)` / `crypto.Hash(alg, ..)` → `Some(false)`;
 /// `crypto.createHmac(alg, key, ..)` / `crypto.Hmac(..)` → `Some(true)`.
 /// A call without the required arguments stays on the handle path, which
 /// owns its (non-throwing) degenerate behaviour.
-fn create_call_kind(expr: &Expr) -> Option<bool> {
+fn create_call_kind(expr: &Expr, aliases: &HashSet<LocalId>) -> Option<bool> {
     let Expr::Call { callee, args, .. } = expr else {
         return None;
     };
@@ -107,7 +117,7 @@ fn create_call_kind(expr: &Expr) -> Option<bool> {
     else {
         return None;
     };
-    if !is_crypto(object) {
+    if !is_crypto(object, aliases) {
         return None;
     }
     match property.as_str() {
@@ -141,9 +151,9 @@ fn peel_updates(mut expr: &Expr) -> &Expr {
 
 /// `createX(..).update(..)*.digest(..)` — an inline chain whose object no
 /// expression can name.
-fn is_inline_chain(expr: &Expr) -> bool {
+fn is_inline_chain(expr: &Expr, aliases: &HashSet<LocalId>) -> bool {
     method_call(expr, "digest")
-        .is_some_and(|(recv, _)| create_call_kind(peel_updates(recv)).is_some())
+        .is_some_and(|(recv, _)| create_call_kind(peel_updates(recv), aliases).is_some())
 }
 
 /// The chains codegen already collapses to one direct helper with no handle
@@ -164,9 +174,16 @@ fn is_literal_fast_path(expr: &Expr) -> bool {
     else {
         return false;
     };
-    let Expr::PropertyGet { property, .. } = callee.as_ref() else {
+    let Expr::PropertyGet {
+        property, object, ..
+    } = callee.as_ref()
+    else {
         return false;
     };
+    // Codegen's direct helpers only match the import binding.
+    if !matches!(object.as_ref(), Expr::NativeModuleRef(n) if n == "crypto") {
+        return false;
+    }
     let enc_ok = match digest_args.first() {
         None | Some(Expr::Undefined) => true,
         Some(Expr::String(s)) => s.eq_ignore_ascii_case("hex"),
@@ -297,33 +314,34 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
 // Module-wide occurrence count of every LocalId carrier
 // ---------------------------------------------------------------------------
 
-fn module_has_create_call(module: &Module) -> bool {
-    fn expr_has(e: &Expr) -> bool {
-        if create_call_kind(e).is_some() {
+fn module_has_create_call(module: &Module, aliases: &HashSet<LocalId>) -> bool {
+    fn expr_has(e: &Expr, aliases: &HashSet<LocalId>) -> bool {
+        if create_call_kind(e, aliases).is_some() {
             return true;
         }
         if let Expr::Closure { body, .. } = e {
-            if body.iter().any(stmt_has) {
+            if body.iter().any(|s| stmt_has(s, aliases)) {
                 return true;
             }
         }
         let mut found = false;
         walk_expr_children(e, &mut |c| {
-            if !found && expr_has(c) {
+            if !found && expr_has(c, aliases) {
                 found = true;
             }
         });
         found
     }
-    fn stmt_has(s: &Stmt) -> bool {
+    fn stmt_has(s: &Stmt, aliases: &HashSet<LocalId>) -> bool {
         let mut found = false;
         for_each_stmt_expr(s, &mut |e| {
-            if !found && expr_has(e) {
+            if !found && expr_has(e, aliases) {
                 found = true;
             }
         });
         found
     }
+    let stmt_has = |s: &Stmt| stmt_has(s, aliases);
     module.init.iter().any(stmt_has)
         || module.functions.iter().any(|f| f.body.iter().any(stmt_has))
         || module.classes.iter().any(|c| {
@@ -340,6 +358,210 @@ fn module_has_create_call(module: &Module) -> bool {
 
 type Counts = HashMap<LocalId, usize>;
 
+/// Visit every statement list in the module's function bodies, init and
+/// closure bodies (the places a `Let` can appear).
+fn for_each_let(module: &Module, f: &mut dyn FnMut(&Stmt, &[Stmt])) {
+    fn stmts(list: &[Stmt], f: &mut dyn FnMut(&Stmt, &[Stmt])) {
+        for s in list {
+            stmt(s, list, f);
+        }
+    }
+    fn stmt(s: &Stmt, parent: &[Stmt], f: &mut dyn FnMut(&Stmt, &[Stmt])) {
+        f(s, parent);
+        match s {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                stmts(then_branch, f);
+                if let Some(b) = else_branch {
+                    stmts(b, f);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => stmts(body, f),
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    stmt(i, parent, f);
+                }
+                stmts(body, f);
+            }
+            Stmt::Labeled { body, .. } => stmt(body, parent, f),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                stmts(body, f);
+                if let Some(c) = catch {
+                    stmts(&c.body, f);
+                }
+                if let Some(fin) = finally {
+                    stmts(fin, f);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    stmts(&c.body, f);
+                }
+            }
+            _ => {}
+        }
+        for_each_stmt_expr_shallow(s, &mut |e| closures_in(e, f));
+    }
+    fn closures_in(e: &Expr, f: &mut dyn FnMut(&Stmt, &[Stmt])) {
+        if let Expr::Closure { body, .. } = e {
+            stmts(body, f);
+        }
+        walk_expr_children(e, &mut |c| closures_in(c, f));
+    }
+    stmts(&module.init, f);
+    for func in &module.functions {
+        stmts(&func.body, f);
+    }
+    for class in &module.classes {
+        for func in class
+            .constructor
+            .iter()
+            .chain(&class.methods)
+            .chain(&class.static_methods)
+            .chain(class.getters.iter().map(|(_, f)| f))
+            .chain(class.setters.iter().map(|(_, f)| f))
+            .chain(class.computed_members.iter().map(|m| &m.function))
+        {
+            stmts(&func.body, f);
+        }
+    }
+}
+
+/// The expressions a statement evaluates itself (not its sub-statements).
+fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    match stmt {
+        Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => f(e),
+        Stmt::Return(Some(e)) => f(e),
+        Stmt::If { condition, .. }
+        | Stmt::While { condition, .. }
+        | Stmt::DoWhile { condition, .. } => f(condition),
+        Stmt::For {
+            condition, update, ..
+        } => {
+            if let Some(c) = condition {
+                f(c);
+            }
+            if let Some(u) = update {
+                f(u);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            f(discriminant);
+            for c in cases {
+                if let Some(t) = &c.test {
+                    f(t);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_placeholder_let(stmt: &Stmt) -> Option<LocalId> {
+    match stmt {
+        Stmt::Let {
+            id,
+            init: None | Some(Expr::Undefined),
+            ..
+        } => Some(*id),
+        _ => None,
+    }
+}
+
+fn count_placeholder_lets(module: &Module) -> Counts {
+    let mut c = Counts::new();
+    for_each_let(module, &mut |s, _| {
+        if let Some(id) = is_placeholder_let(s) {
+            bump(&mut c, id);
+        }
+    });
+    c
+}
+
+/// CommonJS `var crypto = require('crypto')` bindings that provably hold the
+/// `node:crypto` namespace whenever they hold anything but their hoisting
+/// placeholder.
+///
+/// `require` must be the binding perry's CJS wrapper declares
+/// (`crates/perry/src/commands/compile/cjs_wrap`): a `const require =
+/// function(specifier) { .. }` directly in the body of the closure bound to
+/// `__perry_cjs_factory`, which no user code can name. Its builtin arm
+/// returns `js_create_native_module_namespace("crypto")`. The alias must have
+/// exactly one value-carrying definition — that `require('crypto')` call —
+/// and otherwise only `undefined` placeholder declarations: no other `Let`,
+/// no `LocalSet`, no `++`/`--`.
+fn cjs_crypto_aliases(module: &Module) -> HashSet<LocalId> {
+    let mut requires: HashSet<LocalId> = HashSet::new();
+    for_each_let(module, &mut |s, _| {
+        let Stmt::Let {
+            name,
+            init: Some(Expr::Closure { body, .. }),
+            ..
+        } = s
+        else {
+            return;
+        };
+        if name != "__perry_cjs_factory" {
+            return;
+        }
+        for inner in body {
+            if let Stmt::Let {
+                id,
+                name,
+                mutable: false,
+                init: Some(Expr::Closure { params, .. }),
+                ..
+            } = inner
+            {
+                if name == "require" && params.len() == 1 && params[0].name == "specifier" {
+                    requires.insert(*id);
+                }
+            }
+        }
+    });
+    if requires.is_empty() {
+        return HashSet::new();
+    }
+    let is_require_crypto = |e: &Expr| {
+        matches!(e, Expr::Call { callee, args, .. }
+            if matches!(callee.as_ref(), Expr::LocalGet(r) if requires.contains(r))
+                && args.len() == 1
+                && matches!(&args[0], Expr::String(sp) if sp == "crypto" || sp == "node:crypto"))
+    };
+    // Value-carrying `Let`s per id, and how many of them are `require('crypto')`.
+    let mut lets: HashMap<LocalId, (usize, usize)> = HashMap::new();
+    for_each_let(module, &mut |s, _| {
+        if let Stmt::Let {
+            id, init: Some(e), ..
+        } = s
+        {
+            if !matches!(e, Expr::Undefined) {
+                let d = lets.entry(*id).or_default();
+                d.0 += 1;
+                if is_require_crypto(e) {
+                    d.1 += 1;
+                }
+            }
+        }
+    });
+    // Any `LocalSet`/`++` anywhere in the module disqualifies the binding.
+    let writes = count_module(module, true);
+    lets.into_iter()
+        .filter(|(id, (values, rc))| *values == 1 && *rc == 1 && !writes.contains_key(id))
+        .map(|(id, _)| id)
+        .collect()
+}
+
 fn bump(counts: &mut Counts, id: LocalId) {
     *counts.entry(id).or_insert(0) += 1;
 }
@@ -348,15 +570,24 @@ fn bump(counts: &mut Counts, id: LocalId) {
 /// Over-counting only makes the pass bail; the container list mirrors
 /// `generator::compute_max_local_id` so nothing is under-counted.
 fn count_module_occurrences(module: &Module) -> Counts {
-    let mut c = Counts::new();
+    count_module(module, false)
+}
+
+/// `writes_only`: count just `LocalSet` / `Update` targets.
+fn count_module(module: &Module, writes_only: bool) -> Counts {
+    let mut counter = Counter {
+        counts: Counts::new(),
+        writes_only,
+    };
+    let c = &mut counter;
     for f in &module.functions {
-        count_function(f, &mut c);
+        count_function(f, c);
     }
-    count_stmts(&module.init, &mut c);
+    count_stmts(&module.init, c);
     for g in &module.globals {
-        bump(&mut c, g.id);
+        c.any(g.id);
         if let Some(init) = &g.init {
-            count_expr(init, &mut c);
+            count_expr(init, c);
         }
     }
     for class in &module.classes {
@@ -368,30 +599,48 @@ fn count_module_occurrences(module: &Module) -> Counts {
             .chain(class.getters.iter().map(|(_, f)| f))
             .chain(class.setters.iter().map(|(_, f)| f))
         {
-            count_function(f, &mut c);
+            count_function(f, c);
         }
         for m in &class.computed_members {
-            count_expr(&m.key_expr, &mut c);
-            count_function(&m.function, &mut c);
+            count_expr(&m.key_expr, c);
+            count_function(&m.function, c);
         }
         for field in class.fields.iter().chain(&class.static_fields) {
             if let Some(init) = &field.init {
-                count_expr(init, &mut c);
+                count_expr(init, c);
             }
             if let Some(key) = &field.key_expr {
-                count_expr(key, &mut c);
+                count_expr(key, c);
             }
-            count_decorators(&field.decorators, &mut c);
+            count_decorators(&field.decorators, c);
         }
-        count_decorators(&class.decorators, &mut c);
+        count_decorators(&class.decorators, c);
         if let Some(e) = &class.extends_expr {
-            count_expr(e, &mut c);
+            count_expr(e, c);
         }
     }
-    c
+    counter.counts
 }
 
-fn count_decorators(decorators: &[Decorator], c: &mut Counts) {
+struct Counter {
+    counts: Counts,
+    writes_only: bool,
+}
+
+impl Counter {
+    /// Any occurrence that is not a write.
+    fn any(&mut self, id: LocalId) {
+        if !self.writes_only {
+            bump(&mut self.counts, id);
+        }
+    }
+
+    fn write(&mut self, id: LocalId) {
+        bump(&mut self.counts, id);
+    }
+}
+
+fn count_decorators(decorators: &[Decorator], c: &mut Counter) {
     for d in decorators {
         for a in &d.args {
             count_expr(a, c);
@@ -399,40 +648,40 @@ fn count_decorators(decorators: &[Decorator], c: &mut Counts) {
     }
 }
 
-fn count_params(params: &[Param], c: &mut Counts) {
+fn count_params(params: &[Param], c: &mut Counter) {
     for p in params {
-        bump(c, p.id);
+        c.any(p.id);
         if let Some(d) = &p.default {
             count_expr(d, c);
         }
         count_decorators(&p.decorators, c);
         if let Some(meta) = &p.arguments_object {
             for (_, local) in &meta.mapped_parameter_ids {
-                bump(c, *local);
+                c.any(*local);
             }
         }
     }
 }
 
-fn count_function(f: &Function, c: &mut Counts) {
+fn count_function(f: &Function, c: &mut Counter) {
     count_params(&f.params, c);
     count_decorators(&f.decorators, c);
     for id in &f.captures {
-        bump(c, *id);
+        c.any(*id);
     }
     count_stmts(&f.body, c);
 }
 
-fn count_stmts(stmts: &[Stmt], c: &mut Counts) {
+fn count_stmts(stmts: &[Stmt], c: &mut Counter) {
     for s in stmts {
         count_stmt(s, c);
     }
 }
 
-fn count_stmt(stmt: &Stmt, c: &mut Counts) {
+fn count_stmt(stmt: &Stmt, c: &mut Counter) {
     match stmt {
         Stmt::Let { id, init, .. } => {
-            bump(c, *id);
+            c.any(*id);
             if let Some(e) = init {
                 count_expr(e, c);
             }
@@ -484,7 +733,7 @@ fn count_stmt(stmt: &Stmt, c: &mut Counts) {
             count_stmts(body, c);
             if let Some(catch) = catch {
                 if let Some((id, _)) = catch.param {
-                    bump(c, id);
+                    c.any(id);
                 }
                 count_stmts(&catch.body, c);
             }
@@ -506,23 +755,24 @@ fn count_stmt(stmt: &Stmt, c: &mut Counts) {
         }
         Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
             for id in ids {
-                bump(c, *id);
+                c.any(*id);
             }
         }
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
     }
 }
 
-fn count_expr(expr: &Expr, c: &mut Counts) {
+fn count_expr(expr: &Expr, c: &mut Counter) {
     match expr {
-        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => bump(c, *id),
+        Expr::LocalGet(id) => c.any(*id),
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => c.write(*id),
         Expr::ArrayPush { array_id, .. }
         | Expr::ArrayPushSpread { array_id, .. }
         | Expr::ArrayUnshift { array_id, .. }
         | Expr::ArraySplice { array_id, .. }
-        | Expr::ArrayCopyWithin { array_id, .. } => bump(c, *array_id),
-        Expr::ArrayPop(id) | Expr::ArrayShift(id) => bump(c, *id),
-        Expr::SetAdd { set_id, .. } => bump(c, *set_id),
+        | Expr::ArrayCopyWithin { array_id, .. } => c.any(*array_id),
+        Expr::ArrayPop(id) | Expr::ArrayShift(id) => c.any(*id),
+        Expr::SetAdd { set_id, .. } => c.any(*set_id),
         Expr::Closure {
             params,
             body,
@@ -532,16 +782,16 @@ fn count_expr(expr: &Expr, c: &mut Counts) {
         } => {
             // Param defaults are reached by the walker below.
             for p in params {
-                bump(c, p.id);
+                c.any(p.id);
                 count_decorators(&p.decorators, c);
                 if let Some(meta) = &p.arguments_object {
                     for (_, local) in &meta.mapped_parameter_ids {
-                        bump(c, *local);
+                        c.any(*local);
                     }
                 }
             }
             for id in captures.iter().chain(mutable_captures) {
-                bump(c, *id);
+                c.any(*id);
             }
             count_stmts(body, c);
         }
@@ -707,20 +957,47 @@ fn crypto_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
 }
 
 /// `createX(args)` → `crypto.__perry*ChainInit(args)`.
+///
+/// A CommonJS alias receiver is still read first, as a discarded
+/// `crypto.createHash` property get: the alias is either the `require`d
+/// namespace or its hoisting placeholder `undefined`, and in the latter case
+/// node throws `Cannot read properties of undefined` before evaluating any
+/// argument — so does this.
 fn rewrite_create(expr: Expr) -> Expr {
-    let is_hmac = create_call_kind(&expr) == Some(true);
     let Expr::Call {
-        args, byte_offset, ..
+        callee,
+        args,
+        byte_offset,
+        ..
     } = expr
     else {
         unreachable!("checked by create_call_kind")
     };
-    let init = if is_hmac {
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset: prop_offset,
+    } = *callee
+    else {
+        unreachable!("checked by create_call_kind")
+    };
+    let init = if matches!(property.as_str(), "createHmac" | "Hmac") {
         CHAIN_INIT_HMAC
     } else {
         CHAIN_INIT_HASH
     };
-    crypto_call(init, args, byte_offset)
+    let init_call = crypto_call(init, args, byte_offset);
+    match *object {
+        Expr::NativeModuleRef(_) => init_call,
+        receiver => Expr::Sequence(vec![
+            Expr::PropertyGet {
+                object: Box::new(receiver),
+                property,
+                byte_offset: prop_offset,
+            },
+            init_call,
+        ]),
+    }
 }
 
 /// Rewrite `recv.update(..)` / `recv.digest(..)` into the chain calls,
@@ -767,6 +1044,10 @@ fn rewrite_chain(expr: Expr, root: &mut dyn FnMut(Expr) -> Expr) -> Expr {
 
 struct Rewriter<'a> {
     counts: &'a Counts,
+    aliases: &'a HashSet<LocalId>,
+    /// `Let { init: None | Some(Undefined) }` count per id: `var` hoisting
+    /// placeholders, which bind no value and so are not an escape.
+    placeholders: &'a Counts,
     /// Only `const` block-locals qualify (nested blocks of module init).
     require_const: bool,
 }
@@ -870,7 +1151,10 @@ impl Rewriter<'_> {
     }
 
     fn expr(&mut self, expr: &mut Expr) {
-        if is_inline_chain(expr) && !is_literal_fast_path(expr) && !contains_suspension(expr) {
+        if is_inline_chain(expr, self.aliases)
+            && !is_literal_fast_path(expr)
+            && !contains_suspension(expr)
+        {
             let taken = std::mem::replace(expr, Expr::Undefined);
             let mut rewritten = rewrite_chain(taken, &mut rewrite_create);
             // Chains nested in the arguments (`update(createHash(..)...)`).
@@ -902,7 +1186,9 @@ impl Rewriter<'_> {
                 continue;
             }
             let id = *id;
-            if create_call_kind(peel_updates(init)).is_none() || contains_suspension(init) {
+            if create_call_kind(peel_updates(init), self.aliases).is_none()
+                || contains_suspension(init)
+            {
                 continue;
             }
             let mut allowed = 0;
@@ -914,7 +1200,9 @@ impl Rewriter<'_> {
                     last = j;
                 }
             }
-            if allowed == 0 || self.counts.get(&id).copied() != Some(1 + allowed) {
+            // A hoisted `var` also has an `undefined` placeholder declaration.
+            let expected = 1 + allowed + self.placeholders.get(&id).copied().unwrap_or(0);
+            if allowed == 0 || self.counts.get(&id).copied() != Some(expected) {
                 continue;
             }
             if stmts[i + 1..=last].iter().any(stmt_contains_suspension) {

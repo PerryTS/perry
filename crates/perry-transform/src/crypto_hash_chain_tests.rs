@@ -446,3 +446,127 @@ fn module_init_nested_var_keeps_the_handle() {
     let before = dbg(&init);
     assert_eq!(dbg(&run_init(init)), before);
 }
+
+fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
+    Expr::Closure {
+        func_id,
+        params,
+        return_type: Type::Any,
+        body,
+        captures,
+        mutable_captures: vec![],
+        captures_this: false,
+        captures_new_target: false,
+        is_strict: false,
+        enclosing_class: None,
+        is_arrow: false,
+        is_async: false,
+        is_generator: false,
+    }
+}
+
+fn plain_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.into(),
+        ty: Type::Any,
+        mutable,
+        init: Some(init),
+    }
+}
+
+/// The jwa module as perry's CJS wrapper lowers it:
+/// `var crypto = require('crypto')` inside `__perry_cjs_factory`, and a
+/// signer closure with a hoisted `var hmac`.
+fn cjs_module(factory_name: &str, extra: Vec<Stmt>) -> Vec<Stmt> {
+    let require_param = Param {
+        id: 30,
+        name: "specifier".into(),
+        ty: Type::Any,
+        default: None,
+        decorators: vec![],
+        is_rest: false,
+        arguments_object: None,
+    };
+    let signer_body = vec![
+        plain_let(47, "hmac", true, Expr::Undefined),
+        plain_let(
+            47,
+            "hmac",
+            true,
+            call(h(2), "createHmac", vec![s("sha256"), s("key")]),
+        ),
+        plain_let(
+            48,
+            "sig",
+            true,
+            Expr::Sequence(vec![
+                call(h(47), "update", vec![s("thing")]),
+                call(h(47), "digest", vec![s("base64")]),
+            ]),
+        ),
+        Stmt::Return(Some(h(48))),
+    ];
+    let mut factory_body = vec![
+        plain_let(
+            8,
+            "require",
+            false,
+            closure(7, vec![require_param], vec![], vec![]),
+        ),
+        plain_let(2, "crypto", true, Expr::Undefined),
+        plain_let(
+            2,
+            "crypto",
+            true,
+            Expr::Call {
+                callee: Box::new(h(8)),
+                args: vec![s("crypto")],
+                type_args: vec![],
+                byte_offset: 0,
+            },
+        ),
+        plain_let(10, "sign", false, closure(9, vec![], signer_body, vec![2])),
+    ];
+    factory_body.extend(extra);
+    vec![plain_let(
+        1,
+        factory_name,
+        false,
+        closure(5, vec![], factory_body, vec![]),
+    )]
+}
+
+#[test]
+fn cjs_require_crypto_alias_with_hoisted_var_is_rewritten() {
+    let out = dbg(&run_init(cjs_module("__perry_cjs_factory", vec![])));
+    assert!(
+        out.contains(CHAIN_INIT_HMAC) && out.contains(CHAIN_DIGEST),
+        "{out}"
+    );
+    // The alias is still read (node throws on an undefined receiver) before
+    // the arguments are evaluated.
+    assert!(
+        out.contains("Sequence([PropertyGet { object: LocalGet(2), property: \"createHmac\""),
+        "{out}"
+    );
+    assert!(!out.contains("property: \"update\""), "{out}");
+}
+
+#[test]
+fn cjs_alias_that_is_reassigned_keeps_the_handle() {
+    let before = cjs_module(
+        "__perry_cjs_factory",
+        vec![Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::Null)))],
+    );
+    let d = dbg(&before);
+    assert_eq!(dbg(&run_init(before)), d);
+}
+
+#[test]
+fn require_outside_the_cjs_wrapper_is_not_trusted() {
+    // A user function named `require` proves nothing about what it returns.
+    let before = cjs_module("user_factory", vec![]);
+    let d = dbg(&before);
+    assert_eq!(dbg(&run_init(before)), d);
+}
