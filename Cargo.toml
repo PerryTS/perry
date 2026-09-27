@@ -607,3 +607,7 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
+
+# LOCAL ONLY (qb2 perf lane): build against the perex working tree.
+[patch.crates-io]
+perex = { path = "/root/claude-lanes/perry76-regex-perex" }
