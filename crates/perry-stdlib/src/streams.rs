@@ -378,7 +378,11 @@ pub use self::strategy::{
 };
 use self::strategy::{read_high_water_mark, read_queuing_strategy_size};
 
+#[cfg(test)]
+pub(crate) use self::byob::byob_pending_for_test;
 pub(crate) use self::expando::stream_expando_get;
+#[cfg(test)]
+pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
@@ -386,6 +390,8 @@ pub use self::subclass::{
     drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
     js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
 };
+#[cfg(test)]
+pub(crate) use self::transform::transform_side_tables_hold_for_test;
 pub use self::transform::{
     js_stream_web_compression_stream_new, js_stream_web_decompression_stream_new,
     js_stream_web_text_decoder_stream_new, js_stream_web_text_encoder_stream_new,
@@ -583,6 +589,203 @@ static READERS: std::sync::LazyLock<Mutex<HashMap<usize, ReaderData>>> =
 static WRITERS: std::sync::LazyLock<Mutex<HashMap<usize, WriterData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// #11471: register [`release_web_streams_in_freed_ranges`] before the first
+/// registry insert. Every stream family starts with a readable or writable
+/// (`alloc_readable_with_strategy`, `alloc_writable_with_strategy`, the
+/// transform constructor); readers, writers, tee branches, BYOB reads,
+/// expandos and the transform side tables all key off an existing stream id.
+fn ensure_streams_thread_exit_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_web_streams_in_freed_ranges,
+        )
+    });
+}
+
+/// #11471: an exiting thread's Web Streams records outlive its heap. The
+/// registries are process-global (ids from the shared `idalloc` band) and
+/// the `stdlib:streams` root scanner of every surviving thread visits every
+/// entry, so a record holding the dead thread's callbacks, queued chunks,
+/// promises or error values would have those threads mark and rewrite freed
+/// (or reused) memory, and a later call on the id would run a dangling
+/// closure.
+///
+/// A stream id is DEAD when any of its records (registry entry, BYOB read,
+/// transform side-table entry) holds an address in `freed`. Deadness then
+/// spreads along the links between registry entries — stream <-> reader /
+/// writer, transform <-> its readable and writable sides — so no surviving
+/// record names an evicted id (which `idalloc` could otherwise hand to an
+/// unrelated stream). Pipe lock ids and the tee sentinel own no registry
+/// entry and do not propagate. Every dead id then gets the same footprint
+/// removal as a quarantine eviction, plus the transform close/pending-write
+/// tables. The ids themselves are not recycled (a bounded band leak per dead
+/// stream; `idalloc` is left alone so this hook never takes its lock).
+///
+/// Runs in the exiting thread's TLS destructor: registry locks one at a
+/// time, poison-tolerant, no allocation on the JS heap, no JS calls.
+fn release_web_streams_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    use std::collections::HashSet;
+    use std::sync::PoisonError;
+    let promise = |p: *mut Promise| freed.contains(p as usize);
+    let mut dead: HashSet<usize> = HashSet::new();
+    let mut known: HashSet<usize> = HashSet::new();
+    let mut links: Vec<(usize, usize)> = Vec::new();
+    {
+        let g = READABLE_STREAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (&id, s) in g.iter() {
+            known.insert(id);
+            if let Some(reader) = s.reader_handle {
+                links.push((id, reader));
+            }
+            if [s.start_cb, s.pull_cb, s.cancel_cb, s.strategy_size_cb]
+                .iter()
+                .any(|&cb| freed.holds_i64(cb))
+                || s.chunks.iter().any(|&bits| freed.holds_bits(bits))
+                || s.pending_reads.iter().any(|&p| promise(p))
+                || freed.holds_bits(s.error_value)
+                || s.pending_error_after_chunks
+                    .is_some_and(|bits| freed.holds_bits(bits))
+            {
+                dead.insert(id);
+            }
+        }
+    }
+    {
+        let g = WRITABLE_STREAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (&id, s) in g.iter() {
+            known.insert(id);
+            if let Some(writer) = s.writer_handle {
+                links.push((id, writer));
+            }
+            if [s.write_cb, s.close_cb, s.abort_cb, s.strategy_size_cb]
+                .iter()
+                .any(|&cb| freed.holds_i64(cb))
+                || s.write_queue
+                    .iter()
+                    .any(|&(bits, p, _)| freed.holds_bits(bits) || promise(p))
+                || freed.holds_bits(s.error_value)
+                || promise(s.ready_promise)
+                || promise(s.closed_promise)
+                || promise(s.close_request_promise)
+            {
+                dead.insert(id);
+            }
+        }
+    }
+    {
+        let g = TRANSFORM_STREAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (&id, t) in g.iter() {
+            known.insert(id);
+            links.push((id, t.readable_handle));
+            links.push((id, t.writable_handle));
+            if freed.holds_i64(t.transform_cb) || freed.holds_i64(t.flush_cb) {
+                dead.insert(id);
+            }
+        }
+    }
+    {
+        let g = READERS.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&id, r) in g.iter() {
+            known.insert(id);
+            links.push((id, r.stream_handle));
+            if promise(r.closed_promise) {
+                dead.insert(id);
+            }
+        }
+    }
+    {
+        let g = WRITERS.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&id, w) in g.iter() {
+            known.insert(id);
+            links.push((id, w.stream_handle));
+            if promise(w.closed_promise) || promise(w.ready_promise) {
+                dead.insert(id);
+            }
+        }
+    }
+    transform::dead_ids_in_freed_ranges(freed, &mut dead, &mut links);
+    byob::dead_ids_in_freed_ranges(freed, &mut dead);
+    if dead.is_empty() {
+        return;
+    }
+
+    let mut adjacent: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (a, b) in links {
+        if known.contains(&a) && known.contains(&b) {
+            adjacent.entry(a).or_default().push(b);
+            adjacent.entry(b).or_default().push(a);
+        }
+    }
+    let mut work: Vec<usize> = dead.iter().copied().collect();
+    while let Some(id) = work.pop() {
+        if let Some(next) = adjacent.get(&id) {
+            for &n in next {
+                if dead.insert(n) {
+                    work.push(n);
+                }
+            }
+        }
+    }
+
+    READABLE_STREAMS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|id, _| !dead.contains(id));
+    WRITABLE_STREAMS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|id, _| !dead.contains(id));
+    TRANSFORM_STREAMS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|id, _| !dead.contains(id));
+    READERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|id, _| !dead.contains(id));
+    WRITERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|id, _| !dead.contains(id));
+    transform::evict_dead_ids(&dead);
+    let batch: Vec<usize> = dead.into_iter().collect();
+    byob::evict_ids(&batch);
+    tee::evict_ids(&batch);
+    for &id in &batch {
+        expando::stream_expando_clear(id);
+    }
+}
+
+/// #11471 test probe: which of the five registries hold `id`, as a bitmask
+/// (readable 1, writable 2, transform 4, reader 8, writer 16).
+#[cfg(test)]
+pub(crate) fn stream_registry_presence_for_test(id: usize) -> u32 {
+    let mut mask = 0;
+    if READABLE_STREAMS.lock().unwrap().contains_key(&id) {
+        mask |= 1;
+    }
+    if WRITABLE_STREAMS.lock().unwrap().contains_key(&id) {
+        mask |= 2;
+    }
+    if TRANSFORM_STREAMS.lock().unwrap().contains_key(&id) {
+        mask |= 4;
+    }
+    if READERS.lock().unwrap().contains_key(&id) {
+        mask |= 8;
+    }
+    if WRITERS.lock().unwrap().contains_key(&id) {
+        mask |= 16;
+    }
+    mask
+}
+
 // #1545: ONE id allocator shared across all five Web Streams registries.
 // Stream handles are raw numeric f64 values, not POINTER_TAG small handles,
 // so they live just above the runtime's `< 0x100000` small-handle band. That
@@ -775,6 +978,7 @@ fn alloc_readable_with_strategy(
     is_byte_stream: bool,
     strategy_size_cb: i64,
 ) -> usize {
+    ensure_streams_thread_exit_hook();
     let id = next_stream_id();
     READABLE_STREAMS.lock().unwrap().insert(
         id,
@@ -827,6 +1031,7 @@ fn alloc_writable_with_strategy(
     hwm: f64,
     strategy_size_cb: i64,
 ) -> usize {
+    ensure_streams_thread_exit_hook();
     let id = next_stream_id();
     let ready = internal_promise();
     let closed = internal_promise();

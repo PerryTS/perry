@@ -461,6 +461,31 @@ pub(crate) fn dom_exception_error_clear_dead(err_addr: usize) {
     }
 }
 
+/// #11471: thread-exit release for `DOM_EXCEPTION_ERRORS`. Its only removal
+/// is the error finalize hook above, which `Arena::drop` never runs, so an
+/// exiting thread's DOMExceptions would leave addresses behind that make an
+/// unrelated Error at a reused address `instanceof DOMException`. Runs from a
+/// TLS destructor: one process-global lock, no thread-locals, no GC.
+pub(crate) fn release_dom_exception_errors_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    if !DOM_EXCEPTIONS_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    dom_exception_errors()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|&addr| !freed.contains(addr));
+}
+
+/// Test probe (#11471): is `err_addr` recorded as a DOMException?
+#[doc(hidden)]
+pub fn dom_exception_error_registered_for_test(err_addr: usize) -> bool {
+    dom_exception_errors()
+        .lock()
+        .is_ok_and(|set| set.contains(&err_addr))
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_dom_exception_error(err_addr: usize) {
     DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);

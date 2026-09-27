@@ -167,6 +167,31 @@ impl Drop for MallocState {
         // Free the worker thread's malloc objects instead of leaking them at
         // exit (audit §6 / #6185). See `free_all_tracked_objects` for the
         // thread-exit soundness and TLS-destruction-order argument.
+        //
+        // #11471: these blocks go back to the system allocator, so another
+        // thread can be handed the same addresses. Process-global tables
+        // keyed by, or holding, a `gc_malloc` address (fresh `Symbol()`
+        // headers in `SYMBOL_POINTERS`, malloc'd strings and closures in
+        // listener tables) hear about it here, exactly as they do for arena
+        // blocks in `Arena::drop`. Reported before the frees, so a hook still
+        // sees mapped memory. Test builds skip it for the same reason
+        // `Arena::drop` does: their side tables are per-thread.
+        if !cfg!(test) {
+            let ranges: Vec<(usize, usize)> = self
+                .objects
+                .iter()
+                .filter(|header| !header.is_null())
+                .filter_map(|&header| {
+                    // SAFETY: every entry in `objects` is a live `gc_malloc`
+                    // header until `free_all_tracked_objects` frees it below.
+                    let (flags, size) =
+                        unsafe { ((*header).gc_flags, (*header).size as usize) };
+                    (flags & GC_FLAG_PINNED == 0 && size != 0)
+                        .then(|| (header as usize, header as usize + size))
+                })
+                .collect();
+            crate::arena::thread_exit::release_freed_ranges(&ranges);
+        }
         self.free_all_tracked_objects();
     }
 }

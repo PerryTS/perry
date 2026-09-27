@@ -158,7 +158,7 @@ COUNTER_USE = re.compile(
 )
 EXPORTED = re.compile(r"#\[\s*(?:unsafe\s*\(\s*)?(?:no_mangle|export_name)")
 TYPE_ALIAS = re.compile(
-    r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+(\w+)(?:<[^=]*>)?\s*=\s*(.+?);", re.M
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+(\w+)(?:<[^=]*>)?\s*=\s*(.+?);", re.M | re.S
 )
 TYPE_IDENT = re.compile(r"\b[A-Z]\w*\b")
 OUTER_NAME = re.compile(r"^(?:[\w$]+::)*(\w+)")
@@ -272,7 +272,7 @@ def _brace_body(code: str, open_at: int) -> str:
 
 CALL = re.compile(r"\b(\w+)\s*\(")
 REGISTERED_HOOK = re.compile(
-    r"\b(?:register_thread_exit_range_hook|register_retire_hook)\s*\(\s*(?:[\w:]*::)?(\w+)\s*\)"
+    r"\b(?:register_thread_exit_range_hook|register_retire_hook)\s*\(\s*(?:[\w:]*::)?(\w+)\s*,?\s*\)"
 )
 DROP_IMPL = re.compile(r"impl\s+Drop\s+for\s+(\w+)\s*\{")
 
@@ -571,14 +571,14 @@ def self_test() -> int:
             "static LISTENERS: Mutex<Vec<i64>> = Mutex::new(Vec::new());\n"
             "fn release_listeners(f: &FreedRanges) { let _ = f; }\n"
             "pub fn on(cb: i64) { REGISTER.call_once(|| "
-            "perry_runtime::arena::thread_exit::register_thread_exit_range_hook(release_listeners)); }\n"
+            "perry_runtime::arena::thread_exit::register_thread_exit_range_hook(\n        release_listeners,\n    )); }\n"
         )
     }
     reg = json.loads(json.dumps(SELF_TEST_INVENTORY))
     reg["entries"].append({"file": "crates/perry-stdlib/src/lst.rs", "names": ["LISTENERS"], "verdict": "thread_exit_invalidated", "hook": "release_listeners", "why": "self-test fixture: registered range hook"})
     (unclassified, problems, _), _ = _run_fixture(stdlib_table, reg)
     expect(not unclassified and not problems, f"a registered range hook must be accepted: {problems}")
-    (_, problems, _), _ = _run_fixture(stdlib_table, reg, drop=("crates/perry-stdlib/src/lst.rs", "register_thread_exit_range_hook(release_listeners)"))
+    (_, problems, _), _ = _run_fixture(stdlib_table, reg, drop=("crates/perry-stdlib/src/lst.rs", "register_thread_exit_range_hook(\n        release_listeners,\n    )"))
     expect(any("does not run at thread exit" in p for p in problems), "a deleted registration must fail")
     moved = json.loads(json.dumps(reg))
     moved["entries"][-1]["hook_file"] = "crates/perry-runtime/src/cache.rs"
@@ -620,6 +620,14 @@ def self_test() -> int:
     tv["type_verdicts"] = [{"type": "NoSuchWrapper", "verdict": "per_thread", "why": "self-test fixture for a stale type verdict"}]
     (_, problems, _), _ = _run_fixture(None, tv)
     expect(any("type_verdicts[NoSuchWrapper]: stale" in p for p in problems), "a stale type verdict must fail")
+
+    # 8b. A type alias spanning several lines (rustfmt's shape for a long
+    #     `Arc<dyn Fn(..)>`) is still resolved.
+    (unclassified, _, _), _ = _run_fixture(
+        {"crates/perry-stdlib/src/alias.rs": "type Releaser = std::sync::Arc<\n    dyn Fn(&mut u8) -> bool\n        + Send,\n>;\nstatic RELEASERS: Mutex<Vec<Releaser>> = Mutex::new(Vec::new());\n"},
+        SELF_TEST_INVENTORY,
+    )
+    expect(any(c["name"] == "RELEASERS" for c in unclassified), "a multi-line type alias must be resolved")
 
     # 9. An exported atomic is never counter-only (codegen may write it).
     (unclassified, _, _), _ = _run_fixture(

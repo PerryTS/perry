@@ -73,6 +73,14 @@ crate::perry_thread_local! {
         RefCell::new(HashMap::new());
     static HANDLE_PROPERTY_BIND_REENTRY: Cell<bool> = const { Cell::new(false) };
     pub(crate) static BUFFER_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
+    /// `Buffer.poolSize` as JS value bits. Node 26 raised its initial value
+    /// from 8 KiB to 64 KiB. It is a plain writable property of each realm's
+    /// `Buffer`, so any value may be stored: per-thread (a worker's write never
+    /// reaches the main thread, as in Node) and visited by
+    /// `scan_native_callable_export_roots_mut`. #11471: it used to be a
+    /// process-global atomic, which kept an object/string written by an
+    /// exited thread as a dangling, unrooted address.
+    static BUFFER_POOL_SIZE_BITS: Cell<u64> = const { Cell::new(65536f64.to_bits()) };
     pub(crate) static SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static SQLITE_SESSION_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
@@ -254,6 +262,11 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             slot.set(value_bits);
         }
     });
+    BUFFER_POOL_SIZE_BITS.with(|slot| {
+        let mut value_bits = slot.get();
+        visitor.visit_nanbox_u64_slot(&mut value_bits);
+        slot.set(value_bits);
+    });
     SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
         let mut value_bits = slot.get();
         if value_bits != 0 {
@@ -391,10 +404,6 @@ pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 pub(crate) const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
 pub(crate) const WORKER_THREADS_LOCK_CLASS_ID: u32 = 0xFFFF_00B2;
 
-// Node 26 raised Buffer.poolSize's initial value from 8 KiB to 64 KiB.
-static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(65536f64.to_bits());
-
 type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 
 pub(crate) static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
@@ -431,11 +440,12 @@ pub(crate) fn call_worker_threads_getter(
 }
 
 pub(crate) fn buffer_pool_size() -> f64 {
-    f64::from_bits(BUFFER_POOL_SIZE_BITS.load(std::sync::atomic::Ordering::Relaxed))
+    f64::from_bits(BUFFER_POOL_SIZE_BITS.with(Cell::get))
 }
 
 pub(crate) fn set_buffer_pool_size(value: f64) {
-    BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    BUFFER_POOL_SIZE_BITS.with(|slot| slot.set(value.to_bits()));
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
 
 /// Linker-strippability vtable for every native-module behavior reachable
@@ -1951,3 +1961,21 @@ mod cjs_default;
 pub(crate) use cjs_default::{
     cjs_default_base_module, cjs_default_export_value, native_module_get_builtin_module_value,
 };
+
+#[cfg(test)]
+mod buffer_pool_size_tests {
+    // #11471: `Buffer.poolSize` is per realm, so a worker's write (possibly of
+    // a heap value) never reaches another thread.
+    #[test]
+    fn buffer_pool_size_writes_stay_on_their_thread() {
+        let written = std::thread::spawn(|| {
+            super::set_buffer_pool_size(1.0);
+            super::buffer_pool_size()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(written, 1.0);
+        let elsewhere = std::thread::spawn(super::buffer_pool_size).join().unwrap();
+        assert_eq!(elsewhere, 65536.0);
+    }
+}

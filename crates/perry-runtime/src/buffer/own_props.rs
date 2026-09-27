@@ -97,6 +97,7 @@ pub fn buffer_define_own_data_prop(addr: usize, prop: &str, value: f64) {
     if addr == 0 {
         return;
     }
+    register_thread_exit_hook();
     BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {
         let own = props.entry(addr).or_default();
@@ -264,6 +265,35 @@ pub fn clear_buffer_own_props(addr: usize) {
     if let Ok(mut props) = buffer_props().lock() {
         props.remove(&addr);
     }
+}
+
+fn register_thread_exit_hook() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_buffer_own_props_in_freed_ranges,
+        )
+    });
+}
+
+/// #11471: thread-exit release. Neither clear site above runs when a thread
+/// exits (`Arena::drop` frees its blocks without finalizing the buffers), so
+/// drop every record whose buffer address, or any stored value, lies in the
+/// exiting thread's blocks; otherwise the scanner keeps tracing the dead
+/// values and a later tenant of the address inherits the expandos. Runs from
+/// a TLS destructor: one process-global lock, no thread-locals, no GC.
+/// Registered (this module is private to `buffer`) by
+/// [`register_thread_exit_hook`] before the table's first insert.
+fn release_buffer_own_props_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    if !BUFFER_OWN_PROPS_EVER.load(Ordering::Acquire) {
+        return;
+    }
+    let mut props = buffer_props()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    props.retain(|&owner, own| {
+        !freed.contains(owner) && !own.values.values().any(|&bits| freed.holds_bits(bits))
+    });
 }
 
 #[cfg(test)]

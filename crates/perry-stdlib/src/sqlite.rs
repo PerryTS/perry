@@ -245,6 +245,7 @@ pub(crate) fn node_sqlite_active_aggregates() -> &'static Mutex<HashSet<usize>> 
 }
 
 pub(crate) fn ensure_node_sqlite_gc_scanner_registered() {
+    ensure_node_sqlite_thread_exit_hooks_registered();
     NODE_SQLITE_GC_SCANNER.with(|registered| {
         if registered.get() {
             return;
@@ -255,6 +256,202 @@ pub(crate) fn ensure_node_sqlite_gc_scanner_registered() {
         );
         registered.set(true);
     });
+}
+
+/// #11471: the three node:sqlite sets and `NodeSqliteDbHandle::authorizer_callback`
+/// hold JS values of the thread that called `db.function()` / `db.aggregate()` /
+/// `db.setAuthorizer()`. Registered before any of them is filled: every insert
+/// path runs `ensure_node_sqlite_gc_scanner_registered` first.
+fn ensure_node_sqlite_thread_exit_hooks_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_node_sqlite_callbacks_in_freed_ranges,
+        );
+        crate::common::handle::register_handle_payload_releaser::<NodeSqliteDbHandle>(
+            release_node_sqlite_authorizer_in_freed_ranges,
+        );
+    });
+}
+
+/// Thread-exit hook (#11471). The boxes named by the three sets are owned by
+/// SQLite (freed by xDestroy / xFinal, which tolerate an already-unregistered
+/// pointer), so this never frees them: it unregisters every box holding a
+/// value in the dying thread's arena (so no surviving thread's scanner visits
+/// it) and overwrites those values with `undefined`, so a late SQLite call
+/// throws "value is not a function" instead of jumping into reused memory.
+fn release_node_sqlite_callbacks_in_freed_ranges(
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) {
+    fn scrub(slot: &mut f64, freed: &perry_runtime::arena::thread_exit::FreedRanges) -> bool {
+        if freed.holds_value(*slot) {
+            *slot = f64::from_bits(TAG_UNDEFINED_BITS);
+            true
+        } else {
+            false
+        }
+    }
+    if let Some(functions) = NODE_SQLITE_CUSTOM_FUNCTIONS.get() {
+        let mut functions = functions.lock().unwrap_or_else(|p| p.into_inner());
+        functions.retain(|raw| {
+            let func = *raw as *mut NodeSqliteCustomFunction;
+            // SAFETY: a registered box stays allocated until xDestroy, which
+            // unregisters it under this lock first.
+            func.is_null() || !scrub(unsafe { &mut (*func).callback }, freed)
+        });
+    }
+    if let Some(aggregates) = NODE_SQLITE_CUSTOM_AGGREGATES.get() {
+        let mut aggregates = aggregates.lock().unwrap_or_else(|p| p.into_inner());
+        aggregates.retain(|raw| {
+            let aggregate = *raw as *mut NodeSqliteCustomAggregate;
+            if aggregate.is_null() {
+                return true;
+            }
+            // SAFETY: as above (xDestroy unregisters under this lock).
+            let aggregate = unsafe { &mut *aggregate };
+            let mut dead = scrub(&mut aggregate.start, freed);
+            dead |= scrub(&mut aggregate.step, freed);
+            if let Some(result) = aggregate.result.as_mut() {
+                dead |= scrub(result, freed);
+            }
+            if let Some(inverse) = aggregate.inverse.as_mut() {
+                dead |= scrub(inverse, freed);
+            }
+            !dead
+        });
+    }
+    if let Some(states) = NODE_SQLITE_ACTIVE_AGGREGATES.get() {
+        let mut states = states.lock().unwrap_or_else(|p| p.into_inner());
+        states.retain(|raw| {
+            let state = *raw as *mut NodeSqliteAggregateState;
+            // SAFETY: xFinal unregisters under this lock before freeing.
+            state.is_null() || !scrub(unsafe { &mut (*state).state }, freed)
+        });
+    }
+}
+
+/// `HANDLES` payload releaser (#11471): clear a DatabaseSync's authorizer when
+/// the closure lives in the dying thread's arena. The authorizer trampoline
+/// reads `None` as "allow" (`SQLITE_OK`), so the connection stays usable. The
+/// database itself is kept: it holds no other GC value.
+fn release_node_sqlite_authorizer_in_freed_ranges(
+    db: &mut NodeSqliteDbHandle,
+    freed: &perry_runtime::arena::thread_exit::FreedRanges,
+) -> bool {
+    let mut callback = db
+        .authorizer_callback
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if callback.is_some_and(|value| freed.holds_value(value)) {
+        *callback = None;
+    }
+    false
+}
+
+#[cfg(test)]
+pub(crate) mod thread_exit_probe {
+    //! #11471 test probes over the node:sqlite callback tables.
+    use super::*;
+
+    /// Register a scalar-function box exactly as `db.function()` does, minus
+    /// the `sqlite3_create_function_v2` call. Returns the box address.
+    pub(crate) fn register_function_for_test(callback: f64) -> usize {
+        let info = Box::into_raw(Box::new(NodeSqliteCustomFunction {
+            callback,
+            use_bigint_arguments: false,
+        }));
+        register_node_sqlite_custom_function(info);
+        info as usize
+    }
+
+    /// Register an aggregate box as `db.aggregate()` does. Returns its address.
+    pub(crate) fn register_aggregate_for_test(step: f64) -> usize {
+        let aggregate = Box::into_raw(Box::new(NodeSqliteCustomAggregate {
+            start: f64::from_bits(TAG_NULL_BITS),
+            step,
+            result: None,
+            inverse: None,
+            use_bigint_arguments: false,
+        }));
+        register_node_sqlite_custom_aggregate(aggregate);
+        aggregate as usize
+    }
+
+    /// Register a running aggregate state as xStep does. Returns its address.
+    pub(crate) fn register_aggregate_state_for_test(state: f64) -> usize {
+        ensure_node_sqlite_gc_scanner_registered();
+        let state = Box::into_raw(Box::new(NodeSqliteAggregateState { state }));
+        register_node_sqlite_aggregate_state(state);
+        state as usize
+    }
+
+    /// A closed DatabaseSync whose authorizer is `callback`, registered in
+    /// `HANDLES` as `new DatabaseSync()` + `db.setAuthorizer()` leave it.
+    pub(crate) fn register_db_with_authorizer_for_test(callback: f64) -> Handle {
+        ensure_node_sqlite_gc_scanner_registered();
+        crate::common::register_handle(NodeSqliteDbHandle {
+            conn: Mutex::new(None),
+            path: String::new(),
+            read_only: false,
+            read_write: true,
+            create: true,
+            enable_foreign_keys: true,
+            enable_dqs: false,
+            timeout_ms: 0,
+            read_bigints: false,
+            return_arrays: false,
+            allow_bare_named_parameters: true,
+            allow_unknown_named_parameters: false,
+            allow_load_extension: false,
+            enable_load_extension: AtomicBool::new(false),
+            defensive: AtomicBool::new(true),
+            authorizer_callback: Mutex::new(Some(callback)),
+            initial_limits: [None; NODE_SQLITE_LIMIT_COUNT],
+            limits_handle: Mutex::new(None),
+            sessions: Mutex::new(HashSet::new()),
+            statements: Mutex::new(HashSet::new()),
+        })
+    }
+
+    pub(crate) fn function_registered(addr: usize) -> bool {
+        node_sqlite_custom_functions()
+            .lock()
+            .unwrap()
+            .contains(&addr)
+    }
+
+    pub(crate) fn aggregate_registered(addr: usize) -> bool {
+        node_sqlite_custom_aggregates()
+            .lock()
+            .unwrap()
+            .contains(&addr)
+    }
+
+    pub(crate) fn aggregate_state_registered(addr: usize) -> bool {
+        node_sqlite_active_aggregates()
+            .lock()
+            .unwrap()
+            .contains(&addr)
+    }
+
+    pub(crate) fn authorizer(db: Handle) -> Option<f64> {
+        crate::common::with_handle::<NodeSqliteDbHandle, _, _>(db, |db| {
+            *db.authorizer_callback.lock().unwrap()
+        })
+        .flatten()
+    }
+
+    /// Free the probe boxes (SQLite's xDestroy / xFinal would in real use).
+    pub(crate) fn free_boxes_for_test(function: usize, aggregate: usize, state: usize) {
+        unsafe {
+            unregister_node_sqlite_custom_function(function as *mut NodeSqliteCustomFunction);
+            drop(Box::from_raw(function as *mut NodeSqliteCustomFunction));
+            unregister_node_sqlite_custom_aggregate(aggregate as *mut NodeSqliteCustomAggregate);
+            drop(Box::from_raw(aggregate as *mut NodeSqliteCustomAggregate));
+            unregister_node_sqlite_aggregate_state(state as *mut NodeSqliteAggregateState);
+            drop(Box::from_raw(state as *mut NodeSqliteAggregateState));
+        }
+    }
 }
 
 pub(crate) fn scan_node_sqlite_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
@@ -354,6 +551,7 @@ pub(crate) fn unregister_node_sqlite_custom_aggregate(ptr: *mut NodeSqliteCustom
 }
 
 pub(crate) fn register_node_sqlite_aggregate_state(ptr: *mut NodeSqliteAggregateState) {
+    ensure_node_sqlite_thread_exit_hooks_registered();
     if !ptr.is_null() {
         node_sqlite_active_aggregates()
             .lock()

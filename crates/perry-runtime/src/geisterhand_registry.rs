@@ -835,6 +835,54 @@ pub extern "C" fn perry_geisterhand_get_closure(handle: i64, callback_kind: u8) 
     }
 }
 
+/// Thread-exit release (#11471): drop every registered widget callback and
+/// queued action that holds a value in the exiting thread's freed arena
+/// blocks. Nothing in perry-ui enforces that widgets are created on the main
+/// thread on every platform, so a worker's closure can land here; once its
+/// arena is recycled the slot would name a different object, which the root
+/// scanner would then rewrite and the pump would call.
+///
+/// Runs in the exiting thread's TLS destructor: plain poison-tolerant locks
+/// only (`lock_gc_root_registry` touches a thread-local depth counter).
+pub(crate) fn release_geisterhand_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|w| !freed.holds_value(w.closure_f64));
+    PENDING_ACTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|action| match action {
+            PendingAction::InvokeCallback { closure_f64, args } => {
+                !freed.holds_value(*closure_f64) && !args.iter().any(|a| freed.holds_value(*a))
+            }
+            PendingAction::SetState { value, .. } => !freed.holds_value(*value),
+            PendingAction::ApplyStyle { .. }
+            | PendingAction::SetText { .. }
+            | PendingAction::ScrollTo { .. }
+            | PendingAction::ReadValue { .. }
+            | PendingAction::QueryWidgetTree
+            | PendingAction::CaptureScreenshot => true,
+        });
+}
+
+/// Test probe (#11471): does any queued action hold exactly `value`?
+#[doc(hidden)]
+pub fn geisterhand_pending_holds_value_for_test(value: f64) -> bool {
+    let bits = value.to_bits();
+    PENDING_ACTIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|action| match action {
+            PendingAction::InvokeCallback { closure_f64, args } => {
+                closure_f64.to_bits() == bits || args.iter().any(|a| a.to_bits() == bits)
+            }
+            PendingAction::SetState { value, .. } => value.to_bits() == bits,
+            _ => false,
+        })
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_geisterhand_roots() {
     crate::gc::lock_gc_root_registry(&REGISTRY).clear();

@@ -4,6 +4,8 @@ use crate::value::{JSValue, TAG_TRUE};
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
+#[cfg(unix)]
+use std::sync::atomic::AtomicU64;
 #[cfg(any(unix, windows))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -403,6 +405,90 @@ static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
     AtomicUsize::new(0),
 ];
 
+/// #11471: the agent whose loop carries each slot's subscription, written
+/// just before [`TURNLOOP_SIGNAL_IDS`]. A turnloop id is a handle into ONE
+/// agent's loop and `turnloop_proc` table, not a process-wide name, so when
+/// that agent retires, [`release_signal_subscriptions_of_agent`] finds its
+/// slots here and unwinds them.
+#[cfg(unix)]
+static TURNLOOP_SIGNAL_OWNERS: [AtomicU64; 9] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+#[cfg(unix)]
+const _: () = assert!(
+    TURNLOOP_SIGNAL_OWNERS.len() == PROCESS_SIGNAL_SLOTS.len(),
+    "one turnloop owner cell per process-signal slot"
+);
+
+/// #11471: unwind every signal subscription carried by a retiring agent's
+/// loop. Registered with `agent::register_retire_hook` on the first turnloop
+/// install.
+///
+/// `retire_agent` has already shut that loop down (it runs
+/// `event_pump::shutdown_agent_loop` before any retire hook), which ended the
+/// subscription and restored the disposition. What survives in these
+/// process-global statics is the bookkeeping: the slot's `installed` flag,
+/// its turnloop bit and the dead loop's entry id. Left in place, the next
+/// `process.on(signal)` on any other thread would see `installed` and never
+/// subscribe — the signal silently lost — and a later `off()` would hand the
+/// dead loop's id to its own loop's `signal_stop`. Clearing them returns the
+/// slot to "not installed", so the next listener sync installs afresh on its
+/// own loop. The listener count is left alone: it mirrors whichever thread
+/// synced last, and that thread's next sync rewrites it.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn release_signal_subscriptions_of_agent(agent: crate::agent::AgentId) {
+    for (idx, slot) in PROCESS_SIGNAL_SLOTS.iter().enumerate() {
+        if TURNLOOP_SIGNAL_OWNERS[idx].load(Ordering::Acquire) != agent {
+            continue;
+        }
+        let id = TURNLOOP_SIGNAL_IDS[idx].load(Ordering::Acquire);
+        // Zero: already unwound by `off()`. A failed exchange: another thread
+        // unwound (or replaced) it first and owns the cleanup.
+        if id == 0
+            || TURNLOOP_SIGNAL_IDS[idx]
+                .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            continue;
+        }
+        mark_on_turnloop(slot, false);
+        slot.pending.store(0, Ordering::Release);
+        slot.installed.store(false, Ordering::Release);
+        crate::gc::census::census_after_signal_disposition_reset(slot.number);
+    }
+}
+
+/// Test probe (#11471): sync `count` listeners for `name` on the calling
+/// thread, exactly as `process.on`/`process.off` do.
+#[doc(hidden)]
+pub fn set_process_signal_listener_count_for_test(name: &str, count: usize) {
+    set_process_signal_listener_count(name, count);
+}
+
+/// Test probe (#11471): `(installed, on turnloop, turnloop entry id, owner
+/// agent)` for signal `name`.
+#[cfg(unix)]
+#[doc(hidden)]
+pub fn process_signal_subscription_for_test(name: &str) -> Option<(bool, bool, usize, u64)> {
+    let slot = slot_by_name(name)?;
+    let idx = slot_index(slot);
+    Some((
+        slot.installed.load(Ordering::Acquire),
+        is_on_turnloop(slot),
+        TURNLOOP_SIGNAL_IDS[idx].load(Ordering::Acquire),
+        TURNLOOP_SIGNAL_OWNERS[idx].load(Ordering::Acquire),
+    ))
+}
+
 // A slot added above without a matching id cell would silently index out of
 // bounds at runtime; say so at compile time instead.
 #[cfg(unix)]
@@ -464,6 +550,14 @@ fn install_signal_on_loop(slot: &'static ProcessSignalSlot) -> bool {
     ) else {
         return false;
     };
+    // #11471: the owner first, so a retire hook that sees this id also sees
+    // whose loop it names.
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::agent::register_retire_hook(release_signal_subscriptions_of_agent);
+    });
+    TURNLOOP_SIGNAL_OWNERS[slot_index(slot)]
+        .store(crate::agent::current_agent(), Ordering::Release);
     TURNLOOP_SIGNAL_IDS[slot_index(slot)].store(id as usize, Ordering::Release);
     // A registered listener is ref-NEUTRAL (see `has_active_process_signal_listeners`
     // and `crates/perry/tests/issue_signal_listener_ref_neutral.rs`): it must

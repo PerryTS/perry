@@ -30,6 +30,13 @@ struct CryptoDigestStream {
 }
 
 impl CryptoDigestStream {
+    fn holds_freed(&self, freed: &perry_runtime::arena::thread_exit::FreedRanges) -> bool {
+        self.listeners
+            .values()
+            .flatten()
+            .any(|cb| freed.holds_i64(*cb))
+    }
+
     fn scan_roots(&mut self, visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
         for callbacks in self.listeners.values_mut() {
             for cb in callbacks {
@@ -67,6 +74,24 @@ thread_local! {
 }
 
 fn ensure_crypto_stream_gc_scanner() {
+    // #11471: retire a Hash/Hmac whose stream listeners live in an exiting
+    // thread's arena (`HANDLES` is process-global).
+    static REGISTER_RELEASERS: std::sync::Once = std::sync::Once::new();
+    REGISTER_RELEASERS.call_once(|| {
+        use crate::common::handle::register_handle_payload_releaser as register;
+        register::<HashHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+        register::<HmacHandle>(|h, freed| {
+            h.stream
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .holds_freed(freed)
+        });
+    });
     CRYPTO_STREAM_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;

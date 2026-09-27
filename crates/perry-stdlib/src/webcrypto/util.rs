@@ -292,6 +292,7 @@ pub(super) fn register_crypto_key_with_bit_length(
     mat: CryptoKeyMaterial,
     bit_length: u32,
 ) {
+    ensure_crypto_key_thread_exit_hook_registered();
     CRYPTO_KEY_REGISTRY.lock().unwrap().insert(buf_addr, mat);
     unsafe {
         js_buffer_mark_as_crypto_key_external(
@@ -371,6 +372,52 @@ pub(crate) extern "C" fn crypto_key_buffer_died(buf_addr: usize) {
     if let Ok(mut r) = CRYPTO_KEY_REGISTRY.lock() {
         r.remove(&buf_addr);
     }
+}
+
+/// #11471: a CryptoKey's backing Buffer lives in the arena of the thread that
+/// generated / imported it. The GC sweep reports its death
+/// (`crypto_key_buffer_died`), but a thread exit frees the whole arena without
+/// a sweep, so the entry would survive and a Buffer later allocated at the same
+/// address on another thread would read as that dead key.
+fn ensure_crypto_key_thread_exit_hook_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_crypto_keys_in_freed_ranges,
+        )
+    });
+}
+
+/// Thread-exit hook (#11471): drop every CryptoKey entry keyed by a Buffer in
+/// the exiting thread's arena. Only removes map entries, like the sweep hook.
+fn release_crypto_keys_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut registry = CRYPTO_KEY_REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registry.retain(|buf_addr, _| !freed.contains(*buf_addr));
+}
+
+/// #11471 test probe: register a fresh secret HMAC key on a Buffer allocated in
+/// the calling thread's arena, as `subtle.importKey` does. Returns its address.
+/// Exported by symbol because `webcrypto::util` is private to `webcrypto`.
+#[cfg(test)]
+#[no_mangle]
+pub extern "C" fn perry_test_11471_register_crypto_key() -> usize {
+    let buf = unsafe { alloc_uint8array_from_slice(&[7u8; 32]) };
+    let addr = buf as usize;
+    register_crypto_key(
+        addr,
+        CryptoKeyMaterial::new(KeyAlgo::Hmac, HashAlgo::Sha256, KeyKind::Secret, true, 0),
+    );
+    addr
+}
+
+/// #11471 test probe: is `buf_addr` in the stdlib CryptoKey registry itself
+/// (not the runtime metadata fallback `lookup_crypto_key` also consults)?
+#[cfg(test)]
+#[no_mangle]
+pub extern "C" fn perry_test_11471_crypto_key_registered(buf_addr: usize) -> bool {
+    CRYPTO_KEY_REGISTRY.lock().unwrap().contains_key(&buf_addr)
 }
 
 pub(super) fn lookup_crypto_key(buf_addr: usize) -> Option<CryptoKeyMaterial> {

@@ -2,9 +2,9 @@
 //! subscribe/unsubscribe, tracing channels) + the global Node diagnostic
 //! records consumed by the OBJECT_TYPE_ERROR getters.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread::ThreadId;
 
@@ -1140,23 +1140,29 @@ pub(crate) fn publish_channel(id: i64, data: f64) {
 }
 
 // Cached channel ids for the five `console.*` diagnostics channels.
-// Zero means "not yet looked up". The five-element static keeps the
-// `console.log` hot path branch-free: load atomic, miss → check by-key
-// map, hit → check subscriber count. No string formatting or string
-// allocation happens unless a subscriber actually exists.
-static CONSOLE_LOG_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
-static CONSOLE_INFO_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
-static CONSOLE_DEBUG_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
-static CONSOLE_ERROR_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
-static CONSOLE_WARN_CHANNEL_ID: AtomicI64 = AtomicI64::new(0);
+// Zero means "not yet looked up". The cache keeps the `console.log` hot path
+// cheap: load the slot, miss → check by-key map, hit → check subscriber count.
+// No string formatting or string allocation happens unless a subscriber
+// actually exists.
+//
+// #11471: per-thread, like the `DIAG_CHANNEL_BY_KEY` / `DIAG_CHANNELS` tables
+// the ids index (minted by the thread-local `NEXT_DIAG_ID`). As process-global
+// atomics, the first thread to resolve one pinned ITS id for every thread, so
+// another thread published console args to whichever of its own channels had
+// that number (or to none), and kept doing so after the first thread exited.
+thread_local! {
+    static CONSOLE_CHANNEL_IDS: [Cell<i64>; 5] = const {
+        [Cell::new(0), Cell::new(0), Cell::new(0), Cell::new(0), Cell::new(0)]
+    };
+}
 
-pub(crate) fn console_channel_slot(method: &str) -> Option<(&'static AtomicI64, &'static str)> {
+pub(crate) fn console_channel_slot(method: &str) -> Option<(usize, &'static str)> {
     match method {
-        "log" => Some((&CONSOLE_LOG_CHANNEL_ID, "console.log")),
-        "info" => Some((&CONSOLE_INFO_CHANNEL_ID, "console.info")),
-        "debug" => Some((&CONSOLE_DEBUG_CHANNEL_ID, "console.debug")),
-        "error" => Some((&CONSOLE_ERROR_CHANNEL_ID, "console.error")),
-        "warn" => Some((&CONSOLE_WARN_CHANNEL_ID, "console.warn")),
+        "log" => Some((0, "console.log")),
+        "info" => Some((1, "console.info")),
+        "debug" => Some((2, "console.debug")),
+        "error" => Some((3, "console.error")),
+        "warn" => Some((4, "console.warn")),
         _ => None,
     }
 }
@@ -1177,28 +1183,31 @@ pub fn diagnostics_channel_publish_console(method: &str, arr: *const crate::arra
     // Resolve the channel id without allocating. If nobody has subscribed
     // (or even called `dc.channel("console.<m>")`), the by-key lookup
     // misses and we return without formatting anything.
-    let mut id = slot.load(Ordering::Relaxed);
-    if id == 0 {
+    let mut id = CONSOLE_CHANNEL_IDS.with(|ids| ids[slot].get());
+    // Fast subscriber check: if the channel exists but is empty, skip. A
+    // cached id whose channel was evicted (`evict_inactive_diag_channels_if_needed`)
+    // reads as `None` and is resolved again: a later `dc.channel(key)` mints a
+    // NEW id, which a stale cache would never see.
+    let mut subscribed = if id == 0 {
+        None
+    } else {
+        DIAG_CHANNELS.with(|m| m.borrow().get(&id).map(|c| !c.subscribers.is_empty()))
+    };
+    if id == 0 || subscribed.is_none() {
         let lookup = DIAG_CHANNEL_BY_KEY.with(|m| {
             m.borrow()
                 .get(&DiagChannelKey::String(key.to_string()))
                 .copied()
         });
-        match lookup {
-            Some(real_id) => {
-                slot.store(real_id, Ordering::Relaxed);
-                id = real_id;
-            }
-            None => return,
+        let real_id = lookup.unwrap_or(0);
+        CONSOLE_CHANNEL_IDS.with(|ids| ids[slot].set(real_id));
+        if real_id == 0 {
+            return;
         }
+        id = real_id;
+        subscribed = DIAG_CHANNELS.with(|m| m.borrow().get(&id).map(|c| !c.subscribers.is_empty()));
     }
-    // Fast subscriber check: if the channel exists but is empty, skip.
-    let has_subs = DIAG_CHANNELS.with(|m| {
-        m.borrow()
-            .get(&id)
-            .is_some_and(|c| !c.subscribers.is_empty())
-    });
-    if !has_subs {
+    if subscribed != Some(true) {
         return;
     }
     let arr_value = if arr.is_null() {

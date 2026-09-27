@@ -751,6 +751,14 @@ thread_local! {
 /// rooting them a GC between `.on()` and the deferred dispatch would free the
 /// closure body (the same hazard net.Socket guards against — issue #35).
 fn ensure_zlib_gc_scanner() {
+    // #11471: every zlib table insert (stream creation, `.on()`, the one-shot
+    // `zlib.gzip(data, cb)` path) passes through here first.
+    static THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
+    THREAD_EXIT_HOOK.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_zlib_in_freed_ranges,
+        )
+    });
     ZLIB_GC_REGISTERED.with(|registered| {
         if registered.get() {
             return;
@@ -758,6 +766,88 @@ fn ensure_zlib_gc_scanner() {
         perry_runtime::gc::gc_register_mutable_root_scanner_named("stdlib:zlib", scan_zlib_roots);
         registered.set(true);
     });
+}
+
+/// #11471: an exiting thread's zlib records outlive its heap. The tables are
+/// process-global and not agent-tagged: `.pipe(dest)` destinations and
+/// `.on(event, cb)` listeners are the setting thread's heap objects, and
+/// `.flush(cb)` / `zlib.gzip(data, cb)` queue raw closure pointers that
+/// `js_zlib_process_pending` would later call. Left behind, surviving
+/// threads' `scan_zlib_roots` mark and rewrite freed (or reused) memory and a
+/// drained event dispatches onto it.
+///
+/// A zlib stream whose pipes or listeners lie in `freed` is dropped whole
+/// (state, listeners, and its queued Data/End/Error events); a queued
+/// callback event whose closure lies in `freed` is dropped. Handle ids are
+/// monotonic (never reused), so no other record can come to name a dropped
+/// id. `js_zlib_has_active_handles` reads the queue's emptiness directly, so
+/// shrinking it keeps the loop-liveness answer consistent. The dropped
+/// streams' async-hooks `destroy` is not emitted (that would run JS).
+///
+/// Runs in a TLS destructor: one lock at a time, poison-tolerant, no JS heap
+/// access.
+fn release_zlib_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    use std::sync::PoisonError;
+    let mut dead: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    {
+        let g = ZLIB_STREAMS.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&id, s) in g.iter() {
+            if s.pipes.iter().any(|&bits| freed.holds_bits(bits)) {
+                dead.insert(id);
+            }
+        }
+    }
+    {
+        let g = ZLIB_LISTENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for (&id, per_event) in g.iter() {
+            if per_event.values().flatten().any(|&cb| freed.holds_i64(cb)) {
+                dead.insert(id);
+            }
+        }
+    }
+    if !dead.is_empty() {
+        ZLIB_STREAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| !dead.contains(id));
+        ZLIB_LISTENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| !dead.contains(id));
+    }
+    ZLIB_PENDING_EVENTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|ev| match ev {
+            ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => {
+                !dead.contains(id)
+            }
+            ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => !freed.holds_i64(*cb),
+        });
+}
+
+/// #11471 test probe: (stream registered, listener count, queued events
+/// naming `id`).
+#[cfg(test)]
+pub(crate) fn zlib_tables_for_test(id: i64) -> (bool, usize, usize) {
+    let stream = ZLIB_STREAMS.lock().unwrap().contains_key(&id);
+    let listeners = ZLIB_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|m| m.values().map(Vec::len).sum())
+        .unwrap_or(0);
+    let events = ZLIB_PENDING_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|ev| {
+            matches!(ev, ZlibEvent::Data(i, _) | ZlibEvent::End(i) | ZlibEvent::Error(i, _) if *i == id)
+        })
+        .count();
+    (stream, listeners, events)
 }
 
 fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {

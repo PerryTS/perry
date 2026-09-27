@@ -325,6 +325,96 @@ fn scan_environment_data_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootV
     });
 }
 
+/// #11471: `WORKERS` is process-global, but each record holds the Worker
+/// object, listener closures, terminate promise and async-resource objects of
+/// the thread that constructed the Worker (nested Workers are supported, so
+/// that need not be the main thread). Registered before the first insert.
+fn ensure_worker_thread_exit_hook_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            release_worker_records_in_freed_ranges,
+        )
+    });
+}
+
+/// Thread-exit hook (#11471): drop every Worker record whose JS values live in
+/// the exiting thread's arena. Such a record belongs to the dying thread (the
+/// only one that can observe that Worker), so the whole record goes: its
+/// `LIVE_REFED_WORKERS` share is released first, and dropping its command
+/// `Sender` disconnects the child's receive loop, which ends it as a parent
+/// exit should. Runs in a TLS destructor: one process-global lock, no JS.
+fn release_worker_records_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut workers = WORKERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    workers.retain(|_, worker| {
+        let dead = freed.holds_bits(worker.object_bits)
+            || worker
+                .listeners
+                .values()
+                .flatten()
+                .any(|listener| freed.holds_bits(listener.callback_bits))
+            || worker
+                .terminate_promise
+                .is_some_and(|promise| freed.contains(promise))
+            || worker
+                .async_resource_bits
+                .iter()
+                .any(|bits| freed.holds_bits(*bits));
+        if dead {
+            worker.set_liveness(false, false);
+        }
+        !dead
+    });
+}
+
+/// #11471 test probes over `WORKERS`.
+#[cfg(test)]
+pub(crate) mod thread_exit_probe {
+    use super::*;
+
+    /// Insert a live, refed record for `object_bits` exactly as
+    /// `js_worker_threads_worker_new` does (minus spawning the thread), with
+    /// `callback_bits` as a `message` listener. Returns the worker id.
+    pub(crate) fn insert_worker_for_test(object_bits: u64, callback_bits: u64) -> u64 {
+        ensure_worker_thread_exit_hook_registered();
+        let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::Relaxed);
+        let (tx, _rx) = mpsc::channel::<WorkerCommand>();
+        let undefined = perry_runtime::JSValue::undefined().bits();
+        let mut listeners = HashMap::new();
+        listeners.insert(
+            "message".to_string(),
+            vec![WorkerListener {
+                callback_bits,
+                once: false,
+                web_event: false,
+            }],
+        );
+        let mut record = WorkerRecord {
+            sender: tx,
+            object_bits,
+            listeners,
+            alive: false,
+            refed: false,
+            terminate_promise: None,
+            async_resources: [perry_runtime::async_hooks::AsyncResourceIds {
+                async_id: 0,
+                trigger_async_id: 0,
+            }; 3],
+            async_resource_bits: [undefined; 3],
+        };
+        let mut workers = WORKERS.lock().unwrap();
+        record.set_liveness(true, true);
+        workers.insert(worker_id, record);
+        worker_id
+    }
+
+    pub(crate) fn worker_present(worker_id: u64) -> bool {
+        WORKERS.lock().unwrap().contains_key(&worker_id)
+    }
+}
+
 fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     if let Ok(mut workers) = WORKERS.lock() {
         for worker in workers.values_mut() {
@@ -1301,6 +1391,7 @@ pub extern "C" fn js_worker_threads_message_channel_new() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> f64 {
     ensure_worker_gc_scanner();
+    ensure_worker_thread_exit_hook_registered();
     worker_pump::ensure_parent_event_retire_hook();
     crate::worker_threads::async_shim::ensure_pump_registered();
 

@@ -107,12 +107,44 @@ pub fn register_thread_exit_range_hook(hook: fn(&FreedRanges)) {
     }
 }
 
-/// Run every registered hook over `ranges`. Called by `Arena::drop`.
+/// Run every registered hook over `ranges`. Called by `Arena::drop` (arena
+/// blocks) and `MallocState::drop` (`gc_malloc` blocks) at thread exit.
 pub(crate) fn release_freed_ranges(ranges: &[(usize, usize)]) {
     let freed = FreedRanges::new(ranges);
     if freed.is_empty() {
         return;
     }
+    // -- perry-runtime tables (#11471): one call per owning module --
+    crate::geisterhand_registry::release_geisterhand_in_freed_ranges(&freed);
+    crate::ui_text_registry::release_ui_text_registry_in_freed_ranges(&freed);
+    crate::frame::release_frame_callbacks_in_freed_ranges(&freed);
+    crate::tui::input::release_tui_input_handler_in_freed_ranges(&freed);
+    crate::tui::state::release_tui_state_slots_in_freed_ranges(&freed);
+    crate::tui::hooks::release_tui_hook_slots_in_freed_ranges(&freed);
+    #[cfg(feature = "full")]
+    crate::plugin::release_plugin_registry_in_freed_ranges(&freed);
+    #[cfg(feature = "ohos-napi")]
+    crate::media_playback::release_media_callbacks_in_freed_ranges(&freed);
+    crate::symbol::release_symbol_tables_in_freed_ranges(&freed);
+    crate::symbol::release_symbol_accessors_in_freed_ranges(&freed);
+    crate::object::prototype_chain::release_object_prototypes_in_freed_ranges(&freed);
+    crate::event_target::release_dom_exception_errors_in_freed_ranges(&freed);
+    crate::node_vm::release_vm_owner_entries_in_freed_ranges(&freed);
+    crate::messaging::release_port_states_in_freed_ranges(&freed);
+    crate::v8::release_promise_hooks_in_freed_ranges(&freed);
+    crate::async_hooks::release_async_hooks_in_freed_ranges(&freed);
+    crate::object::release_global_this_ptr_in_freed_ranges(&freed);
+    crate::tls::release_tls_client_metadata_in_freed_ranges(&freed);
+    #[cfg(feature = "mod-dgram")]
+    crate::dgram_reactor::release_dgram_sockets_in_freed_ranges(&freed);
+    #[cfg(feature = "mod-dgram")]
+    crate::dgram::release_dgram_bindings_in_freed_ranges(&freed);
+    crate::child_process::reactor::release_cp_children_in_freed_ranges(&freed);
+    #[cfg(any(unix, windows))]
+    crate::pty::reactor::release_ptys_in_freed_ranges(&freed);
+    crate::promise::native_async::release_native_async_tokens_in_freed_ranges(&freed);
+    crate::typed_feedback::release_typed_feedback_in_freed_ranges(&freed);
+    // -- end perry-runtime tables --
     // Copied out so a hook may itself take locks without holding this one.
     let hooks: Vec<fn(&FreedRanges)> = RANGE_HOOKS
         .lock()

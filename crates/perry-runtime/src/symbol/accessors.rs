@@ -60,6 +60,48 @@ pub(super) fn prune_dead_symbol_accessor_owners(is_dead_owner: &dyn Fn(usize) ->
     }
 }
 
+/// #11471: thread-exit release for `SYMBOL_ACCESSOR_PROPERTIES`. Death
+/// pruning above only attributes the collecting thread's heap, so an exiting
+/// thread's accessor entries (owner or symbol in its arena, or get/set
+/// closures from it) would outlive its blocks: a new object at a reused owner
+/// address would gain the dead one's accessor, and
+/// `scan_symbol_accessor_roots_mut` would trace the dangling closure bits.
+///
+/// Runs from `Arena::drop` (a TLS destructor): a plain `lock()`, never
+/// `lock_gc_root_registry` (thread-local depth counter + deferred-GC flush).
+pub(crate) fn release_symbol_accessors_in_freed_ranges(
+    freed: &crate::arena::thread_exit::FreedRanges,
+) {
+    let mut guard = SYMBOL_ACCESSOR_PROPERTIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    let before = map.len();
+    map.retain(|&(owner, sym), acc| {
+        !freed.contains(owner)
+            && !freed.contains(sym)
+            && !freed.holds_bits(acc.get)
+            && !freed.holds_bits(acc.set)
+    });
+    let changed = map.len() != before;
+    drop(guard);
+    if changed {
+        crate::symbol::symbol_property_ic_epoch_bump();
+    }
+}
+
+/// Test probe (#11471): is there a symbol accessor for `(owner, sym)`?
+#[doc(hidden)]
+pub fn symbol_accessor_held_for_test(owner: usize, sym: usize) -> bool {
+    SYMBOL_ACCESSOR_PROPERTIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|map| map.contains_key(&(owner, sym)))
+}
+
 #[cfg(test)]
 pub(crate) fn test_symbol_accessor_property_count() -> usize {
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
