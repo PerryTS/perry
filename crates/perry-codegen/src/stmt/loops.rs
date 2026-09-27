@@ -3433,8 +3433,31 @@ fn lower_packed_f64_range_versioned_for(
         };
         let slot = ctx.func.alloca_entry(DOUBLE);
         let g_ref = format!("@{global_name}");
+        // #11590: the cache is a COPY of a GC root, so it must be a root too.
+        // Both clones' entry guards are runtime calls, and the SLOW clone
+        // polls on its back-edge and reaches `js_dyn_index_set_strict` (which
+        // grows the array) every iteration. An evacuating minor rewrites
+        // `@perry_global_*` but not a bare alloca, so an unrooted cache of a
+        // heap receiver (`let d: any = []; for (…) d[j] = …` with `d` read by
+        // some function) handed from-space to the very next store. A value
+        // proven non-pointer by the shared shadow-slot predicate stays a bare,
+        // register-promotable alloca, which is what the cache exists for.
+        let may_hold_pointer = !crate::expr::expr_is_known_non_pointer_shadow_value(
+            ctx,
+            &perry_hir::Expr::LocalGet(gid),
+        );
+        if may_hold_pointer {
+            // `root_entry_alloca` hoists the bind into entry setup, so seed
+            // the slot before the collector can dereference it.
+            let undefined =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &slot);
+        }
         let val = ctx.block().load(DOUBLE, &g_ref);
         ctx.block().store(DOUBLE, &val, &slot);
+        if may_hold_pointer {
+            crate::expr::root_entry_alloca(ctx, &slot);
+        }
         ctx.locals.insert(gid, slot);
         global_override_ids.push(gid);
     }
