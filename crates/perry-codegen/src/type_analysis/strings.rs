@@ -905,8 +905,8 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `digest().toString('hex')` skips the buffer encoding path and
         // mis-reads the bytes as Latin-1 (#1353).
         Expr::Call { callee, args, .. }
-            if is_crypto_digest_chain(callee)
-                && matches!(args.first(), Some(a) if !matches!(a, Expr::Undefined)) =>
+            if crypto_digest_call_result(callee, args)
+                == Some(super::refine::CryptoDigestResult::String) =>
         {
             true
         }

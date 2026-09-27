@@ -8,6 +8,7 @@ pub mod audit;
 pub mod cap_fields;
 pub mod capability;
 mod class_accessors;
+pub mod crypto_chain;
 pub mod deferral;
 pub(crate) mod destructuring;
 pub mod dynamic_import;

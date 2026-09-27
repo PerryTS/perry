@@ -735,8 +735,8 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // local) lets `...digest().toString('hex')` / `...digest()[i]` take
         // the buffer dispatch instead of the Latin-1 string path (#1353).
         Expr::Call { callee, args, .. }
-            if args.first().is_none_or(|a| matches!(a, Expr::Undefined))
-                && is_crypto_digest_chain(callee) =>
+            if crypto_digest_call_result(callee, args)
+                == Some(super::refine::CryptoDigestResult::Buffer) =>
         {
             Some(HirType::Named("Uint8Array".into()))
         }

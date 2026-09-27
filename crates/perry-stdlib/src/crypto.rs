@@ -14,6 +14,7 @@ mod ec_sign;
 mod ecdh;
 mod handles;
 mod hash;
+mod hash_chain;
 mod hash_handles;
 mod kdf;
 mod keys;
@@ -28,6 +29,6 @@ use self::{cipher::*, ec_sign::*, kdf::*, keys::*, random::*, util::*, x509::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{
-    certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_handles::*, kdf::*, keys::*,
-    prime::*, random::*, sign::*, x509::*,
+    certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_chain::*, hash_handles::*,
+    kdf::*, keys::*, prime::*, random::*, sign::*, x509::*,
 };

@@ -349,3 +349,87 @@ pub(crate) fn arm_crypto_create_hash(
         Ok(blk.call(DOUBLE, "js_crypto_create_hash", &[(I64, &alg_handle)]))
     }
 }
+
+/// Bytes codegen reserves per handle-free chain site. Mirrors
+/// `perry-stdlib`'s `crypto::hash_chain::CHAIN_STATE_BYTES`, whose const
+/// assertions fail the stdlib build if the digest state outgrows it.
+pub(crate) const CRYPTO_CHAIN_STATE_BYTES: u32 = 1024;
+/// Mirrors `crypto::hash_chain::CHAIN_STATE_ALIGN`.
+pub(crate) const CRYPTO_CHAIN_STATE_ALIGN: u32 = 16;
+
+/// #11516: the internal `crypto.__perryHash*` calls that
+/// `perry_transform::crypto_hash_chain` emits for a hash/HMAC object that
+/// provably never escapes. The init call gets a stack slot of its own in
+/// the frame's entry block and the digest state lives there, so no native
+/// handle is registered (and #11515's collector never has to prove one dead).
+///
+/// Every argument is lowered first, in source order (extra arguments only
+/// for their side effects), then validated exactly as the handle-creating
+/// arms validate them.
+pub(crate) fn arm_crypto_chain_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<String> {
+    use perry_hir::crypto_chain::{CHAIN_DIGEST, CHAIN_INIT_HASH, CHAIN_INIT_HMAC, CHAIN_UPDATE};
+    let Expr::PropertyGet { property, .. } = callee else {
+        unreachable!("guarded by the dispatcher")
+    };
+    let mut vals = Vec::with_capacity(args.len());
+    for a in args {
+        vals.push(lower_expr(ctx, a)?);
+    }
+    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let arg = |i: usize| vals.get(i).cloned().unwrap_or_else(|| undef.clone());
+    match property.as_str() {
+        CHAIN_INIT_HASH => {
+            let alg_box = arg(0);
+            emit_validate_string_arg(ctx, &alg_box, "algorithm");
+            let slot = ctx
+                .func
+                .alloca_entry_bytes_aligned(CRYPTO_CHAIN_STATE_BYTES, CRYPTO_CHAIN_STATE_ALIGN);
+            let options = arg(1);
+            let blk = ctx.block();
+            let alg = unbox_ffi_str_arg(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_chain_hash_init",
+                &[(PTR, &slot), (I64, &alg), (DOUBLE, &options)],
+            ))
+        }
+        CHAIN_INIT_HMAC => {
+            let alg_box = arg(0);
+            let key_box = arg(1);
+            emit_validate_string_arg(ctx, &alg_box, "hmac");
+            emit_validate_crypto_key_arg(ctx, &key_box, "key");
+            let slot = ctx
+                .func
+                .alloca_entry_bytes_aligned(CRYPTO_CHAIN_STATE_BYTES, CRYPTO_CHAIN_STATE_ALIGN);
+            let blk = ctx.block();
+            let alg = unbox_ffi_str_arg(blk, &alg_box);
+            let key = unbox_ffi_str_arg(blk, &key_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_chain_hmac_init",
+                &[(PTR, &slot), (I64, &alg), (I64, &key)],
+            ))
+        }
+        CHAIN_UPDATE => {
+            let (state, data, enc) = (arg(0), arg(1), arg(2));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_crypto_chain_update",
+                &[(DOUBLE, &state), (DOUBLE, &data), (DOUBLE, &enc)],
+            ))
+        }
+        CHAIN_DIGEST => {
+            let (state, enc) = (arg(0), arg(1));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_crypto_chain_digest",
+                &[(DOUBLE, &state), (DOUBLE, &enc)],
+            ))
+        }
+        other => unreachable!("not a crypto chain method: {other}"),
+    }
+}

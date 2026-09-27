@@ -678,6 +678,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // Same handle protocol as `js_crypto_create_hash` — POINTER_TAG box, then
     // HANDLE_METHOD_DISPATCH routes `.update` / `.digest` to `dispatch_hmac`.
     module.declare_function("js_crypto_create_hmac", DOUBLE, &[I64, I64]);
+    // #11516: handle-free hash/HMAC chains — the digest state lives in a
+    // caller-provided frame slot; the "state" value is that slot's address.
+    module.declare_function("js_crypto_chain_hash_init", DOUBLE, &[PTR, I64, DOUBLE]);
+    module.declare_function("js_crypto_chain_hmac_init", DOUBLE, &[PTR, I64, I64]);
+    module.declare_function("js_crypto_chain_update", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_crypto_chain_digest", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_from_bytes", I64, &[I64, I32]);
     module.declare_function("js_string_from_wtf8_bytes", I64, &[I64, I32]);
     // Buffer.alloc(size, fill) — returns raw *mut BufferHeader.
