@@ -1537,28 +1537,19 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
     {
         return -1;
     }
-    match ordinary_key_position(&descriptor, key_bits) {
-        Some(index) => index as i32,
-        None => -1,
-    }
-}
-
-/// `key`'s position in an ORDINARY, generation-0, tombstone-free shape's key
-/// list — the caller has checked those three facts, which are what make the
-/// position mean something. Allocation-free; bounded by the physically present
-/// key slots.
-fn ordinary_key_position(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<usize> {
     let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     unsafe {
-        let wanted = crate::string::js_string_key_bytes(
+        let Some(wanted) = crate::string::js_string_key_bytes(
             crate::JSValue::from_bits(key_bits),
             &mut wanted_buf,
-        )?;
+        ) else {
+            return -1;
+        };
         let (slots, slot_len) =
             super::keys_array_dense_slots(descriptor.keys as usize as *const ArrayHeader);
         if slots.is_null() {
-            return None;
+            return -1;
         }
         let bound = slot_len.min(descriptor.logical_key_count as usize);
         for index in 0..bound {
@@ -1570,14 +1561,51 @@ fn ordinary_key_position(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<
             // is what makes a MIXED pair (pool immediate vs heap key, or two
             // separately allocated heap keys) still match.
             if stored.bits() == key_bits {
-                return Some(index);
+                return index as i32;
             }
             if crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted) {
-                return Some(index);
+                return index as i32;
             }
         }
     }
-    None
+    -1
+}
+
+/// Step 4b loop regions: where objects of an ORDINARY, generation-0,
+/// hole-free shape (the caller checked all three) keep `key` — `(false,
+/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// position at or past the live inline bound IS the key's index in the
+/// buffer (`ShapeRecordRef::spill_position_of_key`). Answered in the same
+/// order the megamorphic read asks: the inline range front to back
+/// (`inline_slot_of_key`), then the spill range back to front (#10595: a
+/// shadowed field's most-derived position wins). The list is bounded by the
+/// shape's own key count, never its backing's length (#10969).
+/// Allocation-free; never calls user code.
+fn region_key_location(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<(bool, usize)> {
+    let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    unsafe {
+        let wanted = crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(key_bits),
+            &mut wanted_buf,
+        )?;
+        let (slots, len) =
+            super::keys_array_dense_slots_resolved(descriptor.keys as usize as *const ArrayHeader);
+        if slots.is_null() {
+            return None;
+        }
+        let hi = len.min(descriptor.logical_key_count as usize);
+        let lo = hi.min(descriptor.live_inline_slot_count as usize);
+        let mut matches = |i: usize| {
+            let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+            stored.bits() == key_bits
+                || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
+        };
+        if let Some(i) = (0..lo).find(|&i| matches(i)) {
+            return Some((false, i));
+        }
+        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+    }
 }
 
 /// Keepalive anchor — `js_shape_ordinary_inline_slot_for_key` is a
@@ -1712,8 +1740,9 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// guard itself, on the object, not here.
 ///
 /// SPILL-located keys (the S5 facts): a key at or past the shape's live
-/// inline bound lives at index `position - bound` of the object's spill
-/// buffer, and every carrier of the shape has that storage — the same claim
+/// inline bound lives at index `position` of the object's spill buffer
+/// (`ShapeRecordRef::spill_position_of_key`), and every carrier of the shape
+/// has that storage — the same claim
 /// the emitted `pic.spill.hit` rests on, published under the same conditions
 /// (object-owned spill storage, an index it can address). Such a word carries
 /// the ShapeId with `PACKED_SPILL_FLIP` flipped into it — the S5 convention —
@@ -1748,19 +1777,18 @@ pub extern "C" fn js_region_loop_pack(
     {
         return REGION_GUARD_WORD_EMPTY;
     }
-    let bound = descriptor.live_inline_slot_count as usize;
     let keys = [k0, k1, k2, k3, k4];
-    // (spilled, slot or spill index) per key.
+    // (spilled, inline slot or spill index) per key.
     let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
     let mut any_spill = false;
     for (i, &key) in keys.iter().enumerate().take(n as usize) {
-        let Some(position) = ordinary_key_position(&descriptor, key) else {
+        let Some((spilled, position)) = region_key_location(&descriptor, key) else {
             return REGION_GUARD_WORD_EMPTY;
         };
-        if position < bound {
+        if !spilled {
             at[i] = (false, position);
         } else {
-            let index = position - bound;
+            let index = position;
             if stored_mask & (1 << i) != 0
                 || !super::object_spill_enabled()
                 || index >= super::SPILL_MAX_FIELD_INDEX

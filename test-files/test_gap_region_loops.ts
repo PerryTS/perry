@@ -603,3 +603,87 @@ function spillThenReshape(o: any, n: number, f: (o: any) => void): number {
   return h;
 }
 out("spillThenReshape", spillThenReshape(mkSpill(40), 6, (o: any) => { delete o.e; o.e = 1000; }));
+
+// 38. Receivers that genuinely SPILL: 20 keys added to an Object.create
+// object and 10 to a `{}`, so the last keys live in the spill buffer. Reads
+// of spill keys in a loop region, in a body region, mixed with an inline
+// store, and under allocation pressure (the buffer moves).
+function mkWide(base: number): any {
+  const t: any = Object.create(SPROTO);
+  for (let i = 0; i < 20; i++) t["k" + i] = base + i;
+  return t;
+}
+function mkWide2(base: number): any {
+  const t: any = {};
+  t.a = base; t.b = base + 1; t.c = base + 2; t.d = base + 3; t.e = base + 4;
+  t.f = base + 5; t.g = base + 6; t.h = base + 7; t.i = base + 8; t.j = base + 9;
+  return t;
+}
+function wideRead(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    h += o.k1 + o.k17 + o.k18 + o.k19;
+  }
+  return h;
+}
+out("wideRead", wideRead(mkWide(10), 50));
+function wide2Read(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    h += o.a + o.h + o.i + o.j;
+  }
+  return h;
+}
+out("wide2Read", wide2Read(mkWide2(10), 50));
+function wideStoreInlineReadSpill(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    o.k0 = i;
+    const x = o.k19;
+    h += o.k0 + x;
+  }
+  return h;
+}
+out("wideStoreInlineReadSpill", wideStoreInlineReadSpill(mkWide(5), 30));
+function wideStoreSpill(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    o.k19 = i;
+    h += o.k19 + o.k1;
+  }
+  return h;
+}
+out("wideStoreSpill", wideStoreSpill(mkWide(7), 30));
+function wideBody(n: number): number {
+  const objs: any[] = [];
+  for (let i = 0; i < 4; i++) objs.push(mkWide(i * 100));
+  objs.push(mkWide2(7));
+  let h = 0;
+  for (let k = 0; k < n; k++) {
+    const o = objs[k % 5];
+    const x = o.k18;
+    h += (x === undefined ? o.j : x) + o.k1;
+  }
+  return h;
+}
+out("wideBody", wideBody(40));
+function wideMoving(n: number): number {
+  let h = 0;
+  for (let r = 0; r < n; r++) {
+    const o = mkWide(r);
+    const junk: any[] = [];
+    for (let j = 0; j < 40; j++) junk.push({ j, pad: [j] });
+    h += wideRead(o, 2) + wide2Read(mkWide2(r), 2) + junk.length;
+  }
+  return h;
+}
+out("wideMoving", wideMoving(2000));
+function wideReshape(o: any, n: number, f: (o: any) => void): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    h += o.k18 + o.k19;
+    if (i === 2) f(o);
+  }
+  return h;
+}
+out("wideReshape", wideReshape(mkWide(3), 6, (o: any) => { delete o.k18; o.k18 = 1000; o.k25 = 1; }));
