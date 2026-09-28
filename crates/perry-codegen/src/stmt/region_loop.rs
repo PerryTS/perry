@@ -69,6 +69,10 @@ const EMPTY_WORD: &str = "4294967295";
 /// last bounded prime attempt fails, and the guard then skips even the
 /// receiver test (DESIGN §4.3: "the retirement check moves into the word").
 const RETIRED_WORD: &str = "-1";
+/// Bit 62 of a loop region's word: some key is SPILL-located
+/// (`REGION_LOOP_WORD_SPILL`); each key's 6-bit field is then `slot < 32` or
+/// `32 + spill index`.
+const SPILL_BIT_SHIFT: &str = "62";
 /// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) — DESIGN §6.5a fact F-B.
 const PROOF_FLAG_I16: &str = "128";
 /// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` and its admitted
@@ -113,6 +117,8 @@ pub(crate) struct Receiver {
     pub(crate) recv: Recv,
     pub(crate) keys: Vec<String>,
     pub(crate) has_store: bool,
+    /// Bit `i`: the body stores `keys[i]` (the runtime then requires it inline).
+    stored_mask: u32,
     sites: Option<(String, String)>,
     /// The region word, an SSA value of the preheader (loop regions) or of
     /// the tail's guard block (body regions).
@@ -137,6 +143,9 @@ pub(crate) struct Pending {
     bare: HashSet<usize>,
     trees: HashSet<usize>,
     token: u64,
+    /// Loop regions: which split copy [`lower_loop`] is lowering — the one
+    /// for a word with a spill-located key, or the all-inline one.
+    spill_mode: bool,
 }
 
 /// The facts active while F-body is lowered.
@@ -152,6 +161,9 @@ pub(crate) struct Active {
     /// derived (block, instruction index) — [`region_handle`] reuses it while
     /// nothing that can collect lies between.
     handles: Vec<(Recv, String, usize, usize)>,
+    /// This F copy serves words with a SPILL-located key (bit 62): a read's
+    /// slot field then says inline (`< 32`) or spill index (`32 + i`).
+    spill: bool,
 }
 
 thread_local! {
@@ -872,7 +884,7 @@ fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
 }
 
 struct Plan {
-    receivers: Vec<(Recv, Vec<String>, bool)>,
+    receivers: Vec<(Recv, Vec<String>, bool, u32)>,
     bare: HashSet<usize>,
     trees: HashSet<usize>,
     recheck: Recheck,
@@ -987,11 +999,29 @@ fn plan(
         }
         u
     };
-    let mut receivers: Vec<(Recv, Vec<String>, bool)> = used
+    // Which of each receiver's keys the body ever STORES (bare or not): the
+    // runtime serves a spill-located key to reads only, so a stored key must
+    // be inline for the word to be published.
+    let mut stored: HashMap<Recv, u32> = HashMap::new();
+    for (r, k, is_store) in accesses(tail) {
+        if is_store && cands.contains(&r) {
+            if let Some(i) = keys[&r].iter().position(|x| *x == k) {
+                *stored.entry(r).or_default() |= 1 << i;
+            }
+        }
+    }
+    let mut receivers: Vec<(Recv, Vec<String>, bool, u32)> = used
         .into_iter()
-        .map(|r| (r, keys[&r].clone(), bare_stores.contains(&r)))
+        .map(|r| {
+            (
+                r,
+                keys[&r].clone(),
+                bare_stores.contains(&r),
+                stored.get(&r).copied().unwrap_or(0),
+            )
+        })
         .collect();
-    receivers.sort_by_key(|(r, _, _)| *r);
+    receivers.sort_by_key(|(r, _, _, _)| *r);
     Some(Plan {
         receivers,
         bare,
@@ -1131,6 +1161,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
             (I64, &key_bits[3]),
             (I64, &key_bits[4]),
             (I32, &last),
+            (I32, &rv.stored_mask.to_string()),
         ],
     );
     // The prime is not a collection point for the receiver's facts: it reads
@@ -1244,10 +1275,11 @@ pub(crate) fn begin(
         let mut receivers: Vec<Receiver> = p
             .receivers
             .iter()
-            .map(|(r, k, st)| Receiver {
+            .map(|(r, k, st, sm)| Receiver {
                 recv: *r,
                 keys: k.clone(),
                 has_store: *st,
+                stored_mask: *sm,
                 sites: None,
                 word: String::new(),
                 slots: Vec::new(),
@@ -1274,6 +1306,7 @@ pub(crate) fn begin(
             bare: p.bare,
             trees: p.trees,
             token,
+            spill_mode: false,
         });
         return Ok(Some(token));
     }
@@ -1318,10 +1351,11 @@ pub(crate) fn begin(
         let receivers: Vec<Receiver> = p
             .receivers
             .iter()
-            .map(|(r, k, st)| Receiver {
+            .map(|(r, k, st, sm)| Receiver {
                 recv: *r,
                 keys: k.clone(),
                 has_store: *st,
+                stored_mask: *sm,
                 sites: None,
                 word: String::new(),
                 slots: Vec::new(),
@@ -1338,6 +1372,7 @@ pub(crate) fn begin(
             bare: p.bare,
             trees: p.trees,
             token,
+            spill_mode: false,
         });
         return Ok(Some(token));
     }
@@ -1384,9 +1419,37 @@ pub(crate) fn lower_loop(
 
     ctx.current_block = split;
     note(ctx, Route::RloopSplit);
-    lower(ctx)?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_l);
+    // A word naming a spill-located key selects the split copy that reads
+    // through the spill buffer; every other word, the all-inline copy (the
+    // hot one, whose reads are one load). A region that stores every key it
+    // names never gets a spill word, so it needs no spill copy.
+    let words: Vec<String> = ctx.region_loops[pos].receivers.iter().map(|r| r.word.clone()).collect();
+    let may_spill = ctx.region_loops[pos]
+        .receivers
+        .iter()
+        .any(|r| r.stored_mask != (1u32 << r.keys.len()) - 1);
+    if may_spill {
+        let inline_b = ctx.new_block("rloop.version.inline");
+        let spill_b = ctx.new_block("rloop.version.spill");
+        let inline_l = ctx.block_label(inline_b);
+        let spill_l = ctx.block_label(spill_b);
+        let any = any_spill_bit(ctx, &words);
+        ctx.block().cond_br(&any, &spill_l, &inline_l);
+        for (blk, mode) in [(inline_b, false), (spill_b, true)] {
+            ctx.current_block = blk;
+            if let Some(p) = ctx.region_loops.iter_mut().find(|p| p.token == t) {
+                p.spill_mode = mode;
+            }
+            lower(ctx)?;
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_l);
+            }
+        }
+    } else {
+        lower(ctx)?;
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_l);
+        }
     }
 
     // The plain version: the region is not registered while it lowers, so
@@ -1407,6 +1470,17 @@ pub(crate) fn lower_loop(
     }
     ctx.current_block = merge;
     Ok(())
+}
+
+/// `(w0 | w1 | ...) >> 62 & 1` — does any receiver's word name a spill key?
+fn any_spill_bit(ctx: &mut FnCtx<'_>, words: &[String]) -> String {
+    let mut acc = "0".to_string();
+    for w in words {
+        acc = ctx.block().or(I64, &acc, w);
+    }
+    let s = ctx.block().lshr(I64, &acc, SPILL_BIT_SHIFT);
+    let b = ctx.block().and(I64, &s, "1");
+    ctx.block().icmp_ne(I64, &b, "0")
 }
 
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
@@ -1462,6 +1536,20 @@ pub(crate) fn lower_split(
     let bare = ctx.region_loops[idx].bare.clone();
     let trees = ctx.region_loops[idx].trees.clone();
     let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
+    // The layouts F-body must serve: a loop region's split copy was chosen by
+    // its preheader (one layout); a body region chooses per iteration, so it
+    // carries the all-inline copy and, unless every key it names is stored
+    // (then no spill word is ever published), the spill-reading copy.
+    let modes: Vec<bool> = if valid_slot.is_some() {
+        vec![ctx.region_loops[idx].spill_mode]
+    } else if receivers
+        .iter()
+        .any(|r| r.stored_mask != (1u32 << r.keys.len()) - 1)
+    {
+        vec![false, true]
+    } else {
+        vec![false]
+    };
 
     let fast = ctx.new_block("rloop.fast");
     let slow = ctx.new_block("rloop.slow");
@@ -1532,43 +1620,59 @@ pub(crate) fn lower_split(
         }
     }
 
-    // F-body.
-    ctx.current_block = fast;
-    note(ctx, Route::RloopF);
-    let fast_first_block = fast;
-    let scan_start = ctx.func.num_blocks();
-    ctx.region_loop_facts.push(Active {
-        receivers: receivers.clone(),
-        bare,
-        trees,
-        dirty_slot: dirty_slot.clone(),
-        emitted: Vec::new(),
-        handles: Vec::new(),
-    });
-    let r = lower_list(ctx, tail);
-    let active = ctx.region_loop_facts.pop().expect("pushed above");
-    r?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&join_l);
-    }
-    let scan_end = ctx.func.num_blocks();
-    let ok = verify(ctx, fast_first_block, scan_start, scan_end, &active.emitted);
-    if !ok {
-        stat(4, 1);
-        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("2") {
-            eprintln!(
-                "[perry region] F-body discarded by the verifier in {}",
-                ctx.func.name
-            );
+    // F-body, once per layout; each copy is verified on its own IR.
+    let mut copies: Vec<(String, bool)> = Vec::with_capacity(modes.len());
+    for (ci, &mode) in modes.iter().enumerate() {
+        let fb = if ci == 0 { fast } else { ctx.new_block("rloop.fast") };
+        let fl = ctx.block_label(fb);
+        ctx.current_block = fb;
+        note(ctx, Route::RloopF);
+        let scan_start = ctx.func.num_blocks();
+        ctx.region_loop_facts.push(Active {
+            receivers: receivers.clone(),
+            bare: bare.clone(),
+            trees: trees.clone(),
+            dirty_slot: dirty_slot.clone(),
+            emitted: Vec::new(),
+            handles: Vec::new(),
+            spill: mode,
+        });
+        let r = lower_list(ctx, tail);
+        let active = ctx.region_loop_facts.pop().expect("pushed above");
+        r?;
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&join_l);
         }
+        let scan_end = ctx.func.num_blocks();
+        let ok = verify(ctx, fb, scan_start, scan_end, &active.emitted);
+        if !ok {
+            stat(4, 1);
+            if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("2") {
+                eprintln!(
+                    "[perry region] F-body discarded by the verifier in {}",
+                    ctx.func.name
+                );
+            }
+        }
+        copies.push((fl, ok));
     }
+    let ok = copies[0].1;
+    let _ = &fast_l;
 
-    // G-body: today's lowering.
+    // G-body: today's lowering. A loop region with nothing between
+    // iterations that can invalidate its facts (no re-check) never leaves F
+    // once its split loop is entered — the preheader's plain loop is its G —
+    // so the split loop carries no G copy.
+    let g_dead = ok && valid_slot.is_some() && recheck == Recheck::None;
     ctx.current_block = slow;
-    note(ctx, Route::RloopG);
-    lower_list(ctx, tail)?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&join_l);
+    if g_dead {
+        ctx.block().unreachable();
+    } else {
+        note(ctx, Route::RloopG);
+        lower_list(ctx, tail)?;
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&join_l);
+        }
     }
 
     if let Some((top_idx, need, rc_l)) = decide_top {
@@ -1580,7 +1684,24 @@ pub(crate) fn lower_split(
         }
     }
     ctx.current_block = decide.0;
-    if ok {
+    if copies.len() == 2 {
+        // Body region: the guard passed -> pick the copy for the word's layout.
+        let target = |c: &(String, bool)| if c.1 { c.0.clone() } else { slow_l.clone() };
+        let (inline_t, spill_t) = (target(&copies[0]), target(&copies[1]));
+        if !copies[0].1 && !copies[1].1 {
+            ctx.block().br(&slow_l);
+        } else {
+            let mode_b = ctx.new_block("rloop.mode");
+            let mode_l = ctx.block_label(mode_b);
+            ctx.block().cond_br(&decide.1, &mode_l, &slow_l);
+            ctx.current_block = mode_b;
+            let words: Vec<String> = receivers.iter().map(|r| r.word.clone()).collect();
+            let any = any_spill_bit(ctx, &words);
+            ctx.block().cond_br(&any, &spill_t, &inline_t);
+        }
+    } else if g_dead {
+        ctx.block().br(&fast_l);
+    } else if ok {
         ctx.block().cond_br(&decide.1, &fast_l, &slow_l);
     } else {
         ctx.block().br(&slow_l);
@@ -1747,6 +1868,72 @@ fn note_emitted(ctx: &mut FnCtx<'_>) {
     }
 }
 
+/// The address a bare READ loads. In an all-inline copy (and for every store,
+/// whose key the runtime publishes only when inline) it is the inline slot.
+/// In a spill copy the key's field says where the value lives: `< 32` is an
+/// inline slot, `32 + i` is spill index `i`, reached exactly as the S5 hit
+/// path reaches it — `ObjectHeader.meta`, `ObjectMeta.spill`, the element —
+/// on the ShapeId's word alone (every carrier of the shape has that storage).
+fn bare_read_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> String {
+    let spill = ctx.region_loop_facts.last().is_some_and(|a| a.spill);
+    if !spill {
+        return slot_ptr(ctx, handle, slot);
+    }
+    let is_spill = ctx.block().icmp_uge(I64, slot, "32");
+    let in_b = ctx.new_block("rloop.slot.inline");
+    let sp_b = ctx.new_block("rloop.slot.spill");
+    let jn_b = ctx.new_block("rloop.slot.join");
+    let (in_l, sp_l, jn_l) = (
+        ctx.block_label(in_b),
+        ctx.block_label(sp_b),
+        ctx.block_label(jn_b),
+    );
+    ctx.block().cond_br(&is_spill, &sp_l, &in_l);
+    ctx.current_block = in_b;
+    let p_in = slot_ptr(ctx, handle, slot);
+    let in_end = ctx.block().label.clone();
+    ctx.block().br(&jn_l);
+    ctx.current_block = sp_b;
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
+    let meta_off = crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple);
+    let meta_addr = ctx.block().add(I64, handle, &meta_off.to_string());
+    let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
+    let meta = if ilp32 {
+        let narrow = ctx.block().load(I32, &meta_slot);
+        ctx.block().zext(I32, &narrow, I64)
+    } else {
+        ctx.block().load(I64, &meta_slot)
+    };
+    let meta_ptr = ctx.block().inttoptr(I64, &meta);
+    let spill_slot = ctx.block().gep(
+        I8,
+        &meta_ptr,
+        &[(
+            I64,
+            &crate::target_layout::OBJECT_META_SPILL_OFFSET_BYTES.to_string(),
+        )],
+    );
+    let buf = ctx.block().load(I64, &spill_slot);
+    let buf_ptr = ctx.block().inttoptr(I64, &buf);
+    let elems = ctx.block().gep(
+        I8,
+        &buf_ptr,
+        &[(
+            I64,
+            &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
+        )],
+    );
+    let index = ctx.block().sub(I64, slot, "32");
+    let p_sp = ctx.block().gep(DOUBLE, &elems, &[(I64, &index)]);
+    let sp_end = ctx.block().label.clone();
+    ctx.block().br(&jn_l);
+    ctx.current_block = jn_b;
+    ctx.block().phi(
+        crate::types::PTR,
+        &[(p_in.as_str(), in_end.as_str()), (p_sp.as_str(), sp_end.as_str())],
+    )
+}
+
 fn slot_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> String {
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let base = ctx.block().inttoptr(I64, handle);
@@ -1772,7 +1959,7 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
         return Ok(None);
     };
     let h = region_handle(ctx, r)?;
-    let p = slot_ptr(ctx, &h, &slot);
+    let p = bare_read_ptr(ctx, &h, &slot);
     note_emitted(ctx);
     let v = ctx.block().load(DOUBLE, &p);
     stat(2, 1);
@@ -1878,7 +2065,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
     for (i, l) in all.iter().enumerate() {
         if let Expr::PropertyGet { property, .. } = l {
             let slot = active_slot(ctx, l, r, property).expect("planned with its tree");
-            let p = slot_ptr(ctx, &h, &slot);
+            let p = bare_read_ptr(ctx, &h, &slot);
             note_emitted(ctx);
             values[i] = Some(ctx.block().load(DOUBLE, &p));
             stat(2, 1);
@@ -1930,6 +2117,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         dirty_slot: None,
         emitted: Vec::new(),
         handles: Vec::new(),
+        spill: false,
     });
     let slow = lower_expr(ctx, e);
     ctx.region_loop_facts.pop();

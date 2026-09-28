@@ -1537,19 +1537,28 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
     {
         return -1;
     }
+    match ordinary_key_position(&descriptor, key_bits) {
+        Some(index) => index as i32,
+        None => -1,
+    }
+}
+
+/// `key`'s position in an ORDINARY, generation-0, tombstone-free shape's key
+/// list — the caller has checked those three facts, which are what make the
+/// position mean something. Allocation-free; bounded by the physically present
+/// key slots.
+fn ordinary_key_position(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<usize> {
     let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     unsafe {
-        let Some(wanted) = crate::string::js_string_key_bytes(
+        let wanted = crate::string::js_string_key_bytes(
             crate::JSValue::from_bits(key_bits),
             &mut wanted_buf,
-        ) else {
-            return -1;
-        };
+        )?;
         let (slots, slot_len) =
             super::keys_array_dense_slots(descriptor.keys as usize as *const ArrayHeader);
         if slots.is_null() {
-            return -1;
+            return None;
         }
         let bound = slot_len.min(descriptor.logical_key_count as usize);
         for index in 0..bound {
@@ -1561,14 +1570,14 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
             // is what makes a MIXED pair (pool immediate vs heap key, or two
             // separately allocated heap keys) still match.
             if stored.bits() == key_bits {
-                return index as i32;
+                return Some(index);
             }
             if crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted) {
-                return index as i32;
+                return Some(index);
             }
         }
     }
-    -1
+    None
 }
 
 /// Keepalive anchor — `js_shape_ordinary_inline_slot_for_key` is a
@@ -1701,6 +1710,16 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// The per-object store facts that are NOT shape facts yet (receiver kind,
 /// Array-subclass numeric proof: DESIGN §6.5a) are tested by the emitted
 /// guard itself, on the object, not here.
+///
+/// SPILL-located keys (the S5 facts): a key at or past the shape's live
+/// inline bound lives at index `position - bound` of the object's spill
+/// buffer, and every carrier of the shape has that storage — the same claim
+/// the emitted `pic.spill.hit` rests on, published under the same conditions
+/// (object-owned spill storage, an index it can address). Such a word sets
+/// [`REGION_LOOP_WORD_SPILL`] and each key's field becomes `slot` (< 32) or
+/// `32 + index`; the region reads it through its spill copy. A spill key is
+/// served to READS only: a key in `stored_mask` must be inline (a spill store
+/// owes the buffer's own GC bookkeeping, which the bare store does not do).
 #[no_mangle]
 pub extern "C" fn js_region_loop_pack(
     shape_id: u32,
@@ -1710,13 +1729,66 @@ pub extern "C" fn js_region_loop_pack(
     k2: u64,
     k3: u64,
     k4: u64,
+    stored_mask: u32,
 ) -> u64 {
+    if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+        return REGION_GUARD_WORD_EMPTY;
+    }
     match shape_record_by_id(shape_id) {
         Some(record) if record.summary() == 0 => {}
         _ => return REGION_GUARD_WORD_EMPTY,
     }
-    js_region_guard_pack(shape_id, n, k0, k1, k2, k3, k4)
+    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
+        return REGION_GUARD_WORD_EMPTY;
+    };
+    if descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.semantic_generation != 0
+        || descriptor.hole_count != 0
+    {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    let bound = descriptor.live_inline_slot_count as usize;
+    let keys = [k0, k1, k2, k3, k4];
+    // (spilled, slot or spill index) per key.
+    let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
+    let mut any_spill = false;
+    for (i, &key) in keys.iter().enumerate().take(n as usize) {
+        let Some(position) = ordinary_key_position(&descriptor, key) else {
+            return REGION_GUARD_WORD_EMPTY;
+        };
+        if position < bound {
+            at[i] = (false, position);
+        } else {
+            let index = position - bound;
+            if stored_mask & (1 << i) != 0
+                || !super::object_spill_enabled()
+                || index >= super::SPILL_MAX_FIELD_INDEX
+            {
+                return REGION_GUARD_WORD_EMPTY;
+            }
+            at[i] = (true, index);
+            any_spill = true;
+        }
+    }
+    let mut word = u64::from(shape_id);
+    for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
+        let field = match (any_spill, spilled) {
+            (false, _) if n_at <= REGION_GUARD_SLOT_MAX as usize => n_at,
+            (true, false) if n_at < 32 => n_at,
+            (true, true) if n_at < 31 => 32 + n_at,
+            _ => return REGION_GUARD_WORD_EMPTY,
+        };
+        word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
+    }
+    if any_spill {
+        word |= REGION_LOOP_WORD_SPILL;
+    }
+    word
 }
+
+/// Bit 62 of a loop region's word: some key is spill-located, and every
+/// key's field is `slot` (< 32) or `32 + spill index`.
+pub const REGION_LOOP_WORD_SPILL: u64 = 1 << 62;
 
 /// The word a loop region's site holds once its last bounded prime attempt
 /// was refused: all ones. Its id half is `REGION_GUARD_WORD_EMPTY`'s, which no
@@ -1743,8 +1815,9 @@ pub unsafe extern "C" fn js_region_loop_prime(
     k3: u64,
     k4: u64,
     last: u32,
+    stored_mask: u32,
 ) -> u64 {
-    let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4);
+    let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4, stored_mask);
     region_loop_prime_census(shape_id, packed);
     if word.is_null() {
         return REGION_GUARD_WORD_EMPTY;
@@ -1778,9 +1851,9 @@ fn region_loop_prime_census(shape_id: u32, packed: u64) {
         note(RT_ROUTE_RLOOP_REFUSE_BAND);
     } else if shape_record_by_id(shape_id).is_some_and(|r| r.summary() != 0) {
         note(RT_ROUTE_RLOOP_REFUSE_SUMMARY);
-    } else if shape_descriptor_by_id(shape_id)
-        .is_some_and(|d| d.live_inline_slot_count != d.logical_key_count)
-    {
+    } else if shape_descriptor_by_id(shape_id).is_some_and(|d| {
+        d.live_inline_slot_count != d.logical_key_count
+    }) {
         note(RT_ROUTE_RLOOP_REFUSE_SPILLED);
     } else {
         note(RT_ROUTE_RLOOP_REFUSE_OTHER);
@@ -1800,6 +1873,7 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u64,
     u64,
     u64,
+    u32,
     u32,
 ) -> u64 = js_region_loop_prime;
 

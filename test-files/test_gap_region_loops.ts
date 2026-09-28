@@ -534,3 +534,72 @@ function allocBetween(o: any, n: number): number {
   return h + keep.length;
 }
 out("allocBetween", allocBetween({ a: { v: 1 }, b: { v: 2 } }, 30000));
+
+// 37. SPILL-located keys (an Object.create receiver grows past its inline
+// slots): reads served through the spill buffer, stores to an inline key, a
+// young receiver under allocation pressure so the buffer itself moves.
+const SPROTO: any = { p: 100 };
+function mkSpill(base: number): any {
+  const t: any = Object.create(SPROTO);
+  t.a = base + 1; t.b = base + 2; t.c = base + 3; t.e = base + 4; t.d = base + 5;
+  return t;
+}
+function spillRead(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    h += o.a + o.c + o.e + o.d;
+  }
+  return h;
+}
+out("spillRead", spillRead(mkSpill(10), 50));
+function spillStoreInline(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    o.a = i;
+    h += o.a + o.e;
+  }
+  return h;
+}
+out("spillStoreInline", spillStoreInline(mkSpill(20), 40));
+function spillStoreSpill(o: any, n: number): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    o.d = i;
+    h += o.d + o.e;
+  }
+  return h;
+}
+out("spillStoreSpill", spillStoreSpill(mkSpill(30), 40));
+function spillBody(n: number): number {
+  const objs: any[] = [];
+  for (let i = 0; i < 8; i++) objs.push(mkSpill(i * 10));
+  let h = 0;
+  for (let k = 0; k < n; k++) {
+    const o = objs[k & 7];
+    const x = o.e;
+    const y = o.d;
+    h += x + y + o.a;
+  }
+  return h;
+}
+out("spillBody", spillBody(64));
+function spillMoving(n: number): number {
+  let h = 0;
+  for (let r = 0; r < n; r++) {
+    const o = mkSpill(r);
+    const junk: any[] = [];
+    for (let j = 0; j < 50; j++) junk.push({ j });
+    h += spillRead(o, 3) + junk.length;
+  }
+  return h;
+}
+out("spillMoving", spillMoving(3000));
+function spillThenReshape(o: any, n: number, f: (o: any) => void): number {
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    h += o.e + o.d;
+    if (i === 2) f(o);
+  }
+  return h;
+}
+out("spillThenReshape", spillThenReshape(mkSpill(40), 6, (o: any) => { delete o.e; o.e = 1000; }));
