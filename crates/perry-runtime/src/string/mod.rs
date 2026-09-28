@@ -232,6 +232,11 @@ pub use html::{
     js_string_strike, js_string_sub, js_string_sup,
 };
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
+#[cfg(test)]
+pub(crate) use intern::{
+    test_check_intern_young_logged, test_clear_intern_table, test_init_string_bytes,
+    test_intern_slot_ptr, test_write_intern_slot_without_logging,
+};
 pub use io::{js_string_error, js_string_print, js_string_warn};
 pub(crate) use iter_object::dispatch_string_iterator_method_builtin;
 pub use iter_object::{
