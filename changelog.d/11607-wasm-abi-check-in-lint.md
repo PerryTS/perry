@@ -1,0 +1,1 @@
+- **ci**: `runtime_abi_check.py --check-wasm-abi` now runs in the required `lint` job (it ran only in the path-filtered, non-required `wasi-check`), so a PR that changes a runtime extern signature regenerates `crates/perry-codegen/src/wasm32/runtime_abi.tsv` itself. The table is regenerated against current main.

@@ -74,19 +74,38 @@ pub(crate) fn create_string_f64(s: &str) -> f64 {
 }
 
 /// Get string content from a NaN-boxed StringHeader pointer (passed as f64)
+#[inline]
 pub(crate) fn get_string_content(ptr_f64: f64) -> String {
-    // Extract the pointer from NaN-boxed value using proper unboxing
-    let ptr_i64 = crate::value::js_nanbox_get_string_pointer(ptr_f64);
-    let ptr: *mut StringHeader = ptr_i64 as *mut StringHeader;
-    if ptr.is_null() || ptr_i64 == 0 {
-        return String::new();
+    let jsval = crate::value::JSValue::from_bits(ptr_f64.to_bits());
+    // Heap string first: the URL helpers call this once per stored field, and
+    // this arm is exactly the pre-#11519 body.
+    if jsval.is_string() {
+        let ptr = jsval.as_string_ptr();
+        if ptr.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let len = (*ptr).byte_len as usize;
+            let slice = std::slice::from_raw_parts(crate::string::string_data(ptr), len);
+            return String::from_utf8_lossy(slice).into_owned();
+        }
     }
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let slice = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(slice).into_owned()
+    if jsval.is_short_string() {
+        return short_string_content(jsval);
     }
+    String::new()
+}
+
+/// The inline-SSO arm of [`get_string_content`] (#11519): a short string built
+/// at runtime (`new URLSearchParams("a" + "=1")`, `url.parse(String(n))`) used
+/// to read as "" because only the heap tag was unboxed. Out of line so the
+/// heap path stays as small as it was.
+#[cold]
+#[inline(never)]
+fn short_string_content(jsval: crate::value::JSValue) -> String {
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let n = jsval.short_string_to_buf(&mut buf);
+    String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
 pub(crate) fn string_from_header(ptr: *mut crate::StringHeader) -> String {

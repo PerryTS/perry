@@ -78,6 +78,11 @@ JOBS: dict[str, tuple[str, ...]] = {
     "cargo_test": ("pr", "sweep", "full"),
     "cargo_test_perry": ("full",),
     "gap_suite": ("pr", "sweep", "full"),
+    # The generated GC call-effects table vs. freshly built runtime archives
+    # (scripts/gc_call_effects): Linux reuses gap-suite-build's archives;
+    # macOS aarch64 and Windows (cargo xwin) build their own (RFC deferred
+    # collection, owner decision 4: all three targets).
+    "gc_call_effects": ("pr", "sweep", "full"),
     "gc_stress": ("pr", "sweep", "full"),
     "e2e_scoped": ("pr",),  # scoped to the PR's diff; meaningless without one
     "security_audit": ("pr", "sweep", "full"),  # pr: only when `deps` changed
@@ -407,6 +412,8 @@ def _self_test() -> int:
     check("core PR: gc-stress on", core["jobs"]["gc_stress"])
     check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
+    check("core PR: gc call-effects table check on", core["jobs"]["gc_call_effects"])
+    check("docs-only PR: gc call-effects table check off", not docs["jobs"]["gc_call_effects"])
     check("core PR: windows off", not core["jobs"]["windows_build"])
     check("core PR: parity off", not core["jobs"]["parity"])
     check("core PR: security-audit off (no deps change)", not core["jobs"]["security_audit"])

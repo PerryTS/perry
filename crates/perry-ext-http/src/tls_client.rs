@@ -684,11 +684,8 @@ unsafe fn live_pfx_entries(options: f64) -> Option<Vec<(Vec<u8>, String)>> {
     }
 
     fn string_value(value: perry_ffi::JsValue) -> Option<String> {
-        if !value.is_string() {
-            return None;
-        }
-        perry_ffi::read_string(unsafe { perry_ffi::JsString::from_raw(value.as_string_ptr()) })
-            .map(String::from)
+        // Heap or inline SSO string (#11519): a short passphrase fits inline.
+        value.to_owned_string()
     }
 
     unsafe fn buffer_value(

@@ -13,6 +13,7 @@ pub(crate) mod thread_config;
 pub mod async_bridge;
 pub mod dispatch;
 pub(crate) mod dispatch_http;
+pub mod feature_hooks;
 pub mod net_method_values;
 mod net_socket_bridge;
 

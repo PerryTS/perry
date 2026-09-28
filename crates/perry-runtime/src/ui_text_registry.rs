@@ -239,9 +239,25 @@ fn with_state_values<F, R>(f: F) -> R
 where
     F: FnOnce(&mut std::collections::HashMap<String, f64>) -> R,
 {
+    register_thread_exit_release();
     let mut guard = crate::gc::lock_gc_root_registry(&STATE_VALUES);
     let map = guard.get_or_insert_with(std::collections::HashMap::new);
     f(map)
+}
+
+/// Register [`release_ui_text_registry_in_freed_ranges`] before the first
+/// `state<T>` value or `ForEach` binding is stored (#11541): every
+/// `STATE_VALUES` write goes through `with_state_values` and the only
+/// `FOREACH_REGISTRY` insert is `js_foreach_register`; the root scanner locks
+/// the tables directly. Named in `arena::thread_exit`'s dispatcher instead, it
+/// was linked into every binary.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_ui_text_registry_in_freed_ranges,
+        );
+    });
 }
 
 #[no_mangle]
@@ -514,6 +530,7 @@ pub extern "C" fn js_foreach_register(
     render_closure: f64,
 ) {
     let synth_id = decode_jsvalue_string(synth_id_handle);
+    register_thread_exit_release();
     {
         let mut guard = FOREACH_REGISTRY.lock().expect("FOREACH_REGISTRY poisoned");
         let map = guard.get_or_insert_with(std::collections::HashMap::new);

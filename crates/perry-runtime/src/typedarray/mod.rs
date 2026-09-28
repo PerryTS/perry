@@ -1123,11 +1123,13 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
     let bits = v.to_bits();
     let top16 = bits >> 48;
     // Plain double — positive, negative, ±Inf, and all NaN patterns that
-    // are NOT NaN-box tags. Tagged values occupy top16 in 0x7FFA..0x7FFF
-    // (BIGINT_TAG=0x7FFA, 0x7FFC=undefined/null/bool, POINTER_TAG=0x7FFD,
-    // INT32_TAG=0x7FFE, STRING_TAG=0x7FFF). Negative doubles (top16≥0x8000)
-    // and non-tag NaN patterns (top16 in 0x7FF8..0x7FF9) return as-is.
-    if !(0x7FFA..0x8000).contains(&top16) {
+    // are NOT NaN-box tags. Tagged values occupy top16 in
+    // 0x7FF9..=0x7FFF (SHORT_STRING_TAG=0x7FF9, BIGINT_TAG=0x7FFA,
+    // 0x7FFC=undefined/null/bool, POINTER_TAG=0x7FFD, INT32_TAG=0x7FFE,
+    // STRING_TAG=0x7FFF). Negative doubles (top16≥0x8000) and the canonical
+    // NaN (top16 0x7FF8) return as-is. An inline SSO string must reach the
+    // string arm below, not be stored as its raw NaN bits (#11519).
+    if !(0x7FF9..0x8000).contains(&top16) {
         return v;
     }
     // ECMA-262 IntegerIndexedElementSet on a non-bigint view performs
@@ -1159,22 +1161,15 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
     if bits == 0x7FFC_0000_0000_0001 {
         return f64::NAN; // undefined -> NaN
     }
-    // Strings: try to parse, else 0/NaN
-    if top16 == 0x7FFF {
-        let str_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
-        if !str_ptr.is_null() && (str_ptr as usize) >= 0x1000 {
-            unsafe {
-                let len = (*str_ptr).byte_len as usize;
-                let data =
-                    (str_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-                if let Ok(s) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) {
-                    if let Ok(n) = s.trim().parse::<f64>() {
-                        return n;
-                    }
-                }
-            }
-        }
-        return f64::NAN;
+    // Strings (heap or inline SSO, #11519): try to parse, else NaN.
+    if top16 == 0x7FFF || top16 == 0x7FF9 {
+        return crate::string::with_string_value_bytes(v, |bytes| {
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .unwrap_or(f64::NAN)
+        })
+        .unwrap_or(f64::NAN);
     }
     // POINTER_TAG object (Symbols already threw above; BigInt handled above):
     // a non-bigint view performs `ToNumber(value)`, which for an object runs

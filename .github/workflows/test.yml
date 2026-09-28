@@ -289,6 +289,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
 
+      # RFC deferred collection S1: codegen's GC call effects come from the
+      # generated tables in crates/perry-codegen/src/gc_effects/. The self-test
+      # compiles a C fixture to ELF, Mach-O and COFF objects and runs the real
+      # classifier over them, including a planted js_proxy_get call in a Leaf
+      # helper that must come back Reenters and be reported as UNSAFE drift, so
+      # a green archive check means something. `lint` checks that the rules and
+      # the three committed tables parse. The archive comparison itself runs in
+      # gc-call-effects-linux and gc-call-effects (macOS aarch64, Windows).
+      - name: GC call-effects classifier self-test and table lint
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_call_effects/callgraph.py --self-test
+          python3 scripts/gc_call_effects/callgraph.py lint
+
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
       # docs-only PRs skip the compile tier, an empty file listing is treated
@@ -440,6 +454,17 @@ jobs:
         run: |
           python3 scripts/string_payload_access_inventory.py --self-test
           python3 scripts/string_payload_access_inventory.py
+
+      # A short string (<= 5 bytes) lives inline in the NaN-box under
+      # SHORT_STRING_TAG with no StringHeader behind it. Masking its bits into
+      # a `*StringHeader` segfaults; a heap-tag-only check reads it as "not a
+      # string" (#11430, #11519). Existing sites are tracked per crate and may
+      # only decrease; the self-test plants each shape and proves it is caught.
+      - name: SSO string-unboxing inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/sso_unbox_inventory.py --self-test
+          python3 scripts/sso_unbox_inventory.py
 
       # Two reserved class ids sharing a value is silent and destructive: every
       # dispatch tower matches them in a fixed order, so the later arm becomes
@@ -694,10 +719,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
 
+      # The wasm32 ABI table (crates/perry-codegen/src/wasm32/runtime_abi.tsv) is
+      # derived from the runtime's extern signatures. Checked only in the
+      # path-filtered, non-required wasi-check workflow, it went stale four times on
+      # 2026-09-27 alone and turned wasi-check red on every PR. Text-only (~30 s, no build):
+      # a PR that changes a runtime signature regenerates the table itself
+      # (`python3 scripts/runtime_abi_check.py --emit-wasm-abi`).
       - name: Native runtime ABI consistency
         run: |
           python3 scripts/runtime_abi_check.py --self-test
           python3 scripts/runtime_abi_check.py --check-native
+          python3 scripts/runtime_abi_check.py --check-wasm-abi
 
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of
@@ -3134,6 +3166,130 @@ jobs:
   # await-tests keys on. If a standing failure must not block a release,
   # triage it into test-parity/known_failures.json — do not soften the job.
   # ---------------------------------------------------------------------------
+  # RFC deferred collection S1 (owner decision 4). The committed table
+  # crates/perry-codegen/src/gc_effects/<target>.tsv must equal the table
+  # scripts/gc_call_effects/callgraph.py derives from THIS commit's release
+  # runtime archives, and no symbol may be committed weaker than the archives
+  # prove (UNSAFE drift: codegen would skip a statepoint the runtime needs).
+  # On failure the regenerated table is uploaded as `gc-effects-<target>`:
+  # commit it (or run scripts/gc_call_effects/regen.sh <target> locally).
+  # On a PR only UNSAFE drift fails (new symbols from main read as Unknown,
+  # which is safe); on main-line tiers any drift fails, so it gets regenerated.
+  #
+  # Linux reuses gap-suite-build's archives (same build command as regen.sh);
+  # in the full tier, where gap-suite-build does not run, it builds them.
+  gc-call-effects-linux:
+    needs: [plan, gap-suite-build]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects &&
+      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-llvm22
+      - name: Download the shared fast-mode build
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gap-suite-fast-build
+          path: target/release
+      - name: Install Rust toolchain
+        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Build runtime archives (no shared build in this tier)
+        if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+      - name: Committed table vs. the archives
+        env:
+          GC_EFFECTS_SKIP_BUILD: "1"
+          GC_EFFECTS_FRESH_OUT: gc-effects/linux-x86_64.tsv
+          # PRs are tested merged with a main that may have added runtime
+          # symbols since the PR last regenerated; those only read as Unknown
+          # (safe). UNSAFE drift always fails. Main-line tiers are strict.
+          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
+        run: |
+          mkdir -p gc-effects
+          scripts/gc_call_effects/regen.sh linux-x86_64 --check
+      - name: Upload the regenerated table
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gc-effects-linux-x86_64
+          path: gc-effects/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
+  # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
+  # uses). Each leg compares only its own table.
+  gc-call-effects:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.gc_call_effects
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            os: macos-14
+          - target: windows-x86_64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-gc-effects-${{ matrix.target }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-xwin
+        if: matrix.target == 'windows-x86_64'
+        run: |
+          asset=cargo-xwin-v0.23.0.x86_64-unknown-linux-musl.tar.gz
+          url="https://github.com/rust-cross/cargo-xwin/releases/download/v0.23.0/$asset"
+          curl --fail --location --retry 3 "$url" --output "$RUNNER_TEMP/$asset"
+          echo "74a216f64f10ea81c909f02d6b1a84cd0fda8de4c87ee52fe63ba76ab2392b75  $RUNNER_TEMP/$asset" \
+            | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cargo-xwin-bin"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/cargo-xwin-bin"
+          echo "$RUNNER_TEMP/cargo-xwin-bin" >> "$GITHUB_PATH"
+          echo "$LLVM_SYS_221_PREFIX/bin" >> "$GITHUB_PATH"
+          rustup target add x86_64-pc-windows-msvc
+      - name: Restore cargo-xwin MSVC sysroot
+        if: matrix.target == 'windows-x86_64'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/cargo-xwin
+          key: cargo-xwin-${{ runner.os }}-0.23.0
+      - name: Build the archives and compare the committed table
+        env:
+          GC_EFFECTS_FRESH_OUT: gc-effects/${{ matrix.target }}.tsv
+          GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
+        run: |
+          mkdir -p gc-effects
+          scripts/gc_call_effects/regen.sh "${{ matrix.target }}" --check
+      - name: Upload the regenerated table
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gc-effects-${{ matrix.target }}
+          path: gc-effects/
+          if-no-files-found: warn
+          retention-days: 7
+
   parity:
     # Sweep/full-tier only. Chained behind `check` so a sweep's fan-out does
     # not take every runner slot the moment a merge lands -- PR gates share
@@ -4373,6 +4529,8 @@ jobs:
       - repsel-census
       - native-abi-evidence-packet
       - gap-suite
+      - gc-call-effects-linux
+      - gc-call-effects
       - parity
       - parity-aggregate
       - compile-smoke

@@ -1,6 +1,27 @@
 #[cfg(feature = "crypto")]
 use super::super::handle::with_handle;
 use super::*;
+use crate::common::feature_hooks::{Hook, MethodArm, RawMethodArm};
+
+// One slot per optional-feature position in `js_handle_method_dispatch`, in
+// hub order. Filled by the owning feature's install (see `feature_hooks`); an
+// empty slot is skipped, which is exactly what the `#[cfg]` that used to gate
+// the arm did in a build without that feature.
+static RAW_EXTERNAL_ZLIB: Hook<RawMethodArm> = Hook::empty();
+static RAW_EXTERNAL_HTTP_CLIENT: Hook<RawMethodArm> = Hook::empty();
+static ARM_STREAMS: Hook<MethodArm> = Hook::empty();
+static ARM_EVENTS: Hook<MethodArm> = Hook::empty();
+static ARM_NODEMAILER: Hook<MethodArm> = Hook::empty();
+static ARM_NODE_SQLITE: Hook<MethodArm> = Hook::empty();
+static ARM_CRYPTO: Hook<MethodArm> = Hook::empty();
+static ARM_TLS: Hook<MethodArm> = Hook::empty();
+static ARM_SQLITE: Hook<MethodArm> = Hook::empty();
+static ARM_ZLIB: Hook<MethodArm> = Hook::empty();
+static ARM_HTTP_CLIENT: Hook<MethodArm> = Hook::empty();
+static ARM_HTTP_SERVER: Hook<MethodArm> = Hook::empty();
+static ARM_HTTP_CLIENT_PAUSE_RESUME: Hook<MethodArm> = Hook::empty();
+static ARM_EXTERNAL_NET: Hook<MethodArm> = Hook::empty();
+static ARM_FETCH: Hook<MethodArm> = Hook::empty();
 
 /// Route external zlib stream methods before the generic dispatcher creates
 /// owned method/argument copies. The external implementation is synchronous:
@@ -144,27 +165,22 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    #[cfg(feature = "external-zlib-pump")]
-    if let Some(value) = try_dispatch_external_zlib_stream(
+    try_arm!(
+        RAW_EXTERNAL_ZLIB,
         handle,
         method_name_ptr,
         method_name_len,
         args_ptr,
         args_len,
-    ) {
-        return value;
-    }
-
-    #[cfg(feature = "external-http-client-pump")]
-    if let Some(value) = try_dispatch_external_http_client(
+    );
+    try_arm!(
+        RAW_EXTERNAL_HTTP_CLIENT,
         handle,
         method_name_ptr,
         method_name_len,
         args_ptr,
         args_len,
-    ) {
-        return value;
-    }
+    );
 
     let method_name_owned = if method_name_ptr.is_null() || method_name_len == 0 {
         String::new()
@@ -195,28 +211,84 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return v;
     }
 
-    // #1545: Web Streams handles (readable/writable/transform/reader/writer)
-    // live in a dedicated high id range, so this never claims another
-    // subsystem's handle. Routes method calls on receivers whose static stream
-    // type the codegen lost (`src.pipeThrough(ts).getReader()`, `ts.readable
-    // .getReader()`, `const r = rs.getReader(); r.read()`, …).
-    #[cfg(feature = "bundled-streams")]
-    if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
-        return v;
-    }
+    try_arm!(ARM_STREAMS, handle, method_name, &args);
 
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
-        return value;
-    }
+    try_arm!(ARM_EVENTS, handle, method_name, &args);
 
     if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
         return value;
     }
 
+    try_arm!(ARM_NODEMAILER, handle, method_name, &args);
+
+    try_arm!(ARM_NODE_SQLITE, handle, method_name, &args);
+
+    // Fastify app + request/reply context method dispatch lived here when the
+    // bundled adapter was compiled into perry-stdlib. fastify now routes entirely
+    // through the external perry-ext-fastify crate (well-known flip), whose
+    // `app.get(...)` / `reply.send(...)` calls lower via the static
+    // NATIVE_MODULE_TABLE rather than this dynamic-handle dispatcher — so no
+    // fastify arm is needed here.
+
+    try_arm!(ARM_CRYPTO, handle, method_name, &args);
+
+    try_arm!(ARM_TLS, handle, method_name, &args);
+
+    try_arm!(ARM_SQLITE, handle, method_name, &args);
+
+    try_arm!(ARM_ZLIB, handle, method_name, &args);
+
+    try_arm!(ARM_HTTP_CLIENT, handle, method_name, &args);
+
+    try_arm!(ARM_HTTP_SERVER, handle, method_name, &args);
+
+    try_arm!(ARM_HTTP_CLIENT_PAUSE_RESUME, handle, method_name, &args);
+
+    try_arm!(ARM_EXTERNAL_NET, handle, method_name, &args);
+
+    try_arm!(ARM_FETCH, handle, method_name, &args);
+
+    // Issue #848: StringDecoder write / end. The any-typed receiver path
+    // (`const dec = new StringDecoder("utf8"); dec.write(buf)` where
+    // `dec`'s declared type vanishes after TS stripping in libraries that
+    // re-export it) lands here. Method-name gated to avoid claiming
+    // colliding handle ids whose owners have disjoint method sets.
+    if matches!(method_name, "write" | "end")
+        && crate::string_decoder::is_string_decoder_handle(handle)
+    {
+        return crate::string_decoder::dispatch_string_decoder(handle, method_name, &args);
+    }
+
+    // Unknown handle type - return undefined
+    TAG_UNDEFINED_F64
+}
+
+#[cfg(feature = "bundled-streams")]
+unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
+    // #1545: Web Streams handles (readable/writable/transform/reader/writer)
+    // live in a dedicated high id range, so this never claims another
+    // subsystem's handle. Routes method calls on receivers whose static stream
+    // type the codegen lost (`src.pipeThrough(ts).getReader()`, `ts.readable
+    // .getReader()`, `const r = rs.getReader(); r.read()`, …).
+    if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
+        return Some(v);
+    }
+    None
+}
+
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+unsafe fn arm_events(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
+    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
+        return Some(value);
+    }
+    None
+}
+
+#[cfg(feature = "bundled-nodemailer")]
+unsafe fn arm_nodemailer(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // turnloop P6: `nodemailer.createTransport(...)` returns a bare handle
     // NUMBER, so `transporter.sendMail(...)` / `.verify()` are lowered as
     // generic calls on an untyped receiver and land here. No arm claimed them,
@@ -225,16 +297,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // bundled-surface half of the fix; `perry-ext-nodemailer` registers a
     // dispatch EXTENSION for the well-known-flip half, because its handles live
     // in perry-ffi's registry rather than this one.
-    #[cfg(feature = "bundled-nodemailer")]
     if let Some(value) = crate::nodemailer::dispatch_transporter_method(handle, method_name, &args)
     {
-        return value;
+        return Some(value);
     }
+    None
+}
 
+#[cfg(feature = "database-sqlite")]
+unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
     // SQLite fallbacks because method names like prepare/exec/close overlap
     // but the lifecycle/error semantics are intentionally different.
-    #[cfg(feature = "database-sqlite")]
     if matches!(
         method_name,
         "open"
@@ -279,26 +353,24 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_database_method(handle, method_name, &args)
         {
-            return result;
+            return Some(result);
         }
     }
 
     // node:sqlite SQLTagStore handle. Keep this before StatementSync because
     // the query execution method names overlap but tag stores consume tagged
     // template arguments and bind them positionally.
-    #[cfg(feature = "database-sqlite")]
     if matches!(method_name, "run" | "get" | "all" | "iterate" | "clear") {
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_tag_store_method(handle, method_name, &args)
         {
-            return result;
+            return Some(result);
         }
     }
 
     // node:sqlite StatementSync handle. Keep this before the better-sqlite3
     // statement fallback because run/get/all overlap but Node's parameter and
     // result semantics are different.
-    #[cfg(feature = "database-sqlite")]
     if matches!(
         method_name,
         "run"
@@ -314,13 +386,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
         {
-            return result;
+            return Some(result);
         }
     }
 
     // node:sqlite Session handle. This follows DatabaseSync dispatch because
     // `close` overlaps and the database lifecycle rules should win for DBs.
-    #[cfg(feature = "database-sqlite")]
     if matches!(
         method_name,
         "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose"
@@ -328,22 +399,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if let Some(result) =
             crate::sqlite::dispatch_node_sqlite_session_method(handle, method_name, &args)
         {
-            return result;
+            return Some(result);
         }
     }
+    None
+}
 
-    // Fastify app + request/reply context method dispatch lived here when the
-    // bundled adapter was compiled into perry-stdlib. fastify now routes entirely
-    // through the external perry-ext-fastify crate (well-known flip), whose
-    // `app.get(...)` / `reply.send(...)` calls lower via the static
-    // NATIVE_MODULE_TABLE rather than this dynamic-handle dispatcher — so no
-    // fastify arm is needed here.
-
+#[cfg(feature = "crypto")]
+unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // crypto Hash handle: createHash(...).update(...).digest().
     // The order vs. net (below) does not matter once method-gated, but we
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "update"
@@ -360,13 +427,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
     ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hash(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_hash(handle, method_name, &args));
     }
 
     // crypto Hmac handle: createHmac(alg, key).update(...).digest(). Routes
     // the runtime path the codegen falls back to whenever `alg` isn't a
     // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "update"
@@ -382,24 +448,21 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "close"
     ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hmac(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_hmac(handle, method_name, &args));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(method_name, "update" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_sign(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_sign(handle, method_name, &args));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(method_name, "update" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_verify(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_verify(handle, method_name, &args));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "generateKeys"
@@ -412,10 +475,9 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "dhComputeSecret"
     ) && with_handle::<crate::crypto::EcdhHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_ecdh(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_ecdh(handle, method_name, &args));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "generateKeys"
@@ -436,10 +498,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     ) && with_handle::<crate::crypto::DiffieHellmanHandle, bool, _>(handle, |_| true)
         .unwrap_or(false)
     {
-        return crate::crypto::dispatch_diffie_hellman(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_diffie_hellman(
+            handle,
+            method_name,
+            &args,
+        ));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "toString"
@@ -453,7 +518,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             | "checkIssued"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_x509_method(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_x509_method(
+            handle,
+            method_name,
+            &args,
+        ));
     }
 
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
@@ -461,35 +530,40 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // issue #1075. Method-gated like the Hash handle above so handle id
     // collisions across registries (net.Socket id=1 vs CipherHandle id=1)
     // don't accidentally route a socket method here.
-    #[cfg(feature = "crypto")]
     if matches!(
         method_name,
         "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
     ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_cipher(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_cipher(handle, method_name, &args));
     }
 
     // crypto Sign/Verify handle: createSign(alg)/createVerify(alg) followed by
     // .update(...).sign(key) / .verify(key, sig) — issue #1364. Method-gated
     // like the Hash/Cipher handles. `sign`/`verify` are distinctive enough to
     // disambiguate from other registries sharing a handle id.
-    #[cfg(feature = "crypto")]
     if matches!(method_name, "update" | "sign" | "verify")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_sign(handle, method_name, &args);
+        return Some(crate::crypto::dispatch_sign(handle, method_name, &args));
     }
+    None
+}
 
-    #[cfg(all(
-        feature = "tls-runtime",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+unsafe fn arm_tls(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     if crate::tls::should_dispatch_tls_handle(handle, method_name) {
-        return crate::tls::dispatch_tls_handle(handle, method_name, &args);
+        return Some(crate::tls::dispatch_tls_handle(handle, method_name, &args));
     }
+    None
+}
 
+#[cfg(feature = "database-sqlite")]
+unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
     // routes the dynamic-receiver path used by drizzle's
     // `this.stmt.raw().all(...params)` chain (where `this.stmt` is
@@ -507,11 +581,10 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // binary — `optimized_libs.rs` now keeps `database-sqlite` for
     // exactly this reason (the duplicate `js_sqlite_*` symbols are
     // resolved by the linker to a single impl).
-    #[cfg(feature = "database-sqlite")]
     if matches!(method_name, "raw" | "all" | "get" | "run") {
         let result = dispatch_sqlite_stmt(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
-            return result;
+            return Some(result);
         }
     }
 
@@ -530,21 +603,23 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // class fields the codegen can't statically resolve. Refs #645 /
     // #488 / #643. Method-gated to avoid claiming small handles owned
     // by other registries (HashHandle, FastifyApp, etc.).
-    #[cfg(feature = "database-sqlite")]
     if matches!(method_name, "prepare" | "exec" | "close") {
         let result = dispatch_sqlite_db(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
-            return result;
+            return Some(result);
         }
     }
+    None
+}
 
+#[cfg(feature = "compression-gzip")]
+unsafe fn arm_zlib(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
     // in the zlib small-handle range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
     // `.params`/`.reset`/`.close` calls lose their static type and route here.
     // Gated on the registry AND the method vocabulary so a handle-id reused
     // across another subsystem's registry can't misroute (handle id-spaces
     // aren't unified — see the long comment above).
-    #[cfg(feature = "compression-gzip")]
     if matches!(
         method_name,
         "write"
@@ -564,23 +639,29 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         // so the event loop's `has_active` gate + pump drain the deferred
         // 'data'/'end' events instead of exiting before they fire (#1843).
         crate::common::async_bridge::ensure_pump_registered();
-        return dispatch_zlib_stream(handle, method_name, &args);
+        return Some(dispatch_zlib_stream(handle, method_name, &args));
     }
+    None
+}
 
-    #[cfg(feature = "external-http-client-pump")]
+#[cfg(feature = "external-http-client-pump")]
+unsafe fn arm_http_client(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     if let Some(value) = unsafe {
         super::super::dispatch_http::dispatch_client_request_method(handle, method_name, &args)
     } {
-        return value;
+        return Some(value);
     }
 
-    #[cfg(feature = "external-http-client-pump")]
     if let Some(value) = unsafe {
         super::super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args)
     } {
-        return value;
+        return Some(value);
     }
+    None
+}
 
+#[cfg(feature = "external-http-server-pump")]
+unsafe fn arm_http_server(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // External http-server path (#2153): when `node:http` / `node:https` /
     // `node:http2` routes through perry-ext-http, the HttpServer handle
     // returned by `http.createServer(...)` reaches `js_native_call_method` via
@@ -596,7 +677,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Method-gated so a handle id reused by another registry (HashHandle,
     // FastifyApp, …) doesn't misroute. The list mirrors the
     // `class_filter: Some("HttpServer")` rows in http.rs.
-    #[cfg(feature = "external-http-server-pump")]
     {
         extern "C" {
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
@@ -654,7 +734,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "@@__perry_wk_asyncDispose"
         );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_server_dispatch_method(
                     handle,
                     method_name.as_ptr(),
@@ -662,7 +742,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.as_ptr(),
                     args.len(),
                 )
-            };
+            });
         }
 
         let is_incoming_message_method = matches!(
@@ -718,7 +798,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_incoming_message_dispatch_method(
                     handle,
                     method_name.as_ptr(),
@@ -726,7 +806,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.as_ptr(),
                     args.len(),
                 )
-            };
+            });
         }
 
         let is_server_response_method = matches!(
@@ -780,7 +860,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if is_server_response_method
             && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_server_response_dispatch_method(
                     handle,
                     method_name.as_ptr(),
@@ -788,7 +868,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.as_ptr(),
                     args.len(),
                 )
-            };
+            });
         }
 
         let is_h2_session_method = matches!(
@@ -807,7 +887,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "goaway"
         );
         if is_h2_session_method && unsafe { js_ext_http2_session_is_handle(handle) } != 0 {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http2_session_dispatch_method(
                     handle,
                     method_name.as_ptr(),
@@ -815,7 +895,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.as_ptr(),
                     args.len(),
                 )
-            };
+            });
         }
 
         let is_h2_stream_method = matches!(
@@ -834,7 +914,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 | "sendTrailers"
         );
         if is_h2_stream_method && unsafe { js_ext_http2_stream_is_handle(handle) } != 0 {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http2_stream_dispatch_method(
                     handle,
                     method_name.as_ptr(),
@@ -842,10 +922,18 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.as_ptr(),
                     args.len(),
                 )
-            };
+            });
         }
     }
+    None
+}
 
+#[cfg(feature = "external-http-client-pump")]
+unsafe fn arm_http_client_pause_resume(
+    handle: i64,
+    method_name: &str,
+    _args: &[f64],
+) -> Option<f64> {
     // #4975: client-side response (`http.get`/`ClientRequest` `'response'`
     // callback) is a *distinct* IncomingMessage handle from the server's, and
     // is registered as an EventEmitter — so `res.on(...)` already routes
@@ -858,7 +946,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `Readable.pause()/resume()` return `this`; the buffered body already
     // drains when an `'end'`/`'data'` listener attaches, so returning the
     // receiver is the whole fix here.
-    #[cfg(feature = "external-http-client-pump")]
     {
         extern "C" {
             fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
@@ -866,41 +953,48 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         if matches!(method_name, "pause" | "resume")
             && unsafe { js_ext_http_client_incoming_message_is_handle(handle) } != 0
         {
-            return nanbox_handle_value(handle);
+            return Some(nanbox_handle_value(handle));
         }
     }
+    None
+}
 
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+unsafe fn arm_external_net(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // External net path (v0.5.581): perry-ext-net registers itself when
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.
-    #[cfg(all(
-        feature = "external-net-pump",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
     {
         extern "C" {
             fn js_ext_net_is_socket_handle(handle: i64) -> i32;
         }
         if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
-            return dispatch_external_net_socket(handle, method_name, &args);
+            return Some(dispatch_external_net_socket(handle, method_name, &args));
         }
         if let Some(v) = crate::common::net_method_values::dispatch_external_server_method(
             handle,
             method_name,
             &args,
         ) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::common::net_method_values::dispatch_external_block_list_method(
             handle,
             method_name,
             &args,
         ) {
-            return v;
+            return Some(v);
         }
     }
+    None
+}
 
+#[cfg(feature = "web-fetch")]
+unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
     // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
     // unification). When user code does `res.text()` / `res.json()` / etc. on
     // an any-typed Response handle (typical of npm packages with stripped TS
@@ -909,7 +1003,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `js_native_call_method` → small-handle range check → here. Each helper
     // does its own registry-membership + property-name gate; `None` means
     // "not us, try the next dispatcher or return undefined".
-    #[cfg(feature = "web-fetch")]
     {
         // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
         // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
@@ -919,37 +1012,86 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         // Response with the (formerly colliding) same id.
         if let Some(v) = crate::fetch::dispatch_request_method(handle as usize, method_name, &args)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_response_method(handle as usize, method_name, &args)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) =
             crate::fetch::dispatch_form_data_method(handle as usize, method_name, &args)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_blob_method(handle as usize, method_name, &args) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_headers_method(handle as usize, method_name, &args)
         {
-            return v;
+            return Some(v);
         }
     }
+    None
+}
 
-    // Issue #848: StringDecoder write / end. The any-typed receiver path
-    // (`const dec = new StringDecoder("utf8"); dec.write(buf)` where
-    // `dec`'s declared type vanishes after TS stripping in libraries that
-    // re-export it) lands here. Method-name gated to avoid claiming
-    // colliding handle ids whose owners have disjoint method sets.
-    if matches!(method_name, "write" | "end")
-        && crate::string_decoder::is_string_decoder_handle(handle)
-    {
-        return crate::string_decoder::dispatch_string_decoder(handle, method_name, &args);
-    }
-
-    // Unknown handle type - return undefined
-    TAG_UNDEFINED_F64
+// Per-feature slot fills, called from the owning feature's install
+// (`super::install_*`, reached from `feature_hooks`).
+#[cfg(feature = "bundled-streams")]
+pub(super) fn install_streams() {
+    ARM_STREAMS.set(arm_streams);
+}
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+pub(super) fn install_events() {
+    ARM_EVENTS.set(arm_events);
+}
+#[cfg(feature = "bundled-nodemailer")]
+pub(super) fn install_nodemailer() {
+    ARM_NODEMAILER.set(arm_nodemailer);
+}
+#[cfg(feature = "database-sqlite")]
+pub(super) fn install_sqlite() {
+    ARM_NODE_SQLITE.set(arm_node_sqlite);
+    ARM_SQLITE.set(arm_sqlite);
+}
+#[cfg(feature = "crypto")]
+pub(super) fn install_crypto() {
+    ARM_CRYPTO.set(arm_crypto);
+}
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_tls() {
+    ARM_TLS.set(arm_tls);
+}
+#[cfg(feature = "compression-gzip")]
+pub(super) fn install_zlib() {
+    ARM_ZLIB.set(arm_zlib);
+}
+#[cfg(feature = "external-zlib-pump")]
+pub(super) fn install_external_zlib() {
+    RAW_EXTERNAL_ZLIB.set(try_dispatch_external_zlib_stream);
+}
+#[cfg(feature = "external-http-client-pump")]
+pub(super) fn install_external_http_client() {
+    RAW_EXTERNAL_HTTP_CLIENT.set(try_dispatch_external_http_client);
+    ARM_HTTP_CLIENT.set(arm_http_client);
+    ARM_HTTP_CLIENT_PAUSE_RESUME.set(arm_http_client_pause_resume);
+}
+#[cfg(feature = "external-http-server-pump")]
+pub(super) fn install_external_http_server() {
+    ARM_HTTP_SERVER.set(arm_http_server);
+}
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_external_net() {
+    ARM_EXTERNAL_NET.set(arm_external_net);
+}
+#[cfg(feature = "web-fetch")]
+pub(super) fn install_fetch() {
+    ARM_FETCH.set(arm_fetch);
 }

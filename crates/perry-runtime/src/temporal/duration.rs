@@ -73,7 +73,7 @@ pub(crate) fn coerce_duration(v: f64) -> Duration {
     }
     let jv = JSValue::from_bits(v.to_bits());
     // String → ISO-8601 duration parse.
-    if jv.is_string() {
+    if jv.is_any_string() {
         let s = super::dispatch::read_string(v);
         return ok_or_throw(Duration::from_utf8(s.as_bytes()));
     }

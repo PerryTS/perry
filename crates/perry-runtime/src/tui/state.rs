@@ -112,6 +112,15 @@ pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
 /// tests can drive the table without going through the handle object, and so
 /// the registry lock is released before `tui_object` allocates.
 fn alloc_state_slot(initial: f64) -> i64 {
+    // #11541: every slot is minted here, so registering the thread-exit hook
+    // before the first one replaces naming it in `arena::thread_exit`'s
+    // dispatcher (which linked it into every binary).
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_tui_state_slots_in_freed_ranges,
+        );
+    });
     let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     let h = s.len() as i64;
     s.push(initial.to_bits());

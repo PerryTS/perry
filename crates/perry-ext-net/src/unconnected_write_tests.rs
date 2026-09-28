@@ -30,6 +30,12 @@ fn unopened_command_refuses_bytes_instead_of_counting_and_dropping_them() {
 
 #[test]
 fn unopened_writes_queue_callbacks_before_one_error_and_close() {
+    // Another test's `js_net_process_pending` would dispatch (and consume)
+    // the events this test queues and then asserts on, calling the fake
+    // callbacks 501/502 as closures.
+    let _lock = crate::tests::GC_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let handle = -111_561;
     take_events(handle);
     statics::sockets()
