@@ -1243,7 +1243,7 @@ pub fn run_with_parse_cache(
         .native_module_imports
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
-    let native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
+    let mut native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
         ctx.native_module_imports
             .iter()
             .map(String::as_str)
@@ -1253,6 +1253,15 @@ pub fn run_with_parse_cache(
                     || optimized_libs::wrapper_is_sole_provider(module)
             }),
     );
+    // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
+    // devirt entry that arms the install-all hooks. Reached any other way — a
+    // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
+    // returned module's methods had no dispatch and all returned undefined.
+    // The feature scan sees every spelling, so arm the hooks up front.
+    if ctx.uses_get_builtin_module {
+        native_provider_installs.push("js_nm_enable_install_all".to_string());
+        native_provider_installs.push("js_node_submod_enable_install_all".to_string());
+    }
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>

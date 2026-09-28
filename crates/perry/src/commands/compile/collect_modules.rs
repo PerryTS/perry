@@ -71,6 +71,31 @@ use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
+/// #11616: every quoted `node:<name>` literal in `source` (`"`, `'` or a
+/// template without substitutions).
+fn node_specifier_literals(source: &str) -> Vec<&str> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(found) = source[at..].find("node:") {
+        let start = at + found;
+        at = start + 5;
+        let Some(&quote) = start.checked_sub(1).and_then(|i| bytes.get(i)) else {
+            continue;
+        };
+        if !matches!(quote, b'"' | b'\'' | b'`') {
+            continue;
+        }
+        let end = source[at..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '/'))
+            .map_or(source.len(), |i| at + i);
+        if end > at && bytes.get(end) == Some(&quote) {
+            out.push(&source[start..end]);
+        }
+    }
+    out
+}
+
 fn register_bunfs_literal_assets(source: &str, ctx: &mut CompilationContext) {
     let Some(root) = ctx.bunfs_root.clone() else {
         return;
@@ -469,6 +494,20 @@ fn collect_module_one(
         ctx.needs_stdlib = true;
         let normalized = spec.strip_prefix("node:").unwrap_or(&spec).to_string();
         ctx.native_module_imports.insert(normalized);
+    }
+    // #11616: the same for `process.getBuiltinModule(id)` — a module asked for
+    // by name was never imported, so auto-optimize stripped it and its methods
+    // returned `undefined`. The id is a runtime string; take every quoted
+    // `node:` literal in a module that mentions `getBuiltinModule`.
+    if source.contains("getBuiltinModule") {
+        for spec in node_specifier_literals(&source) {
+            if !perry_hir::requires_stdlib(spec) {
+                continue;
+            }
+            ctx.needs_stdlib = true;
+            ctx.native_module_imports
+                .insert(spec.strip_prefix("node:").unwrap_or(spec).to_string());
+        }
     }
     if was_cjs_wrapped && ctx.debug_symbols {
         if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
@@ -2011,3 +2050,19 @@ fn collect_module_one(
 
 mod finish;
 pub(crate) use finish::collect_module_finish;
+
+#[cfg(test)]
+mod node_specifier_literal_tests {
+    use super::node_specifier_literals;
+
+    #[test]
+    fn finds_quoted_node_specifiers_only() {
+        let src = r#"const m = { zlib: "node:zlib", fsp: 'node:fs/promises', os: `node:os` };
+            // node:path in a comment, "node:bad-name!" and `node:${x}` are not specifiers
+            getBuiltinModule("node:crypto");"#;
+        assert_eq!(
+            node_specifier_literals(src),
+            ["node:zlib", "node:fs/promises", "node:os", "node:crypto"]
+        );
+    }
+}
