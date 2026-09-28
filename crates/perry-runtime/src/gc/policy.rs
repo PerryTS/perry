@@ -1593,9 +1593,13 @@ fn serve_owed_request_at_poll() -> bool {
     true
 }
 
+fn owed_request_pending() -> bool {
+    GC_POLL_OWED_REQUEST.with(|owed| !matches!(owed.get(), DeferredGcRequest::None))
+}
+
 #[cfg(test)]
 pub(super) fn poll_owed_request_pending() -> bool {
-    GC_POLL_OWED_REQUEST.with(|owed| !matches!(owed.get(), DeferredGcRequest::None))
+    owed_request_pending()
 }
 
 pub fn gc_suppress() {
@@ -3812,8 +3816,12 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
         let _declared = DeclaredSafepointGuard::enter();
         serve_budgeted_root_phase();
         super::alloc_point::note_root_phase_served_at_poll();
-        note_pending_poll_wait();
-        set_safepoint_pending(false);
+        // An owed collection the in-alloc guard above held back (a budgeted
+        // minor holds `GC_FLAG_IN_ALLOC`) keeps the poll armed for later.
+        if !owed_request_pending() {
+            note_pending_poll_wait();
+            set_safepoint_pending(false);
+        }
         return true;
     }
     let budgeted = gc_budgeted_cycle_active();
