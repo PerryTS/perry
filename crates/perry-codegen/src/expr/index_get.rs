@@ -306,15 +306,7 @@ fn lower_array_index_get_via_runtime_key(
     idx_double: &str,
     coerce_numeric_fallback: bool,
 ) -> String {
-    let arr_handle = {
-        let blk = ctx.block();
-        unbox_to_i64(blk, arr_box)
-    };
-    let boxed = ctx.block().call(
-        DOUBLE,
-        "js_array_get_index_or_string",
-        &[(I64, &arr_handle), (DOUBLE, idx_double)],
-    );
+    let boxed = crate::expr::array_or_sso_index_get(ctx, arr_box, idx_double);
     if coerce_numeric_fallback {
         ctx.block()
             .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &boxed)])

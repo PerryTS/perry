@@ -69,7 +69,7 @@ fn coerce_date_with_overflow(
         ),
         None => {}
     }
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         return ok_or_throw(dispatch::read_string(v).parse::<PlainDate>());
     }
     super::options::plain_date_from_bag(v, overflow)
@@ -89,7 +89,7 @@ pub fn from_static(args: &[f64]) -> f64 {
     //     LAST (`observable-get-overflow` / `order-of-operations`).
     let item = raw_arg(args, 0);
     let opts = raw_arg(args, 1);
-    if JSValue::from_bits(item.to_bits()).is_string() {
+    if JSValue::from_bits(item.to_bits()).is_any_string() {
         let d = ok_or_throw(dispatch::read_string(item).parse::<PlainDate>());
         let _ = super::options::overflow(opts);
         return wrap(d);
@@ -162,7 +162,7 @@ pub fn get(d: &PlainDate, name: &str) -> Option<f64> {
 /// Parse the `toZonedDateTime` argument: either a bare time-zone identifier
 /// string or an options object `{ timeZone, plainTime }`.
 fn to_zoned_args(v: f64) -> (TimeZone, Option<PlainTime>) {
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         return (super::options::timezone(v), None);
     }
     let jv = JSValue::from_bits(v.to_bits());

@@ -68,19 +68,40 @@ unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
 
 #[inline]
 unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, vbits: u64) {
-    let slot = spill_elements(spill).add(index);
-    let old_bits = *slot;
-    *slot = vbits;
+    let elements = spill_elements(spill);
+    let slot = elements.add(index);
+    let length = (*spill).length as usize;
     // Length is the buffer's high-water mark: `js_array_alloc_with_length`
     // sets length = REQUESTED capacity while the physical capacity rounds up
     // (MIN_ARRAY_CAPACITY), and the in-capacity fast path stores past the
     // current length. Everything keys off length — `spill_get`'s bounds
     // check, the GC element range (a value past length is invisible to
-    // marking/rewriting), and the growth copy — so extend it here. Slots
-    // between the old and new length are TAG_HOLE from allocation.
-    if index >= (*spill).length as usize {
+    // marking/rewriting), and the growth copy — so extend it here.
+    //
+    // #11550: a slot at or past `length` holds NO value. The allocator
+    // initializes only the requested prefix, so the rounded-up tail still
+    // holds whatever that arena memory last held — very often a NaN-boxed
+    // heap pointer from a dead object. Reading it as the "old value" made a
+    // first store of a pointer look like a pointer-over-pointer overwrite,
+    // which `layout_note_slot_aware` answers WITHOUT setting the slot's GC
+    // mask bit. The collector then skipped the slot: the stored value was
+    // neither marked nor rewritten, and the object kept a from-space address
+    // (qs's `{ __proto__: null }` accumulator, 12 keys, 10 of them spilled).
+    // Treat the tail as holes, and hole-fill any gap the new length exposes,
+    // so the element range the GC walks never contains stale bits.
+    let old_bits = if index < length {
+        *slot
+    } else {
+        for gap in length..index {
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer
+            // sentinel for a never-written spill slot.
+            elements.add(gap).write(crate::value::TAG_HOLE);
+        }
         (*spill).length = (index + 1) as u32;
-    }
+        crate::value::TAG_HOLE
+    };
+    // GC_STORE_AUDIT(BARRIERED): layout note + slot barrier below.
+    *slot = vbits;
     // Spill elements are boxed JS values just like ordinary array slots. The
     // old value is already in hand, so preserve the same overwrite invariant
     // as array stores: scalar -> scalar and pointer -> pointer cannot change
@@ -721,5 +742,72 @@ mod tests {
             crate::gc::test_layout_pointer_slot_count(spill, slot + 1),
             Some(0)
         );
+    }
+
+    /// #11559: a spill store at or past the buffer's high-water mark must not
+    /// read the headroom word as the value it overwrites.
+    ///
+    /// `js_array_alloc_with_length(8)` initializes eight `TAG_HOLE` slots in a
+    /// sixteen-slot allocation; the other eight hold whatever the memory held
+    /// before. The poison below stands in for that previous tenant: a live
+    /// pointer, so it is exactly the pointer-shaped word that made the
+    /// pointer-over-pointer layout shortcut skip the note. The assertion is
+    /// the collector's own question — does it enumerate (and so mark and
+    /// rewrite) the slot the new child lives in?
+    #[test]
+    fn spill_store_past_high_water_ignores_headroom_bits() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _trigger_guard = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let owner = js_object_alloc(0x6B45_5A16, 0);
+        let first = js_object_alloc(0x6B45_5A17, 0);
+        let first_bits = crate::value::POINTER_TAG | (first as u64 & crate::value::POINTER_MASK);
+        spill_set(owner as usize, 2, first_bits);
+
+        let spill = crate::object::test_spill_buffer_addr(owner as usize);
+        let header = spill as *mut crate::array::ArrayHeader;
+        let (length, capacity) =
+            unsafe { ((*header).length as usize, (*header).capacity as usize) };
+        assert_eq!(
+            length, 8,
+            "fixture: the first spill buffer requests 8 slots"
+        );
+        assert!(
+            capacity > 9,
+            "fixture: index 9 must take the in-capacity path past the high-water mark"
+        );
+
+        let stale = js_object_alloc(0x6B45_5A18, 0);
+        let stale_bits = crate::value::POINTER_TAG | (stale as u64 & crate::value::POINTER_MASK);
+        unsafe {
+            let elements = spill_elements(header);
+            for i in length..capacity {
+                // GC_STORE_AUDIT(INIT): test poison past `length`, standing in
+                // for a previous tenant's leftover word; nothing reads it as a value.
+                *elements.add(i) = stale_bits;
+            }
+        }
+
+        let child = js_object_alloc(0x6B45_5A19, 0);
+        let child_bits = crate::value::POINTER_TAG | (child as u64 & crate::value::POINTER_MASK);
+        spill_set(owner as usize, 9, child_bits);
+
+        assert_eq!(
+            crate::object::test_spill_buffer_addr(owner as usize),
+            spill,
+            "fixture: the store must not have grown the buffer"
+        );
+        let slot_addr = unsafe { spill_elements(header).add(9) as usize };
+        let rewrite = crate::gc::test_gc_rewrite_slot_addresses(spill).unwrap();
+        assert!(
+            rewrite.contains(&slot_addr),
+            "the collector must enumerate a pointer stored past the high-water mark"
+        );
+        let gap_addr = unsafe { spill_elements(header).add(8) as usize };
+        assert_eq!(
+            unsafe { *(gap_addr as *const u64) },
+            crate::value::TAG_HOLE,
+            "the gap the store brings inside `length` must not expose the headroom word"
+        );
+        assert_eq!(unsafe { (*header).length }, 10);
     }
 }

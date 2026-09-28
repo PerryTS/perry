@@ -29,6 +29,7 @@ copy is current.
 | `cargo-test` | yes | yes | yes |
 | `cargo-test-perry` |  |  | yes |
 | `gap-suite` | 6x fast | 3x fast | 8x full |
+| `gc-call-effects` | yes | yes | yes |
 | `gc-stress` | 1x pr | 4x all | 4x all |
 | `e2e-scoped` | yes |  |  |
 | `security-audit` | deps only | yes | yes |

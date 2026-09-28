@@ -141,15 +141,18 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
 /// which is exactly what lets the `__knownSymbol` fallback to `Symbol.for` fire).
 #[no_mangle]
 pub unsafe extern "C" fn js_symbol_computed_member(ctor_f64: f64, key_f64: f64) -> f64 {
-    let bits = key_f64.to_bits();
-    if bits & 0xFFFF_0000_0000_0000 == STRING_TAG {
-        let key_ptr = (bits & POINTER_MASK) as *const StringHeader;
-        if let Some(name) = str_from_header(key_ptr) {
-            if is_well_known_symbol_member_name(&name) {
-                let wk_ptr = well_known_symbol(&name);
-                return f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
-            }
-        }
+    // A heap or inline SSO string key (#11519) — `"match"` and `"split"` are
+    // short enough to arrive inline when built at runtime.
+    let well_known = crate::string::with_string_value_bytes(key_f64, |bytes| {
+        std::str::from_utf8(bytes)
+            .ok()
+            .filter(|name| is_well_known_symbol_member_name(name))
+            .map(str::to_string)
+    })
+    .flatten();
+    if let Some(name) = well_known {
+        let wk_ptr = well_known_symbol(&name);
+        return f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
     }
     // Not a well-known symbol name — behave exactly like a plain `Symbol[key]`
     // read on the constructor value.

@@ -176,16 +176,22 @@ pub(super) unsafe fn dispatch_client_incoming_method(
     }
 
     let self_ref = f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & PTR_MASK));
+    // String arguments go through `js_ffi_arg_ptr`, not a bare mask: an inline
+    // SSO event name or encoding (`"data"`, `"end"`, `"utf8"` built at
+    // runtime) has no header behind its bits (#11519). The natives copy the
+    // name out before returning.
     let value = match method_name {
         "setEncoding" if !args.is_empty() => {
-            let ptr = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
+            let ptr =
+                perry_runtime::value::js_ffi_arg_ptr(args[0]) as *const perry_runtime::StringHeader;
             unsafe {
                 js_http_incoming_message_set_encoding(handle, ptr);
             }
             self_ref
         }
         "on" | "addListener" if args.len() >= 2 => {
-            let event = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
+            let event =
+                perry_runtime::value::js_ffi_arg_ptr(args[0]) as *const perry_runtime::StringHeader;
             let callback = (args[1].to_bits() & PTR_MASK) as i64;
             unsafe {
                 js_http_on(handle, event, callback);
@@ -193,7 +199,8 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             self_ref
         }
         "once" if args.len() >= 2 => {
-            let event = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
+            let event =
+                perry_runtime::value::js_ffi_arg_ptr(args[0]) as *const perry_runtime::StringHeader;
             let callback = (args[1].to_bits() & PTR_MASK) as i64;
             unsafe {
                 js_http_once(handle, event, callback);

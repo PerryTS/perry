@@ -1,0 +1,176 @@
+# Seeds, cuts and audited exemptions for scripts/gc_call_effects/callgraph.py.
+#
+# Format:   kind  match  pattern  -- reason
+#   match   exact | prefix | contains | regex, applied to every spelling of a
+#           symbol: its raw name (Mach-O's leading underscore removed) and its
+#           demangled name (`perry_runtime::gc::policy::gc_check_trigger`).
+#   reason  REQUIRED. A rule without a reason is a claim nobody made.
+#
+# Named seeds and cuts (collector, poll, js, throw, panic) must each match at
+# least one function in the archives, or the run FAILS: a seed that matches
+# nothing (renamed, inlined away) seeds nothing, and every verdict computed
+# from it would be vacuous. Exemptions (indirect, extern) may be target-specific
+# and are reported, not failed, when they match nothing.
+#
+# Seeds are deliberately layered: an entry point AND the root-reading
+# chokepoint below it. Inlining may erase one symbol from a path, never both.
+
+# ---------------------------------------------------------------- collector
+# Anything that starts, or performs part of, a collection. A symbol reaching one
+# is not Leaf. AllocOnly cuts these (under RFC D1/D2 they stop reading frame
+# roots at allocation points), so they stay seeds only for the Leaf class.
+collector regex ^perry_runtime::gc::policy::gc_check_trigger -- the allocation-point trigger (RFC A1/A2): OldReclaim full, the slack valve, a mutator assist, or a direct minor can run inside it
+collector regex flush_deferred_gc_request|gc::roots::exit_gc_root_lock$ -- root-lock exit runs the collection deferred while the lock was held (RFC arm D, #11523). Anchored: exit_gc_root_lock_noncollecting (the #11523 fix) never flushes
+collector regex ^perry_runtime::gc::gc_collect_(minor|full) -- the minor and full collectors themselves
+collector regex ^perry_runtime::gc::copying::run_copied_minor_attempt -- the copying (moving) minor
+collector contains gc::roots::stack_maps::visit_stack_map_root_slots -- reads (and rewrites) the native frame roots of every generated frame: the chokepoint every precise collection passes
+collector contains gc::roots::mark_mutable_root_slots -- the mutable-root marking walk (frames, shadow stack, registered scanners) of every precise collection
+collector regex ^perry_runtime::gc::native_stack_scan:: -- the conservative native-stack scan (the valve / OldReclaim / emergency arms)
+collector regex ^<*perry_runtime::gc::cycle::registered_root_scan:: -- a budgeted cycle's RootScan subphase, reachable from a mutator assist (RFC arm A-assist)
+collector regex ^perry_runtime::gc::(mod::)?gc_try_emergency_reclaim -- emergency full collection when a block reservation fails (RFC arm A-emerg)
+poll exact js_gc_collect -- explicit gc(): a declared poll (RFC D1), never cut
+poll exact js_gc_memory_pressure -- memory-pressure collection: a declared poll (RFC D1)
+poll regex ^perry_runtime::gc::idle_reclaim::(?![A-Z][A-Z0-9_]*::) -- idle reclaim / compaction: a declared poll (RFC D1)
+
+# --------------------------------------------------------------------- poll
+# Declared polls (RFC D1). Never cut: reaching one means a precise, possibly
+# moving collection can begin inside the call.
+poll exact js_gc_loop_safepoint -- the loop back-edge poll
+poll exact js_gc_safepoint -- the explicit safepoint entry
+poll regex ^perry_runtime::gc::policy::manual_gc_collect_now -- the collection behind gc() / perry/gc: a declared poll
+poll regex ^perry_runtime::gc::policy::gc_safepoint_moving_minor -- the poll body: runs the moving minor at a declared safepoint
+
+# ----------------------------------------------------------------------- js
+# Entry points that run JavaScript. Every one of them also contains the
+# indirect call that actually enters JS, so these are for liveness, witness
+# paths and the self-test; the indirect-call seed is what makes the graph
+# complete for helpers not named here.
+js exact js_native_call_value -- calls an arbitrary JS function value
+js prefix js_closure_call -- calls a closure's generated body (js_closure_call0..N, _array, _spread)
+js exact js_proxy_get -- runs a Proxy `get` trap (#11522)
+js exact js_proxy_set -- runs a Proxy `set` trap
+js exact js_to_primitive -- runs valueOf / toString / Symbol.toPrimitive
+js exact js_number_coerce -- ToNumber: runs valueOf / Symbol.toPrimitive (#11522)
+js exact js_promise_run_microtasks -- drains the microtask queue, running reactions
+
+# ------------------------------------------------------------------- throw
+# The throw funnel. ThrowOnly cuts it: a call that reaches JS only by throwing
+# leaves no suspended frame to resume without unwinding (RFC section 4.6). The
+# fatal path runs exit listeners on an intact stack that never resumes.
+throw exact js_throw -- the single throw funnel every js_throw_* helper ends in
+throw contains perry_runtime::exception::print_uncaught -- fatal uncaught-exception report: runs exit listeners, then the process exits
+
+# ------------------------------------------------------------------- panic
+# Cut in every class. Release builds are panic=abort (Cargo.toml
+# [profile.release], #7302), so a frame suspended at a panicking call never
+# resumes; the only panic hook Perry installs (perry_runtime_widget_init)
+# formats and writes a file and runs no JS and no collection.
+panic regex ^core::panicking:: -- panic entry points (panic, panic_fmt, bounds checks): never return under panic=abort
+panic regex ^std::panicking:: -- the std panic runtime and hook dispatch: never returns under panic=abort
+panic regex ^core::(result|option)::(unwrap_failed|expect_failed) -- unwrap/expect failure: diverges into the panic runtime
+panic regex ^alloc::alloc::handle_alloc_error|^alloc::raw_vec::(handle_error|capacity_overflow)|^std::alloc::rust_oom|^__rg_oom|^__rust_alloc_error_handler -- allocation failure: aborts the process
+panic regex ^core::slice::index::|^core::str::slice_error_fail|^core::cell::panic_already -- index / borrow failures: diverge into the panic runtime
+
+# ---------------------------------------------------------------- teardown
+# Cut in every class: code that runs only when a thread (or the process) is
+# torn down, from a TLS destructor. std's lazy TLS Storage drops a previous
+# value only when an initializer re-enters its own slot, which no Perry
+# initializer does, so the static edge from first-touch initialization to a
+# value's destructor never executes inside a helper.
+teardown regex ^perry_runtime::arena::thread_exit:: -- thread-exit arena release, run from the arena's TLS destructor
+teardown regex ^<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop$ -- the arena's TLS destructor
+teardown regex ^core::ptr::drop_glue::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown)
+teardown regex ^std::sys::thread_local::destructors::|^std::sys::thread_local::guard:: -- std's TLS destructor runner: thread exit only
+
+# ------------------------------------------------------------------- extern
+extern regex ^(memset_pattern(4|8|16)|__strlcat_chk|__strlcpy_chk|strlcpy|strlcat|atoi|atol|random|srandom|confstr|getloadavg|getpriority|setpriority|getgroups|setgroups|initgroups|setuid|setgid|seteuid|setegid|setpgid|getpeereid|gethostuuid|chroot|lchmod|fsctl|pathconf|fpathconf|statvfs|fstatvfs|seekdir|telldir|pause|sigismember|sigpending|sigwait|clock|openpty|cfsetispeed|cfsetospeed|gnu_get_libc_version|pidfd_getpid|pidfd_spawnp|waitid|qsort_r|realpath\$DARWIN_EXTSN|__realpath_chk|_setjmp|setjmp|longjmp|_longjmp|sigsetjmp|siglongjmp|pthread_attr_\w+|pthread_setname_np|proc_pid_rusage|host_processor_info|host_statistics64|getsectiondata|_dyld_\w+|malloc_create_zone|malloc_default_zone|malloc_set_zone_name|malloc_zone_\w+|copyfile_state_\w+|posix_spawn_file_actions_\w+|posix_spawnattr_\w+|__addtf3|__subtf3|__multf3|__divtf3|__eqtf2|__netf2|__gttf2|__getf2|__lttf2|__letf2|__unordtf2|__floatsitf|__floattitf|__fixtfsi|__extenddftf2|__trunctfdf2|CF\w+)$ -- more libc / libSystem / CoreFoundation / soft-float primitives: none takes a Perry callback (qsort_r's comparator is the calling C code's own)
+extern regex ^(\?\?3@YAXPEAX_K@Z|\?\?2@YAPEAX_K@Z|\?\?3@YAXPEAX@Z|\?get_new_handler@std@@.*|LoadLibrary\w*|FreeLibrary|GetProcAddress|AdjustTokenPrivileges|LookupPrivilegeValue\w*|OpenProcess\w*|K32\w+|CoTaskMemFree|SHGetKnownFolderPath|ConnectNamedPipe|DisconnectNamedPipe|FreeEnvironmentStrings\w*|GetSystemDirectory\w*|GetWindowsDirectory\w*|ConvertFiberToThread|ConvertThreadToFiber|IsThreadAFiber|PostQueuedCompletionStatus|ReadConsole\w*|ReadFileEx|RemoveDirectory\w*|ResetEvent|ResizePseudoConsole|UpdateProcThreadAttribute|_close|_gmtime64_s|_localtime64_s|_hypot|_wgetenv|qsort_s|strspn|strcspn|srandomdev|fork|pthread_setname_np|sel_registerName|objc_getClass)$ -- Win32 / MSVC CRT / libc leaves: operator new/delete, library loading for backtrace symbolization (DllMain cannot call into Perry), process tokens, console and pipe I/O, time conversion. NOT listed: objc_msgSend and RegisterWaitForSingleObject / UnregisterWaitEx, which run callbacks and stay seeds
+extern regex ^compiler_builtins:: -- compiler_builtins arithmetic resolved at final link (demangled spelling on targets where the crate's objects are not in the graph)
+# Undefined symbols (defined by no archive in the graph) that are system or C
+# runtime leaves: they cannot call back into Perry code. Any other undefined
+# symbol is a seed -- it could be generated code, a UI crate, or a native
+# addon that re-enters JS.
+extern regex ^(memcpy|memmove|memset|memcmp|bcmp|bzero|memchr|memrchr|strlen|strnlen|strcmp|strncmp|strchr|strrchr|strstr|strerror_r|__xpg_strerror_r|__memcpy_chk|__memset_chk|__memmove_chk|__strcpy_chk|__stack_chk_fail|__stack_chk_guard|__chkstk|__chkstk_darwin|___chkstk_ms|__security_check_cookie|__security_cookie|__GSHandlerCheck|_fltused)$ -- libc/CRT memory, string and stack-protector primitives: no callbacks
+extern regex ^(malloc|free|calloc|realloc|posix_memalign|aligned_alloc|malloc_usable_size|malloc_size|malloc_trim|mallopt|_aligned_malloc|_aligned_free|_msize)$ -- the system allocator: Perry's GC heap never hooks it (the malloc-count trigger counts GC objects, not raw allocations)
+extern regex ^(__tls_get_addr|__tlv_get_addr|_tlv_bootstrap|_tlv_atexit|__cxa_thread_atexit_impl|__dso_handle|_GLOBAL_OFFSET_TABLE_|__errno_location|__error|_errno|__emutls_get_address)$ -- thread-local storage / errno access: no callbacks (TLS destructors run at thread exit, never inside a helper)
+extern regex ^(_Unwind_\w+|__gcc_personality_v0|__gxx_personality_v0|__CxxFrameHandler\d?|__C_specific_handler|_CxxThrowException|__cxa_\w+|_Unwind_Resume|__rust_probestack)$ -- unwinder / personality / probestack: no callbacks into Perry code
+extern regex ^(pthread_\w+|sched_yield|sched_getaffinity|nanosleep|usleep|sleep|clock_\w+|gettimeofday|time|mach_absolute_time|mach_timebase_info|mach_task_self_|mach_\w+|task_info|thread_\w+|os_unfair_lock_\w+|dispatch_\w+|_dispatch_\w+|__ulock_\w+|futex\w*|syscall|getpid|gettid|getppid|getuid|geteuid|getgid|getegid|sysconf|sysctl|sysctlbyname|sysinfo|get_nprocs|getrlimit|setrlimit|getrusage|uname|gethostname|getauxval|getentropy|getrandom|arc4random\w*|SecRandomCopyBytes|CCRandomGenerateBytes|prctl|sigaction|sigaltstack|sigemptyset|sigaddset|sigfillset|sigprocmask|pthread_sigmask|signal|raise|kill)$ -- threads, clocks, process identity, signals: no callbacks into Perry code (signal handlers never run JS; they only set flags or abort)
+extern regex ^(mmap|mmap64|munmap|mprotect|madvise|mremap|mlock|munlock|posix_madvise|vm_\w+|mach_vm_\w+|VirtualAlloc|VirtualFree|VirtualProtect|VirtualQuery)$ -- virtual memory: no callbacks
+extern regex ^(open|open64|openat|openat64|close|read|write|readv|writev|pread|pread64|pwrite|pwrite64|preadv|pwritev|lseek|lseek64|fstat|fstat64|stat|stat64|lstat|lstat64|fstatat|fstatat64|statx|statfs|fstatfs|access|faccessat|fcntl|fcntl64|ioctl|isatty|fsync|fdatasync|ftruncate|ftruncate64|truncate|unlink|unlinkat|rename|renameat|renameat2|mkdir|mkdirat|rmdir|opendir|fdopendir|readdir|readdir64|readdir_r|closedir|dirfd|getcwd|chdir|realpath|readlink|readlinkat|symlink|symlinkat|link|linkat|chmod|fchmod|fchmodat|chown|fchown|lchown|utimensat|futimens|futimes|utimes|copy_file_range|sendfile|splice|fallocate|posix_fadvise|memfd_create|shm_open|shm_unlink|dup|dup2|dup3|pipe|pipe2|poll|ppoll|select|epoll_\w+|kqueue|kevent|eventfd|timerfd_\w+|inotify_\w+|flock|tcgetattr|tcsetattr|cfmakeraw|ttyname_r|umask|mkstemp|mkdtemp|tmpfile|posix_spawn\w*|fork|vfork|execv\w*|waitpid|wait4|setsid|setpgid|getpgid|__fxstat64|__xstat64|__lxstat64|__fxstatat64|_NSGetExecutablePath|_NSGetEnviron|_NSGetArgv|_NSGetArgc|getattrlist|fgetattrlist|clonefile|fclonefileat|copyfile|fcopyfile)$ -- file, pipe and process syscalls: no callbacks into Perry code
+extern regex ^(socket|socketpair|bind|listen|accept|accept4|connect|send|sendto|sendmsg|sendmmsg|recv|recvfrom|recvmsg|recvmmsg|setsockopt|getsockopt|getsockname|getpeername|shutdown|getaddrinfo|freeaddrinfo|gai_strerror|getnameinfo|if_\w+|getifaddrs|freeifaddrs|inet_\w+|htons|ntohs|htonl|ntohl|res_\w+|__res_\w+)$ -- sockets and name resolution: no callbacks into Perry code
+extern regex ^(exit|_exit|_Exit|abort|atexit|__cxa_atexit|__cxa_finalize|quick_exit|at_quick_exit)$ -- process exit: exit listeners may run JS, but the process ends and no frame below the call ever resumes
+extern regex ^(getenv|setenv|unsetenv|putenv|environ|__environ|localeconv|nl_langinfo|setlocale|newlocale|freelocale|uselocale|iconv\w*|wcslen|mbstowcs|wcstombs|mbrtowc|wcrtomb|__ctype_\w+|tzset|localtime_r|gmtime_r|mktime|timegm|strftime|getpwuid_r|getpwnam_r|getgrgid_r|getlogin_r|qsort|bsearch|abs|labs|llabs|rand|srand|__assert_fail|__assert_rtn|_assert|_wassert|dladdr|dlopen|dlsym|dlclose|dlerror|dl_iterate_phdr|backtrace\w*|__register_atfork|__cpu_\w+|__isoc99_\w+|__isoc23_\w+|strtod|strtof|strtol|strtoul|strtoll|strtoull|sscanf|__sprintf_chk|__snprintf_chk|__vsnprintf_chk|__fprintf_chk|fprintf|printf|snprintf|sprintf|vsnprintf|vfprintf|fputs|fputc|fwrite|fflush|fopen|fclose|fread|fgets|puts|putchar|perror|stderr|stdout|stdin|__stderrp|__stdoutp|__stdinp|__acrt_iob_func|__stdio_common_\w+|_errno)$ -- C library utilities: qsort/bsearch comparators are C code in the same C dependency, never Perry callbacks
+extern regex ^(fmod|fmodf|pow|powf|exp|expf|exp2|exp2f|expm1|log|logf|log2|log2f|log10|log10f|log1p|sin|sinf|cos|cosf|tan|tanf|asin|acos|atan|atan2|atan2f|sinh|cosh|tanh|asinh|acosh|atanh|round|roundf|floor|floorf|ceil|ceilf|trunc|truncf|sqrt|sqrtf|cbrt|cbrtf|hypot|hypotf|ldexp|ldexpf|frexp|modf|fma|fmaf|fmin|fmax|nextafter|rint|nearbyint|lround|lrint|__sincos_stret|__exp10|sincos|sincosf|erf|erfc|tgamma|lgamma|_fdtest|_dtest|_dclass|_dsign)$ -- libm: pure arithmetic
+extern regex ^(__udivti3|__umodti3|__divti3|__modti3|__muloti4|__multi3|__ashlti3|__lshrti3|__ashrti3|__floattidf|__floatuntidf|__fixdfti|__fixunsdfti|__powidf2|__powisf2|__extendhfsf2|__truncsfhf2|__truncdfhf2|__gnu_h2f_ieee|__gnu_f2h_ieee|__aarch64_\w+|__rust_\w+|rust_eh_personality|__morestack)$ -- compiler_builtins / rustc shims resolved at final link: arithmetic, atomics and allocator shims (the #[global_allocator] is mimalloc/System, never GC-aware)
+extern regex ^(mi_\w+|_mi_\w+|ZSTD_\w+|ZDICT_\w+|HUF_\w+|FSE_\w+|BrotliEncoder\w+|BrotliDecoder\w+)$ -- C dependencies compiled into the archives (mimalloc, zstd, brotli) whose own objects may be split out on some targets: plain C, no callbacks into Perry code
+extern regex ^(Get\w+|Set\w+|Create\w+|Close\w+|Read\w+|Write\w+|Query\w+|Wait\w+|Sleep\w*|Tls\w+|Fls\w+|Heap\w+|Local\w+|Global\w+|Duplicate\w+|Find\w+|Delete\w+|Move\w+|Copy\w+|Flush\w+|Device\w+|Initialize\w+|Enter\w+|Leave\w+|TryEnter\w+|Acquire\w+|Release\w+|Wake\w+|Switch\w+|Nt\w+|Rtl\w+|Wsa\w+|WSA\w+|closesocket|ioctlsocket|__WSAFDIsSet|Cancel\w+|Terminate\w+|Exit\w+|Format\w+|MultiByteToWideChar|WideCharToMultiByte|CompareStringOrdinal|lstrlenW|wcslen|SystemFunction036|ProcessPrng|BCryptGenRandom|IsDebuggerPresent|IsProcessorFeaturePresent|OutputDebugString\w+|RaiseException|UnhandledExceptionFilter|AddVectoredExceptionHandler|RemoveVectoredExceptionHandler|__acrt_\w+|__std_\w+|_beginthreadex|_endthreadex|__iob_func|_open_osfhandle|_get_osfhandle)$ -- Win32/CRT APIs: kernel services, no callbacks into Perry code (thread/fiber start routines run on new threads, never inside the calling helper)
+
+# ----------------------------------------------------------------- indirect
+# By default EVERY indirect call or indirect tail jump is a seed, in every
+# crate: an indirect call can land on any function whose address escaped,
+# including runtime natives that run JS. An exemption removes that seed for
+# the functions it matches, so each one needs a reason that holds for every
+# possible target of those call sites.
+#
+# A DELEGATED exemption (`... => match pattern`) does not trust a reason alone:
+# every function matching the right-hand side becomes a callee of the exempted
+# function, so if any possible target can collect or run JS, the exempted
+# function -- and everything that calls it -- is still tainted by the graph.
+#
+# Formatting: core::fmt dispatches only through fmt::Arguments' formatter
+# pointers and `&mut dyn fmt::Write`, i.e. to implementations of the core::fmt
+# traits. std's io::Write::write_fmt adapters and the print/eprint machinery
+# inline that dispatch, and add `&mut dyn io::Write` (the output-capture sink)
+# and std's own OS_FUNCTIONS table (errno decoding).
+indirect regex ^<?core::fmt::|as core::fmt::(Display|Debug|LowerHex|UpperHex|Octal|Binary|LowerExp|UpperExp|Pointer)>::fmt$|as core::(fmt|io::write)::Write>::write_fmt|^<?std::io::stdio::|^<?alloc::io::buffered::|^<std::sys::stdio::|^<&?std::io::stdio:: => regex as core::fmt::(Display|Debug|LowerHex|UpperHex|Octal|Binary|LowerExp|UpperExp|Pointer|Write)>:: -- formatting dispatches only to core::fmt trait implementations (made callees here); stdio's only other dyn target is the output-capture sink, which only libtest installs (forbid rule below), plus std's private OS_FUNCTIONS errno table
+# std::sync::Once runs the closure handed to it through `&mut dyn FnMut`; every
+# such closure is created by std::sync (call_once / call_once_force /
+# OnceLock::initialize / LazyLock::force) and calls the user's initializer
+# directly, so those closures -- and through them every initializer -- are
+# made callees. The other indirect calls are the futex syscall via the GOT.
+indirect regex ^<?std::sys::sync::once:: -- Once::call runs only the `&mut dyn FnMut` closure its caller passed; every caller is a std::sync call_once / call_once_force instantiation, which the `closures` rule below gives its own closures as callees. Its other indirect calls are the futex syscall
+closures regex ^<std::sync::(poison::)?once::Once>::call_once(_force)?::< -- the caller side of the Once::call exemption: its closures (wrapping the user initializer) become its callees
+indirect regex ^<?once_cell::imp:: => regex ^<*once_cell::.*\{closure -- once_cell's initialize_or_wait runs `&mut dyn FnMut`; every such closure is once_cell's own wrapper around the caller's initializer (made callees here)
+# std's OS layer calls libc through GOT-hoisted registers and weak!/dlsym
+# lookups (futex, clock_gettime, getrandom, statx, pidfd, open64), and std's
+# private OS_FUNCTIONS table. It takes no caller-provided callback: the ones
+# std does take are Once (above), thread spawn (below), and TLS destructors,
+# which run at thread exit, never inside the helper that registered them.
+indirect regex ^<?std::sys::(pal|sync::(mutex|rwlock|condvar|thread_parking)|fs|random|env|time|process|net|os|io|args|fd|thread_local|stdio|exit|helpers::small_c_string|personality|backtrace)|^<?std::sys::thread::unix::Thread>::(sleep|yield_now|set_name|join) -- std::sys OS layer: libc through GOT registers / weak symbols and std-private closures (run_with_cstr's syscall wrappers); no caller callback runs synchronously here
+indirect regex ^<?std::sys::thread::unix::Thread>::new|^std::thread::spawnhook::|^<std::thread::spawnhook::|^<alloc::sync::Arc<std::thread::|^core::ptr::drop_glue::<alloc::boxed::Box<std::thread::|^std::thread::lifecycle:: -- thread creation: the closure runs on the NEW thread, whose GC heap and stack are its own; spawn hooks are never registered (see the forbid rule below)
+forbid regex add_spawn_hook -- the thread-spawn exemption assumes Perry registers no std spawn hook (they run on the spawning thread)
+indirect regex ^getrandom::|^<getrandom::|^rand_core::|^<rand::|^<chacha20:: -- getrandom/rand: libc getrandom resolved through weak symbols / dlsym; no callbacks
+indirect regex ^<?std::panic::get_backtrace_style|^std::panicking:: -- panic runtime (cut anyway under panic=abort): backtrace-style probe and hook dispatch run no JS
+#
+# mimalloc (C, vendored by libmimalloc-sys): its function pointers are its own
+# static visitors (bitmap and arena iteration) and the error / output /
+# deferred-free hooks. Perry never registers a hook (forbid rule below), so no
+# mimalloc indirect call can reach Perry code.
+indirect regex ^_?mi_|^mi_|^\?_?mi_|^\?win_\w+@@ -- mimalloc internals (C; MSVC-mangled static helpers on Windows, incl. its win_* OS layer calling kernel32 entry points resolved at init): static visitors, OS entry points and unregistered hooks only
+forbid regex ^_?mi_register_|^\?mi_register_ -- the mimalloc exemption assumes no hook is registered
+#
+# TRUST BOUNDARY. Indirect calls inside third-party Rust crates and std/core/
+# alloc are not seeds, except where a rule above names the function as a
+# callback dispatcher (formatting, Once, once_cell). The premise: Perry hands
+# callbacks to foreign code only (a) through generics -- which monomorphize
+# INTO Perry's own objects, where every indirect call is a seed -- or (b)
+# through the dispatchers listed above, or (c) through thread spawn / TLS
+# destructors / atexit / the panic hook, which never run inside the helper
+# that registered them. A dyn value owned by std (an io::Error payload, a
+# thread closure, a panic payload) is std's or a plain Rust error type, never a
+# GC-touching Perry type. Adding a new dyn/fn-pointer callback API use means
+# adding a dispatcher rule here.
+trusted regex ^(?!perry|turnloop).+ -- foreign Rust crates: their indirect calls dispatch to their own code or to the callers' monomorphized generics, see TRUST BOUNDARY above
+trusted regex ^perry_(parser|diagnostics)$ -- the SWC wrapper and diagnostics crates do not depend on perry-runtime; their indirect calls are SWC's own trait objects (source maps, error payloads) and can reach runtime code only through a callback the runtime hands them, which it does not
+#
+# ------------------------------------------------------------------- idiom
+# Indirect-call idioms the parser recognizes structurally (callgraph._idiom);
+# each names the only functions the idiom can land on, which become callees.
+idiom io_os_functions => regex ^std::sys::(io::error|pal)::\w+::(decode_error_kind|error_string|is_interrupted) -- the OS_FUNCTIONS table only ever holds std's own errno helpers
+idiom io_error_drop => regex ^alloc::io::error::custom_owner_from_box::drop_box_raw -- dropping an io::Error's custom payload calls the owner-drop fn std stored in the box: always a drop_box_raw::<T> instantiation
+#
+# Perry's own dispatch.
+indirect regex ^<perry_runtime::tls_hot::HotKey<.*>>::resolve_and_cache => regex ^perry_\w+::.*::[A-Z][A-Z0-9_]*::(resolve|arm_guard)$ -- a HotKey calls only the `resolve` / `arm_guard` fns its perry_thread_local! declaration generates (made callees here), which resolve that thread-local and run its initializer
+forbid regex ^std::io::stdio::set_output_capture$ -- the stdio exemption assumes no output-capture sink is installed
+indirect regex ^<std::thread::local::LocalKey<core::cell::Cell<\(u64, u64\)>>>:: -- std's RandomState KEYS thread-local (initializer: hashmap_random_keys -> getrandom); no Perry thread-local has this type
+indirect regex ^perry_runtime::gc::full_trace:: -- the full-trace fetch hook (audited, not delegated): its only registration (perry_ffi_gc_register_fetch_trace from perry-stdlib fetch/lifecycle.rs) installs `phase` / `observe`, which update the per-thread fetch epoch and mark fetch handles through the runtime's `mark` -- heap-only marking during an active full trace; they run no JS and start no collection. Delegating would drag in the std LocalKey accessor pointers the graph cannot resolve
