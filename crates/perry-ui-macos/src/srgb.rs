@@ -1,7 +1,6 @@
-//! Colours in sRGB. A `perry/ui` RGBA value means sRGB on every target, as CSS
-//! reads it on the web. If the components went to `CGColorCreateGenericRGB` or
-//! `colorWithCalibratedRed:` instead, they would be read as Generic RGB, and
-//! `#00C2FF` would render as `#00CDFF`.
+//! Colours in sRGB. `perry/ui` RGBA components are sRGB. If they went to
+//! `CGColorCreateGenericRGB` or `colorWithCalibratedRed:` instead, they would be
+//! read as Generic RGB, and `#00C2FF` would render as `#00CDFF`.
 
 use objc2::rc::Retained;
 use objc2_app_kit::NSColor;
