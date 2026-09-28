@@ -85,7 +85,7 @@ pub(super) fn optimize_and_emit(
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
-        let preflight_cap = crate::codegen::helpers::root_spill_relocation_threshold();
+        let preflight_cap = root_spill_relocation_threshold();
         let rewritten_functions = rs4gc_functions(module);
         let pre_sizes = if budget == RewriteBudget::Off && preflight_cap == 0 && stats.is_none() {
             std::collections::HashMap::new()
@@ -100,14 +100,36 @@ pub(super) fn optimize_and_emit(
                 .max_by_key(|(_, n)| **n)
                 .map(|(name, n)| (name.clone(), *n));
         }
-        // The source-level estimate is intentionally cheap but can miss
-        // codegen expansion (one expression becoming many collecting helper
-        // calls). Check the actual constructed CallBase/root shape before
-        // asking RS4GC to perform the potentially super-linear rewrite.
-        enforce_rs4gc_preflight_budget(module, preflight_cap, &pre_sizes, &rewritten_functions)?;
+        // S4 (RFC deferred collection): canonicalize exactly as RS4GC's own
+        // pipeline does, count the relocations it would emit on that input,
+        // and only then let it run. A function over the budget is re-lowered
+        // onto a shadow frame before RS4GC spends any time on it.
         let rewrite_started = std::time::Instant::now();
         module
-            .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
+            .run_passes(
+                crate::linker::STATEPOINT_PREPARE_PASSES,
+                &tm,
+                PassBuilderOptions::create(),
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "in-process statepoint preparation (`{}`) failed:\n{}",
+                    crate::linker::STATEPOINT_PREPARE_PASSES,
+                    e.to_string()
+                )
+            })?;
+        let prepare_secs = rewrite_started.elapsed().as_secs_f64();
+        let liveness_started = std::time::Instant::now();
+        let liveness = gc_liveness::analyze_module(module, &rewritten_functions);
+        let liveness_secs = liveness_started.elapsed().as_secs_f64();
+        enforce_rs4gc_preflight_budget(&liveness, preflight_cap, &pre_sizes)?;
+        let rewrite_started = std::time::Instant::now();
+        module
+            .run_passes(
+                crate::linker::STATEPOINT_REWRITE_ONLY_PASSES,
+                &tm,
+                PassBuilderOptions::create(),
+            )
             .map_err(|e| {
                 anyhow!(
                     "in-process rewrite-statepoints-for-gc failed:\n{}",
@@ -129,7 +151,9 @@ pub(super) fn optimize_and_emit(
             )
         })?;
         if let Some(stats) = stats.as_deref_mut() {
-            stats.rewrite_secs = rewrite_started.elapsed().as_secs_f64();
+            stats.rewrite_secs = prepare_secs + rewrite_started.elapsed().as_secs_f64();
+            stats.liveness_secs = liveness_secs;
+            audit_liveness(module, &liveness, liveness_secs, stats);
             let (_, total, widest) = module_instruction_census(module);
             stats.post_rewrite_instructions = total;
             stats.post_rewrite_widest = widest;
@@ -261,6 +285,60 @@ pub(super) fn optimize_and_emit(
     Ok(pieces)
 }
 
+/// `PERRY_CODEGEN_UNIT_TIMINGS` audit of the S4 liveness count: after RS4GC,
+/// compare each function's predicted relocations with the `gc.relocate`s it
+/// really produced, and report one line per function that has a statepoint.
+/// Mismatches are marked, so a build log answers "is the count exact on this
+/// program" with a grep.
+fn audit_liveness(
+    module: &inkwell::module::Module<'_>,
+    liveness: &[(String, gc_liveness::FunctionLiveness)],
+    liveness_secs: f64,
+    stats: &mut UnitCodegenStats,
+) {
+    use inkwell::values::AsValueRef;
+    for (name, l) in liveness {
+        if l.statepoints() == 0 {
+            continue;
+        }
+        let actual = module
+            .get_function(name)
+            .map(|f| gc_liveness::count_relocates(f.as_value_ref()))
+            .unwrap_or(0);
+        let predicted = l.relocation_bound();
+        stats.statepoints += l.statepoints();
+        stats.relocations_predicted += predicted;
+        stats.relocations_actual += actual;
+        let verdict = if predicted == actual {
+            "exact"
+        } else {
+            stats.liveness_mismatches += 1;
+            "MISMATCH"
+        };
+        eprintln!(
+            "[perry] gc-liveness: `{name}` {verdict}: predicted {predicted} relocations{}, rs4gc {actual}; \
+             {} statepoints ({} invoke), max live {}, {} gc values, {} blocks, {} instrs, walk {}, {} us",
+            if l.is_exact() { "" } else { " (bound)" },
+            l.statepoints(),
+            l.invoke_statepoints(),
+            l.max_live(),
+            l.gc_values,
+            l.blocks,
+            l.instructions,
+            l.work,
+            l.micros,
+        );
+    }
+    eprintln!(
+        "[perry] gc-liveness: unit: {} statepoints, predicted {} relocations, rs4gc {}, {} mismatching functions, analysis {:.3}s",
+        stats.statepoints,
+        stats.relocations_predicted,
+        stats.relocations_actual,
+        stats.liveness_mismatches,
+        liveness_secs
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,97 +442,6 @@ mod tests {
             parse_rewrite_budget(Some("lots")),
             RewriteBudget::Error(DEFAULT_RS4GC_MAX_INSTRS)
         );
-    }
-
-    /// The source-level estimate is only a fast first line of defence. This
-    /// fixture pins the constructed-IR backstop: managed-root allocas count,
-    /// ordinary calls count, explicit GC-leaf calls and LLVM intrinsics do
-    /// not, and only functions which will actually enter RS4GC are governed.
-    #[test]
-    fn rs4gc_preflight_uses_constructed_roots_and_non_leaf_calls() {
-        let fixture = r#"
-declare i64 @may_collect()
-declare i64 @leaf()
-declare void @llvm.donothing()
-
-define i64 @hot() gc "statepoint-example" {
-entry:
-  %root = alloca ptr addrspace(1)
-  %plain = alloca i64
-  %a = call i64 @may_collect()
-  %b = call i64 @may_collect()
-  %c = call i64 @leaf() "gc-leaf-function"
-  call void @llvm.donothing()
-  %p = load ptr addrspace(1), ptr %root
-  %bits = ptrtoint ptr addrspace(1) %p to i64
-  %sum = add i64 %a, %b
-  %sum2 = add i64 %sum, %c
-  %out = add i64 %sum2, %bits
-  ret i64 %out
-}
-
-define i64 @shadow() {
-entry:
-  %root = alloca ptr addrspace(1)
-  %a = call i64 @may_collect()
-  ret i64 %a
-}
-"#;
-        let context = Context::create();
-        let module = parse_ir_text(&context, fixture, "preflight_fixture").expect("fixture parses");
-        let hot = module.get_function("hot").expect("hot");
-        assert_eq!(
-            rs4gc_preflight_factors(hot),
-            (1, 2),
-            "plain allocas, leaf calls and intrinsics do not add RS4GC work"
-        );
-
-        // (one constructed root + two possible call-result roots) x two
-        // safepoints = six estimated relocations. The boundary is exclusive.
-        let rewritten_functions = rs4gc_functions(&module);
-        assert_eq!(
-            rs4gc_preflight_violations(&module, 5, &rewritten_functions),
-            vec![("hot".to_string(), 1, 2, 6)]
-        );
-        assert!(rs4gc_preflight_violations(&module, 6, &rewritten_functions).is_empty());
-        assert!(rs4gc_preflight_violations(&module, 0, &rewritten_functions).is_empty());
-
-        let pre = pre_rewrite_sizes(&module);
-        let err = enforce_rs4gc_preflight_budget(&module, 5, &pre, &rewritten_functions)
-            .expect_err("the constructed shape requests a spill retry");
-        let retry = rs4gc_budget_retry(&err).expect("the request stays typed");
-        assert_eq!(retry.len(), 1);
-        assert_eq!(retry[0].name, "hot");
-        assert_eq!(retry[0].pre_instructions, pre.get("hot").copied());
-        assert_eq!(
-            retry[0].cause,
-            Rs4gcBudgetCause::PreRewrite {
-                root_allocas: 1,
-                safepoints: 2,
-                estimated_relocations: 6,
-            }
-        );
-        assert_eq!(retry[0].cap, 5);
-        let msg = format!("{err:#}");
-        for needle in [
-            "before rewrite-statepoints-for-gc",
-            "`hot`",
-            "1 managed-root allocas",
-            "2 non-leaf call sites",
-            "predicts 6 relocations",
-            "budget 5",
-            "PERRY_ROOT_SPILL_RELOCATIONS",
-            "re-lower",
-        ] {
-            assert!(
-                msg.contains(needle),
-                "message must carry {needle:?}:\n{msg}"
-            );
-        }
-
-        let no_rewritten_functions = std::collections::HashSet::new();
-        enforce_rs4gc_preflight_budget(&module, 1, &pre, &no_rewritten_functions)
-            .expect("a shadow-root function is outside the preflight budget");
     }
 
     /// Six gc values live across forty safepoints: ~60 instructions before

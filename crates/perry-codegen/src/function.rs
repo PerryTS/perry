@@ -163,10 +163,10 @@ pub struct LlFunction {
     /// `js_shadow_slot_bind` calls, removes the calls, and emits stack maps.
     stack_map_slot_count: u32,
     /// #8583: force this function onto the heap-backed shadow frame even when
-    /// native stack-map roots are the build default. Set for a function whose
-    /// estimated statepoint relocation count (`live_roots × safepoints`) would
-    /// make `rewrite-statepoints-for-gc` fan-out super-linear in the optimizer
-    /// (`codegen/helpers::maybe_spill_roots_to_shadow_frame`). The shadow-frame
+    /// native stack-map roots are the build default. Set by the backend's
+    /// retry for a function whose exact statepoint relocation count
+    /// (`inprocess::gc_liveness`, RFC deferred collection S4) or post-RS4GC
+    /// size exceeds its budget (`apply_budget_spill_retry`). The shadow-frame
     /// lowering is the pre-#7370 default, walked by the same runtime root scan
     /// as stack maps, so a spilled function's roots stay precise — it simply
     /// carries no `gc "statepoint-example"` strategy and RS4GC skips it. The
@@ -345,9 +345,10 @@ impl LlFunction {
     /// #8583/#8679: route this function's precise roots through the heap
     /// shadow frame instead of native statepoints.
     ///
-    /// The estimate-driven path calls this before `enable_shadow_frame`, while
-    /// the post-RS4GC budget retry calls it after lowering is complete. In the
-    /// latter case the native-root path deliberately retained the original
+    /// The backend's budget retry calls this after lowering is complete (the
+    /// pre-RS4GC relocation count and the post-RS4GC size both decide there);
+    /// tests may also call it before `enable_shadow_frame`. After lowering,
+    /// the native-root path has deliberately retained the original
     /// `js_shadow_slot_bind` calls until final rendering, so converting the
     /// recorded stack-map request back into a shadow-frame push is a complete
     /// re-lowering: final rendering keeps those binds, adds the matching pops,

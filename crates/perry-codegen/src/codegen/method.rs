@@ -365,12 +365,6 @@ pub(super) fn compile_method(
             method_body,
             &flat_const_ids,
         );
-        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
-            lf,
-            &llvm_name,
-            m.len() + 1,
-            method_body,
-        );
         lf.enable_shadow_frame(m.len() as u32 + 1);
         m
     } else {

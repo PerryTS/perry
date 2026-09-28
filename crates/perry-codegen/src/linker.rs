@@ -37,6 +37,17 @@ use linker_temp::{
 pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
     "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc";
 
+/// [`STATEPOINT_REWRITE_PASSES`] split where the in-process backend counts
+/// RS4GC's relocations (RFC deferred collection S4): the canonicalizing half
+/// produces RS4GC's exact input, `inprocess::gc_liveness` measures it, and
+/// only then does the rewrite run. Running the two halves back to back is the
+/// same pipeline; `statepoint_pipeline_split_is_the_shipped_pipeline` pins
+/// that the halves still spell the whole.
+#[cfg_attr(not(feature = "llvm-inprocess"), allow(dead_code))]
+pub(crate) const STATEPOINT_PREPARE_PASSES: &str = "always-inline,function(mem2reg,sccp)";
+#[cfg_attr(not(feature = "llvm-inprocess"), allow(dead_code))]
+pub(crate) const STATEPOINT_REWRITE_ONLY_PASSES: &str = "rewrite-statepoints-for-gc";
+
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
 static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();

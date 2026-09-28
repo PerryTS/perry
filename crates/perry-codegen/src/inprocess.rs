@@ -17,6 +17,7 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+pub(crate) mod gc_liveness;
 mod optimize_emit;
 mod split_emit;
 use optimize_emit::optimize_and_emit;
@@ -35,6 +36,7 @@ use inkwell::targets::{
 use inkwell::values::AsValueRef;
 use inkwell::OptimizationLevel;
 
+#[cfg(test)]
 use crate::linker::STATEPOINT_REWRITE_PASSES;
 
 /// Test seam (#7502): parse `ll_text`, run [`STATEPOINT_REWRITE_PASSES`] for
@@ -367,6 +369,16 @@ pub struct UnitCodegenStats {
     pub post_rewrite_instructions: usize,
     pub post_rewrite_widest: Option<(String, usize)>,
     pub rewrite_secs: f64,
+    /// Time in the S4 liveness count between RS4GC's canonicalization and
+    /// the rewrite itself.
+    pub liveness_secs: f64,
+    /// Statepoints the liveness count predicted for the unit.
+    pub statepoints: usize,
+    /// `gc.relocate`s predicted (upper bound) and produced for the unit.
+    pub relocations_predicted: u64,
+    pub relocations_actual: u64,
+    /// Functions whose prediction differed from RS4GC's output.
+    pub liveness_mismatches: usize,
     pub optimize_secs: f64,
     pub emit_secs: f64,
     /// Functions stamped `"disable-tail-calls"` because their alloca-walk
@@ -702,13 +714,30 @@ pub(crate) enum Rs4gcBudgetCause {
     /// non-leaf call sites LLVM will actually see, rather than another source
     /// syntax approximation.
     PreRewrite {
-        root_allocas: usize,
-        safepoints: usize,
-        estimated_relocations: usize,
+        /// Calls RS4GC turns into statepoints.
+        statepoints: usize,
+        /// Of those, `invoke`s: relocated on the normal and the unwind edge.
+        invoke_statepoints: usize,
+        /// Most GC values live across one statepoint.
+        max_live: u32,
+        /// The `gc.relocate`s RS4GC would emit (an upper bound when the
+        /// function has derived pointers; see `gc_liveness`).
+        relocations: u64,
     },
     /// RS4GC finished, but its relocation fan-out made the rewritten body too
     /// large for the normal optimization pipeline.
     PostRewrite { post_instructions: usize },
+}
+
+impl Rs4gcBudgetCause {
+    fn pre_rewrite(l: &gc_liveness::FunctionLiveness) -> Self {
+        Rs4gcBudgetCause::PreRewrite {
+            statepoints: l.statepoints(),
+            invoke_statepoints: l.invoke_statepoints(),
+            max_live: l.max_live(),
+            relocations: l.relocation_bound(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -849,113 +878,111 @@ fn rs4gc_functions(module: &inkwell::module::Module<'_>) -> std::collections::Ha
     names
 }
 
-/// The two constructed-IR factors that bound RS4GC relocation fan-out.
+/// #8583: relocation budget above which a function keeps its GC roots in a
+/// shadow frame instead of native statepoints.
 ///
-/// Count only allocas whose payload is a managed pointer and call sites which
-/// are not explicitly marked as GC leaves. LLVM intrinsics are also leaves:
-/// they cannot enter Perry's runtime or collect. This is deliberately the
-/// same conservative model as the source-level spill estimate — each
-/// safepoint can leave one additional pointer result live across later calls —
-/// but it observes the calls codegen actually emitted. That closes estimator
-/// holes where one source expression expands into several collecting helpers.
-fn rs4gc_preflight_factors(function: inkwell::values::FunctionValue<'_>) -> (usize, usize) {
-    let mut root_allocas = 0usize;
-    let mut safepoints = 0usize;
-    for bb in function.get_basic_blocks() {
-        let mut inst = bb.get_first_instruction();
-        while let Some(i) = inst {
-            match i.get_opcode() {
-                inkwell::values::InstructionOpcode::Alloca => {
-                    if matches!(
-                        i.get_allocated_type(),
-                        Ok(inkwell::types::BasicTypeEnum::PointerType(ptr))
-                            if ptr.get_address_space() == inkwell::AddressSpace::from(1u16)
-                    ) {
-                        root_allocas += 1;
-                    }
-                }
-                inkwell::values::InstructionOpcode::Call
-                | inkwell::values::InstructionOpcode::CallBr
-                | inkwell::values::InstructionOpcode::Invoke => {
-                    // Call, invoke and callbr are all LLVM CallBase values, so
-                    // the call-site attribute API is valid for each opcode.
-                    let call = unsafe { inkwell::values::CallSiteValue::new(i.as_value_ref()) };
-                    let gc_leaf = call
-                        .get_string_attribute(
-                            inkwell::attributes::AttributeLoc::Function,
-                            "gc-leaf-function",
-                        )
-                        .is_some();
-                    let intrinsic = call
-                        .get_called_fn_value()
-                        .map_or(false, |callee| callee.get_intrinsic_id() != 0);
-                    if !gc_leaf && !intrinsic {
-                        safepoints += 1;
-                    }
-                }
-                _ => {}
-            }
-            inst = i.get_next_instruction();
-        }
+/// The budget is on the number RS4GC will really produce: the exact count of
+/// `gc.relocate`s ([`gc_liveness`], RFC deferred collection S4), measured on
+/// RS4GC's own input just before it runs. It used to be on an estimate,
+/// `(root slots + call sites) × call sites`, which overshot the claude-code
+/// bundle about 100× and moved functions to shadow frames that RS4GC would
+/// have handled in seconds.
+///
+/// The default is the post-RS4GC instruction budget
+/// ([`DEFAULT_RS4GC_MAX_INSTRS`], 1.5 Mi), and that is derived, not tuned.
+/// Every relocation is one `gc.relocate` instruction in the rewritten body,
+/// so a function over this many relocations is over the post-RS4GC budget by
+/// construction: that backstop would spill it anyway, after RS4GC had spent
+/// its time on it. Any lower default would spill functions the measured
+/// optimizer limit (#8128) accepts. What the pre-rewrite check adds is that
+/// the decision now costs milliseconds instead of an RS4GC run.
+///
+/// Measured (LLVM 22 `opt`, perrymaster) on synthetic straight-line functions
+/// of known count: 0.37 M relocations → RS4GC 4 s; 1.1 M → 19 s; 2.5 M → 51 s;
+/// 4.5 M → 122 s, so RS4GC stays in bounded time right up to this budget.
+/// On the claude-code 2.1.112 bundle after S0–S3 the largest real count is
+/// 0.47 M (`__25747`), so nothing spills there. The old estimate spilled
+/// `__87158`, `__84092` and `__85198` (42.9 k, 25.7 k and 17.4 k real
+/// relocations).
+///
+/// Relocations are not RS4GC's only cost driver. A branchy function with
+/// hundreds of values live through many small conditional blocks costs
+/// minutes at a few hundred thousand relocations (a synthetic diamond chain,
+/// 500 values × 250 safepoints: 0.25 M relocations, 540 s), and neither this
+/// budget nor the post-RS4GC one sees it. No real function in the bundle is
+/// that shape today; the per-safepoint counts ([`gc_liveness`]) are what a
+/// shape-aware budget would read.
+///
+/// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
+/// (every function stays on native statepoints, the pre-#8583 behavior).
+pub(crate) const DEFAULT_ROOT_SPILL_RELOCATIONS: u64 = DEFAULT_RS4GC_MAX_INSTRS as u64;
+
+pub(crate) fn root_spill_relocation_threshold() -> u64 {
+    #[cfg(test)]
+    if let Some(cap) = TEST_ROOT_SPILL_RELOCATIONS.with(std::cell::Cell::get) {
+        return cap;
     }
-    (root_allocas, safepoints)
+    std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_ROOT_SPILL_RELOCATIONS)
 }
 
-/// Every RS4GC-participating function whose constructed IR predicts more
-/// relocation work than the source-level spill budget permits.
+#[cfg(test)]
+thread_local! {
+    static TEST_ROOT_SPILL_RELOCATIONS: std::cell::Cell<Option<u64>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Thread-local seam for the relocation budget, so a test can move the
+/// threshold without mutating `PERRY_ROOT_SPILL_RELOCATIONS` under other
+/// concurrently running LLVM tests.
+#[cfg(test)]
+pub(crate) fn with_test_root_spill_threshold<T>(cap: u64, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<u64>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_ROOT_SPILL_RELOCATIONS.set(self.0);
+        }
+    }
+    let old = TEST_ROOT_SPILL_RELOCATIONS.replace(Some(cap));
+    let _restore = Restore(old);
+    run()
+}
+
+/// Every RS4GC-participating function whose exact relocation count exceeds
+/// `cap`, with the liveness facts the retry message reports.
 fn rs4gc_preflight_violations(
-    module: &inkwell::module::Module<'_>,
-    cap: usize,
-    rewritten_functions: &std::collections::HashSet<String>,
-) -> Vec<(String, usize, usize, usize)> {
+    liveness: &[(String, gc_liveness::FunctionLiveness)],
+    cap: u64,
+) -> Vec<(String, Rs4gcBudgetCause)> {
     if cap == 0 {
         return Vec::new();
     }
-    let mut over = Vec::new();
-    let mut function = module.get_first_function();
-    while let Some(f) = function {
-        if f.count_basic_blocks() > 0 {
-            let name = f.get_name().to_string_lossy().into_owned();
-            if rewritten_functions.contains(&name) {
-                let (root_allocas, safepoints) = rs4gc_preflight_factors(f);
-                let live_roots =
-                    crate::codegen::helpers::spill_live_root_count(root_allocas, safepoints);
-                let estimate =
-                    crate::codegen::helpers::root_relocation_estimate(live_roots, safepoints);
-                if estimate > cap {
-                    over.push((name, root_allocas, safepoints, estimate));
-                }
-            }
-        }
-        function = f.get_next_function();
-    }
-    over
+    liveness
+        .iter()
+        .filter(|(_, l)| l.relocation_bound() > cap)
+        .map(|(name, l)| (name.clone(), Rs4gcBudgetCause::pre_rewrite(l)))
+        .collect()
 }
 
-/// Stop before RS4GC itself enters its super-linear liveness/rewrite walk and
-/// ask codegen to re-lower the named functions with precise shadow roots.
+/// Stop before RS4GC runs and ask codegen to re-lower the named functions
+/// with precise shadow roots.
 fn enforce_rs4gc_preflight_budget(
-    module: &inkwell::module::Module<'_>,
-    cap: usize,
+    liveness: &[(String, gc_liveness::FunctionLiveness)],
+    cap: u64,
     pre: &std::collections::HashMap<String, usize>,
-    rewritten_functions: &std::collections::HashSet<String>,
 ) -> Result<()> {
-    let violations: Vec<Rs4gcBudgetViolation> =
-        rs4gc_preflight_violations(module, cap, rewritten_functions)
-            .into_iter()
-            .map(
-                |(name, root_allocas, safepoints, estimated_relocations)| Rs4gcBudgetViolation {
-                    pre_instructions: pre.get(&name).copied(),
-                    name,
-                    cause: Rs4gcBudgetCause::PreRewrite {
-                        root_allocas,
-                        safepoints,
-                        estimated_relocations,
-                    },
-                    cap,
-                },
-            )
-            .collect();
+    let violations: Vec<Rs4gcBudgetViolation> = rs4gc_preflight_violations(liveness, cap)
+        .into_iter()
+        .map(|(name, cause)| Rs4gcBudgetViolation {
+            pre_instructions: pre.get(&name).copied(),
+            name,
+            cause,
+            cap: cap as usize,
+        })
+        .collect();
     if violations.is_empty() {
         Ok(())
     } else {
@@ -993,15 +1020,17 @@ fn rewrite_budget_message(violation: &Rs4gcBudgetViolation, retry: bool) -> Stri
     };
     match &violation.cause {
         Rs4gcBudgetCause::PreRewrite {
-            root_allocas,
-            safepoints,
-            estimated_relocations,
+            statepoints,
+            invoke_statepoints,
+            max_live,
+            relocations,
         } => format!(
-            "before rewrite-statepoints-for-gc, `{}` has {root_allocas} managed-root allocas and \
-             {safepoints} non-leaf call sites; accounting for call-result temporaries predicts \
-             {estimated_relocations} relocations, above the pre-rewrite budget {}. RS4GC's own \
-             liveness/rewrite walk is super-linear on fan-out of this size; {outcome} (#8583). \
-             Override with PERRY_ROOT_SPILL_RELOCATIONS=<n> (raise) or =0 (disable).",
+            "before rewrite-statepoints-for-gc, `{}` has {statepoints} statepoints \
+             ({invoke_statepoints} of them invokes, relocated on both edges) with up to \
+             {max_live} GC values live across one; RS4GC would emit {relocations} relocations, \
+             above the pre-rewrite budget {}. RS4GC and the optimizer after it are super-linear \
+             on fan-out of this size; {outcome} (#8583). Override with \
+             PERRY_ROOT_SPILL_RELOCATIONS=<n> (raise) or =0 (disable).",
             violation.name, violation.cap
         ),
         Rs4gcBudgetCause::PostRewrite { post_instructions } => {

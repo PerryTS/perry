@@ -229,19 +229,22 @@ pub(crate) fn apply_budget_spill_retry<'a>(
             changed.insert(violation.name.clone());
             match &violation.cause {
                 crate::inprocess::Rs4gcBudgetCause::PreRewrite {
-                    root_allocas,
-                    safepoints,
-                    estimated_relocations,
+                    statepoints,
+                    invoke_statepoints,
+                    max_live,
+                    relocations,
                 } => eprintln!(
-                    "perry: `{}` exceeded the pre-RS4GC relocation estimate ({} managed-root \
-                     allocas + {} non-leaf call-result temporaries across {} call sites = {} \
-                     estimated relocations; cap {}); retrying it with precise GC roots in a \
-                     shadow frame at the requested optimization level (#8583)",
+                    "perry: `{}` keeps its GC roots in a shadow frame instead of statepoints: \
+                     rewrite-statepoints-for-gc would emit {} relocations ({} statepoints, {} of \
+                     them invokes relocated on both edges; up to {} GC values live across one), \
+                     above the budget {}. The function is still compiled at the requested \
+                     optimization level; only its GC-root representation changes, and its roots \
+                     stay precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS.",
                     violation.name,
-                    root_allocas,
-                    safepoints,
-                    safepoints,
-                    estimated_relocations,
+                    relocations,
+                    statepoints,
+                    invoke_statepoints,
+                    max_live,
                     violation.cap,
                 ),
                 crate::inprocess::Rs4gcBudgetCause::PostRewrite { post_instructions } => {
@@ -585,7 +588,7 @@ pub fn compile_module_units_native(
                 0.0
             };
             eprintln!(
-                "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns; pre-RS4GC {} instrs (widest {}); post-RS4GC {} instrs (x{growth:.1}; widest {}); rs4gc {:.1}s, opt {:.1}s, emit {:.1}s",
+                "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns; pre-RS4GC {} instrs (widest {}); post-RS4GC {} instrs (x{growth:.1}; widest {}); rs4gc {:.1}s (liveness {:.3}s: {} statepoints, {} relocations predicted, {} emitted, {} mismatching fns), opt {:.1}s, emit {:.1}s",
                 i + 1,
                 stats.functions,
                 stats.pre_rewrite_instructions,
@@ -593,6 +596,11 @@ pub fn compile_module_units_native(
                 stats.post_rewrite_instructions,
                 widest(&stats.post_rewrite_widest),
                 stats.rewrite_secs,
+                stats.liveness_secs,
+                stats.statepoints,
+                stats.relocations_predicted,
+                stats.relocations_actual,
+                stats.liveness_mismatches,
                 stats.optimize_secs,
                 stats.emit_secs,
             );
@@ -1392,6 +1400,40 @@ mod tests {
         assert!(after.contains("@js_shadow_frame_enter"), "{after}");
         assert!(after.contains("@js_shadow_slot_bind"), "{after}");
         assert!(after.contains("@js_shadow_frame_pop"), "{after}");
+    }
+
+    /// S4 (RFC deferred collection): the pre-RS4GC spill is decided on the
+    /// exact relocation count of the constructed function. Under a budget the
+    /// fixture fits, it keeps its statepoints; under a budget of 1 it is
+    /// re-lowered onto a shadow frame before RS4GC runs, and still compiles.
+    #[test]
+    fn exact_relocation_budget_decides_the_spill_before_rs4gc() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let spilled = |budget: u64| {
+            let mut module = precise_root_fixture(false);
+            let object = crate::inprocess::with_test_root_spill_threshold(budget, || {
+                compile_module_native(&mut module, None, "exact_budget_fixture")
+            })
+            .expect("the fixture compiles under either budget");
+            assert!(!object.is_empty());
+            let function = module
+                .deduped_function_refs()
+                .into_iter()
+                .find(|function| function.name == "native_root_diff_fixture")
+                .expect("fixture function exists");
+            let ir = function.to_ir();
+            assert_eq!(
+                function.spills_roots_to_shadow_frame(),
+                !ir.contains("gc \"statepoint-example\""),
+                "{ir}"
+            );
+            function.spills_roots_to_shadow_frame()
+        };
+        assert!(
+            !spilled(1_000_000),
+            "a budget the fixture fits must keep statepoints"
+        );
+        assert!(spilled(1), "a budget below the fixture's count must spill");
     }
 
     /// The reported Claude bundle takes the split-unit worker path. Its retry
