@@ -295,7 +295,14 @@ fn neutralise(function: &mut LlFunction, site: &EntryPollSite) {
     if let Some(block) = function.block_mut(site.load_block) {
         for inst in block.insts_mut().iter_mut() {
             if matches!(inst, LlInst::Load { dst, .. } if *dst == site.load_dst) {
-                *inst = LlInst::Raw(format!("  {} = add i32 0, 0", site.load_dst));
+                *inst = LlInst::Bin {
+                    dst: site.load_dst.clone(),
+                    op: "add",
+                    pre: "",
+                    ty: I32,
+                    a: "0".to_string(),
+                    b: "0".to_string(),
+                };
                 break;
             }
         }
