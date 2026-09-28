@@ -181,10 +181,36 @@ impl ConstructionArray {
 
     pub(super) unsafe fn finish(
         mut self,
-        batch: &Option<crate::arena::ConstructionBatch>,
+        batch: &mut Option<crate::arena::ConstructionBatch>,
     ) -> *mut ArrayHeader {
+        self.right_size(batch);
         self.finish_layout(batch);
         self.ptr
+    }
+
+    /// A presized array that ended far below its estimate is copied to its
+    /// length, so the unused reservation dies with the parse instead of
+    /// living as long as the array (#11642).
+    unsafe fn right_size(&mut self, batch: &mut Option<crate::arena::ConstructionBatch>) {
+        let length = (*self.ptr).length;
+        let capacity = (*self.ptr).capacity;
+        if !self.batched || capacity <= 64 || capacity / 4 <= length {
+            return;
+        }
+        let mut next = Self::new(batch, length.max(1));
+        if !next.batched {
+            return;
+        }
+        std::ptr::copy_nonoverlapping(
+            crate::array::array_elements_ptr(self.ptr).cast::<JSValue>(),
+            crate::array::array_elements_ptr(next.ptr).cast::<JSValue>(),
+            length as usize,
+        );
+        (*next.ptr).length = length;
+        next.any_pointer = self.any_pointer;
+        next.all_pointers = self.all_pointers;
+        next.all_numbers = self.all_numbers;
+        *self = next;
     }
 }
 
