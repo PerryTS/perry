@@ -1553,7 +1553,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 25] = [
+const RECV_ROUTE_NAMES: [&str; 28] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1585,8 +1585,11 @@ const RECV_ROUTE_NAMES: [&str; 25] = [
     "rt_rloop_prime_ok",
     "rt_rloop_refuse_band",
     "rt_rloop_refuse_summary",
-    "rt_rloop_refuse_spilled",
-    "rt_rloop_refuse_other",
+    "rt_rloop_refuse_kind",
+    "rt_rloop_refuse_absent",
+    "rt_rloop_refuse_spill_stored",
+    "rt_rloop_refuse_spill_unservable",
+    "rt_rloop_refuse_range",
     "rt_rloop_retire",
 ];
 
@@ -1596,12 +1599,15 @@ pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
-pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILLED: u32 = 22;
-pub(crate) const RT_ROUTE_RLOOP_REFUSE_OTHER: u32 = 23;
-pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 24;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_KIND: u32 = 22;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_ABSENT: u32 = 23;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_STORED: u32 = 24;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE: u32 = 25;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_RANGE: u32 = 26;
+pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 27;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 25] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 25];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 28] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 28];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a

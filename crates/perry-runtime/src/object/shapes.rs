@@ -1761,43 +1761,70 @@ pub extern "C" fn js_region_loop_pack(
     k4: u64,
     stored_mask: u32,
 ) -> u64 {
+    region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask)
+        .unwrap_or(REGION_GUARD_WORD_EMPTY)
+}
+
+/// Why [`js_region_loop_pack`] refused a shape — the route census's refusal
+/// histogram (DESIGN §9.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegionRefusal {
+    /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
+    Band,
+    /// A key is an accessor or not writable/enumerable/configurable data.
+    Summary,
+    /// Not `Ordinary`, a non-zero semantic generation, or tombstones.
+    Kind,
+    /// A key is not in the shape at all (inherited, or absent).
+    Absent,
+    /// A key the body STORES is spill-located.
+    SpillStored,
+    /// A spill-located key the S5 path could not serve (storage disabled,
+    /// index past `SPILL_MAX_FIELD_INDEX`, or past the word's 6-bit field).
+    SpillUnservable,
+    /// An inline slot past the word's 6-bit field (>= 32).
+    Range,
+}
+
+fn region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    keys: [u64; 5],
+    stored_mask: u32,
+) -> Result<u64, RegionRefusal> {
+    use RegionRefusal::*;
     if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
-        return REGION_GUARD_WORD_EMPTY;
+        return Err(Band);
     }
     match shape_record_by_id(shape_id) {
         Some(record) if record.summary() == 0 => {}
-        _ => return REGION_GUARD_WORD_EMPTY,
+        Some(_) => return Err(Summary),
+        None => return Err(Band),
     }
     let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
-        return REGION_GUARD_WORD_EMPTY;
+        return Err(Band);
     };
     if descriptor.object_kind != ShapeObjectKind::Ordinary
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
     {
-        return REGION_GUARD_WORD_EMPTY;
+        return Err(Kind);
     }
-    let keys = [k0, k1, k2, k3, k4];
     // (spilled, inline slot or spill index) per key.
     let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
     let mut any_spill = false;
     for (i, &key) in keys.iter().enumerate().take(n as usize) {
-        let Some((spilled, position)) = region_key_location(&descriptor, key) else {
-            return REGION_GUARD_WORD_EMPTY;
-        };
-        if !spilled {
-            at[i] = (false, position);
-        } else {
-            let index = position;
-            if stored_mask & (1 << i) != 0
-                || !super::object_spill_enabled()
-                || index >= super::SPILL_MAX_FIELD_INDEX
-            {
-                return REGION_GUARD_WORD_EMPTY;
+        let (spilled, position) = region_key_location(&descriptor, key).ok_or(Absent)?;
+        if spilled {
+            if stored_mask & (1 << i) != 0 {
+                return Err(SpillStored);
             }
-            at[i] = (true, index);
+            if !super::object_spill_enabled() || position >= super::SPILL_MAX_FIELD_INDEX {
+                return Err(SpillUnservable);
+            }
             any_spill = true;
         }
+        at[i] = (spilled, position);
     }
     // Every field is `slot` (< 32) or `32 + spill index` (< 63), in BOTH
     // kinds of word: a region with two receivers may run its spill copy for
@@ -1813,11 +1840,12 @@ pub extern "C" fn js_region_loop_pack(
         let field = match spilled {
             false if n_at < 32 => n_at,
             true if n_at < 31 => 32 + n_at,
-            _ => return REGION_GUARD_WORD_EMPTY,
+            false => return Err(Range),
+            true => return Err(SpillUnservable),
         };
         word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
     }
-    word
+    Ok(word)
 }
 
 /// The word a loop region's site holds once its last bounded prime attempt
@@ -1847,8 +1875,9 @@ pub unsafe extern "C" fn js_region_loop_prime(
     last: u32,
     stored_mask: u32,
 ) -> u64 {
-    let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4, stored_mask);
-    region_loop_prime_census(shape_id, packed);
+    let verdict = region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask);
+    region_loop_prime_census(verdict);
+    let packed = verdict.unwrap_or(REGION_GUARD_WORD_EMPTY);
     if word.is_null() {
         return REGION_GUARD_WORD_EMPTY;
     }
@@ -1868,26 +1897,25 @@ pub unsafe extern "C" fn js_region_loop_prime(
 
 /// The route census's verdict on one loop-region prime (a relaxed load and a
 /// not-taken branch outside a census build): accepted, or WHY it was refused
-/// — the site band, a non-zero attribute summary, a shape with spilled keys,
-/// or anything else the packer declines (kind, generation, holes, key absent).
-fn region_loop_prime_census(shape_id: u32, packed: u64) {
+/// ([`RegionRefusal`]).
+fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
     use crate::hot_diag::{
-        recv_route_note_runtime as note, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_BAND,
-        RT_ROUTE_RLOOP_REFUSE_OTHER, RT_ROUTE_RLOOP_REFUSE_SPILLED, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+        recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_KIND, RT_ROUTE_RLOOP_REFUSE_RANGE,
+        RT_ROUTE_RLOOP_REFUSE_SPILL_STORED, RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
+        RT_ROUTE_RLOOP_REFUSE_SUMMARY,
     };
-    if packed != REGION_GUARD_WORD_EMPTY {
-        note(RT_ROUTE_RLOOP_PRIME_OK);
-    } else if !is_site_matchable_shape_id(shape_id) {
-        note(RT_ROUTE_RLOOP_REFUSE_BAND);
-    } else if shape_record_by_id(shape_id).is_some_and(|r| r.summary() != 0) {
-        note(RT_ROUTE_RLOOP_REFUSE_SUMMARY);
-    } else if shape_descriptor_by_id(shape_id)
-        .is_some_and(|d| d.live_inline_slot_count != d.logical_key_count)
-    {
-        note(RT_ROUTE_RLOOP_REFUSE_SPILLED);
-    } else {
-        note(RT_ROUTE_RLOOP_REFUSE_OTHER);
-    }
+    let route = match verdict {
+        Ok(_) => RT_ROUTE_RLOOP_PRIME_OK,
+        Err(RegionRefusal::Band) => RT_ROUTE_RLOOP_REFUSE_BAND,
+        Err(RegionRefusal::Summary) => RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+        Err(RegionRefusal::Kind) => RT_ROUTE_RLOOP_REFUSE_KIND,
+        Err(RegionRefusal::Absent) => RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        Err(RegionRefusal::SpillStored) => RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        Err(RegionRefusal::SpillUnservable) => RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
+        Err(RegionRefusal::Range) => RT_ROUTE_RLOOP_REFUSE_RANGE,
+    };
+    recv_route_note_runtime(route);
 }
 
 /// Keepalive anchor — `js_region_loop_prime` is called only from generated
