@@ -854,11 +854,22 @@ pub(super) fn compile_method(
 
     // RFC deferred collection S5: methods are entered through the class
     // tables, so they carry the indirect-entry poll (see `crate::entry_polls`).
-    crate::entry_polls::emit_entry_poll(
-        &mut ctx,
-        method_body,
-        crate::entry_polls::EntryPollKind::Indirect,
-    );
+    //
+    // NOT constructors. `new C(...)` calls the constructor body DIRECTLY, and
+    // an in-body poll would make every such call a MOVING collection point.
+    // Several `new` lowerings hold a slot-loaded value in a register across
+    // that call (the stale-register checker found three in the corpus), which
+    // was sound only because the call could not move. The RFC's stub design
+    // (a poll only on the indirect entry) is what makes a constructor poll
+    // safe; until it exists a constructor's allocation stays bounded by the
+    // polls of the loops and calls inside it, and by the valve.
+    if method.name != format!("{}_constructor", class.name) {
+        crate::entry_polls::emit_entry_poll(
+            &mut ctx,
+            method_body,
+            crate::entry_polls::EntryPollKind::Indirect,
+        );
+    }
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &method.params,
