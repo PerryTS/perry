@@ -616,8 +616,9 @@ pub(super) fn emit_string_pool(
         let blk = chunker.current_block();
         // The birth's class id, typed-ness and live bound come from the ONE
         // derivation the driver's pre-pass also uses to name this birth's
-        // content (`static_shape_ids::class_birth`); `requested` is the static
-        // id the driver assigned that content (0 = none).
+        // content (`static_shape_ids::class_birth`); `requested` is that
+        // content's static id — the definer's for a structural stub of the
+        // definer's facts — (0 = none).
         let birth = super::static_shape_ids::class_birth(
             module_prefix,
             &class_keys_init_data[idx],
@@ -625,7 +626,7 @@ pub(super) fn emit_string_pool(
             class_ids,
         );
         let class_id = birth.class_id;
-        let requested = super::static_shape_ids::static_mint_id_for_keys_global(global_name)
+        let requested = super::static_shape_ids::static_shape_id_for_keys_global(global_name)
             .unwrap_or(0)
             .to_string();
         let cid_str = class_id.to_string();

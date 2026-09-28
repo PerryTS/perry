@@ -94,7 +94,7 @@ fn birth(global: &str, cid: u32, defined: bool, shape: &BirthShape) -> ModuleBir
 }
 
 #[test]
-fn a_structural_stub_guards_with_the_definers_typed_id() {
+fn a_structural_stub_of_the_definers_facts_resolves_to_the_definers_typed_id() {
     let stub = class("next\0value\0", 2, 21);
     let def = typed("next\0value\0", 2, 21, 0b10, 0b01);
     let births = [
@@ -104,15 +104,18 @@ fn a_structural_stub_guards_with_the_definers_typed_id() {
     let ids = assign_static_shape_ids(births.iter().map(|b| &b.shape));
     let program = ProgramClassShapeIds::from_births(&births, &ids);
     assert_eq!(
-        program.guard_id("k_imp__C", 21, &stub, ids[&stub]),
+        program.resolved_id("k_imp__C", 21, &stub, ids[&stub]),
         ids[&def]
     );
-    assert_eq!(program.guard_id("k_def__C", 21, &def, ids[&def]), ids[&def]);
+    assert_eq!(
+        program.resolved_id("k_def__C", 21, &def, ids[&def]),
+        ids[&def]
+    );
     // A stub with other facts (#5094), or a typed stub, keeps its own id.
     let other = class("next\0", 1, 21);
-    assert_eq!(program.guard_id("k_imp__C", 21, &other, 7), 7);
+    assert_eq!(program.resolved_id("k_imp__C", 21, &other, 7), 7);
     let typed_stub = typed("next\0value\0", 2, 21, 0, 0b11);
-    assert_eq!(program.guard_id("k_imp__C", 21, &typed_stub, 9), 9);
+    assert_eq!(program.resolved_id("k_imp__C", 21, &typed_stub, 9), 9);
 }
 
 #[test]

@@ -69,14 +69,15 @@ unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
 /// globals and init guards are per-thread), so every agent installs its own.
 ///
 /// `requested` is the driver's static id for this layout (design step 4, 0 =
-/// none: a fresh counter id). Its content includes the masks, and no other
-/// content shares it (decision 16: a structural view of the class has its own
-/// id), so only this layout's own install ever requests it: it is absent from
-/// this agent, or present with these exact facts and this exact descriptor
-/// (a second module deriving the same typed layout). A refusal is therefore
-/// an invariant violation, and it ABORTS: the defining module's guards compare
-/// against `requested` as an immediate, so a fallback id would leave them
-/// naming whatever else held it.
+/// none: a fresh counter id). Its content includes the masks; the only other
+/// requester is an importer's structural view of exactly these facts (the
+/// same content at runtime, so the driver hands it this id too). So the id is
+/// absent from this agent, present with these exact facts and no layout (the
+/// importer initialized first), or present with these exact facts and this
+/// exact descriptor (a second module deriving the same typed layout). A
+/// refusal is therefore an invariant violation, and it ABORTS: the guards
+/// compare against `requested` as an immediate, so a fallback id would leave
+/// them naming whatever else held it.
 ///
 /// There is no registry: the typed identity is the id the driver derived from
 /// the layout, and the descriptor lives in the agent's ordinary hot table.

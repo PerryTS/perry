@@ -58,34 +58,32 @@ fn the_definer_adopts_the_static_id_and_an_importer_resolves_to_it() {
 }
 
 /// An importing module initializes first (the entry module, or an import
-/// cycle): its structural mint adopts ITS OWN static id (decision 16: a plain
-/// view never shares the typed id), the definer's typed install then adopts
-/// the typed id, and every later birth of those facts reaches the typed id.
+/// cycle). Its structural view of the class has exactly the definer's facts,
+/// so it is the same content and the driver hands it the definer's (typed) id:
+/// its mint adopts that id with no layout, the definer's typed install then
+/// accepts the same facts under it and installs the descriptor, and every
+/// later birth of those facts reaches it. Init order never matters.
 #[test]
-fn an_importer_first_keeps_its_own_id_and_the_definer_adopts_the_typed_id() {
+fn an_importer_first_adopts_the_definers_id_and_the_typed_install_accepts_it() {
     let class_id = 0x0B1_2002;
-    let (s_plain, s_typed) = (SHAPE_ID_BASE + 0x5102, SHAPE_ID_BASE + 0x5103);
+    let s = SHAPE_ID_BASE + 0x5103;
     let keys = keys_for(class_id, b"lt4u_next\0lt4u_value\0");
     let importer = crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-        keys, 2, 2, class_id, s_plain,
+        keys, 2, 2, class_id, s,
     );
-    assert_eq!(importer, s_plain);
+    assert_eq!(importer, s);
     assert!(
-        hot(s_plain).is_none(),
+        hot(s).is_none(),
         "a structural mint installs no typed layout"
     );
-    assert_eq!(typed(class_id, keys, &RAW, &POINTERS, s_typed), s_typed);
-    assert!(hot(s_typed) == Some(Some(descriptor(&RAW, &POINTERS))));
-    assert!(
-        hot(s_plain).is_none(),
-        "the plain id never carries the typed layout"
-    );
+    assert_eq!(typed(class_id, keys, &RAW, &POINTERS, s), s);
+    assert!(hot(s) == Some(Some(descriptor(&RAW, &POINTERS))));
     assert_eq!(
         crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-            keys, 2, 2, class_id, s_plain,
+            keys, 2, 2, class_id, s,
         ),
-        s_typed,
-        "the typed install is canonical for later births of those facts"
+        s,
+        "a later birth of those facts reaches the one id"
     );
 }
 

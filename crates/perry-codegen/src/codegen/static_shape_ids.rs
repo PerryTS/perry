@@ -13,9 +13,9 @@
 //! Adoption is the runtime's: module init hands the id to the ordinary mint
 //! as `requested` (`js_object_shape_id_for_class_keys_static`,
 //! `js_gc_typed_shape_id_for_keys`), which mints it on a by-facts miss and
-//! otherwise returns the existing id. Births stamp what the mint RETURNED;
-//! only guards compare against the static id as an immediate, so a declined
-//! id makes a guard miss (slow), never alias.
+//! otherwise returns the existing id; a refused id aborts (ids are by
+//! content, so a refusal is an invariant violation). Births stamp what the
+//! mint RETURNED; only guards compare against the static id as an immediate.
 //!
 //! The content of a birth comes from ONE function, [`class_birth`], which the
 //! string pool uses to emit the mint and the driver's pre-pass uses (through
@@ -103,8 +103,10 @@ impl BirthShape {
 ///
 /// Every distinct content gets its OWN id (decision 16): a structural view of
 /// a class and its typed layout are different content, so they never share an
-/// id and a guard immediate never names two layouts. An importer's guards
-/// reach the definer's id through [`ProgramClassShapeIds`] instead.
+/// id and a guard immediate never names two layouts. An importer's
+/// structural stub with exactly the definer's facts is the definer's content
+/// at runtime and uses the definer's id through [`ProgramClassShapeIds`]
+/// (its own entry here is then never requested).
 ///
 /// Contents beyond the band's capacity get no id (their guards load the
 /// mint's id, as before step 4).
@@ -193,13 +195,23 @@ impl ProgramClassShapeIds {
         )
     }
 
-    /// The guard immediate for a keys global of THIS module holding `shape`
-    /// (minted as `own`): the defining module's id when this is a structural
-    /// stub of exactly the definer's facts — the definer's typed install goes
-    /// to the front of the by-facts bucket, so this module's births reach it
-    /// too — else `own`. A typed stub keeps its own id: its code may rely on
-    /// its own masks, which the definer's layout need not share.
-    fn guard_id(&self, keys_global: &str, class_id: u32, shape: &BirthShape, own: u32) -> u32 {
+    /// The static id of a keys global of THIS module holding `shape` (whose
+    /// own content was assigned `own`): the id its mint REQUESTS and its
+    /// guards embed. It is the defining module's id when this is a structural
+    /// stub of exactly the definer's facts (keys, count, live bound,
+    /// prototype): the runtime mints the same facts for both, so they are one
+    /// content, and whichever module initializes first adopts the id — the
+    /// definer's typed install accepts a record of its exact facts already
+    /// under it — so init order never matters and no guard misses. Else
+    /// `own`. A typed stub keeps its own id: its code may rely on its own
+    /// masks, which the definer's layout need not share.
+    pub(crate) fn resolved_id(
+        &self,
+        keys_global: &str,
+        class_id: u32,
+        shape: &BirthShape,
+        own: u32,
+    ) -> u32 {
         match self.0.get(&class_id) {
             Some(d)
                 if d.keys_global != keys_global
@@ -286,13 +298,12 @@ pub(crate) fn class_birth(
 }
 
 thread_local! {
-    /// This module's static ids per class keys global: `(mint id, guard id)`.
-    /// The mint id is the one its own content was assigned (the string pool
-    /// requests it); the guard id is what a guard compares as an immediate
-    /// (the definer's id for a structural stub, see
-    /// [`ProgramClassShapeIds::guard_id`]). Set by `compile_module` for every
-    /// module (empty when the driver assigned none).
-    static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, u32)>> = RefCell::new(HashMap::new());
+    /// This module's static id per class keys global: the id its mint
+    /// requests and its guards compare as an immediate (the definer's id for
+    /// a structural stub of the definer's facts, see
+    /// [`ProgramClassShapeIds::resolved_id`]). Set by `compile_module` for
+    /// every module (empty when the driver assigned none).
+    static MODULE_STATIC_IDS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
     /// This module's slice of the program-wide map (foreign shape globals).
     static MODULE_PROGRAM_IDS: RefCell<ProgramClassShapeIds> = RefCell::new(ProgramClassShapeIds::default());
 }
@@ -308,7 +319,7 @@ pub(crate) fn set_module_static_ids(
     program: &ProgramClassShapeIds,
 ) {
     let by_content: HashMap<&BirthShape, u32> = assigned.iter().map(|(c, id)| (c, *id)).collect();
-    let map: HashMap<String, (u32, u32)> = if by_content.is_empty() {
+    let map: HashMap<String, u32> = if by_content.is_empty() {
         HashMap::new()
     } else {
         class_keys_init_data
@@ -317,8 +328,8 @@ pub(crate) fn set_module_static_ids(
                 let birth = class_birth(module_prefix, entry, class_header_image_inits, class_ids);
                 let shape = birth.shape.as_ref()?;
                 let own = *by_content.get(shape)?;
-                let guard = program.guard_id(&entry.0, birth.class_id, shape, own);
-                Some((entry.0.clone(), (own, guard)))
+                let id = program.resolved_id(&entry.0, birth.class_id, shape, own);
+                Some((entry.0.clone(), id))
             })
             .collect()
     };
@@ -326,17 +337,11 @@ pub(crate) fn set_module_static_ids(
     MODULE_PROGRAM_IDS.with(|m| *m.borrow_mut() = program.clone());
 }
 
-/// The static id a GUARD compares against for the class whose keys global is
-/// `keys_global`, when the driver assigned one and the global belongs to this
-/// module.
+/// The static id of the class whose keys global is `keys_global`, when the
+/// driver assigned one and the global belongs to this module: the id its mint
+/// requests and every guard compares against as an immediate.
 pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(_, guard)| guard))
-}
-
-/// The static id this module's mint of `keys_global` requests (its own
-/// content's id).
-pub(crate) fn static_mint_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(own, _)| own))
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).copied())
 }
 
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`
