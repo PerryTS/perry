@@ -487,7 +487,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     let current = unsafe { *record };
     // A stable id may never silently retarget its collector-owned keys edge.
     // Array growth that reallocates falls back to a fresh descriptor.
-    if current.keys != keys as u64 || current.object_kind() != super::ShapeObjectKind::Ordinary {
+    if current.keys != keys as u64 || !current.object_kind().is_ordinary_layout() {
         return None;
     }
     // Only a PRIVATE list's epoch may be updated in place. A receiver that
@@ -570,7 +570,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     let record = &mut *live;
     if record.keys != current.keys
         || record.has(RECORD_FLAG_FACTS_INDEXED)
-        || record.object_kind() != super::ShapeObjectKind::Ordinary
+        || !record.object_kind().is_ordinary_layout()
         || !stable_update_keeps_inline_bound(record.live_inline_slot_count, live_inline_slot_count)
     {
         return None;
@@ -623,7 +623,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     let live = unsafe { *live_ptr };
     if live.keys != current.keys
         || live.has(RECORD_FLAG_FACTS_INDEXED)
-        || live.object_kind() != super::ShapeObjectKind::Ordinary
+        || !live.object_kind().is_ordinary_layout()
     {
         return None;
     }
@@ -716,7 +716,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         logical_key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        super::store_kind::mint_kind(current.object_kind, obj),
         hole_count,
         current.proto_id,
         super::receiver_extra_summary(obj),
@@ -939,7 +939,7 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
             logical_key_count,
             current.live_inline_slot_count,
             generation,
-            current.object_kind,
+            super::store_kind::mint_kind(current.object_kind, obj),
             hole_count,
             current.proto_id,
         );
@@ -1125,6 +1125,7 @@ pub(super) fn install_external_shape_id(
     logical_key_count: u32,
     live_inline_slot_count: u32,
     proto_id: u64,
+    object_kind: super::ShapeObjectKind,
 ) -> bool {
     if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
         return false;
@@ -1138,7 +1139,7 @@ pub(super) fn install_external_shape_id(
         logical_key_count,
         live_inline_slot_count,
         0,
-        super::ShapeObjectKind::Ordinary,
+        object_kind,
         0,
     )
     .with_proto_id(proto_id)
@@ -1153,7 +1154,7 @@ pub(super) fn install_external_shape_id(
             logical_key_count,
             live_inline_slot_count,
             0,
-            super::ShapeObjectKind::Ordinary,
+            object_kind,
             0,
             proto_id,
             summary,

@@ -71,7 +71,7 @@ pub(crate) struct ShapeRecord {
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
-    /// discriminant. Bits 11-14: the births a keyless birth shape served while
+    /// discriminant (codes 0-6; the store facts F-A/F-B are kinds 5 and 6). Bits 11-14: the births a keyless birth shape served while
     /// tracking its width (#10905). Bit 15: reserved. Bits 16-23: the
     /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
     /// Bits 24-31: the inline width a keyless birth shape's descendants grow
@@ -87,6 +87,10 @@ pub(crate) struct ShapeRecord {
 
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
+/// The largest `ShapeObjectKind::code()` (`OrdinaryNumericProof`, 6). Code 7
+/// is the field's last free value. `kind_codes_round_trip` pins every kind.
+const RECORD_KIND_MAX_CODE: u32 = 6;
+const _: () = assert!(RECORD_KIND_MAX_CODE <= RECORD_KIND_MASK >> RECORD_KIND_SHIFT);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
 /// whose keys are all default answers without touching its keys. Derived
@@ -228,6 +232,8 @@ impl ShapeRecord {
             2 => ShapeObjectKind::Dictionary,
             3 => ShapeObjectKind::Function,
             4 => ShapeObjectKind::FunctionDictionary,
+            5 => ShapeObjectKind::OrdinaryUnmarked,
+            6 => ShapeObjectKind::OrdinaryNumericProof,
             _ => ShapeObjectKind::Ordinary,
         }
     }
@@ -1141,6 +1147,35 @@ impl IdList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind survives the record field, and the two store-fact kinds
+    /// (charter step 3) occupy codes 5 and 6 — distinct values, so distinct
+    /// ShapeIds for otherwise identical facts.
+    #[test]
+    fn kind_codes_round_trip() {
+        for kind in [
+            ShapeObjectKind::Ordinary,
+            ShapeObjectKind::Class,
+            ShapeObjectKind::Dictionary,
+            ShapeObjectKind::Function,
+            ShapeObjectKind::FunctionDictionary,
+            ShapeObjectKind::OrdinaryUnmarked,
+            ShapeObjectKind::OrdinaryNumericProof,
+        ] {
+            assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
+            let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);
+            assert_eq!(r.object_kind(), kind);
+            for other in [ShapeObjectKind::Ordinary, ShapeObjectKind::OrdinaryUnmarked] {
+                if other != kind {
+                    assert!(!r.facts_match(0x1000, 1, 1, 0, other, 0));
+                    assert_ne!(
+                        facts_key(0x1000, 1, 1, 0, kind, 0),
+                        facts_key(0x1000, 1, 1, 0, other, 0)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn slab_records_are_addressed_by_id_and_keep_their_address() {

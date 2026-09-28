@@ -1132,7 +1132,7 @@ unsafe fn inherited_read_cache_walk(
         return None;
     }
     match shapes::object_shape_descriptor(obj) {
-        Some(shape) if shape.object_kind == shapes::ShapeObjectKind::Ordinary => {}
+        Some(shape) if shape.object_kind.is_ordinary_layout() => {}
         _ => return None,
     }
     let recv_class_id = (*obj).class_id;
@@ -1266,7 +1266,7 @@ unsafe fn inherited_read_cache_walk(
             Some(shape) => shape,
             None => return None,
         };
-        if shape.object_kind != shapes::ShapeObjectKind::Ordinary {
+        if !shape.object_kind.is_ordinary_layout() {
             return None;
         }
         if shapes::object_shape_stamp(next) == 0 {

@@ -40,6 +40,8 @@ mod shapes_birth_width;
 mod shapes_slot_list;
 #[path = "shapes_store.rs"]
 mod shapes_store;
+#[path = "shapes_store_kind.rs"]
+pub(crate) mod store_kind;
 pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
 #[cfg(test)]
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
@@ -269,7 +271,7 @@ impl ShapeRecordRef {
         hint: usize,
     ) -> Option<usize> {
         let r = &*self.0.as_ptr();
-        if r.object_kind() != ShapeObjectKind::Ordinary
+        if !r.object_kind().is_ordinary_layout()
             || r.semantic_generation != 0
             || r.hole_count != 0
             || r.keys == 0
@@ -308,7 +310,7 @@ impl ShapeRecordRef {
         key: *const crate::StringHeader,
     ) -> Option<usize> {
         let r = &*self.0.as_ptr();
-        if r.object_kind() != ShapeObjectKind::Ordinary
+        if !r.object_kind().is_ordinary_layout()
             || r.semantic_generation != 0
             || r.hole_count != 0
             || r.keys == 0
@@ -406,6 +408,11 @@ impl Eq for ShapeDescriptor {}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ShapeObjectKind {
+    /// An ordinary object whose own slots are proven plain data (a class
+    /// instance, or a class-less receiver a birth site marked
+    /// `OBJ_FLAG_PLAIN_ORDINARY`) and that carries no Array-subclass numeric
+    /// proof. The ONE kind a store may be admitted on by its ShapeId alone
+    /// (charter step 3, `shapes_store_kind`).
     Ordinary,
     Class,
     /// #10868: the receiver's keys live per-object, not in a shared keys
@@ -426,6 +433,18 @@ pub(crate) enum ShapeObjectKind {
     /// deleted or redefined intrinsic, an accessor, a recorded
     /// [[Prototype]]): the answer lives on the object, as for `Dictionary`.
     FunctionDictionary,
+    /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
+    /// whose own slots are NOT proven plain data: a class-less receiver no
+    /// birth site marked ordinary (`URL`, `Object.prototype`, a typed-array
+    /// prototype, a runtime-born record) or a native-module receiver. Reads
+    /// treat it as `Ordinary`; a store is never admitted on it by shape.
+    OrdinaryUnmarked,
+    /// [`ShapeObjectKind::Ordinary`] carrying the Array-subclass packed-numeric
+    /// proof (`array::subclass`). Entered only by publishing the proof and
+    /// left by retiring it (or by any other shape change), so the proof is a
+    /// shape transition and a store word naming an `Ordinary` id can never
+    /// match a proof-carrying receiver.
+    OrdinaryNumericProof,
 }
 
 impl ShapeObjectKind {
@@ -435,6 +454,19 @@ impl ShapeObjectKind {
         matches!(
             self,
             ShapeObjectKind::Function | ShapeObjectKind::FunctionDictionary
+        )
+    }
+
+    /// The ordinary object LAYOUT: every kind whose receiver reads exactly as
+    /// an `Ordinary` one. What every layout / read consumer asks; only the
+    /// store admission asks `== Ordinary`.
+    #[inline]
+    pub(crate) fn is_ordinary_layout(self) -> bool {
+        matches!(
+            self,
+            ShapeObjectKind::Ordinary
+                | ShapeObjectKind::OrdinaryUnmarked
+                | ShapeObjectKind::OrdinaryNumericProof
         )
     }
 
@@ -448,6 +480,8 @@ impl ShapeObjectKind {
             ShapeObjectKind::Dictionary => 2,
             ShapeObjectKind::Function => 3,
             ShapeObjectKind::FunctionDictionary => 4,
+            ShapeObjectKind::OrdinaryUnmarked => 5,
+            ShapeObjectKind::OrdinaryNumericProof => 6,
         }
     }
 }
@@ -463,6 +497,8 @@ const SHAPE_KIND_CLASS: u64 = 2;
 const SHAPE_KIND_DICTIONARY: u64 = 3;
 const SHAPE_KIND_FUNCTION: u64 = 4;
 const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
+const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
+const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -483,6 +519,8 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_DICTIONARY => Some(ShapeObjectKind::Dictionary),
         SHAPE_KIND_FUNCTION => Some(ShapeObjectKind::Function),
         SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
+        SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
+        SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
         _ => None,
     }
 }
@@ -496,6 +534,8 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::Dictionary => SHAPE_KIND_DICTIONARY,
         ShapeObjectKind::Function => SHAPE_KIND_FUNCTION,
         ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
+        ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
+        ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
@@ -1110,7 +1150,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     // #10905: every shape of the transition tree below a keyless birth shape
     // is minted exactly once, here, so this is where the birth shape learns
     // how wide its descendants grow (`shapes_birth_width`).
-    if object_kind == ShapeObjectKind::Ordinary && semantic_generation == 0 {
+    if object_kind.is_ordinary_layout() && semantic_generation == 0 {
         shapes_birth_width::note_descendant_width(
             &inner,
             table.slab(),
@@ -1156,7 +1196,7 @@ pub(crate) unsafe fn shape_descriptor_ensure_for_object(
         logical_key_count,
         live_inline_slot_count,
         0,
-        ShapeObjectKind::Ordinary,
+        store_kind::receiver_ordinary_kind(obj),
         object_proto_id(obj),
         receiver_extra_summary(obj),
     )
@@ -1392,6 +1432,9 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
     id: u32,
 ) {
+    // Charter step 3 (R5): a receiver carrying the Array-subclass numeric
+    // proof loses it on every stamp but its own proof shape's.
+    store_kind::retire_proof_before_stamp(obj, id);
     let previous = (*obj).parent_class_id;
     (*obj).parent_class_id = id;
     // A structural change to an object somebody INHERITS from is invisible to
@@ -1412,6 +1455,9 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
             note_shape_carrier_candidate(record.keys());
         }
     }
+    // Charter step 3 (R6): every publication is checked in debug builds and
+    // under `shape-fact-audit`; compiled out otherwise.
+    store_kind::check_store_facts(obj);
 }
 
 /// Clear every `cache_carrier` bit ahead of the post-full-trace recompute.
@@ -1530,7 +1576,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
     let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
         return -1;
     };
-    if descriptor.object_kind != ShapeObjectKind::Ordinary
+    if !descriptor.object_kind.is_ordinary_layout()
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
         || descriptor.live_inline_slot_count != descriptor.logical_key_count
@@ -1698,7 +1744,16 @@ pub(crate) fn mint_registered_typed_shape_id(
     proto_id: u64,
 ) -> u32 {
     let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
-    if !shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id) {
+    if !shapes_slot_list::install_external_shape_id(
+        id,
+        keys,
+        key_count,
+        key_count,
+        proto_id,
+        // A codegen-registered typed layout is a class allocation's: F-A
+        // admitted (charter step 3).
+        ShapeObjectKind::Ordinary,
+    ) {
         invalid_shape_facts_abort();
     }
     id
@@ -1717,7 +1772,16 @@ pub(crate) fn install_registered_typed_shape_id(
     key_count: u32,
     proto_id: u64,
 ) -> bool {
-    shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id)
+    shapes_slot_list::install_external_shape_id(
+        id,
+        keys,
+        key_count,
+        key_count,
+        proto_id,
+        // A codegen-registered typed layout is a class allocation's: F-A
+        // admitted (charter step 3).
+        ShapeObjectKind::Ordinary,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1873,7 +1937,9 @@ unsafe fn install_cached_object_shape_version_impl(
         // `cache_carrier` already roots the target descriptor for the
         // cache's lifetime — strictly stronger than the epoch-scoped
         // old-carrier note, so this stamp deliberately skips the funnel's
-        // descriptor probe (see the function doc above).
+        // descriptor probe (see the function doc above). The proof retire
+        // (R5) is not skipped: it is one header load without a proof.
+        store_kind::retire_proof_before_stamp(obj, target_shape_id);
         (*obj).parent_class_id = target_shape_id;
     } else {
         stamp_object_shape_id_with_carrier_note(obj, target_shape_id);
@@ -1884,6 +1950,9 @@ unsafe fn install_cached_object_shape_version_impl(
         obj,
         crate::object::ObjectKeys::new(_target_keys, _target_key_count),
     );
+    // The successor was minted from a receiver that carried the same
+    // predecessor, so it derived the same F-A (R2); checked, never trusted.
+    store_kind::check_store_facts(obj);
     #[cfg(test)]
     TEST_CACHED_TRANSITION_WATCH.with(|watch| {
         if watch.get() == obj as usize {
@@ -1932,12 +2001,25 @@ pub(crate) unsafe fn stamp_object_shape(
         debug_assert_object_shape_parity(obj);
         return id;
     };
+    // A same-facts republish (the read side's `lookup_ways`) keeps a
+    // proof-carrying receiver on its proof shape (charter step 3): it changes
+    // nothing the proof depends on, so retiring the proof here would make
+    // every read of the receiver re-prove it.
+    let kind = if lineage.object_kind == ShapeObjectKind::OrdinaryNumericProof
+        && lineage.keys == keys as u64
+        && lineage.logical_key_count == key_count
+        && store_kind::receiver_carries_numeric_proof(obj)
+    {
+        ShapeObjectKind::OrdinaryNumericProof
+    } else {
+        store_kind::mint_kind(lineage.object_kind, obj)
+    };
     let id = publish_shape_result(shape_descriptor_ensure_with_holes(
         keys,
         key_count,
         lineage.live_inline_slot_count,
         lineage.semantic_generation,
-        lineage.object_kind,
+        kind,
         // Same-array restamp: physical holes persist, so must the count
         // (see the lineage publish below for the churn-growth rationale).
         lineage.hole_count,
@@ -1997,6 +2079,7 @@ pub(crate) unsafe fn birth_stamp_object_shape(
                 key_count,
                 live_inline_slot_count,
                 object_proto_id(obj),
+                store_kind::receiver_ordinary_kind(obj),
             );
     if supplied_id_is_local {
         stamp_object_shape_id_with_carrier_note(obj, runtime_shape_id);
@@ -2049,9 +2132,14 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         || descriptor.logical_key_count != keys.count()
         || descriptor.live_inline_slot_count != live_inline_slot_count
         || descriptor.semantic_generation != 0
-        || descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
         || descriptor.proto_id != object_proto_id(obj)
     {
+        if descriptor.object_kind.is_ordinary_layout()
+            && descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
+        {
+            store_kind::audit::note_explicit_decline();
+        }
         return false;
     }
     (*obj).parent_class_id = runtime_shape_id;
@@ -2059,6 +2147,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         note_old_generation_carrier(descriptor.record_ref());
     }
     debug_assert_object_shape_parity(obj);
+    store_kind::check_store_facts(obj);
     true
 }
 
@@ -2236,9 +2325,14 @@ pub(crate) unsafe fn publish_object_shape_from(
     let semantic_generation = lineage
         .map(|descriptor| descriptor.semantic_generation)
         .unwrap_or(0);
-    let object_kind = lineage
-        .map(|descriptor| descriptor.object_kind)
-        .unwrap_or(ShapeObjectKind::Ordinary);
+    // Charter step 3 (R2): an ordinary-family kind is the RECEIVER's, never
+    // the lineage's — a lineage cannot carry a stale F-A or a numeric proof.
+    let object_kind = store_kind::mint_kind(
+        lineage
+            .map(|descriptor| descriptor.object_kind)
+            .unwrap_or(ShapeObjectKind::Ordinary),
+        obj,
+    );
     // Tombstones (#9029): an append or grow-realloc keeps every hole slot
     // physically in the array, so the successor must inherit the count — a
     // reset would let delete/re-add churn dodge the squeeze threshold
@@ -2354,7 +2448,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.hole_count,
         current.proto_id,
         receiver_extra_summary(obj),
@@ -2397,7 +2491,7 @@ pub(crate) unsafe fn transition_object_shape_semantics(
         key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.proto_id,
         receiver_extra_summary(obj),
     ));
@@ -2448,7 +2542,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
-        current.object_kind,
+        store_kind::mint_kind(current.object_kind, obj),
         current.hole_count,
         proto_id,
         receiver_extra_summary(obj),
@@ -2467,7 +2561,12 @@ pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHead
     if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == 0 {
         return 0;
     }
-    transition_object_shape_prototype(obj, object_proto_id(obj))
+    transition_object_shape_prototype(obj, object_proto_id(obj));
+    // A `class_id` rewrite is also an F-A input (charter step 3, R4): a
+    // prototype transition re-derives it, but an unchanged prototype
+    // identity mints nothing, so re-derive explicitly.
+    store_kind::restamp_object_store_kind(obj);
+    object_shape_stamp(obj)
 }
 
 // ---------------------------------------------------------------------------
@@ -2741,6 +2840,9 @@ fn descriptor_matches_object(
             && d.logical_key_count == keys.count()
             && d.live_inline_slot_count == live_inline_slot_count
             && d.proto_id == object_proto_id(obj)
+            // Charter step 3 (R3): a supplied id is the receiver's only if
+            // it names the receiver's store facts too.
+            && d.object_kind == store_kind::receiver_ordinary_kind(obj)
     }
 }
 

@@ -133,10 +133,13 @@ unsafe fn stamp_reserved_floor_shape(
         .map(|d| d.live_inline_slot_count)
         .unwrap_or(0);
     let generation = lineage.as_ref().map(|d| d.semantic_generation).unwrap_or(0);
-    let kind = lineage
-        .as_ref()
-        .map(|d| d.object_kind)
-        .unwrap_or(shapes::ShapeObjectKind::Ordinary);
+    let kind = shapes::store_kind::mint_kind(
+        lineage
+            .as_ref()
+            .map(|d| d.object_kind)
+            .unwrap_or(shapes::ShapeObjectKind::Ordinary),
+        obj,
+    );
     let proto_id = match lineage.as_ref() {
         Some(d) => d.proto_id,
         None => shapes::object_proto_id(obj),

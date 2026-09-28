@@ -760,6 +760,8 @@ fn shape_mutation_to_new_young_key_rearms_minor_log() {
         *slot = f64::from_bits(string_bits(old_leaf()));
         let id = crate::object::shapes::shape_descriptor_ensure(keys, 1, 0).expect("shape");
         let (owner, _) = alloc_old_test_object(0);
+        // The keys-only mint is `Ordinary`: its carrier is a plain one.
+        crate::object::shapes::store_kind::premark_plain_ordinary(owner);
         crate::object::shapes::stamp_object_shape_id_with_carrier_note(owner, id);
         let _ = gc_collect_minor();
         assert_eq!(walk("shapes.families+indices").kept, 0);

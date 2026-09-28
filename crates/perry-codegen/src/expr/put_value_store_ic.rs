@@ -9,7 +9,6 @@
 //!   receiver tag test          bits ^ POINTER_TAG, top 16 bits zero
 //!   small-handle test          handle > 0xFFFFF (native registry ids, proxies)
 //!   ONE shape compare          u32 at handle+4 == low half of @..._packed_set
-//!   per-object receiver test   _reserved & PROOF == 0, and the receiver kind
 //!   the store                  handle + 16 + slot*8, slot = high half
 //!   the barrier the GC needs   behind a live test of the stored bits
 //! ```
@@ -51,25 +50,24 @@
 //!   counter-unique semantic generation, and the miss entry refuses them.
 //! * **Not deleted**: #10826 makes every delete a shape transition.
 //! * **Not a class object or a dictionary**: the shape's `object_kind`.
+//! * **Receiver kind and no numeric proof** (charter step 3): the word is
+//!   published only for a shape of kind `Ordinary`, which is exactly "a class
+//!   instance, or a class-less receiver a birth site marked plain, not a
+//!   typed-array prototype, carrying no Array-subclass numeric proof"
+//!   (`perry_runtime::object::shapes::store_kind`). A class-less exotic or
+//!   native-module receiver is `OrdinaryUnmarked`; a proof-carrying one is
+//!   `OrdinaryNumericProof`; both are other ShapeIds.
 //! * **Not a Proxy**: a Proxy is a POINTER-tagged id in the handle band, below
 //!   `0x100000`, so the small-handle test refuses it before any load.
 //!
-//! # What the shape does not carry, and is therefore re-read here
+//! # Nothing is re-read per object
 //!
-//! Two per-object facts are not functions of the ShapeId today, and the hit
-//! reads them from the header on every store:
-//!
-//! * **Receiver kind** — a class-less receiver shares ShapeIds with the
-//!   exotic class-less objects whose own slots are not plain data (`URL`,
-//!   `Object.prototype`, a typed-array prototype), and a native-module
-//!   receiver (`class_id == 0xFFFF_FFFE`) shares them with ordinary objects.
-//!   Admitted: a class instance (`class_id` not 0 / `u32::MAX-1` / `u32::MAX`),
-//!   or a class-less receiver a birth site marked `OBJ_FLAG_PLAIN_ORDINARY`
-//!   with `OBJ_FLAG_TYPED_ARRAY_PROTO` clear.
-//! * **The Array-subclass numeric proof** (`OBJ_FLAG_PACKED_NUMERIC_PROOF`) —
-//!   a per-object claim that an element prefix is numeric (optionally u32).
-//!   Any owner store must retire it first, so a proof-carrying receiver takes
-//!   the miss, whose runtime store retires it; later stores hit.
+//! Until charter step 3 the receiver kind and the Array-subclass numeric
+//! proof lived only on the object, and the hit re-read `class_id` and
+//! `_reserved` on every store. Both are now shape kinds (see above): every
+//! operation that changes either moves the receiver to another ShapeId, so the
+//! one compare proves them. `_reserved` is still loaded, for the barrier
+//! below only.
 //!
 //! # The barrier
 //!
@@ -111,12 +109,6 @@ pub(crate) const PACKED_SET_EMPTY: i64 = 0xFFFF_FFFF;
 /// **Must equal `perry_runtime::proxy::PACKED_SET_INLINE_WAYS`**; pinned by the
 /// runtime's `packed_set_inline_ways_matches_codegen`.
 pub(crate) const PACKED_SET_INLINE_WAYS: usize = 4;
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80).
-const PROOF_FLAG_I16: &str = "128";
-/// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` (0x300) and the
-/// admitted value of that pair (plain, not a typed-array prototype: 0x200).
-const CLASSLESS_ADMIT_MASK_I16: &str = "768";
-const CLASSLESS_ADMIT_I16: &str = "512";
 /// `GC_LAYOUT_STATE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT` (0xD000) as a signed
 /// i16: the header states in which a pointer store's layout note can act.
 const NOTE_ACTS_FOR_POINTER_I16: &str = "-12288";
@@ -160,10 +152,11 @@ const ADD_STEM: &str = "put.add";
 /// `GC_FLAG_TENURED` (gc_flags byte).
 pub(crate) const ADD_REFUSE_GC_FLAGS: u32 = 0x20;
 /// `_reserved` bits the key-add hit refuses: `OBJ_FLAG_HAS_DESCRIPTORS`
-/// (0x800), `OBJ_FLAG_STABLE_TOMBSTONES` (0x400),
-/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80). Pinned by the runtime's
+/// (0x800), `OBJ_FLAG_STABLE_TOMBSTONES` (0x400). The numeric proof is not
+/// here: it is a shape kind (charter step 3), and a memo's pre-shape is an
+/// `Ordinary` one. Pinned by the runtime's
 /// `packed_add_refuse_bits_match_codegen`.
-pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0C80;
+pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0C00;
 /// `GC_LAYOUT_SIDE_MASK` (0x8000) | `GC_OBJ_TYPED_LAYOUT_INTACT` (0x1000): a
 /// receiver with either bit has a layout record the new shape no longer
 /// describes, which `js_gc_key_add_layout_unknown` retires before the stamp
@@ -278,15 +271,11 @@ pub(crate) fn emit_static_store_ic(
 
     let tok_idx = ctx.new_block(&format!("{STORE_IC_STEM}.token"));
     let kind_idx = ctx.new_block(&format!("{STORE_IC_STEM}.kind"));
-    let class_idx = ctx.new_block(&format!("{STORE_IC_STEM}.class"));
-    let classless_idx = ctx.new_block(&format!("{STORE_IC_STEM}.classless"));
     let store_idx = ctx.new_block(&format!("{STORE_IC_STEM}.hit.store"));
     let miss_idx = ctx.new_block(&format!("{STORE_IC_STEM}.miss"));
     let merge_idx = ctx.new_block(&format!("{STORE_IC_STEM}.merge"));
     let tok_label = ctx.block_label(tok_idx);
     let kind_label = ctx.block_label(kind_idx);
-    let class_label = ctx.block_label(class_idx);
-    let classless_label = ctx.block_label(classless_idx);
     let store_label = ctx.block_label(store_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
@@ -434,8 +423,10 @@ pub(crate) fn emit_static_store_ic(
         add_way_label = next_label;
     }
 
-    // The per-object facts the shape does not carry (see the module doc), as
-    // a branch chain rather than one flat predicate (#7883).
+    // A hit. Charter step 3: the matched ShapeId is an `Ordinary` shape (the
+    // only kind the runtime publishes), which proves the receiver kind and
+    // the absence of a numeric proof — no per-object test. `_reserved` is
+    // read only for the GC bookkeeping after the store.
     ctx.current_block = kind_idx;
     let word = {
         let incoming: Vec<(&str, &str)> = word_incoming
@@ -447,26 +438,7 @@ pub(crate) fn emit_static_store_ic(
     let reserved_addr = ctx.block().sub(I64, &handle, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
-    let proof = ctx.block().and(I16, &reserved, PROOF_FLAG_I16);
-    let no_proof = ctx.block().icmp_eq(I16, &proof, "0");
-    ctx.block().cond_br(&no_proof, &class_label, &miss_label);
-
-    // `class_id + 2 > 2` (unsigned) is "a class id other than 0, u32::MAX-1
-    // (native module) and u32::MAX (never allocated)".
-    ctx.current_block = class_idx;
-    let class_ptr = ctx.block().inttoptr(I64, &handle);
-    let class_id = ctx.block().load(I32, &class_ptr);
-    let class_biased = ctx.block().add(I32, &class_id, "2");
-    let has_class = ctx.block().icmp_ugt(I32, &class_biased, "2");
-    ctx.block()
-        .cond_br(&has_class, &store_label, &classless_label);
-
-    ctx.current_block = classless_idx;
-    let admit_bits = ctx.block().and(I16, &reserved, CLASSLESS_ADMIT_MASK_I16);
-    let admitted = ctx.block().icmp_eq(I16, &admit_bits, CLASSLESS_ADMIT_I16);
-    let classless = ctx.block().icmp_eq(I32, &class_id, "0");
-    let plain_ok = ctx.block().and(I1, &admitted, &classless);
-    ctx.block().cond_br(&plain_ok, &store_label, &miss_label);
+    ctx.block().br(&store_label);
 
     // The store, then the GC's obligations for the bits actually stored.
     ctx.current_block = store_idx;
@@ -557,10 +529,10 @@ pub(crate) fn emit_static_store_ic(
 /// ```text
 ///   ONE pre-shape compare       sid == low half of a memo's shapes (caller)
 ///   the chain verdict           PROTO_VALIDITY + VTABLE_GEN == guard >> 16
-///   the receiver-kind admission class id / _reserved, as the existing-key hit
 ///   per-object facts            ONE test of the GcHeader word: not TENURED,
-///                               no numeric proof, tombstones or descriptor
-///                               flag, and no layout record to retire
+///                               no tombstones or descriptor flag, and no
+///                               layout record to retire (receiver kind and
+///                               numeric proof: the pre-shape is `Ordinary`)
 ///   the successor ShapeId       high half of shapes -> handle + 4
 ///   the store and barrier       slot = guard & 0xFFFF
 /// ```
@@ -583,13 +555,11 @@ fn emit_key_add_hit(
     merge_label: &str,
 ) -> String {
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
-    let classless_idx = ctx.new_block(&format!("{ADD_STEM}.classless"));
     let layout_idx = ctx.new_block(&format!("{ADD_STEM}.layout"));
     let slow_idx = ctx.new_block(&format!("{ADD_STEM}.layout.slow"));
     let forget_idx = ctx.new_block(&format!("{ADD_STEM}.layout.forget"));
     let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
     let obj_label = ctx.block_label(obj_idx);
-    let classless_label = ctx.block_label(classless_idx);
     let layout_label = ctx.block_label(layout_idx);
     let slow_label = ctx.block_label(slow_idx);
     let forget_label = ctx.block_label(forget_idx);
@@ -610,27 +580,16 @@ fn emit_key_add_hit(
     let gen_eq = ctx.block().icmp_eq(I64, &now, &recorded);
     ctx.block().cond_br(&gen_eq, &obj_label, miss_label);
 
-    // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16)
-    // and the receiver-kind admission, as the existing-key hit.
+    // The GcHeader's first word (obj_type | gc_flags << 8 | _reserved << 16).
+    // No receiver-kind admission: the memo's pre-shape is an `Ordinary` shape
+    // (charter step 3), which proves the receiver kind and no numeric proof.
     ctx.current_block = obj_idx;
     let hdr_addr = ctx.block().sub(I64, handle, "8");
     let hdr_ptr = ctx.block().inttoptr(I64, &hdr_addr);
     let hdr = ctx.block().load(I32, &hdr_ptr);
     let reserved_i32 = ctx.block().lshr(I32, &hdr, "16");
     let reserved = ctx.block().trunc(I32, &reserved_i32, I16);
-    let class_ptr = ctx.block().inttoptr(I64, handle);
-    let class_id = ctx.block().load(I32, &class_ptr);
-    let class_biased = ctx.block().add(I32, &class_id, "2");
-    let has_class = ctx.block().icmp_ugt(I32, &class_biased, "2");
-    ctx.block()
-        .cond_br(&has_class, &layout_label, &classless_label);
-
-    ctx.current_block = classless_idx;
-    let admit_bits = ctx.block().and(I16, &reserved, CLASSLESS_ADMIT_MASK_I16);
-    let admitted = ctx.block().icmp_eq(I16, &admit_bits, CLASSLESS_ADMIT_I16);
-    let classless = ctx.block().icmp_eq(I32, &class_id, "0");
-    let plain_ok = ctx.block().and(I1, &admitted, &classless);
-    ctx.block().cond_br(&plain_ok, &layout_label, miss_label);
+    ctx.block().br(&layout_label);
 
     // ONE test: nothing refused and no layout record.
     ctx.current_block = layout_idx;

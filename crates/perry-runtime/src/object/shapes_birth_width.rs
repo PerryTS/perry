@@ -171,7 +171,7 @@ pub(crate) unsafe fn note_spill_width(obj: *const crate::object::ObjectHeader, w
         return;
     };
     let r = &*record;
-    if r.object_kind() != ShapeObjectKind::Ordinary
+    if !r.object_kind().is_ordinary_layout()
         || r.semantic_generation != 0
         || !is_prototype_serial(r.proto_id)
     {

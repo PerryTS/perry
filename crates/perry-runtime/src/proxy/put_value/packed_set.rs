@@ -38,14 +38,12 @@
 //! * **not a class object, not a dictionary** — both are the shape's
 //!   `object_kind` (`object_is_regular`).
 //!
-//! What is NOT a property of the shape is re-tested by the emitted hit on
-//! every store, and refused here: the receiver-kind admission
-//! (`write_fast_path_receiver_kind_ok` — a native-module receiver, and a
-//! class-less receiver that no birth site marked ordinary: `URL`,
-//! `Object.prototype`, the typed-array prototypes) and the Array-subclass
-//! numeric proof (`OBJ_FLAG_PACKED_NUMERIC_PROOF`). The emitted code reads them
-//! from the header; this entry refuses a receiver that fails them so the
-//! word's first carrier is always one the hit path would have admitted.
+//! * **receiver kind and numeric proof** (charter step 3) — the receiver-kind
+//!   admission (a native-module receiver, and a class-less receiver that no
+//!   birth site marked ordinary: `URL`, `Object.prototype`, the typed-array
+//!   prototypes) and the Array-subclass numeric proof are shape kinds
+//!   (`object::shapes::store_kind`): only an `Ordinary` shape is published,
+//!   and `Ordinary` proves both. The emitted hit reads nothing else.
 //!
 //! # Polymorphic sites
 //!
@@ -113,20 +111,6 @@ pub type PackedSetWaysSlot = *mut PackedSetWays;
 /// A spill-located key's way: the ShapeId with the read path's flip applied,
 /// which no receiver's `+4` word can equal (see `PACKED_SPILL_FLIP`).
 const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
-
-/// Blocking header flags for a receiver this entry may PUBLISH.
-///
-/// Integrity flags would already have moved the receiver to a private lineage
-/// (see the module doc); they are refused here as well because a refused
-/// receiver costs one miss, while a published one is served forever. The
-/// typed-array-prototype flag and the numeric proof are per-object facts the
-/// hit path re-tests; refusing them here keeps the word's first carrier one the
-/// hit path admits.
-// Charter step 3: no integrity bit. An overwrite is refused only by a key that
-// is an accessor or non-writable (a frozen object's keys all are), which the
-// receiver's keys record per key and the prime checks below.
-const PACKED_SET_PRIME_BLOCKING: u16 =
-    crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
 
 /// Miss entry for the generated static-key store. Performs the full
 /// strict-aware `[[Set]]` (or a validated way store) and publishes what it
@@ -258,7 +242,7 @@ pub extern "C" fn js_put_value_set_packed_miss(
 
 /// S2 of the deferred-collection RFC: the GC-leaf hit of a full-outline
 /// static-key store. Serves an existing key from an INLINE way — the
-/// receiver test, a ShapeId compare, `packed_hit_receiver_ok` (header reads)
+/// receiver test, a ShapeId compare (charter step 3: nothing per object)
 /// and `store_object_field_slot` (`runtime_store_jsvalue_slot`: addref,
 /// layout note, slot barrier) — and answers `TAG_HOLE` for everything else:
 /// an unprimed site, a spill way (`dyn_ic_try_store` is not audited leaf), a
@@ -333,9 +317,9 @@ unsafe fn packed_ways_store_impl(
         let stamp = word as u32;
         let index = (word >> 32) as u32;
         if stamp == sid && way >= first_way {
-            if !packed_hit_receiver_ok(obj) {
-                return None;
-            }
+            // Charter step 3: the matched id is an `Ordinary` shape (the only
+            // kind `prime_packed_set` publishes), which proves the receiver
+            // kind and the absence of a numeric proof.
             crate::object::store_object_field_slot(obj, index as usize, value.to_bits());
             return Some(value);
         }
@@ -348,29 +332,6 @@ unsafe fn packed_ways_store_impl(
         }
     }
     None
-}
-
-/// The per-object half of the emitted hit, for a receiver whose ShapeId
-/// already matched: no numeric proof, and a class instance or a class-less
-/// receiver marked ordinary that is not a typed-array prototype.
-///
-/// # Safety
-/// `obj` passed the receiver test and matched a published ShapeId.
-unsafe fn packed_hit_receiver_ok(obj: *mut crate::ObjectHeader) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
-        return false;
-    };
-    let reserved = header._reserved;
-    if reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF != 0 {
-        return false;
-    }
-    let class_id = (*obj).class_id;
-    if class_id.wrapping_add(2) > 2 {
-        return true;
-    }
-    class_id == 0
-        && reserved & (crate::gc::OBJ_FLAG_PLAIN_ORDINARY | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
-            == crate::gc::OBJ_FLAG_PLAIN_ORDINARY
 }
 
 /// Publish `(ShapeId, slot)` for `key` on `target`, if `target` is a receiver
@@ -396,13 +357,14 @@ unsafe fn prime_packed_set(
     };
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || gc_header._reserved & PACKED_SET_PRIME_BLOCKING != 0
     {
         return;
     }
     let obj = obj_addr as *mut crate::ObjectHeader;
     if !crate::object::object_is_regular(obj)
-        || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
+        || !crate::object::shapes::store_kind::shape_admits_plain_store(
+            crate::object::shapes::object_shape_stamp(obj),
+        )
         || !crate::object::proto_validity::store_cache_may_learn(obj)
     {
         return;

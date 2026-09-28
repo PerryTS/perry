@@ -494,9 +494,8 @@ pub extern "C" fn js_object_delete_field(
                             .is_none());
                 let stable_candidate = stable_identity
                     && stable_not_prototype
-                    && super::shapes::object_shape_descriptor(obj).is_some_and(|shape| {
-                        shape.object_kind == super::shapes::ShapeObjectKind::Ordinary
-                    })
+                    && super::shapes::object_shape_descriptor(obj)
+                        .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
                     && (*obj_gc)._reserved
                         & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
                             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
@@ -913,7 +912,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     }
 
     let shape = super::shapes::object_shape_descriptor(obj)?;
-    if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return None;
     }
     let keys = shape.keys as usize as *mut crate::ArrayHeader;

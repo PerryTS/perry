@@ -1503,6 +1503,9 @@ impl GcCycleState {
                 // `PERRY_GC_CENSUS` pass 2: marks are final and nothing is
                 // swept yet; only synchronous full cycles are exact.
                 super::census::census_take_if_armed_at_full_sweep_start();
+                // Charter step 3 (`shape-fact-audit` only; nothing otherwise):
+                // every live object's store facts agree with its shape.
+                crate::object::shapes::store_kind::audit_heap_at_full_sweep_start();
                 // #10241: same point, for a promoted-cohort full's survival
                 // probe (a no-op unless one is armed).
                 super::promoted_cohort::survival::check_minor_view_at_full_sweep_start();

@@ -353,7 +353,7 @@ fn class_field_fast_contract(
         let shape_ok = (*obj).class_id == expected_class_id
             && shape_id == expected_shape_id
             && descriptor.is_some_and(|facts| {
-                facts.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
+                facts.object_kind.is_ordinary_layout()
                     && expected_field_index < facts.live_inline_slot_count
             });
         let layout_ok = shape_ok
