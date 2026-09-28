@@ -142,6 +142,14 @@ pub(crate) fn register(socket_bits: u64, udp: Arc<UdpSocket>) -> u64 {
         Some(spawn_recv(id, udp.clone(), closing.clone()))
     };
 
+    // #11541: registered before the first insert (this is the only one)
+    // instead of being named in `arena::thread_exit`'s dispatcher.
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_dgram_sockets_in_freed_ranges,
+        );
+    });
     {
         let mut guard = live_lock();
         guard.get_or_insert_with(HashMap::new).insert(

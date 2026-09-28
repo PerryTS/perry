@@ -1,6 +1,21 @@
 #[cfg(any(feature = "crypto", feature = "http-client"))]
 use super::super::handle::with_handle;
 use super::*;
+use crate::common::feature_hooks::{Hook, PropertyArm};
+
+// One slot per optional-feature position in `js_handle_property_dispatch`, in
+// hub order; see `method_dispatch.rs` for the scheme.
+static PROP_EVENTS: Hook<PropertyArm> = Hook::empty();
+static PROP_TLS: Hook<PropertyArm> = Hook::empty();
+static PROP_STREAMS: Hook<PropertyArm> = Hook::empty();
+static PROP_ZLIB: Hook<PropertyArm> = Hook::empty();
+static PROP_EXTERNAL_ZLIB: Hook<PropertyArm> = Hook::empty();
+static PROP_HTTP_AGENT: Hook<PropertyArm> = Hook::empty();
+static PROP_SQLITE: Hook<PropertyArm> = Hook::empty();
+static PROP_HTTP_SERVER: Hook<PropertyArm> = Hook::empty();
+static PROP_HTTP_CLIENT: Hook<PropertyArm> = Hook::empty();
+static PROP_FETCH: Hook<PropertyArm> = Hook::empty();
+static PROP_CRYPTO: Hook<PropertyArm> = Hook::empty();
 
 /// Dispatch a property access on a handle-based object.
 #[no_mangle]
@@ -31,38 +46,15 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
-    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-    if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
-        return value;
-    }
+    try_arm!(PROP_EVENTS, handle, property_name);
 
     if let Some(value) = dispatch_async_local_storage_property(handle, property_name) {
         return value;
     }
 
-    #[cfg(all(
-        feature = "tls-runtime",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
-        return value;
-    }
+    try_arm!(PROP_TLS, handle, property_name);
 
-    // #1670: Web Streams handle property reads. A numeric stream id reaches
-    // here via `js_object_get_field_by_name`'s stream probe (inline
-    // `res.body.locked`). Route getter properties to their accessors, return
-    // a bound-method closure for callable members, and undefined for anything
-    // else — never a deref of the float id as a pointer. Gated on stream
-    // id-range + registry membership so unrelated small-handle reads are
-    // untouched.
-    #[cfg(feature = "bundled-streams")]
-    if (crate::streams::STREAM_HANDLE_ID_START..crate::streams::STREAM_HANDLE_ID_END)
-        .contains(&(handle as usize))
-        && crate::streams::js_stream_handle_is_registered(handle as usize)
-    {
-        return crate::streams::dispatch_stream_property(handle as f64, property_name);
-    }
+    try_arm!(PROP_STREAMS, handle, property_name);
 
     // #9324: `WebSocketServer.clients` on the dynamic path is served by
     // perry-ext-ws's own handle-property extension (`dispatch.rs`); the
@@ -73,14 +65,115 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
+    try_arm!(PROP_ZLIB, handle, property_name);
+
+    try_arm!(PROP_EXTERNAL_ZLIB, handle, property_name);
+
+    try_arm!(PROP_HTTP_AGENT, handle, property_name);
+
+    if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
+        return v;
+    }
+
+    try_arm!(PROP_SQLITE, handle, property_name);
+
+    try_arm!(PROP_HTTP_SERVER, handle, property_name);
+
+    try_arm!(PROP_HTTP_CLIENT, handle, property_name);
+
+    try_arm!(PROP_FETCH, handle, property_name);
+
+    // Issue #848: StringDecoder reads — state getters `lastNeed` /
+    // `lastTotal` / `lastChar`, the canonical `encoding` property,
+    // and the method-as-value reads `write` /
+    // `end` (the latter return a bound-method closure so
+    // `typeof dec.write === "function"` and `const w = dec.write; w(buf)`
+    // both work; see `dispatch_string_decoder_property`). Same disjoint-
+    // property gate as the method-dispatch arm above.
+    if matches!(
+        property_name,
+        "lastNeed"
+            | "lastTotal"
+            | "lastChar"
+            | "encoding"
+            | "constructor"
+            | "write"
+            | "end"
+            | "text"
+    ) && crate::string_decoder::is_string_decoder_handle(handle)
+    {
+        return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
+    }
+
+    try_arm!(PROP_CRYPTO, handle, property_name);
+
+    // Generic per-handle expando read: an arbitrary user-assigned own property
+    // (`handle.colors = [...]`) stored by the set-dispatch fallback below. This
+    // is the read half that makes native HANDLE values (Blob / fetch Response /
+    // Web-Streams readers) freely extensible like Node's, so the `debug`
+    // package's `createDebug.colors[...]` reads back the array it assigned
+    // instead of `undefined`. Specific typed properties were all tried above, so
+    // a hit here is always a genuine user expando.
+    if let Some(v) =
+        perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
+    {
+        return v;
+    }
+
+    // Unknown handle type - return undefined
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+unsafe fn prop_events(handle: i64, property_name: &str) -> Option<f64> {
+    if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return Some(value);
+    }
+    None
+}
+
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+unsafe fn prop_tls(handle: i64, property_name: &str) -> Option<f64> {
+    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
+        return Some(value);
+    }
+    None
+}
+
+#[cfg(feature = "bundled-streams")]
+unsafe fn prop_streams(handle: i64, property_name: &str) -> Option<f64> {
+    // #1670: Web Streams handle property reads. A numeric stream id reaches
+    // here via `js_object_get_field_by_name`'s stream probe (inline
+    // `res.body.locked`). Route getter properties to their accessors, return
+    // a bound-method closure for callable members, and undefined for anything
+    // else — never a deref of the float id as a pointer. Gated on stream
+    // id-range + registry membership so unrelated small-handle reads are
+    // untouched.
+    if (crate::streams::STREAM_HANDLE_ID_START..crate::streams::STREAM_HANDLE_ID_END)
+        .contains(&(handle as usize))
+        && crate::streams::js_stream_handle_is_registered(handle as usize)
+    {
+        return Some(crate::streams::dispatch_stream_property(
+            handle as f64,
+            property_name,
+        ));
+    }
+    None
+}
+
+#[cfg(feature = "compression-gzip")]
+unsafe fn prop_zlib(handle: i64, property_name: &str) -> Option<f64> {
     // zlib Transform streams: `typeof createGzip().write` must read
     // "function". The actual call dispatch is HANDLE_METHOD_DISPATCH
     // (above), but feature-checks read through the property table — we
     // bind a closure here so the typeof short-circuit sees "function".
-    #[cfg(feature = "compression-gzip")]
     if crate::zlib::is_zlib_stream_handle(handle) {
         if property_name == "bytesWritten" {
-            return crate::zlib::zlib_stream_bytes_written(handle);
+            return Some(crate::zlib::zlib_stream_bytes_written(handle));
         }
         let method: Option<&'static [u8]> = match property_name {
             "write" => Some(b"write"),
@@ -106,15 +199,18 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                     method_name_len: usize,
                 ) -> f64;
             }
-            return js_class_method_bind(
+            return Some(js_class_method_bind(
                 f64::from_bits(handle as u64),
                 name_bytes.as_ptr(),
                 name_bytes.len(),
-            );
+            ));
         }
     }
+    None
+}
 
-    #[cfg(feature = "external-zlib-pump")]
+#[cfg(feature = "external-zlib-pump")]
+unsafe fn prop_external_zlib(handle: i64, property_name: &str) -> Option<f64> {
     {
         extern "C" {
             fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
@@ -128,7 +224,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
         if js_ext_zlib_is_stream_handle(handle) != 0 {
             if property_name == "bytesWritten" {
-                return js_ext_zlib_stream_bytes_written(handle);
+                return Some(js_ext_zlib_stream_bytes_written(handle));
             }
             let method: Option<&'static [u8]> = match property_name {
                 "write" => Some(b"write"),
@@ -145,16 +241,19 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 _ => None,
             };
             if let Some(name_bytes) = method {
-                return js_class_method_bind(
+                return Some(js_class_method_bind(
                     f64::from_bits(handle as u64),
                     name_bytes.as_ptr(),
                     name_bytes.len(),
-                );
+                ));
             }
         }
     }
+    None
+}
 
-    #[cfg(feature = "external-http-client-pump")]
+#[cfg(feature = "external-http-client-pump")]
+unsafe fn prop_http_agent(handle: i64, property_name: &str) -> Option<f64> {
     {
         extern "C" {
             fn js_ext_http_agent_is_handle(handle: i64) -> i32;
@@ -189,50 +288,52 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "_sessionCache"
         ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_agent_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
     }
+    None
+}
 
-    if let Some(v) = crate::common::net_method_values::dispatch_property(handle, property_name) {
-        return v;
-    }
-
-    #[cfg(feature = "database-sqlite")]
+#[cfg(feature = "database-sqlite")]
+unsafe fn prop_sqlite(handle: i64, property_name: &str) -> Option<f64> {
     {
         if let Some(v) =
             crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) =
             crate::sqlite::dispatch_node_sqlite_tag_store_property(handle, property_name)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) =
             crate::sqlite::dispatch_node_sqlite_statement_property(handle, property_name)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::sqlite::dispatch_node_sqlite_limits_property(handle, property_name)
         {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::sqlite::dispatch_node_sqlite_session_property(handle, property_name)
         {
-            return v;
+            return Some(v);
         }
     }
+    None
+}
 
+#[cfg(feature = "external-http-server-pump")]
+unsafe fn prop_http_server(handle: i64, property_name: &str) -> Option<f64> {
     // Server-side node:http request/response handles whose static
     // `HttpServer` / `IncomingMessage` / `ServerResponse` type was lost.
-    #[cfg(feature = "external-http-server-pump")]
     {
         extern "C" {
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
@@ -289,13 +390,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "maxRequestsPerSocket"
         ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_server_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
 
         if matches!(
@@ -331,13 +432,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "constructor"
         ) && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_incoming_message_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
 
         if matches!(
@@ -385,13 +486,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "constructor"
         ) && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http_server_response_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
 
         if matches!(
@@ -421,13 +522,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "socket"
         ) && unsafe { js_ext_http2_session_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http2_session_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
 
         if matches!(
@@ -458,30 +559,36 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "endAfterHeaders"
         ) && unsafe { js_ext_http2_stream_is_handle(handle) } != 0
         {
-            return unsafe {
+            return Some(unsafe {
                 js_ext_http2_stream_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
+            });
         }
     }
+    None
+}
 
-    #[cfg(feature = "external-http-client-pump")]
+#[cfg(feature = "external-http-client-pump")]
+unsafe fn prop_http_client(handle: i64, property_name: &str) -> Option<f64> {
     if let Some(value) = unsafe {
         super::super::dispatch_http::dispatch_client_request_property(handle, property_name)
     } {
-        return value;
+        return Some(value);
     }
 
-    #[cfg(feature = "external-http-client-pump")]
     if let Some(value) = unsafe {
         super::super::dispatch_http::dispatch_client_incoming_property(handle, property_name)
     } {
-        return value;
+        return Some(value);
     }
+    None
+}
 
+#[cfg(feature = "web-fetch")]
+unsafe fn prop_fetch(handle: i64, property_name: &str) -> Option<f64> {
     // Web Fetch property dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
     // unification). When user code accesses a property on a Request / Response /
     // Headers / Blob handle in untyped position (`(r) => r.url` where the static
@@ -492,48 +599,28 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // observed property-name disjointness (`url` / `method` only on Request,
     // `status` / `ok` only on Response, etc.). First match wins.
     // Gated on `web-fetch` because fetch.rs itself is gated on that feature (#5174).
-    #[cfg(feature = "web-fetch")]
     {
         if let Some(v) = crate::fetch::dispatch_request_property(handle as usize, property_name) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_response_property(handle as usize, property_name) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_headers_property(handle as usize, property_name) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_form_data_property(handle as usize, property_name) {
-            return v;
+            return Some(v);
         }
         if let Some(v) = crate::fetch::dispatch_blob_property(handle as usize, property_name) {
-            return v;
+            return Some(v);
         }
     }
+    None
+}
 
-    // Issue #848: StringDecoder reads — state getters `lastNeed` /
-    // `lastTotal` / `lastChar`, the canonical `encoding` property,
-    // and the method-as-value reads `write` /
-    // `end` (the latter return a bound-method closure so
-    // `typeof dec.write === "function"` and `const w = dec.write; w(buf)`
-    // both work; see `dispatch_string_decoder_property`). Same disjoint-
-    // property gate as the method-dispatch arm above.
-    if matches!(
-        property_name,
-        "lastNeed"
-            | "lastTotal"
-            | "lastChar"
-            | "encoding"
-            | "constructor"
-            | "write"
-            | "end"
-            | "text"
-    ) && crate::string_decoder::is_string_decoder_handle(handle)
-    {
-        return crate::string_decoder::dispatch_string_decoder_property(handle, property_name);
-    }
-
-    #[cfg(feature = "crypto")]
+#[cfg(feature = "crypto")]
+unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
     if matches!(
         property_name,
         "update"
@@ -550,10 +637,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "close"
     ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hash_property(handle, property_name);
+        return Some(crate::crypto::dispatch_hash_property(handle, property_name));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "update"
@@ -569,24 +655,24 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "close"
     ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_hmac_property(handle, property_name);
+        return Some(crate::crypto::dispatch_hmac_property(handle, property_name));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(property_name, "update" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_sign_property(handle, property_name);
+        return Some(crate::crypto::dispatch_sign_property(handle, property_name));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(property_name, "update" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_verify_property(handle, property_name);
+        return Some(crate::crypto::dispatch_verify_property(
+            handle,
+            property_name,
+        ));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "generateKeys"
@@ -597,10 +683,9 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "computeSecret"
     ) && with_handle::<crate::crypto::EcdhHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_ecdh_property(handle, property_name);
+        return Some(crate::crypto::dispatch_ecdh_property(handle, property_name));
     }
 
-    #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "generateKeys"
@@ -615,12 +700,14 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     ) && with_handle::<crate::crypto::DiffieHellmanHandle, bool, _>(handle, |_| true)
         .unwrap_or(false)
     {
-        return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
+        return Some(crate::crypto::dispatch_diffie_hellman_property(
+            handle,
+            property_name,
+        ));
     }
 
     // #1367/#2563: X509Certificate data properties plus bound conversion
     // methods.
-    #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "subject"
@@ -653,7 +740,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             | "checkIssued"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_x509_property(handle, property_name);
+        return Some(crate::crypto::dispatch_x509_property(handle, property_name));
     }
 
     // Issue #1111: CipherHandle method-as-value reads. Returns a
@@ -661,28 +748,62 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // `setAuthTag` / `setAAD` / `setAutoPadding` so `c.getAuthTag?.()` doesn't short-circuit
     // on the optional-chain `c.getAuthTag == null` check. Same disjoint
     // method-name gate as the method-dispatch arm above.
-    #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
     ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
-        return crate::crypto::dispatch_cipher_property(handle, property_name);
+        return Some(crate::crypto::dispatch_cipher_property(
+            handle,
+            property_name,
+        ));
     }
+    None
+}
 
-    // Generic per-handle expando read: an arbitrary user-assigned own property
-    // (`handle.colors = [...]`) stored by the set-dispatch fallback below. This
-    // is the read half that makes native HANDLE values (Blob / fetch Response /
-    // Web-Streams readers) freely extensible like Node's, so the `debug`
-    // package's `createDebug.colors[...]` reads back the array it assigned
-    // instead of `undefined`. Specific typed properties were all tried above, so
-    // a hit here is always a genuine user expando.
-    if let Some(v) =
-        perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
-    {
-        return v;
-    }
-
-    // Unknown handle type - return undefined
-    f64::from_bits(0x7FFC_0000_0000_0001)
+// Per-feature slot fills, called from the owning feature's install.
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+pub(super) fn install_events() {
+    PROP_EVENTS.set(prop_events);
+}
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_tls() {
+    PROP_TLS.set(prop_tls);
+}
+#[cfg(feature = "bundled-streams")]
+pub(super) fn install_streams() {
+    PROP_STREAMS.set(prop_streams);
+}
+#[cfg(feature = "compression-gzip")]
+pub(super) fn install_zlib() {
+    PROP_ZLIB.set(prop_zlib);
+}
+#[cfg(feature = "external-zlib-pump")]
+pub(super) fn install_external_zlib() {
+    PROP_EXTERNAL_ZLIB.set(prop_external_zlib);
+}
+#[cfg(feature = "external-http-client-pump")]
+pub(super) fn install_external_http_client() {
+    PROP_HTTP_AGENT.set(prop_http_agent);
+    PROP_HTTP_CLIENT.set(prop_http_client);
+}
+#[cfg(feature = "database-sqlite")]
+pub(super) fn install_sqlite() {
+    PROP_SQLITE.set(prop_sqlite);
+}
+#[cfg(feature = "external-http-server-pump")]
+pub(super) fn install_external_http_server() {
+    PROP_HTTP_SERVER.set(prop_http_server);
+}
+#[cfg(feature = "web-fetch")]
+pub(super) fn install_fetch() {
+    PROP_FETCH.set(prop_fetch);
+}
+#[cfg(feature = "crypto")]
+pub(super) fn install_crypto() {
+    PROP_CRYPTO.set(prop_crypto);
 }

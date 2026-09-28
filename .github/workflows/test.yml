@@ -694,10 +694,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/gc_evacuation_liveness_assert.py --self-test
 
+      # The wasm32 ABI table (crates/perry-codegen/src/wasm32/runtime_abi.tsv) is
+      # derived from the runtime's extern signatures. Checked only in the
+      # path-filtered, non-required wasi-check workflow, it went stale four times on
+      # 2026-09-27 alone and turned wasi-check red on every PR. Text-only (~30 s, no build):
+      # a PR that changes a runtime signature regenerates the table itself
+      # (`python3 scripts/runtime_abi_check.py --emit-wasm-abi`).
       - name: Native runtime ABI consistency
         run: |
           python3 scripts/runtime_abi_check.py --self-test
           python3 scripts/runtime_abi_check.py --check-native
+          python3 scripts/runtime_abi_check.py --check-wasm-abi
 
       # Node is a correctness input (see CLAUDE.md "TypeScript Parity Status"):
       # an oracle that cannot run a gap test drops it from the gate instead of

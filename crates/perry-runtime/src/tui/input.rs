@@ -209,6 +209,15 @@ pub fn tui_input_handler_for_test() -> i64 {
 /// — v1 supports a single handler.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_input(handler: i64) -> f64 {
+    // #11541: registered here, before the slot can hold an address, rather
+    // than named in `arena::thread_exit`'s dispatcher (which linked it into
+    // every binary).
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_tui_input_handler_in_freed_ranges,
+        );
+    });
     INPUT_HANDLER.store(handler, Ordering::Release);
     f64::from_bits(JSValue::undefined().bits())
 }

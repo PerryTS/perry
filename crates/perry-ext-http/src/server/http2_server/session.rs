@@ -536,16 +536,31 @@ mod tests {
     /// This is not decoration. It was written expecting the opposite — that a
     /// cargo-test thread owns no loop — and failed, which is how the decline
     /// tests below came to assert their fixtures rather than the environment.
+    ///
+    /// Asked on a thread of an agent this test mints (#11597). A libtest
+    /// thread acts for the PRIMARY agent, whose one route slot belongs to
+    /// whichever test thread asked first, for as long as that thread lives,
+    /// so asking from one here answered no whenever another test held it.
     #[test]
     fn turnloop_is_live_as_the_http2_client_transport() {
+        let (enabled, sink) = std::thread::spawn(|| {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            let enabled = crate::server::turnloop_h2::enabled();
+            let sink =
+                perry_ffi::turnloop_net::sink_installed(crate::server::turnloop_h2::SUBSYSTEM);
+            perry_runtime::agent::retire_agent(agent);
+            (enabled, sink)
+        })
+        .join()
+        .expect("the asking thread does not panic");
         assert!(
-            crate::server::turnloop_h2::enabled(),
-            "a cargo-test thread does reach an agent loop; if that stops being \
-             true the two decline tests below are the only HTTP/2 client \
+            enabled,
+            "a thread that owns its agent's loop does reach it; if that stops \
+             being true the two decline tests below are the only HTTP/2 client \
              coverage left and must be re-read"
         );
         assert!(
-            perry_ffi::turnloop_net::sink_installed(crate::server::turnloop_h2::SUBSYSTEM),
+            sink,
             "enabled() answered yes with no completion sink installed"
         );
     }

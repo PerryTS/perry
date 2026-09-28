@@ -35,6 +35,8 @@ struct Building {
     body: Vec<u8>,
     version: u8,
     expects_continue: bool,
+    /// `100 Continue` already went out for this request, at head time.
+    continue_sent: bool,
     /// The request's own `Connection` header value, needed to compute the
     /// response's default `Connection` / `Keep-Alive` pair.
     connection: Option<String>,
@@ -68,6 +70,9 @@ struct Active {
     head_sent: bool,
     /// Keep the connection after this response, as decided at head time.
     keep_alive: bool,
+    /// `100 Continue` was already sent at head time (see `decode`), so a
+    /// later `res.writeContinue()` must not send a second one.
+    continue_sent: bool,
 }
 
 pub(crate) struct Conn {
@@ -503,6 +508,9 @@ fn decode(id: i64) {
             /// A decoded request, and whether the client is waiting for a
             /// `100 Continue` before it sends the body.
             Dispatch(HttpPendingRequest, bool),
+            /// A head with `Expect: 100-continue` was decoded: answer
+            /// `100 Continue` now, then keep decoding (the body follows it).
+            Continue,
             Upgrade(Building),
             /// A WebSocket upgrade an attached `WebSocketServer` will answer.
             WebSocket(Building),
@@ -520,8 +528,24 @@ fn decode(id: i64) {
             let mut outcome = Step::Idle;
             match step.event {
                 Some(http1::Event::Head(head)) => {
-                    c.building = Some(building_from(&head));
-                    outcome = Step::Again;
+                    let mut building = building_from(&head);
+                    // A client that sent `Expect: 100-continue` withholds the
+                    // body until it sees `100 Continue`, and this decoder only
+                    // dispatches a request at its END — so waiting for the
+                    // dispatch to send it deadlocked every such request
+                    // (#5080's test_http_100_continue_5080, a turnloop
+                    // regression: hyper sent it when the body was first
+                    // polled). Send it as soon as the head arrives, as hyper
+                    // did; a `'checkContinue'` listener still receives the
+                    // request, and its `writeContinue()` then has nothing left
+                    // to send.
+                    if building.expects_continue && building.version != 0 {
+                        building.continue_sent = true;
+                        outcome = Step::Continue;
+                    } else {
+                        outcome = Step::Again;
+                    }
+                    c.building = Some(building);
                 }
                 Some(http1::Event::Body(chunk)) => {
                     if let Some(b) = c.building.as_mut() {
@@ -594,6 +618,10 @@ fn decode(id: i64) {
         match step {
             None | Some(Step::Idle) => return,
             Some(Step::Again) => continue,
+            Some(Step::Continue) => {
+                write_raw(id, b"HTTP/1.1 100 Continue\r\n\r\n");
+                continue;
+            }
             Some(Step::Dispatch(request, send_continue)) => {
                 let server_handle = request.server_handle;
                 queue_pending(server_handle, request);
@@ -667,6 +695,7 @@ fn building_from(head: &http1::Head) -> Building {
         body: Vec::new(),
         version: head.version,
         expects_continue,
+        continue_sent: false,
         connection,
         upgrade,
         websocket: upgrade && websocket_upgrade,
@@ -709,7 +738,7 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
     // takes over. hyper sent it when the body was polled; here the caller
     // sends it as soon as the head says the client is waiting, once it has
     // released the connection borrow.
-    let send_continue = building.expects_continue && !is_check_continue;
+    let send_continue = building.expects_continue && !is_check_continue && !building.continue_sent;
 
     c.active = Some(Active {
         seq: c.seq,
@@ -721,6 +750,7 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
         framing: Framing::Sized(0),
         head_sent: false,
         keep_alive: true,
+        continue_sent: building.continue_sent,
     });
 
     (
@@ -873,7 +903,12 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
 /// `'checkContinue'` listener has taken the request over, so the call has to
 /// reach the wire.
 pub(crate) fn send_interim(conn_id: i64, seq: u64, bytes: &[u8]) {
-    let ours = with_conn(conn_id, |c| owns(c, seq)).unwrap_or(false);
+    let ours = with_conn(conn_id, |c| {
+        owns(c, seq)
+            && !(bytes.starts_with(b"HTTP/1.1 100 ")
+                && c.active.as_ref().is_some_and(|a| a.continue_sent))
+    })
+    .unwrap_or(false);
     if ours {
         write_raw(conn_id, bytes);
     }

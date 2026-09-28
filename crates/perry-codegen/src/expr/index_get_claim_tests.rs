@@ -142,6 +142,42 @@ fn dynamic_index_site_blocks(ir: &str) -> Vec<String> {
         .collect()
 }
 
+/// The complete emitted shape of one dynamic element-read site, in order.
+/// Shared by every test that pins it, so a new arm updates ONE list rather
+/// than a count literal per test (#11588 and #11589 each bumped such a
+/// literal from 21 to 24 independently; together the site has 27 blocks).
+const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
+    // #10515: the admitted byte-view (`Uint8Array` / `Buffer`) arm.
+    "arrlike.u8.brand",
+    "arrlike.u8.bounds",
+    "arrlike.u8.load",
+    "arrlike.ic.header",
+    "arrlike.ic.brand",
+    "arrlike.ic.array_guard",
+    "arrlike.ic.array_load",
+    "tav.brand",
+    "tav.kind_guard",
+    "tav.width",
+    "tav.width4",
+    "tav.width2",
+    "tav.w8",
+    "tav.w4",
+    "tav.w2",
+    "tav.w1",
+    "arrlike.elem.kind",
+    "arrlike.elem.meta",
+    "arrlike.elem.store",
+    "arrlike.elem.bounds",
+    "arrlike.elem.load",
+    "arrlike.elem.value",
+    // #10514: one growth-forwarding hop healed inline.
+    "arrlike.ic.fwd_check",
+    "arrlike.ic.fwd_follow",
+    "arrlike.ic.fwd_header",
+    "arrlike.ic.miss",
+    "arrlike.ic.merge",
+];
+
 /// #T2 ("inline hit, one exit"): the emitted `obj[i]` for an erased receiver
 /// keeps exactly two inline hits — the packed ordinary-Array arm and the
 /// object-backed MRU cache hit — and routes everything else through ONE
@@ -195,37 +231,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
     // waved through.
     assert_eq!(
         dynamic_index_site_blocks(&ir),
-        vec![
-            // #10515: the admitted byte-view (`Uint8Array` / `Buffer`) arm.
-            "arrlike.u8.brand",
-            "arrlike.u8.bounds",
-            "arrlike.u8.load",
-            "arrlike.ic.header",
-            "arrlike.ic.brand",
-            "arrlike.ic.array_guard",
-            "arrlike.ic.array_load",
-            "tav.brand",
-            "tav.kind_guard",
-            "tav.width",
-            "tav.width4",
-            "tav.width2",
-            "tav.w8",
-            "tav.w4",
-            "tav.w2",
-            "tav.w1",
-            "arrlike.elem.kind",
-            "arrlike.elem.meta",
-            "arrlike.elem.store",
-            "arrlike.elem.bounds",
-            "arrlike.elem.load",
-            "arrlike.elem.value",
-            // #10514: one growth-forwarding hop healed inline.
-            "arrlike.ic.fwd_check",
-            "arrlike.ic.fwd_follow",
-            "arrlike.ic.fwd_header",
-            "arrlike.ic.miss",
-            "arrlike.ic.merge",
-        ],
+        DYNAMIC_INDEX_SITE_BLOCKS,
         "the dynamic element read must emit exactly the inline hit plus one exit:\n{ir}"
     );
     // Exactly one runtime call for the whole site, and it is the exit.
@@ -377,8 +383,8 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
             ],
         );
         assert_eq!(
-            dynamic_index_site_blocks(&ir).len(),
-            24,
+            dynamic_index_site_blocks(&ir),
+            DYNAMIC_INDEX_SITE_BLOCKS,
             "{name}: a number context must not change the emitted block shape:\n{ir}"
         );
         let miss = super::class_field_barrier_tests::block_body(&ir, "arrlike.ic.miss.")
@@ -404,6 +410,31 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                  phi is not uniformly a Number:\n{body}"
             );
         }
+        // The remaining value-producing arms load a Number by construction
+        // (a typed-array element of each width, and #10515's admitted byte
+        // view via `uitofp`), so they never coerce in either context. The
+        // forwarding hop (#10514) produces no value; it only re-enters
+        // `arrlike.ic.brand`.
+        for number_arm in [
+            "arrlike.u8.load.",
+            "tav.w8.",
+            "tav.w4.",
+            "tav.w2.",
+            "tav.w1.",
+        ] {
+            let body = super::class_field_barrier_tests::block_body(&ir, number_arm)
+                .unwrap_or_else(|| panic!("{name}: {number_arm} block exists"));
+            assert!(
+                !body.contains("call double @js_number_coerce("),
+                "{name}: {number_arm} is a Number by construction and must not coerce:\n{body}"
+            );
+        }
+        let u8_load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.load.")
+            .unwrap_or_else(|| panic!("{name}: arrlike.u8.load block exists"));
+        assert!(
+            u8_load.contains("uitofp i8"),
+            "{name}: the byte-view arm's value must be a zero-extended byte:\n{u8_load}"
+        );
     }
 }
 
