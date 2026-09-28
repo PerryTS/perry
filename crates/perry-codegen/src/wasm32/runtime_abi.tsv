@@ -2645,6 +2645,7 @@ js_object_set_symbol_method	f64	f64,f64,f64
 js_object_set_symbol_property	f64	f64,f64,f64
 js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u
 js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u
+js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u
 js_object_shape_id_for_keys	i32u	i64,i32u
 js_object_super_call	f64	f64,f64,f64,ptr,usize
 js_object_super_get	f64	f64,f64,f64
@@ -3465,6 +3466,7 @@ js_shadow_slot_get	i64	i32u
 js_shadow_slot_set	void	i32u,i64
 js_shadow_state_addr	ptr	
 js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
+js_shape_seed_plain	i32u	i32u,ptr,i32u,i32u
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64
 js_sharp_auto_orient	i64	i64

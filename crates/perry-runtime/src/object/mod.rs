@@ -218,6 +218,7 @@ pub(crate) mod shape_carriers;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
+pub(crate) mod static_shapes;
 pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
 mod reflect_support;

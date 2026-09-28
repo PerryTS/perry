@@ -773,6 +773,30 @@ pub(crate) const DICTIONARY_SHAPE_ID_BASE: u32 = 0xB000_0000;
 /// needs the shape's IDENTITY (its prototype, its absence of own keys) opts in
 /// explicitly with [`is_exotic_shape_id`].
 pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
+/// # The static band: ShapeIds the compiler assigned (design step 4)
+///
+/// `[SHAPE_ID_BASE, STATIC_SHAPE_ID_END)` is never drawn from the counter.
+/// The driver assigns an id in it to every compiler-nameable birth shape,
+/// by content, before codegen, and generated code embeds that id as an
+/// IMMEDIATE. The runtime adopts it at the ordinary mint: a caller that
+/// knows the static id passes it as `requested` to
+/// [`shape_descriptor_ensure_with_holes`], which mints it on a by-facts miss.
+/// The id means the same facts in every agent; each agent gets its own record
+/// under it when it first mints those facts with the id requested.
+///
+/// No id-to-shape table exists: after the seed, the only record of
+/// "these facts have this id" is the shape record itself, in the intern
+/// structure every later mint probes.
+pub(crate) const STATIC_SHAPE_ID_END: u32 = SHAPE_ID_BASE + (1 << 20);
+const _: () = assert!(STATIC_SHAPE_ID_END < DICTIONARY_SHAPE_ID_BASE);
+
+/// Is `v` in the compiler-assigned band ([`STATIC_SHAPE_ID_END`])? A fact of
+/// the value alone.
+#[inline]
+pub(crate) fn is_static_shape_id(v: u32) -> bool {
+    (SHAPE_ID_BASE..STATIC_SHAPE_ID_END).contains(&v)
+}
+
 const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < EXOTIC_SHAPE_ID_BASE);
 const _: () = assert!(EXOTIC_SHAPE_ID_BASE < SHAPE_ID_END);
 
@@ -786,7 +810,7 @@ const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
 static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE);
+    std::sync::atomic::AtomicU32::new(STATIC_SHAPE_ID_END);
 
 /// The dictionary band's own monotonic counter (see
 /// [`DICTIONARY_SHAPE_ID_BASE`]); never reused, parks at `SHAPE_ID_END`.
@@ -947,6 +971,7 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
         0,
         proto_id,
         extra_summary,
+        None,
     )
 }
 
@@ -960,6 +985,19 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
 /// dictionary receiver's private list ([`receiver_extra_summary`]). The
 /// summary of the published keys is derived here, from the keys, so no
 /// caller can publish a shape that under-reports its attributes.
+///
+/// `requested` is the compiler-assigned static id of these facts
+/// ([`STATIC_SHAPE_ID_END`]), or `None`. It changes only what a by-facts MISS
+/// mints: the requested id instead of a counter id, with
+/// `RECORD_FLAG_EXTERNAL_CARRIER` set (generated code holds the id as an
+/// immediate, so the record must never be pruned while no object carries
+/// it). A by-facts HIT returns the existing id whatever was requested — the
+/// static id whenever its seed ran first, which the seeds are placed to
+/// guarantee; otherwise an immediate compare against it only misses. A
+/// requested id outside the static band, or already present in this agent
+/// under other facts, is declined (the counter mints), so a static id names
+/// at most one set of facts per agent and a compare against it can never hit
+/// a different shape.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
@@ -971,6 +1009,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     hole_count: u32,
     proto_id: u64,
     extra_summary: u8,
+    requested: Option<u32>,
 ) -> Result<u32, ShapeDescriptorError> {
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
@@ -1047,12 +1086,23 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
             }
         }
     }
-    let id = if object_kind.is_exotic() {
-        alloc_exotic_shape_id()
-    } else {
-        alloc_shape_id_for_generation(semantic_generation)
-    }
-    .map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    // A static id is adopted only for facts it can name (ordinary band,
+    // generation 0) and only if this agent has no record under it yet.
+    let adopted = requested.filter(|&id| {
+        is_static_shape_id(id)
+            && !object_kind.is_exotic()
+            && semantic_generation == 0
+            && table.slab().record_ptr(id).is_none()
+    });
+    let id = match adopted {
+        Some(id) => id,
+        None => if object_kind.is_exotic() {
+            alloc_exotic_shape_id()
+        } else {
+            alloc_shape_id_for_generation(semantic_generation)
+        }
+        .map_err(|_| ShapeDescriptorError::IdExhausted)?,
+    };
     #[cfg(feature = "shape-mint-diag")]
     if census_on {
         // Every descriptor already indexed under this keys ADDRESS, copied out
@@ -1096,6 +1146,10 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     )
     .with_proto_id(proto_id)
     .with_summary(summary);
+    let mut record = record;
+    if adopted.is_some() {
+        record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+    }
     // Publish by-id first, then the reverse accelerators. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
@@ -2191,6 +2245,7 @@ pub(crate) unsafe fn stamp_object_shape(
         lineage.hole_count,
         lineage.proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     if id != (*obj).parent_class_id {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
@@ -2508,6 +2563,7 @@ pub(crate) unsafe fn publish_object_shape_from(
         hole_count,
         proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     if retire_owned_history {
@@ -2606,6 +2662,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
         current.hole_count,
         current.proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
@@ -2700,6 +2757,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         current.hole_count,
         proto_id,
         receiver_extra_summary(obj),
+        None,
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
@@ -3873,7 +3931,7 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     ));
     // Ids ever minted by this process: the slab is indexed by id, so the gap
     // between this and `shapes.descriptors` is what chunk release reclaims.
-    let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - SHAPE_ID_BASE;
+    let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END;
     rows.push(("shapes.ids_minted(process)", minted as usize, 0));
     // How the descriptor population splits by [[Prototype]] identity kind,
     // and how many distinct prototype identities it names: what the

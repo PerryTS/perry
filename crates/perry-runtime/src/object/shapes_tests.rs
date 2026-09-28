@@ -1240,6 +1240,7 @@ mod prototype_identity_tests {
             0,
             proto_id,
             0,
+            None,
         ))
     }
 
