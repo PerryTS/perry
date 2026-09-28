@@ -349,6 +349,10 @@ pub extern "C" fn js_nm_install_fs() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_http() {
+    nm_register_attach(
+        NmBucket::Http,
+        super::native_module::callable_exports::nm_attach_http,
+    );
     nm_register_const(
         NmBucket::Http,
         super::native_module::constants::nm_const_http,
