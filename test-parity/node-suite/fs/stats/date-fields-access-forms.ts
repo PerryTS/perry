@@ -1,7 +1,8 @@
 // Stats Date fields through every access form a caller uses: statSync, the
 // stat/lstat/fstat callbacks, and `fs.promises.*` reached as a member of the
 // default `node:fs` import (the form `send` / @astrojs/node use), plus bigint
-// Stats. Prints booleans only, so the output does not depend on the clock.
+// Stats. Also pins `constructor.name`. Timestamps are never printed, only
+// booleans about them, so the output does not depend on the clock.
 import fs from "node:fs";
 
 const ROOT = "/tmp/perry_node_suite_fs_stats_date_fields_access_forms";

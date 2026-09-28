@@ -89,22 +89,26 @@ pub(crate) fn arm_fs_promises(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr])
         // Every other method (`stat`, `lstat`, `readdir`, ...) is a real
         // export of the `fs.promises` namespace: call it through the generic
         // path, like `arm_fs` does, instead of resolving to `undefined`.
-        _ => {
-            crate::expr::downgrade_buffer_aliases_in_expr(
-                ctx,
-                callee,
-                crate::native_value::MaterializationReason::UnknownCallEscape,
-            );
-            for arg in args {
-                crate::expr::downgrade_buffer_aliases_in_expr(
-                    ctx,
-                    arg,
-                    crate::native_value::MaterializationReason::UnknownCallEscape,
-                );
-            }
-            lower_call(ctx, callee, args)
-        }
+        _ => lower_generic_fs_call(ctx, callee, args),
     }
+}
+
+/// An fs method without dedicated lowering: its callee and arguments escape
+/// into an unknown call, so downgrade their buffer aliases first.
+fn lower_generic_fs_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    crate::expr::downgrade_buffer_aliases_in_expr(
+        ctx,
+        callee,
+        crate::native_value::MaterializationReason::UnknownCallEscape,
+    );
+    for arg in args {
+        crate::expr::downgrade_buffer_aliases_in_expr(
+            ctx,
+            arg,
+            crate::native_value::MaterializationReason::UnknownCallEscape,
+        );
+    }
+    lower_call(ctx, callee, args)
 }
 
 /// Phase H fs: `fs.METHOD(args...)` — catch-all for sync APIs reaching
@@ -384,20 +388,6 @@ pub(crate) fn arm_fs(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
                 &[(DOUBLE, &p), (DOUBLE, &undef), (DOUBLE, &cb)],
             ))
         }
-        _ => {
-            crate::expr::downgrade_buffer_aliases_in_expr(
-                ctx,
-                callee,
-                crate::native_value::MaterializationReason::UnknownCallEscape,
-            );
-            for arg in args {
-                crate::expr::downgrade_buffer_aliases_in_expr(
-                    ctx,
-                    arg,
-                    crate::native_value::MaterializationReason::UnknownCallEscape,
-                );
-            }
-            lower_call(ctx, callee, args)
-        }
+        _ => lower_generic_fs_call(ctx, callee, args),
     }
 }
