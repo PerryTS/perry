@@ -72,9 +72,7 @@ use self::guard::{
     decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i16, field_i32,
     handle_of, lower_recv, store_admission,
 };
-use self::plan::{
-    accesses, assigned, body_refused, fact_tree_leaves, plan, receiver_eligible, Recheck,
-};
+use self::plan::{accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Recheck};
 use self::verify::{successors, verify};
 
 const SLOT_BITS: u32 = 6;
@@ -99,6 +97,24 @@ const CLASSLESS_ADMIT_I16: &str = "512";
 
 /// `PERRY_REGIONS=0` switches loop regions off in ONE compiler (A/B arm);
 /// `PERRY_REGION_READS=0` (slices 1/2) switches them off too.
+/// Does a region pay for the code it copies? A loop region versions the whole
+/// loop and a body region copies its tail, so the copied HIR per bare access
+/// is bounded (`PERRY_REGION_NODES_PER_BARE`, default unbounded while it is
+/// measured). `PERRY_REGION_DIAG=3` prints every candidate's size.
+fn pays(ctx: &FnCtx<'_>, kind: &str, nodes: usize, bare: usize) -> bool {
+    let limit: usize = std::env::var("PERRY_REGION_NODES_PER_BARE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(usize::MAX);
+    if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("3") {
+        eprintln!(
+            "[perry region] candidate kind={kind} nodes={nodes} bare={bare} fn={}",
+            ctx.func.name
+        );
+    }
+    nodes <= limit.saturating_mul(bare.max(1))
+}
+
 /// `PERRY_REGION_SPILL=0` (compile time): no spill-reading copies. The
 /// runtime is then told every key is stored, which is exactly the condition
 /// under which it never publishes a spill word, so no copy is needed.
@@ -287,7 +303,9 @@ pub(crate) fn begin(
     }
     // A loop region; failing that, a body region (per-iteration receiver).
     let cands = candidates_for_loop(ctx, cond, body, update);
-    if let Some(p) = plan(ctx, body, cands, Some((cond, update))) {
+    if let Some(p) = plan(ctx, body, cands, Some((cond, update)))
+        .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len()))
+    {
         let token = NEXT_TOKEN.with(|t| {
             let v = t.get();
             t.set(v + 1);
@@ -364,7 +382,9 @@ pub(crate) fn begin(
         }
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
-        let Some(p) = plan(ctx, tail, cands, None) else {
+        let Some(p) = plan(ctx, tail, cands, None)
+            .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
+        else {
             continue;
         };
         let token = NEXT_TOKEN.with(|t| {

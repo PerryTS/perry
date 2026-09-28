@@ -475,6 +475,61 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
     ss.iter().any(s_bad)
 }
 
+/// The HIR size of `ss` (statements plus expressions): what a region copies
+/// when it versions a loop or splits a body.
+pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
+    fn e_n(e: &Expr) -> usize {
+        let mut n = 1;
+        perry_hir::walker::walk_expr_children(e, &mut |c| n += e_n(c));
+        n
+    }
+    fn s_n(s: &Stmt) -> usize {
+        1 + match s {
+            Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_n(e),
+            Stmt::Return(Some(e)) => e_n(e),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                e_n(condition)
+                    + then_branch.iter().map(s_n).sum::<usize>()
+                    + else_branch
+                        .as_ref()
+                        .map_or(0, |b| b.iter().map(s_n).sum::<usize>())
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                e_n(condition) + body.iter().map(s_n).sum::<usize>()
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().map_or(0, |i| s_n(i))
+                    + condition.as_ref().map_or(0, e_n)
+                    + update.as_ref().map_or(0, e_n)
+                    + body.iter().map(s_n).sum::<usize>()
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                e_n(discriminant)
+                    + cases
+                        .iter()
+                        .map(|c| {
+                            c.test.as_ref().map_or(0, e_n) + c.body.iter().map(s_n).sum::<usize>()
+                        })
+                        .sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+    ss.iter().map(s_n).sum()
+}
+
 /// Locals assigned (or declared) anywhere in `ss`, and in `extra`.
 pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
     fn e_walk(e: &Expr, out: &mut HashSet<u32>) {
