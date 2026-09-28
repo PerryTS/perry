@@ -217,9 +217,21 @@ pub(crate) struct EntryPollStats {
     pub(crate) kept_indirect: usize,
     pub(crate) kept_scc: usize,
     pub(crate) recursive_sccs: usize,
+    /// Allocating recursive SCCs none of whose members had a scaffold.
+    pub(crate) uncovered_sccs: usize,
 }
 
 /// Decide which scaffolds live (see the module docs), and neutralise the rest.
+///
+/// A recursive SCC gets a poll only when the recursion itself allocates
+/// without one: some member has a collecting edge of its own, or calls a
+/// function outside the SCC that may collect and has no poll at its entry. A
+/// callee that polls at entry bounds its own allocation per call, so a
+/// recursion that only reaches allocation through such callees needs nothing
+/// more — which is what keeps a numeric recursion whose only collecting edge
+/// is a cold fallback into its generic clone (`fib$spec_i32` → `fib`) free of a
+/// per-call poll. SCCs are visited callees-first, so a callee's poll is known
+/// before its callers are decided.
 pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollStats {
     let mut stats = EntryPollStats::default();
     if !functions.iter().any(|f| f.entry_poll.is_some()) {
@@ -232,29 +244,54 @@ pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollSta
             crate::gc_call_effects::direct_call_graph(&refs),
         )
     };
-    let has_scaffold: HashMap<&str, EntryPollKind> = functions
+    let scaffold: HashMap<String, EntryPollKind> = functions
         .iter()
-        .filter_map(|f| f.entry_poll.as_ref().map(|site| (f.name.as_str(), site.kind)))
+        .filter_map(|f| f.entry_poll.as_ref().map(|site| (f.name.clone(), site.kind)))
+        .collect();
+    let edges: HashMap<String, HashSet<String>> = graph
+        .iter()
+        .map(|(name, (callees, _))| (name.clone(), callees.clone()))
+        .collect();
+    // Indirect-entry scaffolds live in every non-leaf function.
+    let mut polled: HashSet<String> = scaffold
+        .iter()
+        .filter(|(name, kind)| **kind == EntryPollKind::Indirect && !leaf.contains(*name))
+        .map(|(name, _)| name.clone())
         .collect();
     let mut scc_reps: HashSet<String> = HashSet::new();
-    for scc in recursive_sccs(&graph) {
-        stats.recursive_sccs += 1;
-        if scc.iter().all(|name| leaf.contains(name)) {
-            continue;
-        }
-        // An indirect-entry poll already inside the SCC covers it.
-        if scc
-            .iter()
-            .any(|name| has_scaffold.get(name.as_str()) == Some(&EntryPollKind::Indirect))
-        {
-            continue;
-        }
+    for scc in sccs_callees_first(&edges) {
         let members: HashSet<&str> = scc.iter().map(String::as_str).collect();
+        let recursive = scc.len() > 1 || edges.get(&scc[0]).is_some_and(|c| c.contains(&scc[0]));
+        if !recursive {
+            continue;
+        }
+        stats.recursive_sccs += 1;
+        if scc.iter().any(|name| polled.contains(name)) {
+            // An indirect-entry poll inside the SCC already covers it.
+            for name in &scc {
+                polled.insert(name.clone());
+            }
+            continue;
+        }
+        let allocates_uncovered = scc.iter().any(|name| {
+            let Some((callees, collecting)) = graph.get(name) else {
+                return false;
+            };
+            *collecting
+                || callees.iter().any(|callee| {
+                    !members.contains(callee.as_str())
+                        && !leaf.contains(callee)
+                        && !polled.contains(callee)
+                })
+        });
+        if !allocates_uncovered {
+            continue;
+        }
         let rep = scc
             .iter()
-            .filter(|name| has_scaffold.contains_key(name.as_str()))
+            .filter(|name| scaffold.contains_key(name.as_str()))
             .max_by_key(|name| {
-                let incoming = graph
+                let incoming = edges
                     .iter()
                     .filter(|(caller, callees)| {
                         members.contains(caller.as_str()) && callees.contains(name.as_str())
@@ -265,6 +302,11 @@ pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollSta
             });
         if let Some(rep) = rep {
             scc_reps.insert(rep.clone());
+            for name in &scc {
+                polled.insert(name.clone());
+            }
+        } else {
+            stats.uncovered_sccs += 1;
         }
     }
     for function in functions.iter_mut() {
@@ -315,9 +357,9 @@ fn neutralise(function: &mut LlFunction, site: &EntryPollSite) {
     function.entry_poll = None;
 }
 
-/// Recursive SCCs of `graph` (Tarjan): components with more than one member,
-/// or a single member that calls itself. Names sorted within a component.
-pub(crate) fn recursive_sccs(graph: &HashMap<String, HashSet<String>>) -> Vec<Vec<String>> {
+/// Every strongly connected component of `graph` (Tarjan), callees first
+/// (reverse topological order). Names sorted within a component.
+pub(crate) fn sccs_callees_first(graph: &HashMap<String, HashSet<String>>) -> Vec<Vec<String>> {
     struct State<'g> {
         graph: &'g HashMap<String, HashSet<String>>,
         index: HashMap<&'g str, usize>,
@@ -378,12 +420,8 @@ pub(crate) fn recursive_sccs(graph: &HashMap<String, HashSet<String>>) -> Vec<Ve
                         break;
                     }
                 }
-                let recursive = component.len() > 1
-                    || state.graph.get(v).is_some_and(|c| c.contains(v));
-                if recursive {
-                    component.sort_unstable();
-                    state.out.push(component);
-                }
+                component.sort_unstable();
+                state.out.push(component);
             }
         }
     }
@@ -403,8 +441,19 @@ pub(crate) fn recursive_sccs(graph: &HashMap<String, HashSet<String>>) -> Vec<Ve
             strongconnect(&mut state, root);
         }
     }
-    state.out.sort();
     state.out
+}
+
+/// The recursive SCCs of `graph`: components with more than one member, or a
+/// single member that calls itself. Sorted, for tests.
+#[cfg(test)]
+pub(crate) fn recursive_sccs(graph: &HashMap<String, HashSet<String>>) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = sccs_callees_first(graph)
+        .into_iter()
+        .filter(|scc| scc.len() > 1 || graph.get(&scc[0]).is_some_and(|c| c.contains(&scc[0])))
+        .collect();
+    out.sort();
+    out
 }
 
 #[cfg(test)]
@@ -430,6 +479,14 @@ mod tests {
             recursive_sccs(&g),
             vec![vec!["a".to_string()], vec!["b".to_string(), "c".to_string()]]
         );
+    }
+
+    #[test]
+    fn sccs_come_callees_first() {
+        let g = graph(&[("caller", "rec"), ("rec", "rec"), ("rec", "leaf")], &["caller", "rec", "leaf"]);
+        let order = sccs_callees_first(&g);
+        let pos = |n: &str| order.iter().position(|c| c.contains(&n.to_string())).unwrap();
+        assert!(pos("leaf") < pos("rec") && pos("rec") < pos("caller"), "{order:?}");
     }
 
     #[test]

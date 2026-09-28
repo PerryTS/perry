@@ -187,18 +187,27 @@ def check(funcs):
             totals["allocating_loops"] += 1
             if not loop_polls(f, body):
                 uncovered_loops.append(f"{f.name}: loop at %{head}")
+    def has_entry_poll(name):
+        f = by_name[name]
+        return any(ins.callee in ENTRY_POLLS for b in f.blocks for ins in f.insns[b])
+
     for scc in recursive_sccs(edges):
         totals["sccs"] += 1
-        if not any(member in allocating for member in scc):
+        members = set(scc)
+        # The recursion must poll if it allocates by itself: a member with a
+        # direct collecting call, or a call out of the SCC to an allocating
+        # function that has no entry poll of its own (a callee that polls at
+        # entry bounds its own allocation per call).
+        own = any(collecting_calls(by_name[m], defined)[0] for m in scc)
+        through = any(
+            callee not in members and callee in allocating and not has_entry_poll(callee)
+            for m in scc
+            for callee in edges[m]
+        )
+        if not (own or through):
             continue
         totals["allocating_sccs"] += 1
-        polled = any(
-            ins.callee in ENTRY_POLLS
-            for member in scc
-            for block in by_name[member].blocks
-            for ins in by_name[member].insns[block]
-        )
-        if not polled:
+        if not any(has_entry_poll(m) for m in scc):
             uncovered_sccs.append(" -> ".join(scc))
     return uncovered_loops, uncovered_sccs, totals
 
@@ -294,6 +303,13 @@ entry.0:
   ret double %r
 }
 
+define double @rec_via_polled(double %d) {
+entry.0:
+  %r = call double @rec_via_polled(double %d)
+  %s = call double @rec_polled(double %d)
+  ret double %r
+}
+
 define double @rec_pure(double %d) {
 entry.0:
   %r = call double @rec_pure(double %d)
@@ -311,7 +327,7 @@ def self_test():
     assert loops == ["bare_loop: loop at %loop.1"], loops
     assert sccs == ["rec_bare"], sccs
     assert totals["loops"] == 3 and totals["allocating_loops"] == 2, totals
-    assert totals["sccs"] == 3 and totals["allocating_sccs"] == 2, totals
+    assert totals["sccs"] == 4 and totals["allocating_sccs"] == 2, totals
     print("gc_poll_coverage_check self-test: ok")
     return 0
 

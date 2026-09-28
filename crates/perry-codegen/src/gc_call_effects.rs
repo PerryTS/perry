@@ -367,13 +367,24 @@ fn effects_of(function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects
 }
 
 /// The module's direct call graph over its own definitions: each defined
-/// function mapped to the module-defined functions it calls directly. The
-/// recursive-SCC entry polls (`crate::entry_polls`) are placed from this.
-pub(crate) fn direct_call_graph(functions: &[&LlFunction]) -> HashMap<String, HashSet<String>> {
+/// function mapped to `(module-defined direct callees, whether it has a
+/// collecting edge of its own)` — an external callee that may collect, an
+/// indirect call, or an unparsed call. Entry polls are ignored, exactly as in
+/// [`transitive_leaf_functions`]. The recursive-SCC entry polls
+/// (`crate::entry_polls`) are placed from this.
+pub(crate) fn direct_call_graph(
+    functions: &[&LlFunction],
+) -> HashMap<String, (HashSet<String>, bool)> {
     let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
     functions
         .iter()
-        .map(|f| (f.name.clone(), effects_of(f, &defined).internal_callees))
+        .map(|f| {
+            let effects = effects_of(f, &defined);
+            (
+                f.name.clone(),
+                (effects.internal_callees, effects.has_collecting_edge),
+            )
+        })
         .collect()
 }
 
