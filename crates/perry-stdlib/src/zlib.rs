@@ -1401,6 +1401,27 @@ pub unsafe fn zlib_stream_on(handle: i64, event_value: f64, cb: i64) {
         .push(cb);
 }
 
+/// `stream.off(event, cb)` / `removeListener` — drop one registration of `cb`
+/// (#11620: a `for await` that stops early detaches its listeners).
+pub unsafe fn zlib_stream_off(handle: i64, event_value: f64, cb: i64) {
+    let event_ptr = js_get_string_pointer_unified(event_value) as *const StringHeader;
+    if event_ptr.is_null() {
+        return;
+    }
+    let len = (*event_ptr).byte_len as usize;
+    let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let Ok(event) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) else {
+        return;
+    };
+    if let Some(events) = ZLIB_LISTENERS.lock().unwrap().get_mut(&handle) {
+        if let Some(list) = events.get_mut(event) {
+            if let Some(at) = list.iter().rposition(|&c| c == cb) {
+                list.remove(at);
+            }
+        }
+    }
+}
+
 /// `stream.pipe(dest)` — forward 'data' (→ dest.write) and 'end' (→ dest.end)
 /// to `dest`. Stored as NaN-boxed bits; forwarding happens during the deferred
 /// drain. Returns nothing here — the dispatch arm returns `dest` for chaining.
