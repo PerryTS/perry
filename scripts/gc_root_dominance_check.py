@@ -90,6 +90,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -847,19 +848,99 @@ def macro_generated_symbols(roots=SYMBOL_ROOTS):
     return syms - written
 
 
-def nm_exported_symbols(archives):
-    """`js_*` symbols `nm -gj` reports as defined in `archives`.
+def _nm_candidates():
+    """Symbol readers to try, most bitcode-capable first (#11496).
+
+    Plain `nm` is the LAST resort, not the first: the runtime archives are
+    thin-LTO, i.e. LLVM bitcode, which GNU nm reads as zero symbols without the
+    LLVM plugin and Apple `nm` reads as zero on rustc's LTO output. `llvm-nm`
+    reads bitcode natively; rustup's `llvm-tools` copy is tried before any
+    other because it is the one whose bitcode reader matches rustc's LLVM.
+    `PERRY_NM` pins a reader outright.
+    """
+    pinned = os.environ.get("PERRY_NM")
+    if pinned:
+        return [pinned]
+    cands = []
+    try:
+        sysroot = subprocess.run(["rustc", "--print", "sysroot"],
+                                 capture_output=True, text=True).stdout.strip()
+        host = subprocess.run(["rustc", "-vV"], capture_output=True,
+                              text=True).stdout
+        host = next((l.split(":", 1)[1].strip() for l in host.splitlines()
+                     if l.startswith("host:")), "")
+        if sysroot and host:
+            cands.append(os.path.join(sysroot, "lib", "rustlib", host, "bin",
+                                      "llvm-nm"))
+    except OSError:
+        pass
+    prefix = os.environ.get("LLVM_SYS_221_PREFIX")
+    if prefix:
+        cands.append(os.path.join(prefix, "bin", "llvm-nm"))
+    cands += ["llvm-nm-22", "/opt/homebrew/opt/llvm/bin/llvm-nm",
+              "/usr/local/opt/llvm/bin/llvm-nm", "llvm-nm", "nm"]
+    seen, out = set(), []
+    for c in cands:
+        path = c if os.sep in c else shutil.which(c)
+        if path and os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def parse_nm_posix(text):
+    """Defined, external `js_*` names in `nm -g -P` output.
+
+    POSIX format (`name type value size`) is the one layout GNU nm, llvm-nm
+    and Apple nm all emit, and its type column separates definitions from
+    `U` references without relying on `--defined-only` spellings that differ
+    between them. Mach-O prefixes C symbols with `_`; ELF and COFF do not, so
+    the bare `js_` form is what a Linux archive reports -- matching only
+    `_js_` is what made every Linux run read zero symbols (#11496).
+    """
+    syms = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[1] in ("U", "u", "w", "v"):
+            continue
+        name = parts[0]
+        if name.startswith("_js_"):
+            name = name[1:]
+        if name.startswith("js_"):
+            syms.add(name)
+    return syms
+
+
+def nm_exported_symbols(archives, readers=None):
+    """`js_*` symbols defined in `archives`, and the reader that found them.
 
     Ground truth, and a LOWER bound only: an archive built for one target omits
     every symbol the other targets' cfgs define, so the invariant to assert is
     `nm <= scanner`, never equality.
+
+    Readers are tried in `_nm_candidates` order and the first one that sees any
+    `js_*` symbol wins. A reader that runs but sees nothing (GNU nm on bitcode)
+    falls through to the next; only when every reader comes back empty is that
+    reported, with what each one said, by the caller's floor.
     """
-    syms = set()
-    for archive in archives:
-        out = subprocess.run(["nm", "-gj", archive],
-                             capture_output=True, text=True).stdout
-        syms.update(tok[1:] for tok in out.split() if tok.startswith("_js_"))
-    return syms
+    tried = []
+    for reader in (readers if readers is not None else _nm_candidates()):
+        syms = set()
+        notes = []
+        for archive in archives:
+            try:
+                proc = subprocess.run([reader, "-g", "-P", archive],
+                                      capture_output=True, text=True)
+            except OSError as e:
+                notes.append(str(e))
+                continue
+            syms |= parse_nm_posix(proc.stdout)
+            if proc.returncode != 0 and proc.stderr.strip():
+                notes.append(proc.stderr.strip().splitlines()[0])
+        tried.append((reader, len(syms), notes))
+        if syms:
+            return syms, reader, tried
+    return set(), None, tried
 
 
 def alloc_re_alternatives():
@@ -1008,14 +1089,22 @@ def verify_symbols_against_archives(archives, roots=SYMBOL_ROOTS):
     if missing:
         print("error: no such archive: " + ", ".join(missing), file=sys.stderr)
         return 2
-    nm = nm_exported_symbols(archives)
+    nm, reader, tried = nm_exported_symbols(archives)
     if len(nm) < 500:
         # Same non-vacuity floor the other audits carry: an empty or
         # unreadable archive would otherwise report a serene clean.
         print(f"error: nm reported only {len(nm)} `js_*` symbols across "
               f"{len(archives)} archive(s). That is not a runtime build, so "
               "this check would pass having compared nothing.", file=sys.stderr)
+        for r, n, notes in tried:
+            print(f"  {r}: {n} js_* symbol(s)"
+                  + (f" ({'; '.join(notes[:2])})" if notes else ""),
+                  file=sys.stderr)
+        if not tried:
+            print("  no symbol reader found: install llvm-nm (rustup component "
+                  "add llvm-tools, or LLVM 22) or set PERRY_NM", file=sys.stderr)
         return 2
+    print(f"=== verify-symbols: read with {reader}")
     scanner = runtime_symbols(roots)
     unseen = sorted(nm - scanner)
     macro = macro_generated_symbols(roots)
@@ -6149,8 +6238,36 @@ def self_test():
     if not poll_reach_self_test():
         ok = False
 
+    if not nm_parse_self_test():
+        ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
+
+
+# #11496: `--verify-symbols` read zero symbols on every Linux host because it
+# matched only Mach-O's `_js_` spelling. Both object-format spellings, and a
+# `U` reference that must NOT count as a definition, are planted here.
+_NM_POSIX_FIXTURE = """\
+libperry_runtime.a[a.o]:
+js_elf_defined T 0000000000000010 0000000000000008
+js_elf_referenced U
+_js_macho_defined T 0000000000000020 0000000000000004
+_js_macho_referenced U
+js_elf_data D 0000000000000030 0000000000000008
+not_js_symbol T 0000000000000040 0000000000000004
+"""
+
+
+def nm_parse_self_test():
+    got = parse_nm_posix(_NM_POSIX_FIXTURE)
+    want = {"js_elf_defined", "js_macho_defined", "js_elf_data"}
+    if got != want:
+        print(f"self-test FAIL: parse_nm_posix read {sorted(got)}, expected "
+              f"{sorted(want)} (ELF names carry no `_` prefix; `U` is a "
+              "reference, not a definition)", file=sys.stderr)
+        return False
+    return True
 
 
 # The `--audit-poll-reach` half of `--self-test`. Planted, not merely
@@ -6339,7 +6456,7 @@ def main():
                          "would be invisible to every audit here. Takes no "
                          "corpus and needs no build.")
     ap.add_argument("--verify-symbols", nargs="+", metavar="ARCHIVE",
-                    help="cross-check `runtime_symbols()` against `nm -gj` on "
+                    help="cross-check `runtime_symbols()` against `llvm-nm`/`nm` on "
                          "one or more built archives (libperry_runtime.a, "
                          "libperry_stdlib.a). The scanner is a REGEX and the "
                          "tree keeps growing macro families that define "

@@ -698,7 +698,13 @@ pub fn run_with_parse_cache(
                 .join("llvm");
             let _ = std::fs::create_dir_all(&dir);
             std::env::set_var("PERRY_SAVE_LL", &dir);
-            std::env::set_var("PERRY_LLVM_KEEP_IR", "1");
+            // Deliberately NOT `PERRY_LLVM_KEEP_IR` (#11495). `PERRY_SAVE_LL`
+            // alone writes every module's `.ll` here, which is the whole
+            // documented contract. KEEP_IR additionally parks a marked-keep
+            // scratch dir and a native-reps JSON in `$TMPDIR` per module,
+            // which the stale reaper must never touch, so every traced
+            // compile (the gc-root-dominance corpus runs hundreds) leaked
+            // them for good. Set KEEP_IR yourself when you want those.
             // The per-module object cache short-circuits codegen for unchanged
             // modules — which means `emit_module` (and thus the .ll write)
             // never runs and the trace dir comes up empty. Force a full

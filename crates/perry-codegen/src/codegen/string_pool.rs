@@ -1087,7 +1087,7 @@ pub(super) fn emit_string_pool(
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
-        let entry = match strings.iter().find(|e| e.value == method_name) {
+        let entry = match strings.lookup(&method_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1145,7 +1145,7 @@ pub(super) fn emit_string_pool(
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == method_name) {
+        let entry = match strings.lookup(&method_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1424,7 +1424,7 @@ pub(super) fn emit_string_pool(
     for (cid, prop_name, llvm_name, is_static, definition_order) in getter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == prop_name) {
+        let entry = match strings.lookup(&prop_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1527,7 +1527,7 @@ pub(super) fn emit_string_pool(
     for (cid, prop_name, llvm_name, is_static, spec_length, definition_order) in setter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == prop_name) {
+        let entry = match strings.lookup(&prop_name) {
             Some(e) => e,
             None => continue,
         };

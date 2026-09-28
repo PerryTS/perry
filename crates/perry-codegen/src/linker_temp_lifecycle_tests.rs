@@ -350,6 +350,47 @@ fn stale_reaper_removes_only_dead_unkept_scratch() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// #11495: the RAII backstop removes what it owns on every exit — the early
+/// `?` returns the explicit cleanup never reached — yet leaves anything a
+/// retention decision claimed: `PERRY_LLVM_KEEP_IR`, or a failure marker.
+#[test]
+fn temp_path_guard_removes_unless_retained() {
+    let root = env::temp_dir().join(format!(
+        "perry_linker_test_guard_{}_{:x}",
+        std::process::id(),
+        TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let plain = root.join("plain");
+    let failed = root.join("failed");
+    let kept = root.join("kept");
+    let file = root.join("unit.o");
+    let never_created = root.join("never");
+    for dir in [&plain, &failed, &kept] {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("m.ll"), b"; ir").unwrap();
+    }
+    fs::write(failed.join(".perry-failed"), b"").unwrap();
+    fs::write(&file, b"obj").unwrap();
+
+    let early_return = || -> Result<()> {
+        let mut guard = linker_temp::TempPathGuard::with(&plain, false);
+        guard.push(&failed);
+        guard.push(&file);
+        guard.push(&never_created);
+        let _kept = linker_temp::TempPathGuard::with(&kept, true);
+        bail!("simulated failure between creating the paths and cleaning them up")
+    };
+    assert!(early_return().is_err());
+
+    assert!(!plain.exists(), "an unretained scratch dir must not outlive its guard");
+    assert!(!file.exists(), "an unretained temp file must not outlive its guard");
+    assert!(failed.join("m.ll").is_file(), "a claimed failure keeps its IR");
+    assert!(kept.join("m.ll").is_file(), "PERRY_LLVM_KEEP_IR keeps everything");
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// Every `.ll` anywhere under `root`, so a lifetime assertion does not have to
 /// know which layout produced the file.
 fn ll_files_under(root: &Path) -> Vec<PathBuf> {

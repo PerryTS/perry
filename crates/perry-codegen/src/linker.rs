@@ -19,7 +19,8 @@ use anyhow::{anyhow, bail, Context, Result};
 #[path = "linker_temp.rs"]
 mod linker_temp;
 use linker_temp::{
-    reap_stale_llvm_scratch_once, FailedScratch, FailureRetention, PROCESS_FAILURE_RETENTION,
+    reap_stale_llvm_scratch_once, FailedScratch, FailureRetention, TempPathGuard,
+    PROCESS_FAILURE_RETENTION,
 };
 
 /// The shared pass string that inserts every statepoint, relocation and
@@ -707,6 +708,7 @@ pub(crate) fn finish_native_emission(
     let pid = std::process::id();
     let counter = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let scratch = std::env::temp_dir().join(format!("perry_native_asm_{pid:x}_{counter:x}"));
+    let _cleanup = TempPathGuard::with(&scratch, false);
     fs::create_dir_all(&scratch)
         .with_context(|| format!("Failed to create {}", scratch.display()))?;
     let asm_path = scratch.join("module.s");
@@ -800,6 +802,7 @@ fn compile_ll_inprocess_in(
     failure_retention: &FailureRetention,
 ) -> Result<Vec<u8>> {
     let (paths, _pid, _nonce) = llvm_temp_paths(tmp_dir, ll_text);
+    let _cleanup = TempPathGuard::with(&paths.scratch_dir, policy.keep);
     let failed_scratch = FailedScratch::new(
         &paths.scratch_dir,
         &paths.ll_path,
@@ -1030,6 +1033,7 @@ fn compile_ll_to_object_in_with_retention(
         ll_path,
         obj_path,
     } = paths;
+    let _cleanup = TempPathGuard::with(&scratch_dir, policy.keep);
     fs::create_dir_all(&scratch_dir)
         .with_context(|| format!("Failed to create temp dir at {}", scratch_dir.display()))?;
     write_ll_atomically(&ll_path, ll_text, write_pid, write_nonce)?;
@@ -1261,9 +1265,11 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let pid = std::process::id();
     let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
+    let mut cleanup = TempPathGuard::new(env::var_os("PERRY_LLVM_KEEP_IR").is_some());
     let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(objs.len());
     for (i, bytes) in objs.iter().enumerate() {
         let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
+        cleanup.push(&p);
         fs::write(&p, bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
         obj_paths.push(p);
@@ -1273,6 +1279,7 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.lib", pid, nonce));
     #[cfg(not(target_os = "windows"))]
     let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.o", pid, nonce));
+    cleanup.push(&combined);
 
     #[cfg(target_os = "windows")]
     let tool = env::var("PERRY_LLVM_LIB").unwrap_or_else(|_| "llvm-lib".to_string());
@@ -1313,12 +1320,8 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         ))
     };
 
-    if env::var_os("PERRY_LLVM_KEEP_IR").is_none() {
-        for p in &obj_paths {
-            let _ = fs::remove_file(p);
-        }
-        let _ = fs::remove_file(&combined);
-    }
+    // `cleanup` removes the objects and the merged output on every exit,
+    // including the early `?` returns above (#11495).
     result
 }
 

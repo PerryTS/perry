@@ -307,6 +307,17 @@ impl StringPool {
         &self.entries[idx as usize]
     }
 
+    /// The entry already interned under `value`, without interning it.
+    ///
+    /// O(1) through the intern index (#11504). `intern` and `intern_wtf8`
+    /// share that index, so no two entries ever carry the same `value`, and
+    /// this returns exactly what `iter().find(|e| e.value == value)` would.
+    pub fn lookup(&self, value: &str) -> Option<&StringEntry> {
+        self.interned
+            .get(value)
+            .map(|&idx| &self.entries[idx as usize])
+    }
+
     /// Mark an interned entry as a static property/method dispatch key and
     /// return the descriptor symbol codegen should tag into the by-id ABI.
     pub fn static_dispatch_global(&mut self, idx: u32) -> String {
@@ -435,6 +446,25 @@ mod tests {
         // " (0x22) → \22, \ (0x5C) → \5C, \n (0x0A) → \0A, then \00 terminator
         assert_eq!(e.escaped_ir, "c\"a\\22b\\5Cc\\0Ad\\00\"");
         assert_eq!(e.byte_len, 7);
+    }
+
+    /// #11504: `lookup` must agree with the linear scan it replaced, for every
+    /// interned value, for a WTF-8 entry's key, and for an absent name.
+    #[test]
+    fn lookup_matches_linear_scan() {
+        let mut pool = StringPool::new();
+        for i in 0..64 {
+            pool.intern(&format!("m{i}"));
+        }
+        pool.intern_wtf8(&[0xED, 0xA0, 0x80]);
+        pool.intern("m7"); // duplicate: must not create a second entry
+        let names: Vec<String> = pool.iter().map(|e| e.value.clone()).collect();
+        for name in &names {
+            let scanned = pool.iter().find(|e| &e.value == name).map(|e| e.idx);
+            assert_eq!(pool.lookup(name).map(|e| e.idx), scanned, "{name}");
+        }
+        assert!(pool.lookup("absent").is_none());
+        assert_eq!(pool.lookup("m63").map(|e| e.idx), Some(63));
     }
 
     #[test]
