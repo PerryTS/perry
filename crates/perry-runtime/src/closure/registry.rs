@@ -436,9 +436,9 @@ fn wasi_exact_arity(func_ptr: *const u8, strategy: DispatchStrategy) -> Dispatch
 }
 
 /// WASI: the number of `f64` parameters `func_ptr` really takes after the
-/// closure pointer, asked of the engine with `ref.test`
-/// (`ffi/perry_wasi_sig.c`). `None` for a type outside `(closure, f64 x
-/// 0..=32) -> f64`.
+/// closure pointer and the receiver, asked of the engine with `ref.test`
+/// (`ffi/perry_wasi_sig.c`). `None` for a type outside `(closure, this, f64
+/// x 0..=32) -> f64`.
 #[cfg(target_os = "wasi")]
 pub(crate) fn wasi_body_params(func_ptr: *const u8) -> Option<u32> {
     extern "C" {

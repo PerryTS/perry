@@ -12,46 +12,54 @@
  * (the GC proposal, hence `-mgc` on this file only), which asks the engine for
  * the function's actual type. The dispatch layer calls this once per body and
  * caches the answer, then always calls with exactly that many arguments.
+ *
+ * Every JS body takes the receiver (`this`, `perry_abi::JsThis`, a NaN-boxed
+ * `u64`) as its second native parameter (this-as-a-parameter, #11637): the
+ * candidate types below must carry that `unsigned long long` between the
+ * closure pointer and the `double` arguments, or none of them ever matches a
+ * real body's type and every WASI dispatch falls back to the caller's raw
+ * argument count.
  */
 
 typedef struct ClosureHeader ClosureHeader;
 
-typedef double (*perry_body_0)(const ClosureHeader *);
-typedef double (*perry_body_1)(const ClosureHeader *, double);
-typedef double (*perry_body_2)(const ClosureHeader *, double, double);
-typedef double (*perry_body_3)(const ClosureHeader *, double, double, double);
-typedef double (*perry_body_4)(const ClosureHeader *, double, double, double, double);
-typedef double (*perry_body_5)(const ClosureHeader *, double, double, double, double, double);
-typedef double (*perry_body_6)(const ClosureHeader *, double, double, double, double, double, double);
-typedef double (*perry_body_7)(const ClosureHeader *, double, double, double, double, double, double, double);
-typedef double (*perry_body_8)(const ClosureHeader *, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_9)(const ClosureHeader *, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_10)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_11)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_12)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_13)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_14)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_15)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_16)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_17)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_18)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_19)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_20)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_21)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_22)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_23)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_24)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_25)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_26)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_27)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_28)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_29)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_30)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_31)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
-typedef double (*perry_body_32)(const ClosureHeader *, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_0)(const ClosureHeader *, unsigned long long);
+typedef double (*perry_body_1)(const ClosureHeader *, unsigned long long, double);
+typedef double (*perry_body_2)(const ClosureHeader *, unsigned long long, double, double);
+typedef double (*perry_body_3)(const ClosureHeader *, unsigned long long, double, double, double);
+typedef double (*perry_body_4)(const ClosureHeader *, unsigned long long, double, double, double, double);
+typedef double (*perry_body_5)(const ClosureHeader *, unsigned long long, double, double, double, double, double);
+typedef double (*perry_body_6)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double);
+typedef double (*perry_body_7)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double);
+typedef double (*perry_body_8)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_9)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_10)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_11)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_12)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_13)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_14)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_15)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_16)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_17)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_18)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_19)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_20)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_21)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_22)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_23)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_24)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_25)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_26)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_27)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_28)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_29)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_30)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_31)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
+typedef double (*perry_body_32)(const ClosureHeader *, unsigned long long, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double, double);
 
-/* The body's f64 parameter count after the closure pointer, or -1 if its
- * type is none of `double (closure, double x k)` for k in 0..=32. */
+/* The body's f64 parameter count after the closure pointer and the receiver,
+ * or -1 if its type is none of `double (closure, this, double x k)` for k in
+ * 0..=32. */
 int perry_wasi_closure_params(const void *fp) {
     if (__builtin_wasm_test_function_pointer_signature((perry_body_0)fp)) return 0;
     if (__builtin_wasm_test_function_pointer_signature((perry_body_1)fp)) return 1;
