@@ -525,7 +525,9 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     // registered-constructor flat dispatch, which fills user args and
     // snapshot caps by the signature split.
     if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
-        if parent_cid != 0 {
+        // Only a compiled parent class has a class function object; a
+        // builtin parent id (`extends Error`) never gets one.
+        if parent_cid != 0 && crate::object::is_class_id_registered(parent_cid) {
             return crate::object::class_value::class_value(parent_cid);
         }
     }

@@ -887,6 +887,19 @@ mod tests {
             crate::symbol::class_static_symbol_keys_for_class(crate::error::CLASS_ID_ERROR)
                 .is_empty()
         );
+        // Object.getPrototypeOf(C), the static `super` parent value and a
+        // static `super[k] = v` all step to the parent id; none may mint.
+        let _ = crate::object::js_object_get_prototype_of(recv);
+        let _ = crate::object::class_registry::parent_static::template_dynamic_parent_value(cid);
+        let _ = crate::proxy::js_super_put_value_set(
+            crate::error::CLASS_ID_ERROR,
+            crate::value::js_nanbox_string(
+                crate::string::js_string_from_bytes(b"zz".as_ptr(), 2) as i64
+            ),
+            1.0,
+            recv,
+            0,
+        );
         assert!(
             class_value_cached(crate::error::CLASS_ID_ERROR).is_none(),
             "the builtin Error id must not get a class function object"
