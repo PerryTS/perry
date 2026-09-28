@@ -20,6 +20,10 @@ resolving to `undefined` for every method except `readFile`, `writeFile`,
 `lstat`, `readdir`, ... never ran). The codegen arm now falls back to the
 generic call path, as the sync `fs.<method>()` arm already does.
 
-Test: `test-parity/node-suite/fs/stats/date-fields-access-forms.ts`. The
+Tests: `test-parity/node-suite/fs/stats/date-fields-access-forms.ts` (also
+pins `constructor.name` and that a user class named `Stats` keeps its own
+accessors) and `test-parity/node-suite/fs/imports/default-import-promises-methods.ts`
+(`readdir`, `access`, `stat`, `lstat`, `copyFile`, `rename`, `truncate`,
+`unlink`, `realpath`, `mkdtemp`, `rm`, and an `ENOENT` rejection). The
 existing `fs/stats/date-fields.ts` and `fs-promises/stats/date-fields.ts` pass
 again.

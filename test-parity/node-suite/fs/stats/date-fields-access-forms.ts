@@ -22,11 +22,23 @@ function show(label: string, st: any) {
   console.log(`${label} mtime.toUTCString callable:`, typeof st.mtime?.toUTCString === "function");
 }
 
-show("statSync", fs.statSync(file));
+const plain = fs.statSync(file);
+const big = fs.statSync(file, { bigint: true });
+console.log("constructor names:", plain.constructor.name, big.constructor.name);
+
+// A user class that happens to share the runtime's class name keeps its own
+// accessors; the Stats registration must not capture it.
+class Stats {
+  get mtime() { return "user getter"; }
+}
+console.log("user Stats class:", new Stats().mtime, new Stats().constructor.name);
+console.log("fs Stats unaffected:", plain.mtime instanceof Date);
+
+show("statSync", plain);
 show("lstatSync", fs.lstatSync(file));
 const fd = fs.openSync(file, "r");
 show("fstatSync", fs.fstatSync(fd));
-show("statSync bigint", fs.statSync(file, { bigint: true }));
+show("statSync bigint", big);
 
 fs.stat(file, (err, st) => {
   console.log("stat callback err:", err === null);
