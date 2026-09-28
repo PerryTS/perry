@@ -798,11 +798,13 @@ pub(crate) fn gc_note_external_side_free(bytes: usize) {
 /// alone drove the loop into repeated full collections.
 ///
 /// Never collects, so callers may hold raw heap views across it.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn gc_note_external_transient_alloc(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
 }
 
 /// Release bytes recorded by [`gc_note_external_transient_alloc`].
+#[cfg(feature = "regex-engine")]
 pub(crate) fn gc_note_external_transient_free(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
 }
