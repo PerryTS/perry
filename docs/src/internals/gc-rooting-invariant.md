@@ -264,6 +264,10 @@ where the only collecting call is on the arm that replaces `%v`. Before the
 refinement that one join read as 96 violations. A collector on an edge that
 *carries* the value, or between the join and the bind, is still reported, and
 `--self-test` asserts both (`_SELFTEST_PHI_SAFE_EDGE` / `_SELFTEST_PHI_HAZARD`).
+`--stale-registers` applies the same rule when a use reaches its source only
+through such a phi (`_stale_use_replacing_edges`). That took the stale budgets
+from 39 to 2 (curated) and from 118 to 10 (dependency-scale). The
+dependency-scale corpus had been at 457 on `main`, and no step reported it.
 
 For a single file you are iterating on:
 

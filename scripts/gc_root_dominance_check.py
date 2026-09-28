@@ -2897,6 +2897,7 @@ def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
                                 and uses(ins.text, chain)):
                             chain.add(ins.result)
                             grew = True
+            direct = None   # phi-free closure, built on first need (#11604)
             # First real (non-transparent) use of any register in the chain
             # that sits below a collection point.
             for bb in f.blocks:
@@ -2915,6 +2916,18 @@ def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
                     hits = window_hits_generic(f, src, use)
                     if not hits:
                         continue
+                    # #11604: a use reached only through a phi edge that
+                    # REPLACES the source is not below that edge's collector.
+                    # Refining can only remove hits, so it runs only when
+                    # there are some.
+                    if direct is None:
+                        direct = _phi_free_closure(def_of, src.result, chain)
+                    killed = _stale_use_replacing_edges(
+                        f, def_of, src.result, chain, direct, use)
+                    if killed:
+                        hits = window_hits_generic(f, src, use, killed=killed)
+                        if not hits:
+                            continue
                     v = StaleUse(module, f.name, src, kind, use, hits,
                                  src.result, poll_reaching)
                     if moving_only and not v.moving:
@@ -2927,11 +2940,58 @@ def check_func_stale(module, f, poll_reaching=frozenset(), moving_only=False):
     return out
 
 
+def _phi_free_closure(def_of, src_reg, chain):
+    """The registers of `chain` (the source's forward transparent closure)
+    that derive from `src_reg` WITHOUT passing through a phi: they carry the
+    source on every path."""
+    direct = {src_reg}
+    grew = True
+    while grew:
+        grew = False
+        for r in chain:
+            if r in direct:
+                continue
+            d = def_of.get(r)
+            if (d is not None and not _is_phi(d) and is_transparent(d)
+                    and operand_regs(d.text) & direct):
+                direct.add(r)
+                grew = True
+    return direct
+
+
+def _stale_use_replacing_edges(f, def_of, src_reg, chain, direct, use):
+    """`phi_replacing_edges` for a stale-register use (#11604).
+
+    The use reads the source only through a phi when none of the chain
+    registers it names is in `direct` (the phi-free closure). Then a path
+    that enters such a phi through an edge carrying something else delivers
+    that other value to the use, and a collector reachable only through that
+    edge is not in the source's window. S2's template join is the case:
+    `phi [ %v, %entry ], [ %coerced, %tmpl_coerce.slow ]` then a store of
+    the phi, where the only collector is the slow arm's call. If the use
+    names any directly-derived register, nothing is dropped.
+    """
+    used = {r for r in operand_regs(use.text) if r in chain}
+    if not used or used & direct:
+        return frozenset()
+    back = set()
+    q = deque(used)
+    while q:
+        r = q.popleft()
+        if r in back:
+            continue
+        back.add(r)
+        d = def_of.get(r)
+        if d is not None and is_transparent(d):
+            q.extend(operand_regs(d.text))
+    return phi_replacing_edges(f, def_of, src_reg, back)
+
+
 def _collecting_insn(ins):
     return is_collecting(ins.callee)
 
 
-def window_hits_generic(f, A, B, pred=_collecting_insn):
+def window_hits_generic(f, A, B, pred=_collecting_insn, killed=frozenset()):
     """Collection points on some CFG path from just after A to just before B.
 
     `pred` decides what a collection point IS. The shadow modes pass the
@@ -2951,7 +3011,7 @@ def window_hits_generic(f, A, B, pred=_collecting_insn):
     for c in f.insns[B.block]:
         if pred(c) and c.idx < B.idx:
             hits.append(c)
-    for m_blk in between_blocks(f, A.block, B.block):
+    for m_blk in between_blocks(f, A.block, B.block, killed):
         for c in f.insns[m_blk]:
             if pred(c):
                 hits.append(c)
@@ -5467,6 +5527,19 @@ def self_test():
                   "refinement must only drop edges that REPLACE the value; a "
                   "collector on a carrying edge, or after the join, is still "
                   "a late root store.", file=sys.stderr)
+            ok = False
+        # Same refinement, same two directions, in --stale-registers: the
+        # join's store must not read as a stale use of `%v`, and both hazard
+        # shapes must still do so.
+        n_safe, _rc = _stale_probe(phi_safe, None)
+        n_hazard, _rc = _stale_probe(phi_hazard, None)
+        if n_safe != 0 or n_hazard != 2:
+            print(f"self-test FAIL: --stale-registers over the phi fixtures -> "
+                  f"{n_safe} (safe join) / {n_hazard} (hazards), expected 0 / "
+                  "2. A use reached only through a phi edge that REPLACES the "
+                  "source is not below the replacing arm's collector (#11604); "
+                  "a carrying edge's collector, or one after the join, is.",
+                  file=sys.stderr)
             ok = False
 
         # --stale-registers is a diagnostic, so its exit status is asserted
