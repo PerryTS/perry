@@ -381,7 +381,20 @@ regex = "1.12"
 aho-corasick = "1.1"
 memchr = "2"
 # The single regular-expression engine, through crates/perry-perex.
-perex = "0.1.10"
+# 0.1.11 carries PerryTS/perex#3 (package-shaped repeats and classes leave the
+# per-character phase loop; release commit 80845f5310, tag v0.1.11). It is
+# younger than the 7-day `global-min-publish-age` soak (.cargo/config.toml),
+# so Cargo.lock was resolved once with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
+# under an owner-approved one-time publish-age override (2026-09-28), for this
+# version only; the window itself is unchanged. No public API change from
+# 0.1.10. Published 2026-09-27T21:13:35Z, sha256
+# 4cacad0d8fd77338345abb71e4f8372ce93bf0e9205d845940f8e789b3fc98a8 — the
+# checksum Cargo.lock records, verified against
+# https://crates.io/api/v1/crates/perex/0.1.11. As with turnloop above, the
+# opt-out is a committed, reviewable change, never a silent one, and the lock
+# pins the exact artifact. The override lapses on its own on 2026-10-04, when
+# 0.1.11 clears the window.
+perex = "0.1.11"
 # turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
 # stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
 # 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
