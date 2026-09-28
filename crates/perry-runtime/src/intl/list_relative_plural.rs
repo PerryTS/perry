@@ -204,10 +204,10 @@ pub(crate) fn list_format_instance_parts(
 
 pub(crate) extern "C" fn list_format_format_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("format", KIND_LIST_FORMAT);
+    let obj = this_intl_object(this, "format", KIND_LIST_FORMAT);
     string_value(
         &list_format_instance_parts(obj, value)
             .iter()
@@ -232,10 +232,10 @@ pub(crate) extern "C" fn list_format_bound_format_thunk(
 
 pub(crate) extern "C" fn list_format_to_parts_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatToParts", KIND_LIST_FORMAT);
+    let obj = this_intl_object(this, "formatToParts", KIND_LIST_FORMAT);
     parts_to_js_array(&list_format_instance_parts(obj, value))
 }
 
@@ -270,9 +270,9 @@ pub(crate) fn list_format_resolved_options_object(obj: *const ObjectHeader) -> f
 
 pub(crate) extern "C" fn list_format_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_LIST_FORMAT);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_LIST_FORMAT);
     list_format_resolved_options_object(obj)
 }
 
@@ -593,11 +593,11 @@ fn rtf_parts_to_js_array(parts: &[(&'static str, String)], unit: &str) -> f64 {
 
 pub(crate) extern "C" fn rtf_format_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
-    let obj = this_intl_object("format", KIND_RELATIVE_TIME);
+    let obj = this_intl_object(this, "format", KIND_RELATIVE_TIME);
     string_value(
         &rtf_instance_parts(obj, value, unit)
             .iter()
@@ -623,11 +623,11 @@ pub(crate) extern "C" fn rtf_bound_format_thunk(
 
 pub(crate) extern "C" fn rtf_to_parts_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
     unit: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatToParts", KIND_RELATIVE_TIME);
+    let obj = this_intl_object(this, "formatToParts", KIND_RELATIVE_TIME);
     let (parts, unit) = rtf_instance_parts_and_unit(obj, value, unit);
     rtf_parts_to_js_array(&parts, unit)
 }
@@ -672,9 +672,9 @@ pub(crate) fn rtf_resolved_options_object(obj: *const ObjectHeader) -> f64 {
 
 pub(crate) extern "C" fn rtf_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_RELATIVE_TIME);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_RELATIVE_TIME);
     rtf_resolved_options_object(obj)
 }
 
@@ -1005,10 +1005,10 @@ mod plural_category_tests {
 
 pub(crate) extern "C" fn plural_rules_select_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("select", KIND_PLURAL_RULES);
+    let obj = this_intl_object(this, "select", KIND_PLURAL_RULES);
     plural_rules_select(obj, value)
 }
 
@@ -1023,11 +1023,11 @@ pub(crate) extern "C" fn plural_rules_bound_select_thunk(
 
 pub(crate) extern "C" fn plural_rules_select_range_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    let _obj = this_intl_object("selectRange", KIND_PLURAL_RULES);
+    let _obj = this_intl_object(this, "selectRange", KIND_PLURAL_RULES);
     plural_select_range(start, end)
 }
 
@@ -1124,9 +1124,9 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
 
 pub(crate) extern "C" fn plural_rules_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_PLURAL_RULES);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_PLURAL_RULES);
     plural_rules_resolved_options_object(obj)
 }
 

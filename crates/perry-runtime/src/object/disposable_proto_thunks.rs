@@ -31,8 +31,12 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
 
 /// Resolve `IMPLICIT_THIS` to a stack `ObjectHeader` of the expected class id,
 /// or throw a `TypeError`.
-fn stack_receiver_or_throw(want_async: bool, method: &str) -> *mut ObjectHeader {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+fn stack_receiver_or_throw(
+    this: crate::closure::JsThis,
+    want_async: bool,
+    method: &str,
+) -> *mut ObjectHeader {
+    let bits = this.bits();
     let value = f64::from_bits(bits);
     let proto = if want_async {
         "AsyncDisposableStack.prototype"
@@ -55,53 +59,53 @@ fn stack_receiver_or_throw(want_async: bool, method: &str) -> *mut ObjectHeader 
 
 pub(super) extern "C" fn ds_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "use");
+    let stack = stack_receiver_or_throw(this, false, "use");
     js_disposable_stack_use(stack, resource)
 }
 
 pub(super) extern "C" fn ds_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "adopt");
+    let stack = stack_receiver_or_throw(this, false, "adopt");
     js_disposable_stack_adopt(stack, value, on_dispose)
 }
 
 pub(super) extern "C" fn ds_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "defer");
+    let stack = stack_receiver_or_throw(this, false, "defer");
     js_disposable_stack_defer(stack, on_dispose)
 }
 
 pub(super) extern "C" fn ds_proto_dispose_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "dispose");
+    let stack = stack_receiver_or_throw(this, false, "dispose");
     js_disposable_stack_dispose(stack)
 }
 
 pub(super) extern "C" fn ds_proto_move_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "move");
+    let stack = stack_receiver_or_throw(this, false, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "disposed");
+    let stack = stack_receiver_or_throw(this, false, "disposed");
     js_disposable_stack_disposed(stack)
 }
 
@@ -109,53 +113,53 @@ pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
 
 pub(super) extern "C" fn ads_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "use");
+    let stack = stack_receiver_or_throw(this, true, "use");
     js_async_disposable_stack_use(stack, resource)
 }
 
 pub(super) extern "C" fn ads_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "adopt");
+    let stack = stack_receiver_or_throw(this, true, "adopt");
     js_disposable_stack_adopt(stack, value, on_dispose)
 }
 
 pub(super) extern "C" fn ads_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "defer");
+    let stack = stack_receiver_or_throw(this, true, "defer");
     js_disposable_stack_defer(stack, on_dispose)
 }
 
 pub(super) extern "C" fn ads_proto_dispose_async_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "disposeAsync");
+    let stack = stack_receiver_or_throw(this, true, "disposeAsync");
     js_async_disposable_stack_dispose_async(stack)
 }
 
 pub(super) extern "C" fn ads_proto_move_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "move");
+    let stack = stack_receiver_or_throw(this, true, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ads_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "disposed");
+    let stack = stack_receiver_or_throw(this, true, "disposed");
     js_disposable_stack_disposed(stack)
 }
 

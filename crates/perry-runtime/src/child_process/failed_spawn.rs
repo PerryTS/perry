@@ -7,11 +7,11 @@ use super::*;
 /// Keep fork's separate failure contract unchanged by using this for spawn only.
 pub(super) extern "C" fn emit_error_then_close(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cp = scope.root_nanbox_f64(cp_this(closure));
-    reactor::cp_emit_spawn_error(closure, crate::closure::body_call::current_this());
+    let cp = scope.root_nanbox_f64(cp_this(this, closure));
+    reactor::cp_emit_spawn_error(closure, this);
     let close = crate::closure::js_closure_alloc(reactor::cp_emit_spawn_close as *const u8, 1);
     crate::closure::js_closure_set_capture_ptr(close, 0, cp.get_nanbox_f64().to_bits() as i64);
     crate::timer::js_set_timeout_callback(close as i64, 1.0);

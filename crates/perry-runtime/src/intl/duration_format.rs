@@ -369,9 +369,9 @@ fn resolved_options_object(obj: *const ObjectHeader) -> f64 {
 
 pub(super) extern "C" fn resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", super::KIND_DURATION_FORMAT);
+    let obj = this_intl_object(this, "resolvedOptions", super::KIND_DURATION_FORMAT);
     resolved_options_object(obj)
 }
 
@@ -886,19 +886,19 @@ pub(super) fn format_temporal_duration(duration: f64, locales: f64, options: f64
 
 pub(super) extern "C" fn format_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     duration: f64,
 ) -> f64 {
-    let obj = this_intl_object("format", super::KIND_DURATION_FORMAT);
+    let obj = this_intl_object(this, "format", super::KIND_DURATION_FORMAT);
     format_value(obj, duration)
 }
 
 pub(super) extern "C" fn to_parts_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     duration: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatToParts", super::KIND_DURATION_FORMAT);
+    let obj = this_intl_object(this, "formatToParts", super::KIND_DURATION_FORMAT);
     let vals = to_duration_record(duration);
     df_parts_to_js_array(&partition(obj, &vals))
 }

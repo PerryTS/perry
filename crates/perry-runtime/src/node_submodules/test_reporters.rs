@@ -69,7 +69,7 @@ fn reporter_transform(kind: i32) -> f64 {
 
 extern "C" fn reporter_transform_chunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
     _encoding: f64,
     callback: f64,
@@ -96,7 +96,7 @@ extern "C" fn reporter_transform_chunk(
         });
     }
     if !output.is_empty() {
-        let this = crate::object::js_implicit_this_get();
+        let this = this.as_f64();
         let handle = (this.to_bits() & POINTER_MASK) as i64;
         crate::node_stream::js_node_stream_method_push(handle, string_value(&output));
     }

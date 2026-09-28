@@ -1481,12 +1481,12 @@ fn ensure_spec_finally_arities_registered() {
 
 pub(crate) extern "C" fn promise_prototype_then_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     on_fulfilled: f64,
     on_rejected: f64,
 ) -> f64 {
     ensure_spec_finally_arities_registered();
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     let promise = if js_value_is_promise(receiver) != 0 {
         crate::value::js_nanbox_get_pointer(receiver) as *mut Promise
     } else if let Some(backing) = super::subclass::subclass_backing_promise(receiver) {
@@ -1538,10 +1538,10 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
 
 pub(crate) extern "C" fn promise_prototype_catch_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     on_rejected: f64,
 ) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     let args = [f64::from_bits(crate::value::TAG_UNDEFINED), on_rejected];
     call_receiver_then(receiver, &args)
 }
@@ -1552,13 +1552,13 @@ pub(crate) extern "C" fn promise_prototype_catch_thunk(
 
 pub(crate) extern "C" fn promise_prototype_finally_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     on_finally: f64,
 ) -> f64 {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
     ensure_spec_finally_arities_registered();
 
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
 
     // receiver must be a JS Object — pointer-tagged, not a registered symbol, not a handle.
     if !is_promise_species_object(receiver) {

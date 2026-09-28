@@ -384,10 +384,10 @@ extern "C" fn mock_property_reset_accesses(
 
 extern "C" fn mock_property_implementation(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    mock_property_set(closure, crate::closure::body_call::current_this(), value)
+    mock_property_set(closure, this, value)
 }
 
 extern "C" fn mock_property_implementation_once(

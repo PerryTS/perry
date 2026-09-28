@@ -158,18 +158,17 @@ pub(super) extern "C" fn regex_proto_source_getter(
 /// order `d g i m s u v y`. Throws `TypeError` only if `this` is not an Object.
 pub(super) extern "C" fn regex_proto_flags_getter(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     #[cfg(feature = "regex-engine")]
     {
-        let value = crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(
-            crate::object::js_implicit_this_get(),
-        ));
+        let value =
+            crate::regex::perex_api::finish(crate::regex::perex_match_search::flags(this.as_f64()));
         crate::value::js_nanbox_string(value as i64)
     }
     #[cfg(not(feature = "regex-engine"))]
     {
-        let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let receiver = crate::value::JSValue::from_bits(this.bits());
         // Type(R) must be Object. Pointer-tagged values are objects EXCEPT Symbols
         // (which are also pointer-tagged via the symbol side-table); a Symbol `this`
         // must throw a TypeError, not silently assemble "".
@@ -242,10 +241,10 @@ fn install_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8)
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_exec_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    let re = regex_instance_or_throw("exec");
+    let re = regex_instance_or_throw(this, "exec");
     let scope = crate::gc::RuntimeHandleScope::new();
     let re = scope.root_raw_const_ptr(re);
     let s = crate::value::js_jsvalue_to_string_coerce(arg);
@@ -276,11 +275,12 @@ pub(crate) fn is_builtin_regexp_exec(value: f64) -> bool {
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_test_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     let matched = crate::regex::perex_api::finish(crate::regex::perex_dispatch::test_value(
-        crate::object::js_implicit_this_get(),
+        this,
+        this.as_f64(),
         arg,
     ));
     f64::from_bits(crate::value::JSValue::bool(matched).bits())
@@ -296,11 +296,11 @@ pub(super) extern "C" fn regex_proto_test_thunk(
 #[cfg(feature = "regex-engine")]
 pub(super) extern "C" fn regex_proto_compile_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     pattern: f64,
     flags: f64,
 ) -> f64 {
-    let re = regex_instance_or_throw("compile");
+    let re = regex_instance_or_throw(this, "compile");
     crate::regex::js_regexp_compile_value(re as *mut crate::regex::RegExpHeader, pattern, flags)
 }
 
@@ -310,9 +310,9 @@ pub(super) extern "C" fn regex_proto_compile_thunk(
 /// `RegExp.prototype.toString.call({ source: "x", flags: "g" })` works.
 pub(super) extern "C" fn regex_proto_to_string_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let receiver = crate::value::JSValue::from_bits(this.bits());
     if !receiver.is_pointer()
         || crate::symbol::is_registered_symbol(receiver.as_pointer::<u8>() as usize)
     {
@@ -343,8 +343,11 @@ pub(super) extern "C" fn regex_proto_to_string_thunk(
 /// throwing `TypeError` otherwise. Unlike the flag/`source` getters, this does
 /// NOT treat `RegExp.prototype` specially — builtin exec requires a matcher.
 #[cfg(feature = "regex-engine")]
-fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
-    let receiver = crate::value::JSValue::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn regex_instance_or_throw(
+    this: crate::closure::JsThis,
+    method: &str,
+) -> *const crate::regex::RegExpHeader {
+    let receiver = crate::value::JSValue::from_bits(this.bits());
     if receiver.is_pointer() {
         let ptr = receiver.as_pointer::<u8>() as usize;
         if crate::regex::is_registered_regex(ptr) {

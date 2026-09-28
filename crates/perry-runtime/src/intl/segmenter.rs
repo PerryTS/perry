@@ -422,17 +422,17 @@ fn install_segments_iterator(segments: &crate::gc::RuntimeHandle<'_>) {
 
 extern "C" fn segments_iterator_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let segments = scope.root_raw_const_ptr(segments_from_this());
+    let segments = scope.root_raw_const_ptr(segments_from_this(this));
     segments.with_const_ptr(|segments: *const crate::ArrayHeader| {
         crate::array::array_values_iter(js_nanbox_pointer(segments as i64))
     })
 }
 
-fn segments_from_this() -> *const crate::ArrayHeader {
-    let this_value = crate::object::js_implicit_this_get();
+fn segments_from_this(this: crate::closure::JsThis) -> *const crate::ArrayHeader {
+    let this_value = this.as_f64();
     let Some(segments) = array_ptr_from_value(this_value) else {
         throw_type_error("Intl.Segments.prototype.containing called on incompatible receiver");
     };
@@ -445,10 +445,10 @@ fn segments_from_this() -> *const crate::ArrayHeader {
 
 pub(crate) extern "C" fn segmenter_containing_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
-    let segments = segments_from_this();
+    let segments = segments_from_this(this);
     let input_len =
         get_number_field(segments as *const ObjectHeader, KEY_SEGMENTS_LENGTH).unwrap_or(0.0);
 
@@ -496,10 +496,10 @@ pub(crate) extern "C" fn segmenter_containing_thunk(
 
 pub(crate) extern "C" fn segmenter_segment_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("segment", KIND_SEGMENTER);
+    let obj = this_intl_object(this, "segment", KIND_SEGMENTER);
     segmenter_segment_object(obj, value)
 }
 
@@ -520,9 +520,9 @@ pub(crate) fn segmenter_segment_object(obj: *const ObjectHeader, value: f64) -> 
 
 pub(crate) extern "C" fn segmenter_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_SEGMENTER);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_SEGMENTER);
     segmenter_resolved_options_object(obj)
 }
 

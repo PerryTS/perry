@@ -79,18 +79,18 @@ pub(crate) extern "C" fn date_time_format_bound_format_thunk(
 /// construction with name `""` and length 1).
 pub(crate) extern "C" fn date_time_format_format_getter_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("format", KIND_DATE_TIME);
+    let obj = this_intl_object(this, "format", KIND_DATE_TIME);
     get_field(obj, KEY_DTF_BOUND_FORMAT)
 }
 
 pub(crate) extern "C" fn date_time_format_to_parts_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatToParts", KIND_DATE_TIME);
+    let obj = this_intl_object(this, "formatToParts", KIND_DATE_TIME);
     if let Some(kind) = crate::temporal::temporal_kind(value) {
         validate_temporal_dtf_overlap(kind, obj);
     }
@@ -1385,9 +1385,9 @@ pub(crate) use range::*;
 
 pub(crate) extern "C" fn date_time_format_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_DATE_TIME);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_DATE_TIME);
     date_time_format_resolved_options_object(obj)
 }
 
@@ -1706,9 +1706,9 @@ pub(crate) extern "C" fn collator_bound_compare_thunk(
 /// anonymous built-in shape required by ECMA-402 (`name: ""`, `length: 2`).
 pub(crate) extern "C" fn collator_compare_getter_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("compare", KIND_COLLATOR);
+    let obj = this_intl_object(this, "compare", KIND_COLLATOR);
     get_field(obj, KEY_COL_BOUND_COMPARE)
 }
 
@@ -1777,9 +1777,9 @@ pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right
 
 pub(crate) extern "C" fn collator_resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_COLLATOR);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_COLLATOR);
     collator_resolved_options_object(obj)
 }
 

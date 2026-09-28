@@ -144,7 +144,7 @@ mod platform_impl {
         closure: *const ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         let target = cp_get_field(this, b"__ptyTarget");
         let cb = cp_get_field(this, b"__ptyCb");
         if let Some(event) = cp_value_to_string(cp_get_field(this, b"__ptyEvent")) {
@@ -174,7 +174,7 @@ mod platform_impl {
         _this: crate::closure::JsThis,
         cb: f64,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         pty_register(this, "data", cb);
         pty_make_disposable(this, "data", cb)
     }
@@ -184,7 +184,7 @@ mod platform_impl {
         _this: crate::closure::JsThis,
         cb: f64,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         pty_register(this, "exit", cb);
         pty_make_disposable(this, "exit", cb)
     }
@@ -194,7 +194,7 @@ mod platform_impl {
         _this: crate::closure::JsThis,
         data: f64,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         if let Some(handle) = pty_handle_of(this) {
             let bytes = cp_value_to_bytes(data);
             if !bytes.is_empty() {
@@ -210,7 +210,7 @@ mod platform_impl {
         cols: f64,
         rows: f64,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         let cols_i = pty_arg_i32(cols);
         let rows_i = pty_arg_i32(rows);
         if cols_i <= 0 || rows_i <= 0 || cols_i > u16::MAX as i32 || rows_i > u16::MAX as i32 {
@@ -234,7 +234,7 @@ mod platform_impl {
         _this: crate::closure::JsThis,
         signal: f64,
     ) -> f64 {
-        let this = cp_this(closure);
+        let this = cp_this(_this, closure);
         if let Some(handle) = pty_handle_of(this) {
             reactor::pty_live_kill(handle, pty_parse_kill_signal(signal));
         }
@@ -243,9 +243,9 @@ mod platform_impl {
 
     extern "C" fn pty_method_pause(
         closure: *const ClosureHeader,
-        _this: crate::closure::JsThis,
+        this: crate::closure::JsThis,
     ) -> f64 {
-        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+        if let Some(handle) = pty_handle_of(cp_this(this, closure)) {
             reactor::pty_live_set_paused(handle, true);
         }
         cp_undefined()
@@ -253,9 +253,9 @@ mod platform_impl {
 
     extern "C" fn pty_method_resume(
         closure: *const ClosureHeader,
-        _this: crate::closure::JsThis,
+        this: crate::closure::JsThis,
     ) -> f64 {
-        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+        if let Some(handle) = pty_handle_of(cp_this(this, closure)) {
             reactor::pty_live_set_paused(handle, false);
         }
         cp_undefined()
@@ -266,14 +266,10 @@ mod platform_impl {
     /// kill with the default SIGHUP.
     extern "C" fn pty_method_dispose(
         closure: *const ClosureHeader,
-        _this: crate::closure::JsThis,
+        this: crate::closure::JsThis,
     ) -> f64 {
-        pty_method_resume(closure, crate::closure::body_call::current_this());
-        pty_method_kill(
-            closure,
-            crate::closure::body_call::current_this(),
-            cp_undefined(),
-        )
+        pty_method_resume(closure, this);
+        pty_method_kill(closure, this, cp_undefined())
     }
 
     /// `kill([signal])` — node-pty defaults to `SIGHUP` (a hangup is how a

@@ -15,6 +15,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // by a `PERRY_THIS_WITNESS=1` build; declared unconditionally for the same
     // reason.
     module.declare_function("js_this_param_witness", VOID, &[I64, PTR, I64]);
+    // OrdinaryCallBindThis for a sloppy body's receiver parameter
+    // (`expr::body_call::emit_receiver_prologue`). Can allocate: a safepoint.
+    module.declare_function("js_this_coerce_sloppy", DOUBLE, &[DOUBLE]);
     // RegExp exec
     module.declare_function("js_regexp_exec", I64, &[I64, I64]);
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);

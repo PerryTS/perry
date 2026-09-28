@@ -122,7 +122,7 @@ pub(crate) extern "C" fn cp_method_on(
     event: f64,
     cb: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     cp_register(this, event, cb);
     this
 }
@@ -132,7 +132,7 @@ pub(crate) extern "C" fn cp_method_emit(
     event: f64,
     arg: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     let name = match cp_value_to_string(event) {
         Some(n) => n,
         None => return TAG_FALSE_F64,
@@ -145,16 +145,16 @@ pub(crate) extern "C" fn cp_method_emit(
 }
 pub(crate) extern "C" fn cp_method_this0(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cp_this(closure)
+    cp_this(this, closure)
 }
 pub(crate) extern "C" fn cp_method_this1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    cp_this(closure)
+    cp_this(this, closure)
 }
 
 /// Keep a live child attached to the event loop. Calls are idempotent, matching
@@ -163,7 +163,7 @@ pub(crate) extern "C" fn cp_method_ref(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     if let Some(handle) = cp_handle_of(this) {
         reactor::cp_live_set_refed(handle, true);
     }
@@ -177,7 +177,7 @@ pub(crate) extern "C" fn cp_method_unref(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     if let Some(handle) = cp_handle_of(this) {
         reactor::cp_live_set_refed(handle, false);
     }
@@ -189,11 +189,11 @@ pub(crate) extern "C" fn cp_method_unref(
 /// constructed idle object inert after its setup checks.
 pub(crate) extern "C" fn cp_method_child_spawn(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     options: f64,
 ) -> f64 {
     crate::child_process::validate::cp_validate_child_process_spawn(options);
-    cp_this(closure)
+    cp_this(this, closure)
 }
 /// `child.stdout.setEncoding(encoding)` switches emitted chunks from Buffers
 /// to decoded strings. The reactor reads this field when it delivers data.
@@ -202,7 +202,7 @@ pub(crate) extern "C" fn cp_method_set_encoding(
     _this: crate::closure::JsThis,
     encoding: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     cp_set_field(this, b"__cpEncoding", encoding);
     this
 }
@@ -212,7 +212,7 @@ pub(crate) extern "C" fn cp_method_kill(
     signal: f64,
 ) -> f64 {
     cp_validate_signal(signal);
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     cp_set_field(this, b"killed", TAG_TRUE_F64);
     // #1934: signal the live child if one is still running. `__cpHandle` is the
     // reactor registry key set by `spawn`. Returns true when the signal was
@@ -229,13 +229,9 @@ pub(crate) extern "C" fn cp_method_kill(
 /// scope exit. #2556.
 pub(crate) extern "C" fn cp_method_dispose(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = cp_method_kill(
-        closure,
-        crate::closure::body_call::current_this(),
-        cp_undefined(),
-    );
+    let _ = cp_method_kill(closure, this, cp_undefined());
     cp_undefined()
 }
 pub(crate) fn js_fork_child(args_len: usize) -> f64 {
@@ -255,7 +251,7 @@ pub(crate) extern "C" fn cp_method_remove_listener(
     event: f64,
     cb: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     if let Some(name) = cp_value_to_string(event) {
         let key = cp_listener_key(&name);
         if let Some(arr) = cp_array_ptr(cp_get_field(this, &key)) {
@@ -280,7 +276,7 @@ pub(crate) extern "C" fn cp_method_remove_all_listeners(
     _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     if let Some(name) = cp_value_to_string(event) {
         let key = cp_listener_key(&name);
         let empty = crate::array::js_array_alloc(0);
@@ -323,7 +319,7 @@ pub(crate) extern "C" fn cp_method_pipe(
     _this: crate::closure::JsThis,
     dest: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     js_register_closure_arity(cp_pipe_data_thunk as *const u8, 1);
     js_register_closure_arity(cp_pipe_end_thunk as *const u8, 0);
 
@@ -455,7 +451,7 @@ pub(crate) extern "C" fn cp_method_stdin_write(
     arg2: f64,
     arg3: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = cp_stream_callback(arg2, arg3).map(|cb| scope.root_nanbox_f64(cb));
     let mut result = TAG_TRUE_F64;
@@ -526,7 +522,7 @@ pub(crate) extern "C" fn cp_method_send(
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
 
     // The callback is the last argument when it is a function. dispatch pads
     // missing slots with `undefined`, so scan slots 4→2 for a closure.
@@ -617,7 +613,7 @@ pub(crate) extern "C" fn cp_method_disconnect(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     if let Some(handle) = cp_handle_of(this) {
         reactor::cp_ipc_disconnect(handle);
     }
@@ -649,7 +645,7 @@ pub(crate) extern "C" fn cp_method_stdin_end(
     arg2: f64,
     arg3: f64,
 ) -> f64 {
-    let this = cp_this(closure);
+    let this = cp_this(_this, closure);
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = cp_stream_callback(arg2, arg3)
         .or_else(|| (!crate::fs::extract_closure_ptr(chunk).is_null()).then_some(chunk))

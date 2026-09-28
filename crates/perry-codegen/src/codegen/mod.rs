@@ -2471,6 +2471,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         llmod.add_external_module_state_global(shape, I32);
     }
 
+    // A function whose body reads its dynamic `this` gets a receiver-taking
+    // body (`codegen/function.rs`); the arena-threaded wrapper scheme does
+    // not compose with it, so those stay ordinary.
+    let arena_threaded_functions: std::collections::HashSet<u32> =
+        crate::collectors::collect_self_recursive_allocators(hir)
+            .into_iter()
+            .filter(|id| !funcs_reading_dynamic_this.contains(id))
+            .collect();
     let mut cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
@@ -2573,7 +2581,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // no call-site cap (the cap prices `inlinehint`'s duplication, which
         // the inline bump allocator does not incur), plus direct recursion.
         alloc_hot_functions: crate::collectors::collect_alloc_hot_functions(hir),
-        arena_threaded_functions: crate::collectors::collect_self_recursive_allocators(hir),
+        arena_threaded_functions,
         clamp3_functions: hir
             .functions
             .iter()

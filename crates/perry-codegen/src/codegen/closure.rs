@@ -804,10 +804,11 @@ pub(super) fn compile_closure(
             ));
             blk.store(DOUBLE, &class_ref, &slot);
         } else if entry_bound_this {
-            // A valid non-pointer until the prologue's receiver read below
-            // fills it, so the slot is safe to bind here with the others.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            blk.store(DOUBLE, &undef, &slot);
+            // The receiver parameter, stored before the body's first
+            // safepoint so the bind below makes it a rewritten root; a
+            // sloppy body coerces it in place in the prologue.
+            let receiver = blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS);
+            blk.store(DOUBLE, &receiver, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
         }
@@ -1344,23 +1345,18 @@ pub(super) fn compile_closure(
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 
-    // #10906: read the dynamic receiver into the entry `this` slot. It runs
+    // #10906: the entry `this` slot holds the receiver parameter (stored
+    // at entry, above). A sloppy body applies OrdinaryCallBindThis to it here,
     // after every parameter, capture and `arguments` root is bound, because
-    // the sloppy read can allocate a primitive wrapper — and ahead of the
-    // first statement, so no user code can have rebound IMPLICIT_THIS yet.
-    if entry_bound_this {
-        let helper = if is_strict {
-            "js_implicit_this_get"
-        } else {
-            "js_implicit_this_get_sloppy"
-        };
+    // the coercion can allocate a primitive wrapper — and ahead of the first
+    // statement. A strict body uses the receiver as passed.
+    if entry_bound_this && !is_strict {
         let slot = ctx
             .this_stack
             .last()
             .cloned()
             .expect("entry-bound `this` has a slot");
-        let receiver = ctx.block().call(DOUBLE, helper, &[]);
-        ctx.block().store(DOUBLE, &receiver, &slot);
+        crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
     }
 
     // #9060 follow-up: resolve loop-called immutable callee bindings once at

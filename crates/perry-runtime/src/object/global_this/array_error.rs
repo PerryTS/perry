@@ -17,11 +17,11 @@ pub(crate) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
 
 pub(crate) extern "C" fn function_prototype_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     this_arg: f64,
     rest: f64,
 ) -> f64 {
-    let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let target = f64::from_bits(this.bits());
     // The generic value-call bridge treats a proxy invocation as a bare
     // call. Preserve the explicit receiver of Function.prototype.call.
     if crate::proxy::js_proxy_is_proxy(target) == 1 {
@@ -71,11 +71,11 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
 /// hit exactly this: `Reflect.apply(bind, call, [fn])` yielded `undefined`.
 pub(crate) extern "C" fn function_prototype_bind_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     this_arg: f64,
     rest: f64,
 ) -> f64 {
-    let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let target = f64::from_bits(this.bits());
     let mut args: Vec<f64> = Vec::with_capacity(1);
     args.push(this_arg);
     args.extend(global_this_rest_array_values(rest));
@@ -198,7 +198,7 @@ pub(crate) extern "C" fn global_this_queue_microtask_thunk(
 /// `undefined`, so the `.call` access threw before the IIFE body ran.
 pub(crate) extern "C" fn object_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     // Delegate to the canonical `js_object_to_string` so this callable form
     // (`const f = Object.prototype.toString; f.call(x)`) shares the full brand
@@ -206,16 +206,16 @@ pub(crate) extern "C" fn object_prototype_to_string_thunk(
     // buffers/…). Previously this thunk duplicated a coarse discrimination that
     // mis-tagged typed arrays as `[object Number]` and everything beyond
     // Array/Error/Date as `[object Object]`.
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_bits = this.bits();
     unsafe { crate::object::js_object_to_string(f64::from_bits(this_bits)) }
 }
 
 pub(crate) extern "C" fn object_prototype_is_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     // Spec 20.1.3.3 step order: if V is not an Object, return false FIRST —
     // `Object.prototype.isPrototypeOf.call(undefined, 1)` is `false`, not a
     // TypeError. Symbols are POINTER_TAG'd in Perry but are primitives.
@@ -266,9 +266,9 @@ pub(crate) fn is_native_error_subclass_constructor(name: &str) -> bool {
 
 pub(crate) extern "C" fn date_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     // ECMA-262 21.4.4.41 Date.prototype.toString does `thisTimeValue(this)`,
     // which throws a TypeError when the receiver has no [[DateValue]] slot
     // (`Date.prototype.toString.call(0)`, `.call({})`, `Date.prototype.toString()`
@@ -282,19 +282,19 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
 
 pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::object_ops::js_object_has_own(this_value, key)
 }
 
 pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::js_object_property_is_enumerable(this_value, key)
 }
 
@@ -303,47 +303,47 @@ pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
 // not just the direct `o.__defineGetter__(...)` native-dispatch path.
 pub(crate) extern "C" fn object_prototype_define_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
     getter: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::js_object_define_getter(this_value, key, getter)
 }
 
 pub(crate) extern "C" fn object_prototype_define_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
     setter: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::js_object_define_setter(this_value, key, setter)
 }
 
 pub(crate) extern "C" fn object_prototype_lookup_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::js_object_lookup_getter(this_value, key)
 }
 
 pub(crate) extern "C" fn object_prototype_lookup_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     super::super::js_object_lookup_setter(this_value, key)
 }
 
 pub(crate) extern "C" fn error_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     let this_jsv = crate::value::JSValue::from_bits(this_value.to_bits());
     // ECMA-262 20.5.3.4 step 2: `If Type(O) is not Object, throw a TypeError`.
     // A Symbol is a POINTER_TAG value (registered-symbol id), so it slips past
@@ -407,17 +407,17 @@ unsafe fn string_header_to_owned(ptr: *const crate::StringHeader) -> String {
 
 pub(crate) extern "C" fn object_prototype_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     unsafe { super::super::js_object_default_value_of(this_value) }
 }
 
 pub(crate) extern "C" fn object_prototype_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this_value = f64::from_bits(this.bits());
     unsafe { super::super::js_object_prototype_to_locale_string(this_value) }
 }
 
@@ -598,12 +598,12 @@ pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array
 
 pub(crate) extern "C" fn function_prototype_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     this_arg: f64,
     args_array: f64,
 ) -> f64 {
     unsafe {
-        let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        let target = f64::from_bits(this.bits());
         if crate::proxy::js_proxy_is_proxy(target) == 1 {
             return function_apply_proxy(target, this_arg, args_array);
         }
@@ -639,9 +639,9 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
 /// `Object.prototype.toString` (which keeps its own real thunk).
 pub(crate) extern "C" fn function_prototype_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_bits = this.bits();
     let this_jsv = JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -697,12 +697,12 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
 /// `Cannot read properties of undefined (reading 'call')` at module init.
 pub(crate) extern "C" fn array_prototype_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     start_val: f64,
     end_val: f64,
 ) -> f64 {
     use crate::value::JSValue;
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_bits = this.bits();
     let this_jsv = JSValue::from_bits(this_bits);
     let arr_ptr = if this_jsv.is_pointer() {
         this_jsv.as_pointer::<crate::array::ArrayHeader>()
@@ -774,78 +774,78 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
 /// iterate the receiver they are given.
 pub(crate) extern "C" fn array_prototype_values_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::array_values_iter(this)
 }
 
 pub(crate) extern "C" fn array_prototype_flat_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     depth: f64,
 ) -> f64 {
-    crate::array::js_arraylike_flat(crate::object::js_implicit_this_get(), depth)
+    crate::array::js_arraylike_flat(this.as_f64(), depth)
 }
 
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::array_proto_mutator(this, "pop", std::ptr::null(), 0)
 }
 pub(crate) extern "C" fn array_prototype_shift_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::array_proto_mutator(this, "shift", std::ptr::null(), 0)
 }
 pub(crate) extern "C" fn array_prototype_reverse_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::array_proto_mutator(this, "reverse", std::ptr::null(), 0)
 }
 pub(crate) extern "C" fn array_prototype_push_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     crate::array::array_proto_mutator(this, "push", args.as_ptr(), args.len())
 }
 pub(crate) extern "C" fn array_prototype_unshift_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     crate::array::array_proto_mutator(this, "unshift", args.as_ptr(), args.len())
 }
 pub(crate) extern "C" fn array_prototype_splice_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     crate::array::array_proto_mutator(this, "splice", args.as_ptr(), args.len())
 }
 pub(crate) extern "C" fn array_prototype_sort_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     comparator: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::js_arraylike_sort(this, comparator)
 }
 /// `fill` / `copyWithin` were noop-backed until #6908, so a Proxy receiver
@@ -859,10 +859,10 @@ pub(crate) extern "C" fn array_prototype_sort_thunk(
 /// the `end` params the spec resolves `undefined` to `len`).
 pub(crate) extern "C" fn array_prototype_fill_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let value = args.first().copied().unwrap_or(undefined);
@@ -878,10 +878,10 @@ pub(crate) extern "C" fn array_prototype_fill_thunk(
 }
 pub(crate) extern "C" fn array_prototype_copy_within_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let target = args.first().copied().unwrap_or(undefined);
@@ -1007,18 +1007,18 @@ array_proto_arraylike_search_thunk!(
 
 pub(crate) extern "C" fn array_proto_at_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     idx: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::js_arraylike_at(this, idx)
 }
 pub(crate) extern "C" fn array_proto_join_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     sep: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::array::js_arraylike_join(this, sep)
 }
 
@@ -1029,18 +1029,18 @@ pub(crate) extern "C" fn array_proto_join_thunk(
 /// receiver semantics; rewriting it to `x.toString()` loses the Array method.
 pub(crate) extern "C" fn array_prototype_to_string_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     crate::value::array_prototype_to_string(this)
 }
 
 pub(crate) extern "C" fn array_prototype_concat_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     let args = global_this_rest_array_values(rest);
     crate::array::js_arraylike_concat(this, args.as_ptr(), args.len() as i32)
 }

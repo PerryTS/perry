@@ -746,8 +746,8 @@ pub(super) extern "C" fn locale_constructor_thunk(
 
 // ---- prototype methods & getters ------------------------------------------
 
-fn locale_this(method: &str) -> *mut ObjectHeader {
-    let this = crate::object::js_implicit_this_get();
+fn locale_this(this: crate::closure::JsThis, method: &str) -> *mut ObjectHeader {
+    let this = this.as_f64();
     let Some(obj) = object_ptr_from_value(this) else {
         throw_type_error(&format!(
             "Intl.Locale.prototype.{method} called on incompatible receiver"
@@ -772,67 +772,67 @@ fn field_or_undefined(obj: *const ObjectHeader, key: &str) -> f64 {
 
 extern "C" fn locale_to_string_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = locale_this("toString");
+    let obj = locale_this(this, "toString");
     string_value(&get_string_field(obj, KEY_FULL).unwrap_or_default())
 }
 
 extern "C" fn locale_maximize_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    transform_instance(locale_this("maximize"), likely_subtags::maximize)
+    transform_instance(locale_this(this, "maximize"), likely_subtags::maximize)
 }
 
 extern "C" fn locale_minimize_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    transform_instance(locale_this("minimize"), likely_subtags::minimize)
+    transform_instance(locale_this(this, "minimize"), likely_subtags::minimize)
 }
 
 extern "C" fn locale_get_calendars_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    calendars_of(locale_this("getCalendars"))
+    calendars_of(locale_this(this, "getCalendars"))
 }
 extern "C" fn locale_get_collations_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    collations_of(locale_this("getCollations"))
+    collations_of(locale_this(this, "getCollations"))
 }
 extern "C" fn locale_get_hour_cycles_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    hour_cycles_of(locale_this("getHourCycles"))
+    hour_cycles_of(locale_this(this, "getHourCycles"))
 }
 extern "C" fn locale_get_numbering_systems_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    numbering_systems_of(locale_this("getNumberingSystems"))
+    numbering_systems_of(locale_this(this, "getNumberingSystems"))
 }
 extern "C" fn locale_get_time_zones_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    time_zones_of(locale_this("getTimeZones"))
+    time_zones_of(locale_this(this, "getTimeZones"))
 }
 extern "C" fn locale_get_text_info_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    text_info_of(locale_this("getTextInfo"))
+    text_info_of(locale_this(this, "getTextInfo"))
 }
 extern "C" fn locale_get_week_info_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    week_info_of(locale_this("getWeekInfo"))
+    week_info_of(locale_this(this, "getWeekInfo"))
 }
 
 // ---- Intl.Locale-info computations -----------------------------------------
@@ -960,44 +960,44 @@ fn parsed_from_instance(obj: *const ObjectHeader) -> ParsedLocale {
     parse_language_tag(&full).unwrap_or_default()
 }
 
-extern "C" fn getter_base_name(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("baseName"), KEY_BASENAME)
+extern "C" fn getter_base_name(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "baseName"), KEY_BASENAME)
 }
-extern "C" fn getter_language(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("language"), KEY_LANGUAGE)
+extern "C" fn getter_language(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "language"), KEY_LANGUAGE)
 }
-extern "C" fn getter_script(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("script"), KEY_SCRIPT)
+extern "C" fn getter_script(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "script"), KEY_SCRIPT)
 }
-extern "C" fn getter_region(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("region"), KEY_REGION)
+extern "C" fn getter_region(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "region"), KEY_REGION)
 }
-extern "C" fn getter_calendar(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("calendar"), KEY_CALENDAR)
+extern "C" fn getter_calendar(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "calendar"), KEY_CALENDAR)
 }
-extern "C" fn getter_case_first(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("caseFirst"), KEY_CASEFIRST)
+extern "C" fn getter_case_first(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "caseFirst"), KEY_CASEFIRST)
 }
-extern "C" fn getter_collation(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("collation"), KEY_COLLATION)
+extern "C" fn getter_collation(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "collation"), KEY_COLLATION)
 }
-extern "C" fn getter_hour_cycle(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    field_or_undefined(locale_this("hourCycle"), KEY_HOURCYCLE)
+extern "C" fn getter_hour_cycle(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "hourCycle"), KEY_HOURCYCLE)
 }
 extern "C" fn getter_numbering_system(
     _c: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    field_or_undefined(locale_this("numberingSystem"), KEY_NUMBERINGSYSTEM)
+    field_or_undefined(locale_this(this, "numberingSystem"), KEY_NUMBERINGSYSTEM)
 }
 extern "C" fn getter_first_day_of_week(
     _c: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    field_or_undefined(locale_this("firstDayOfWeek"), KEY_FIRSTDAYOFWEEK)
+    field_or_undefined(locale_this(this, "firstDayOfWeek"), KEY_FIRSTDAYOFWEEK)
 }
-extern "C" fn getter_numeric(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    let obj = locale_this("numeric");
+extern "C" fn getter_numeric(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let obj = locale_this(this, "numeric");
     let value = get_field(obj, KEY_NUMERIC);
     if value.to_bits() == crate::value::TAG_TRUE {
         bool_value(true)

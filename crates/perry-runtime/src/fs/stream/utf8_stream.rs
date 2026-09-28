@@ -1118,39 +1118,39 @@ pub extern "C" fn js_fs_utf8_stream_reopen(stream_value: f64, file_value: f64) -
 
 pub(crate) extern "C" fn utf8_stream_on_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
     utf8_add_listener(id, &event_name(event), cb, false);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_once_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
     utf8_add_listener(id, &event_name(event), cb, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_off_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     utf8_remove_listener(stream_id_of(closure), &event_name(event), cb);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_remove_all_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1163,7 +1163,7 @@ pub(crate) extern "C" fn utf8_stream_remove_all_impl(
             }
         }
     });
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_listener_count_impl(

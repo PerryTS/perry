@@ -1023,10 +1023,10 @@ pub extern "C" fn js_child_process_spawn_streams(
 /// captures the ChildProcess value.
 pub(super) extern "C" fn cp_emit_spawn_error(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cp = scope.root_nanbox_f64(cp_this(closure));
+    let cp = scope.root_nanbox_f64(cp_this(this, closure));
     let err = scope.root_nanbox_f64(cp_get_field(cp.get_nanbox_f64(), b"__cpError"));
     if !JSValue::from_bits(err.get_nanbox_f64().to_bits()).is_undefined() {
         cp_emit(cp.get_nanbox_f64(), "error", &[err.get_nanbox_f64()]);
@@ -1037,10 +1037,10 @@ pub(super) extern "C" fn cp_emit_spawn_error(
 
 pub(super) extern "C" fn cp_emit_spawn_close(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cp = scope.root_nanbox_f64(cp_this(closure));
+    let cp = scope.root_nanbox_f64(cp_this(this, closure));
     super::failed_spawn::finish_outputs(cp.get_nanbox_f64());
     let code = cp_get_field(cp.get_nanbox_f64(), b"exitCode");
     cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);

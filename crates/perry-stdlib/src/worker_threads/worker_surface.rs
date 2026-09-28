@@ -384,7 +384,7 @@ fn stream_register(event: f64, callback: f64) -> f64 {
     this
 }
 
-fn stream_emit_event(event: f64, arg: f64) -> f64 {
+fn stream_emit_event(receiver: perry_runtime::closure::JsThis, event: f64, arg: f64) -> f64 {
     let this = stream_this();
     let Some(event) = string_value_to_string(event) else {
         return js_bool(false);
@@ -408,7 +408,7 @@ fn stream_emit_event(event: f64, arg: f64) -> f64 {
     let this_h = scope.root_nanbox_f64(this);
     let arr_h = scope.root_raw_mut_ptr(arr);
     let arg_h = scope.root_nanbox_f64(arg);
-    let prev_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
+    let prev_this = scope.root_nanbox_f64(receiver.as_f64());
     let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     for i in 0..len {
         let callback = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
@@ -465,11 +465,11 @@ extern "C" fn stream_on(
 
 extern "C" fn stream_emit(
     _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
-    stream_emit_event(event, arg)
+    stream_emit_event(this, event, arg)
 }
 
 extern "C" fn stream_off(

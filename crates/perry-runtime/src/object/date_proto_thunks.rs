@@ -80,9 +80,9 @@ date_getter_thunk!(
 /// the time value is `NaN`).
 extern "C" fn date_to_iso_string(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
@@ -95,9 +95,9 @@ extern "C" fn date_to_iso_string(
 /// then format as "Sun, 23 Mar 2014 00:00:00 GMT" (or "Invalid Date").
 extern "C" fn date_to_utc_string(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     if !crate::date::is_date_value(this) {
         super::object_ops::throw_object_type_error(b"this is not a Date object.");
     }
@@ -131,9 +131,9 @@ extern "C" fn date_to_temporal_instant(
 /// `Number(-Infinity)` wrapper (→ `null`).
 extern "C" fn date_to_json(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     date_to_json_value(this)
 }
 
@@ -265,10 +265,10 @@ fn value_is_object(value: f64) -> bool {
 /// (TypeError), matching test262 `hint-invalid.js`.
 extern "C" fn date_to_primitive(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     hint: f64,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     // Step 1: brand-check `Type(O) is Object` (throws for undefined/null/86/''/true).
     if !value_is_object(this) {
         super::object_ops::throw_object_type_error(

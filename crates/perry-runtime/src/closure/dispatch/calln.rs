@@ -975,6 +975,40 @@ fn closure_call16_cell(
     }
 }
 
+#[cfg(test)]
+mod plain_receiver_tests {
+    use super::*;
+
+    extern "C" fn observe_dynamic_this(
+        _: *const ClosureHeader,
+        this: crate::closure::JsThis,
+        _: f64,
+    ) -> f64 {
+        this.as_f64()
+    }
+
+    #[test]
+    fn an_undefined_receiver_is_bound_for_non_arrows_only() {
+        let body = observe_dynamic_this as *const u8;
+        let closure = crate::closure::js_closure_alloc(body, 0);
+        crate::closure::js_register_closure_arity(body, 1);
+
+        let sentinel = 42.0;
+        let original = crate::object::js_implicit_this_set(sentinel);
+        let regular_result = js_closure_call1(closure, JsThis::UNDEFINED, 0.0);
+        assert_eq!(regular_result.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+
+        crate::closure::js_register_closure_arrow_function(body);
+        // An arrow keeps its lexical `this`: the entry binds nothing, and the
+        // body is handed the cell as it stands.
+        let arrow_result = js_closure_call1(closure, JsThis::UNDEFINED, 0.0);
+        assert_eq!(arrow_result, sentinel);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+        crate::object::js_implicit_this_set(original);
+    }
+}
+
 /// `perry_abi::JS_CLOSURE_CALL_ENTRIES` is what codegen DECLARES; these are
 /// the functions it links to. Each entry must name the function taking
 /// exactly its index's JS argument count (the coercion below fails to compile

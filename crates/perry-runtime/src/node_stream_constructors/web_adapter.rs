@@ -503,10 +503,10 @@ extern "C" fn fallback_foreign_reader_read(
 
 extern "C" fn fallback_foreign_reader_cancel(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    foreign_readable_to_web_cancel(closure, crate::closure::body_call::current_this(), reason)
+    foreign_readable_to_web_cancel(closure, this, reason)
 }
 
 extern "C" fn fallback_foreign_get_reader(

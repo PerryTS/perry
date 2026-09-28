@@ -319,8 +319,8 @@ pub(crate) extern "C" fn global_this_crypto_getter_thunk(
     super::super::native_module::webcrypto_namespace()
 }
 
-fn require_webcrypto_this() -> f64 {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn require_webcrypto_this(this: crate::closure::JsThis) -> f64 {
+    let this_value = f64::from_bits(this.bits());
     let jv = crate::value::JSValue::from_bits(this_value.to_bits());
     if jv.is_pointer() {
         let obj = jv.as_pointer::<ObjectHeader>();
@@ -340,10 +340,10 @@ fn require_webcrypto_this() -> f64 {
 
 pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     array: f64,
 ) -> f64 {
-    let this_value = require_webcrypto_this();
+    let this_value = require_webcrypto_this(this);
     unsafe {
         js_native_call_method(
             this_value,
@@ -361,9 +361,9 @@ pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
 /// name through the whole native-call tower on every UUID.
 pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    require_webcrypto_this();
+    require_webcrypto_this(this);
     let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
     if ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -381,9 +381,9 @@ pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
 
 pub(crate) extern "C" fn webcrypto_subtle_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    require_webcrypto_this();
+    require_webcrypto_this(this);
     super::super::native_module::subtle_crypto_namespace()
 }
 

@@ -1080,8 +1080,8 @@ fn make_export_function(
     })
 }
 
-fn global_handle_from_receiver() -> Option<*mut c_void> {
-    let receiver = JSValue::from_bits(crate::object::js_implicit_this_get().to_bits());
+fn global_handle_from_receiver(this: crate::closure::JsThis) -> Option<*mut c_void> {
+    let receiver = JSValue::from_bits(this.as_f64().to_bits());
     if !receiver.is_pointer() {
         return None;
     }
@@ -1094,9 +1094,9 @@ fn global_handle_from_receiver() -> Option<*mut c_void> {
 
 extern "C" fn js_wasm_global_get(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let Some(handle) = global_handle_from_receiver() else {
+    let Some(handle) = global_handle_from_receiver(this) else {
         return nanbox_undefined();
     };
     let mut kind = WASM_VAL_KIND_NONE;
@@ -1109,10 +1109,10 @@ extern "C" fn js_wasm_global_get(
 
 extern "C" fn js_wasm_global_set(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let Some(handle) = global_handle_from_receiver() else {
+    let Some(handle) = global_handle_from_receiver(this) else {
         return nanbox_undefined();
     };
     let mut kind = WASM_VAL_KIND_NONE;

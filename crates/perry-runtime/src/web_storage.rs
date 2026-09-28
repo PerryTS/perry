@@ -57,9 +57,9 @@ extern "C" fn storage_session_global_getter(
 
 extern "C" fn storage_length_getter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let Some(kind) = receiver_kind() else {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     with_store(kind, |store| store.len() as f64)
@@ -67,10 +67,10 @@ extern "C" fn storage_length_getter(
 
 extern "C" fn storage_get_item(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let Some(kind) = receiver_kind() else {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_get_item_impl(kind, key)
@@ -78,11 +78,11 @@ extern "C" fn storage_get_item(
 
 extern "C" fn storage_set_item(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
     value: f64,
 ) -> f64 {
-    let Some(kind) = receiver_kind() else {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_set_item_impl(kind, key, value)
@@ -90,10 +90,10 @@ extern "C" fn storage_set_item(
 
 extern "C" fn storage_remove_item(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
-    let Some(kind) = receiver_kind() else {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_remove_item_impl(kind, key)
@@ -101,17 +101,17 @@ extern "C" fn storage_remove_item(
 
 extern "C" fn storage_key(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
-    let Some(kind) = receiver_kind() else {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_key_impl(kind, index)
 }
 
-extern "C" fn storage_clear(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    let Some(kind) = receiver_kind() else {
+extern "C" fn storage_clear(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let Some(kind) = receiver_kind(this) else {
         return throw_type_error("Illegal invocation");
     };
     storage_clear_impl(kind)
@@ -388,8 +388,8 @@ fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mu
     }
 }
 
-fn receiver_kind() -> Option<StorageKind> {
-    let this = crate::object::js_implicit_this_get();
+fn receiver_kind(this: crate::closure::JsThis) -> Option<StorageKind> {
+    let this = this.as_f64();
     storage_kind_from_value(this)
 }
 

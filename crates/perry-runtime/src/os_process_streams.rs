@@ -110,10 +110,10 @@ extern "C" fn process_stream_on_once_stub(
 /// Node's `this`-returning contract. Encoding-aware reads remain future work.
 extern "C" fn process_stream_set_encoding_stub(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// #3962: set when a TUI tears down stdin via `process.stdin.destroy()` or
@@ -178,11 +178,11 @@ extern "C" fn process_stdin_detach_stub(
 /// delivery (#9676). Node's contract: an unref'd stdin still emits `'data'`.
 extern "C" fn process_stdin_unref_stub(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(true, std::sync::atomic::Ordering::Release);
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.ref()` — restore the event-loop hold (#9676). Was a no-op
@@ -193,11 +193,11 @@ extern "C" fn process_stdin_unref_stub(
 /// stream. `resume()` remains the one call that restarts a stopped reader.
 extern "C" fn process_stdin_ref_stub(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 thread_local! {
@@ -849,7 +849,7 @@ pub fn enable_process_stdin_keypress_events(callback: i64) {
 /// `process.stdin.addListener(event, cb)` / `.on(...)` reached as an object method.
 extern "C" fn process_stdin_add_listener(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -861,18 +861,13 @@ extern "C" fn process_stdin_add_listener(
         }
         return stdin_this_value();
     }
-    process_stdin_on(
-        closure,
-        crate::closure::body_call::current_this(),
-        event,
-        callback,
-    )
+    process_stdin_on(closure, this, event, callback)
 }
 
 /// `process.stdin.once(event, cb)` reached as an object method.
 extern "C" fn process_stdin_add_listener_once(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -884,12 +879,7 @@ extern "C" fn process_stdin_add_listener_once(
         }
         return stdin_this_value();
     }
-    process_stdin_once(
-        closure,
-        crate::closure::body_call::current_this(),
-        event,
-        callback,
-    )
+    process_stdin_once(closure, this, event, callback)
 }
 
 /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
@@ -1218,7 +1208,7 @@ fn register_generic_stdin_keypress_listener(event: f64, callback: f64, once: boo
 /// listener and starts the reader. Returns `this` so callers can chain.
 extern "C" fn process_stdin_on(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1252,13 +1242,13 @@ extern "C" fn process_stdin_on(
             _ => {}
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.once(event, cb)` — fires the listener exactly once.
 extern "C" fn process_stdin_once(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1290,7 +1280,7 @@ extern "C" fn process_stdin_once(
             _ => {}
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.read([size])` — returns buffered input as a string (stdin is
@@ -1347,7 +1337,7 @@ pub fn reset_process_stdin_liveness_for_tests() {
 /// paused stdin can resume.
 extern "C" fn process_stdin_resume(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
@@ -1361,7 +1351,7 @@ extern "C" fn process_stdin_resume(
         resume();
     }
     ensure_stdin_reader();
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// Drain buffered stdin and fire `data`/`readable` listeners. Called once per

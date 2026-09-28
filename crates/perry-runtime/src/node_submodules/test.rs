@@ -795,7 +795,7 @@ mod metadata_tests;
 
 extern "C" fn mock_function_invoke(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let id = closure_id(closure);
@@ -811,7 +811,7 @@ extern "C" fn mock_function_invoke(
         )
     });
 
-    let this_value = crate::object::js_implicit_this_get();
+    let this_value = this.as_f64();
     if JSValue::from_bits(implementation.to_bits()).is_undefined() {
         if is_symbol_method {
             let scope = crate::gc::RuntimeHandleScope::new();

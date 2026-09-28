@@ -99,9 +99,9 @@ fn source_map_method(name: &str, thunk: SourceMapThunk) -> f64 {
 
 extern "C" fn source_map_payload_getter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = source_map_receiver();
+    let obj = source_map_receiver(this);
     let scope = crate::gc::RuntimeHandleScope::new();
     let payload = scope.root_nanbox_f64(f64::from_bits(
         crate::object::js_object_get_field(obj, 0).bits(),
@@ -111,9 +111,9 @@ extern "C" fn source_map_payload_getter(
 
 extern "C" fn source_map_line_lengths_getter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = source_map_receiver();
+    let obj = source_map_receiver(this);
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(
         crate::object::js_object_get_field(obj, 1).bits(),
@@ -144,8 +144,8 @@ fn source_map_getter(name: &str, thunk: crate::closure::body_call::js_body_fn_ty
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn source_map_receiver() -> *const crate::object::ObjectHeader {
-    let receiver = crate::object::js_implicit_this_get();
+fn source_map_receiver(this: crate::closure::JsThis) -> *const crate::object::ObjectHeader {
+    let receiver = this.as_f64();
     let Some(obj) = module_object_ptr(receiver) else {
         module_throw_plain_type_error("Receiver must be an instance of SourceMap");
     };
@@ -607,11 +607,11 @@ fn source_map_origin_object(
 /// originalColumn, name? }`. Returns `{}` when no entry precedes the query.
 extern "C" fn source_map_find_entry_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let _ = closure;
-    let receiver = source_map_receiver();
+    let receiver = source_map_receiver(this);
     let scope = crate::gc::RuntimeHandleScope::new();
     let payload = scope.root_nanbox_f64(f64::from_bits(
         crate::object::js_object_get_field(receiver, 0).bits(),
@@ -659,11 +659,11 @@ extern "C" fn source_map_find_entry_thunk(
 /// which Node returns an empty object.
 extern "C" fn source_map_find_origin_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let _ = closure;
-    let receiver = source_map_receiver();
+    let receiver = source_map_receiver(this);
     let scope = crate::gc::RuntimeHandleScope::new();
     let payload = scope.root_nanbox_f64(f64::from_bits(
         crate::object::js_object_get_field(receiver, 0).bits(),

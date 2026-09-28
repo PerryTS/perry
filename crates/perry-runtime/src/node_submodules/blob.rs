@@ -274,18 +274,18 @@ extern "C" fn file_blob_stream_return_method(
 
 extern "C" fn file_blob_stream_values_method(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _options: f64,
 ) -> f64 {
     let _ = closure;
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 extern "C" fn file_blob_stream_async_iterator_method(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 extern "C" fn file_blob_stream_undefined_method(

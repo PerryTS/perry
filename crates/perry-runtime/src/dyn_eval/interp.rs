@@ -275,28 +275,32 @@ fn ensure_thunk_registered() {
 #[cfg(not(panic = "abort"))]
 extern "C-unwind" fn interp_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     raw_args: f64,
 ) -> f64 {
-    interp_thunk_impl(closure, raw_args)
+    interp_thunk_impl(this, closure, raw_args)
 }
 
 #[cfg(panic = "abort")]
 extern "C" fn interp_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     raw_args: f64,
 ) -> f64 {
-    interp_thunk_impl(closure, raw_args)
+    interp_thunk_impl(this, closure, raw_args)
 }
 
-fn interp_thunk_impl(closure: *const crate::closure::ClosureHeader, raw_args: f64) -> f64 {
+fn interp_thunk_impl(
+    this: crate::closure::JsThis,
+    closure: *const crate::closure::ClosureHeader,
+    raw_args: f64,
+) -> f64 {
     let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u32;
     let def_env = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 1));
     let this_bits = crate::closure::js_closure_get_capture_bits(closure, 2);
     let is_arrow = this_bits != NO_LEXICAL_THIS;
     let this = if this_bits == NO_LEXICAL_THIS {
-        crate::object::js_implicit_this_get()
+        this.as_f64()
     } else {
         f64::from_bits(this_bits)
     };

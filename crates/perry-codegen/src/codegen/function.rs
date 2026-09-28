@@ -663,6 +663,28 @@ pub(super) fn compile_function(
     } else {
         public_llvm_name.clone()
     };
+    // This-as-a-parameter: a body that reads its dynamic `this` binds it at
+    // entry into a rooted `this` slot. The ordinary public body becomes a
+    // receiver-taking body (`perry_fn_*$this`, leading `i64 %js_this`) behind
+    // a public forwarder that passes `undefined` — what every direct call
+    // binds — and the value wrapper passes the receiver it was given. A
+    // specialized entry is only ever called directly, so it binds
+    // `undefined`. (This-reading functions get no typed clone, spec plan or
+    // arena threading, so the other variants never meet this.)
+    let reads_this = cross_module.funcs_reading_dynamic_this.contains(&f.id);
+    let receiver_body = reads_this && spec_entry.is_none();
+    debug_assert!(
+        !receiver_body
+            || (typed_public_trampoline.is_none()
+                && guarded_public_plan.is_none()
+                && !arena_threaded),
+        "a this-reading function has no public variant but the plain body"
+    );
+    let llvm_name = if receiver_body {
+        crate::expr::body_call::receiver_body_name(&public_llvm_name)
+    } else {
+        llvm_name
+    };
 
     // Phase A assumes all user-function params are `double`. Parameter
     // registers are named `%arg{LocalId}` so the body can store them into
@@ -685,6 +707,9 @@ pub(super) fn compile_function(
     if arena_threaded {
         params.push((PTR, "%perry_arena_state".to_string()));
     }
+    if receiver_body {
+        params.insert(0, (I64, crate::expr::body_call::JS_BODY_THIS.to_string()));
+    }
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
@@ -698,6 +723,7 @@ pub(super) fn compile_function(
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
         || arena_threaded
+        || receiver_body
     {
         lf.linkage = "internal".to_string();
     }
@@ -717,13 +743,16 @@ pub(super) fn compile_function(
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
             crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        // One more slot roots the entry `this` slot of a this-reading body,
+        // exactly as `codegen/method.rs` reserves one for `%this_arg`.
+        let this_root_slots = usize::from(reads_this);
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
             &llvm_name,
-            m.len(),
+            m.len() + this_root_slots,
             &f.body,
         );
-        lf.enable_shadow_frame(m.len() as u32);
+        lf.enable_shadow_frame((m.len() + this_root_slots) as u32);
         m
     } else {
         std::collections::HashMap::new()
@@ -866,6 +895,31 @@ pub(super) fn compile_function(
         map
     };
     super::arguments::release_boxed_param_slots_at_exit(lf, &f.params, &boxed_vars, &locals);
+
+    // The entry `this` slot: the receiver parameter (or `undefined` for a
+    // directly-called specialized entry), stored before the body's first
+    // safepoint and bound so a moving collection rewrites it. A sloppy body
+    // coerces it in place once the parameters are bound (below).
+    let this_stack: Vec<String> = if reads_this {
+        let this_shadow_slot_idx = shadow_slot_map.len() as u32;
+        let blk = lf.block_mut(0).unwrap();
+        let this_slot = blk.alloca(DOUBLE);
+        let receiver = if receiver_body {
+            blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS)
+        } else {
+            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        blk.store(DOUBLE, &receiver, &this_slot);
+        if precise_root_analysis_enabled() {
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &this_shadow_slot_idx.to_string()), (PTR, &this_slot)],
+            );
+        }
+        vec![this_slot]
+    } else {
+        Vec::new()
+    };
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
@@ -1161,7 +1215,7 @@ pub(super) fn compile_function(
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
         classes,
-        this_stack: Vec::new(),
+        this_stack,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: false,
@@ -1394,6 +1448,10 @@ pub(super) fn compile_function(
         Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
+    if reads_this && !f.is_strict {
+        let slot = ctx.this_stack[0].clone();
+        crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
+    }
 
     // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
     // `Buffer`-typed function parameters so that the readInt32BE/etc.
@@ -1594,6 +1652,33 @@ pub(super) fn compile_function(
         }
     } else if arena_threaded {
         emit_public_arena_threaded_wrapper(llmod, f, &public_llvm_name, &llvm_name);
+    } else if receiver_body {
+        emit_public_receiverless_forwarder(llmod, f, &public_llvm_name, &llvm_name);
     }
     Ok(())
+}
+
+/// The public `perry_fn_*` symbol of a this-reading function: every direct
+/// call binds no receiver, so it forwards to the receiver-taking body with
+/// `undefined`.
+fn emit_public_receiverless_forwarder(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    receiver_body_name: &str,
+) {
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params.clone());
+    wf.force_inline = true;
+    let _ = wf.create_block("entry");
+    let mut call_args: Vec<(LlvmType, &str)> =
+        vec![(I64, crate::expr::body_call::JS_THIS_UNDEFINED)];
+    call_args.extend(params.iter().map(|(ty, a)| (*ty, a.as_str())));
+    let blk = wf.block_mut(0).unwrap();
+    let value = blk.call(DOUBLE, receiver_body_name, &call_args);
+    blk.ret(DOUBLE, &value);
 }

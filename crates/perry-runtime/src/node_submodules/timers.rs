@@ -154,13 +154,13 @@ pub(crate) extern "C" fn timers_promises_set_immediate(
 
 pub(crate) extern "C" fn timers_promises_scheduler_wait(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     delay_ms: f64,
     options: f64,
 ) -> f64 {
     timers_promises_set_timeout(
         _closure,
-        crate::closure::body_call::current_this(),
+        this,
         delay_ms,
         f64::from_bits(TAG_UNDEFINED),
         options,

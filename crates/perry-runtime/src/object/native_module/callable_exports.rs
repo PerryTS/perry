@@ -437,8 +437,8 @@ extern "C" fn buffer_prototype_method_thunk(
 /// `.offset`/`.parent` directly — see `get_field_by_name_tail.rs`); this only
 /// matters for reflection (`Object.getOwnPropertyDescriptor(Buffer.prototype,
 /// "offset").get.call(x)`) and enumeration.
-fn buffer_prototype_this_addr() -> Option<usize> {
-    let this_bits = crate::object::IMPLICIT_THIS.with(|c| c.get());
+fn buffer_prototype_this_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let jv = crate::value::JSValue::from_bits(this_bits);
     if !jv.is_pointer() {
         return None;
@@ -455,9 +455,9 @@ fn buffer_prototype_this_addr() -> Option<usize> {
 /// Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_parent_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match buffer_prototype_this_addr() {
+    match buffer_prototype_this_addr(this) {
         Some(addr) => {
             crate::value::js_nanbox_pointer(crate::buffer::buffer_backing_array_buffer(addr) as i64)
         }
@@ -469,9 +469,9 @@ extern "C" fn buffer_prototype_parent_getter_thunk(
 /// `.byteOffset`, still a real own accessor on Node's `Buffer.prototype`.
 extern "C" fn buffer_prototype_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match buffer_prototype_this_addr() {
+    match buffer_prototype_this_addr(this) {
         Some(addr) => crate::buffer::buffer_byte_offset(addr) as f64,
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
@@ -767,7 +767,7 @@ fn attach_assert_prototype(constructor_value: f64) {
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,
@@ -775,7 +775,7 @@ extern "C" fn sqlite_database_sync_prototype_method_thunk(
     unsafe {
         let method_name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
         let method_name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = crate::object::js_implicit_this_get();
+        let receiver = this.as_f64();
         let args = [arg0, arg1, arg2];
         crate::object::js_native_call_method(
             receiver,
@@ -1354,13 +1354,13 @@ pub(crate) fn scan_tls_derived_prototype_roots_mut(
 
 extern "C" fn tls_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
         let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
         let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = crate::object::js_implicit_this_get();
+        let receiver = this.as_f64();
         let args_array = crate::value::js_nanbox_get_pointer(rest);
         crate::object::js_native_call_method_apply(receiver, name_ptr, name_len, args_array)
     }

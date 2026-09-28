@@ -320,7 +320,7 @@ fn require_event_emitter_async_resource_receiver(
 
 extern "C" fn ns_ee_async_resource_emit_rest(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     rest: f64,
 ) -> f64 {
@@ -334,12 +334,7 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
     }
-    let result = ns_emit_rest(
-        closure,
-        crate::closure::body_call::current_this(),
-        event,
-        rest,
-    );
+    let result = ns_emit_rest(closure, this, event, rest);
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_leave(runtime_async_id);
     }

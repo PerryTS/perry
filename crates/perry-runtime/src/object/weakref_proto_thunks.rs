@@ -245,8 +245,13 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
 /// Resolve `IMPLICIT_THIS` to a receiver of the expected weak-wrapper class id,
 /// or throw a `TypeError`. Mirrors `collection_proto_thunks`'
 /// `weak_receiver_or_throw` for the WeakRef/FinalizationRegistry pair.
-fn wrapper_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
-    let receiver = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn wrapper_receiver_or_throw(
+    this: crate::closure::JsThis,
+    expected: u32,
+    proto: &str,
+    method: &str,
+) -> f64 {
+    let receiver = f64::from_bits(this.bits());
     if is_weak_wrapper(receiver, expected) {
         receiver
     } else {
@@ -256,20 +261,21 @@ fn wrapper_receiver_or_throw(expected: u32, proto: &str, method: &str) -> f64 {
 
 pub(super) extern "C" fn weakref_proto_deref_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let r = wrapper_receiver_or_throw(CLASS_ID_WEAKREF, "WeakRef.prototype", "deref");
+    let r = wrapper_receiver_or_throw(this, CLASS_ID_WEAKREF, "WeakRef.prototype", "deref");
     js_weakref_deref(r)
 }
 
 pub(super) extern "C" fn finreg_proto_register_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     target: f64,
     held: f64,
     token: f64,
 ) -> f64 {
     let r = wrapper_receiver_or_throw(
+        this,
         CLASS_ID_FINALIZATION_REGISTRY,
         "FinalizationRegistry.prototype",
         "register",
@@ -279,10 +285,11 @@ pub(super) extern "C" fn finreg_proto_register_thunk(
 
 pub(super) extern "C" fn finreg_proto_unregister_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     token: f64,
 ) -> f64 {
     let r = wrapper_receiver_or_throw(
+        this,
         CLASS_ID_FINALIZATION_REGISTRY,
         "FinalizationRegistry.prototype",
         "unregister",

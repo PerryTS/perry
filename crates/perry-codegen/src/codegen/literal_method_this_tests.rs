@@ -3,8 +3,8 @@
 //! HIR lowers `{ a: 1, m() { … this.a … } }` to
 //! `new __AnonShape_<hash>(1, <dynamic-this closure>)`. These pin the two
 //! halves of the fix: the closure binds its receiver ONCE at entry into a
-//! rooted `this` slot (it used to call `js_implicit_this_get_sloppy` at every
-//! `this`), and `this.field` nominates the literal's shape class for the
+//! rooted `this` slot (it used to read a thread-local receiver cell at every
+//! `this`; it now stores its `%js_this` parameter), and `this.field` nominates the literal's shape class for the
 //! guarded class-field path instead of the generic per-site IC.
 
 use crate::{compile_module, CompileOptions};
@@ -176,7 +176,44 @@ fn closure_body(ir: &str, func_id: u32) -> &str {
 }
 
 fn calls_to(body: &str, callee: &str) -> usize {
-    body.matches(&format!("@{callee}()")).count()
+    body.matches(&format!("@{callee}(")).count()
+}
+
+/// The register holding the receiver parameter as a double, and the slot it
+/// is stored into at entry.
+fn entry_receiver_slot(body: &str) -> (String, String) {
+    let conv = body
+        .lines()
+        .find(|l| l.contains("bitcast i64 %js_this to double"))
+        .unwrap_or_else(|| panic!("the receiver parameter is never read:\n{body}"));
+    let value = conv.split('=').next().unwrap().trim().to_string();
+    // The store is either `store double %v, ptr %slot` or, once the
+    // root-lowering pass rewrote the slot, the same value through its
+    // `bitcast` / `inttoptr` pair into `store ptr addrspace(1) %s, ptr %slot`.
+    let mut names = vec![value.clone()];
+    for l in body.lines() {
+        let l = l.trim();
+        let Some((lhs, rhs)) = l.split_once(" = ") else {
+            continue;
+        };
+        if (rhs.starts_with("bitcast ") || rhs.starts_with("inttoptr "))
+            && names.iter().any(|n| rhs.contains(&format!(" {n} to ")))
+        {
+            names.push(lhs.trim().to_string());
+        }
+    }
+    let slot = body
+        .lines()
+        .find_map(|l| {
+            let l = l.trim();
+            names.iter().find_map(|n| {
+                l.strip_prefix(&format!("store double {n}, ptr "))
+                    .or_else(|| l.strip_prefix(&format!("store ptr addrspace(1) {n}, ptr ")))
+                    .map(|s| s.trim().to_string())
+            })
+        })
+        .unwrap_or_else(|| panic!("receiver {value} is never stored:\n{body}"));
+    (value, slot)
 }
 
 #[test]
@@ -186,27 +223,19 @@ fn literal_method_reads_its_receiver_once_at_entry_into_a_rooted_slot() {
     let body = closure_body(&ir, METHOD);
 
     assert_eq!(
-        calls_to(body, "js_implicit_this_get_sloppy"),
-        1,
-        "three `this` uses must share ONE entry read:\n{body}"
+        body.matches("%js_this").count(),
+        2,
+        "three `this` uses must share ONE entry read of the parameter:\n{body}"
     );
-    assert_eq!(calls_to(body, "js_implicit_this_get"), 0, "{body}");
+    assert_eq!(
+        calls_to(body, "js_this_coerce_sloppy"),
+        1,
+        "the sloppy coercion runs once, in the prologue:\n{body}"
+    );
 
     // The receiver lands in a slot the shadow frame roots, so an evacuating
     // minor inside the body rewrites it along with every other root.
-    let read = body
-        .lines()
-        .find(|l| l.contains("@js_implicit_this_get_sloppy()"))
-        .unwrap();
-    let value = read.split('=').next().unwrap().trim();
-    let slot = body
-        .lines()
-        .find_map(|l| {
-            l.trim()
-                .strip_prefix(&format!("store double {value}, ptr "))
-                .map(str::trim)
-        })
-        .unwrap_or_else(|| panic!("entry read {value} is never stored:\n{body}"));
+    let (_, slot) = entry_receiver_slot(body);
     assert!(
         body.lines().any(|l| l.contains("@js_shadow_slot_bind(")
             && l.trim_end().ends_with(&format!("ptr {slot})"))),
@@ -218,8 +247,8 @@ fn literal_method_reads_its_receiver_once_at_entry_into_a_rooted_slot() {
 fn strict_literal_method_binds_the_raw_receiver() {
     let ir = compile_ir(&literal_module(method(METHOD, false, true)));
     let body = closure_body(&ir, METHOD);
-    assert_eq!(calls_to(body, "js_implicit_this_get"), 1, "{body}");
-    assert_eq!(calls_to(body, "js_implicit_this_get_sloppy"), 0, "{body}");
+    let _ = entry_receiver_slot(body);
+    assert_eq!(calls_to(body, "js_this_coerce_sloppy"), 0, "{body}");
 }
 
 #[test]

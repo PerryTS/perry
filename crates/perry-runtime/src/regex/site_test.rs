@@ -682,12 +682,12 @@ mod tests {
     #[inline(never)]
     extern "C" fn nested_factory_wrapper(
         _closure: *const crate::closure::ClosureHeader,
-        _this: crate::closure::JsThis,
+        this: crate::closure::JsThis,
     ) -> f64 {
         // Keep this observably distinct from `exact_factory` under release
         // function merging while modeling a non-literal wrapper with effects.
         NESTED_WRAPPER_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        exact_factory(std::ptr::null(), crate::closure::body_call::current_this())
+        exact_factory(std::ptr::null(), this)
     }
 
     fn closure(function: *const u8) -> f64 {

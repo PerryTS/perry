@@ -742,10 +742,10 @@ pub(crate) unsafe fn js_wasi_init_subclass(this_box: f64, options: f64) {
 #[no_mangle]
 pub extern "C" fn js_wasi_get_import_object(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let this = scope.root_nanbox_f64(this.as_f64());
     if heap_object_ptr(this.get_nanbox_f64()).is_none() || !is_wasi_instance(this.get_nanbox_f64())
     {
         let wrapper = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
@@ -1026,8 +1026,8 @@ fn finalize_memory_option(options: f64) -> f64 {
     object_field(options, b"memory")
 }
 
-fn import_from_closure(closure: *const ClosureHeader) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+fn import_from_closure(this: crate::closure::JsThis, closure: *const ClosureHeader) -> f64 {
+    let this = this.as_f64();
     if let Some(obj) = heap_object_ptr(this) {
         if is_wasi_import_object(obj) {
             return this;
@@ -1164,14 +1164,14 @@ fn import_function_name(closure: *const ClosureHeader) -> &'static str {
 #[no_mangle]
 pub extern "C" fn js_wasi_import_stub(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,
     arg3: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let import = scope.root_nanbox_f64(import_from_closure(closure));
+    let import = scope.root_nanbox_f64(import_from_closure(this, closure));
     match import_function_name(closure).trim_start_matches("bound ") {
         "args_sizes_get" => {
             if !is_undefined(arg2) || argument(arg0).is_none() || argument(arg1).is_none() {

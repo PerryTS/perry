@@ -256,6 +256,12 @@ extern "C" fn this_witness_report() {
 #[used(compiler)]
 static KEEP_JS_THIS_PARAM_WITNESS: extern "C" fn(u64, *const u8, u64) = js_this_param_witness;
 
+/// Keepalive anchor — `js_this_coerce_sloppy` is called only from generated
+/// code (a sloppy body's receiver prologue).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_THIS_COERCE_SLOPPY: extern "C" fn(f64) -> f64 = js_this_coerce_sloppy;
+
 /// Read the current implicit `this` (issue #519).
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get() -> f64 {
@@ -265,7 +271,16 @@ pub extern "C" fn js_implicit_this_get() -> f64 {
 /// Read implicit `this` using ordinary (non-strict) function binding rules.
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
-    let value = js_implicit_this_get();
+    js_this_coerce_sloppy(js_implicit_this_get())
+}
+
+/// OrdinaryCallBindThis for a non-strict body: `undefined`/`null` become
+/// `globalThis`, a boolean/string/number its wrapper object; objects and
+/// class refs are unchanged. Emitted at the entry of a sloppy body that reads
+/// its receiver (the `this` parameter, `perry_abi::JS_BODY_THIS_PARAM`) —
+/// only on the non-object path. Can allocate: a GC safepoint.
+#[no_mangle]
+pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return js_get_global_this();

@@ -1323,8 +1323,8 @@ fn install_script_method(
     });
 }
 
-fn script_receiver() -> f64 {
-    crate::object::js_implicit_this_get()
+fn script_receiver(this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
 pub(crate) fn install_script_prototypes(constructor: f64) {
@@ -1467,11 +1467,11 @@ fn make_script(code: String, options: f64) -> f64 {
 
 extern "C" fn vm_script_create_cached_data_method(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _unused1: f64,
     _unused2: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return cached_data_buffer(CACHE_KIND_SCRIPT, 0);
     };
@@ -1483,11 +1483,11 @@ extern "C" fn vm_script_create_cached_data_method(
 
 extern "C" fn vm_script_run_in_this_context_method(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _options: f64,
     _unused: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };
@@ -1504,11 +1504,11 @@ extern "C" fn vm_script_run_in_this_context_method(
 
 extern "C" fn vm_script_run_in_context_method(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     contextified_object: f64,
     _options: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };
@@ -1524,11 +1524,11 @@ extern "C" fn vm_script_run_in_context_method(
 
 extern "C" fn vm_script_run_in_new_context_method(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     context_object: f64,
     options: f64,
 ) -> f64 {
-    let script = script_receiver();
+    let script = script_receiver(this);
     let Some(metadata) = script_metadata(script) else {
         return undefined_value();
     };

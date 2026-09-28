@@ -142,8 +142,8 @@ fn throw_timer_type_error(message: &[u8]) -> ! {
 /// So a foreign receiver is answered, not refused — the opposite of the text
 /// family, whose WebIDL accessors throw. Each thunk below returns node's answer
 /// for `None` and never touches timer state in that case.
-fn timer_receiver() -> (f64, Option<i64>) {
-    let this = crate::object::js_implicit_this_get();
+fn timer_receiver(this: crate::closure::JsThis) -> (f64, Option<i64>) {
+    let this = this.as_f64();
     let id = timer_handle_id(this);
     (this, id)
 }
@@ -152,7 +152,7 @@ extern "C" fn timer_proto_ref_thunk(
     _c: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let (this, id) = timer_receiver();
+    let (this, id) = timer_receiver(_this);
     if let Some(id) = id {
         js_timer_ref(id);
     }
@@ -163,7 +163,7 @@ extern "C" fn timer_proto_unref_thunk(
     _c: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let (this, id) = timer_receiver();
+    let (this, id) = timer_receiver(_this);
     if let Some(id) = id {
         js_timer_unref(id);
     }
@@ -172,9 +172,9 @@ extern "C" fn timer_proto_unref_thunk(
 
 extern "C" fn timer_proto_has_ref_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let (_, id) = timer_receiver();
+    let (_, id) = timer_receiver(this);
     match id {
         Some(id) if js_timer_has_ref(id) != 0 => {
             f64::from_bits(crate::value::JSValue::bool(true).bits())
@@ -189,7 +189,7 @@ extern "C" fn timer_proto_refresh_thunk(
     _c: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let (this, id) = timer_receiver();
+    let (this, id) = timer_receiver(_this);
     if let Some(id) = id {
         js_timer_refresh(id);
     }
@@ -309,7 +309,7 @@ extern "C" fn timer_proto_close_thunk(
     _c: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let (this, id) = timer_receiver();
+    let (this, id) = timer_receiver(_this);
     if let Some(id) = id {
         clear_every_kind(id);
     }
@@ -319,9 +319,9 @@ extern "C" fn timer_proto_close_thunk(
 /// `t[Symbol.dispose]()` — `using t = setTimeout(...)` clears the timer (#1213).
 extern "C" fn timer_proto_dispose_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let (_, id) = timer_receiver();
+    let (_, id) = timer_receiver(this);
     if let Some(id) = id {
         clear_every_kind(id);
     }
@@ -333,10 +333,10 @@ extern "C" fn timer_proto_dispose_thunk(
 /// conversion, so `+setImmediate(...)` must stay `NaN` (#10542).
 extern "C" fn timer_proto_to_primitive_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _hint: f64,
 ) -> f64 {
-    let (_, id) = timer_receiver();
+    let (_, id) = timer_receiver(this);
     match id {
         Some(id) => id as f64,
         None => f64::from_bits(crate::value::TAG_UNDEFINED),

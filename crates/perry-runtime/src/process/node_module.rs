@@ -57,15 +57,15 @@ pub extern "C" fn js_module_constants() -> f64 {
 
 extern "C" fn module_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     specifier: f64,
 ) -> f64 {
-    js_module_instance_require(specifier)
+    js_module_instance_require(this, specifier)
 }
 
-pub(crate) fn js_module_instance_require(specifier: f64) -> f64 {
+pub(crate) fn js_module_instance_require(this: crate::closure::JsThis, specifier: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     let specifier = scope.root_nanbox_f64(specifier);
     let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {
         module_throw_plain_type_error("Module.prototype.require called on incompatible receiver");
@@ -444,8 +444,8 @@ pub extern "C" fn js_module_load(request: f64, _parent: f64, _is_main: f64) -> f
     module_undefined()
 }
 
-pub extern "C" fn js_module_instance_load(filename: f64) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+pub extern "C" fn js_module_instance_load(this: crate::closure::JsThis, filename: f64) -> f64 {
+    let receiver = this.as_f64();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let Some(_) = module_object_ptr(receiver.get_nanbox_f64()) else {

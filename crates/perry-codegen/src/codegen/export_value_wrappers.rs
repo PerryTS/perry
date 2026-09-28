@@ -129,10 +129,9 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();
         crate::expr::body_call::emit_this_param_witness(blk, witness_site.as_ref());
-        // Call the underlying function with just the arg doubles.
-        let call_args: Vec<(LlvmType, &str)> =
-            arg_names.iter().map(|n| (DOUBLE, n.as_str())).collect();
-        let mut result = blk.call(DOUBLE, &original_name, &call_args);
+        // Call the underlying function with the arg doubles — a this-reading
+        // function's receiver-taking body with the receiver first.
+        let mut result = call_function_body(blk, f, &original_name, &arg_names);
         if function_body_returns_generator_object(&f.body) {
             result = blk.call(
                 DOUBLE,
@@ -260,11 +259,8 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
                     .get(&f.id)
                     .cloned()
                     .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
-                let call_args: Vec<(LlvmType, String)> =
-                    (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
-                let call_args_ref: Vec<(LlvmType, &str)> =
-                    call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
-                let result = blk.call(DOUBLE, &target, &call_args_ref);
+                let arg_names: Vec<String> = (0..arity).map(|i| format!("%a{}", i)).collect();
+                let result = call_function_body(blk, f, &target, &arg_names);
                 blk.ret(DOUBLE, &result);
             } else {
                 // Variable / class / type rename — no callable function
@@ -491,11 +487,9 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
                             .get(&f.id)
                             .cloned()
                             .unwrap_or_else(|| scoped_fn_name(module_prefix, &f.name));
-                        let call_args: Vec<(LlvmType, String)> =
-                            (0..arity).map(|i| (DOUBLE, format!("%a{}", i))).collect();
-                        let call_args_ref: Vec<(LlvmType, &str)> =
-                            call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
-                        let result = blk.call(DOUBLE, &target, &call_args_ref);
+                        let arg_names: Vec<String> =
+                            (0..arity).map(|i| format!("%a{}", i)).collect();
+                        let result = call_function_body(blk, f, &target, &arg_names);
                         blk.ret(DOUBLE, &result);
                     } else {
                         let wf = llmod.define_function(
@@ -513,4 +507,28 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
             }
         }
     }
+}
+
+/// Call top-level function `f` (public symbol `target`) from one of its
+/// value wrappers with the wrapper's JS arguments. A function whose body
+/// reads its dynamic `this` is entered through its receiver-taking body
+/// (`codegen/function.rs`) with the wrapper's receiver parameter; any other
+/// through its public symbol.
+fn call_function_body(
+    blk: &mut crate::block::LlBlock,
+    f: &perry_hir::Function,
+    target: &str,
+    arg_names: &[String],
+) -> String {
+    let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
+    let receiver_body;
+    let callee = if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
+        call_args.push((I64, crate::expr::body_call::JS_BODY_THIS));
+        receiver_body = crate::expr::body_call::receiver_body_name(target);
+        receiver_body.as_str()
+    } else {
+        target
+    };
+    call_args.extend(arg_names.iter().map(|n| (DOUBLE, n.as_str())));
+    blk.call(DOUBLE, callee, &call_args)
 }

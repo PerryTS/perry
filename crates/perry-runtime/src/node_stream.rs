@@ -850,18 +850,18 @@ fn push_chunk_backpressure_result(stream: f64, total: f64) -> f64 {
 /// `readable.push(chunk)` for the untyped/`as any` object-method path.
 extern "C" fn ns_push1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
 ) -> f64 {
-    let stream = readable_push_receiver(closure);
+    let stream = readable_push_receiver(this, closure);
     if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
         throw_readable_push_invalid_receiver();
     }
     push_chunk(stream, chunk)
 }
 
-fn readable_push_receiver(closure: *const ClosureHeader) -> f64 {
-    let implicit = crate::object::js_implicit_this_get();
+fn readable_push_receiver(this: crate::closure::JsThis, closure: *const ClosureHeader) -> f64 {
+    let implicit = this.as_f64();
     if implicit.to_bits() != TAG_UNDEFINED {
         return implicit;
     }

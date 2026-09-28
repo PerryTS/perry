@@ -28,13 +28,13 @@ const ASYNC_RESOURCE_METHODS: &[(&str, u32)] = &[
 /// `run`, `exit`, and `runInAsyncScope`.
 extern "C" fn async_hooks_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
         let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
         let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = crate::object::js_implicit_this_get();
+        let receiver = this.as_f64();
         let name = std::slice::from_raw_parts(name_ptr as *const u8, name_len);
 
         // Node's enterWith/disable implementations do not brand-check an

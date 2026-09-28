@@ -158,3 +158,44 @@ pub(crate) fn emit_this_param_witness(blk: &mut LlBlock, site: Option<&(String, 
         ],
     );
 }
+
+/// The receiver prologue of a SLOPPY body that reads `this` (stage 2 of
+/// this-as-a-parameter): `slot` is the body's rooted entry `this` slot, which
+/// already holds the receiver parameter's bits (stored before the body's
+/// first safepoint, so a moving collection rewrites it). Applies
+/// OrdinaryCallBindThis once, in place: an object receiver is kept inline;
+/// anything else (`undefined`, `null`, a primitive, a class ref) goes through
+/// `js_this_coerce_sloppy`, the only safepoint here. A strict body needs no
+/// prologue: its receiver is the parameter as passed.
+pub(crate) fn emit_sloppy_receiver_coercion(ctx: &mut crate::expr::FnCtx<'_>, slot: &str) {
+    let (value, is_object) = {
+        let blk = ctx.block();
+        let value = blk.load(DOUBLE, slot);
+        let bits = blk.bitcast_double_to_i64(&value);
+        let top16 = blk.lshr(I64, &bits, "48");
+        let is_object = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+        (value, is_object)
+    };
+    let slow_idx = ctx.new_block("this_prologue.coerce");
+    let done_idx = ctx.new_block("this_prologue.done");
+    let slow_label = ctx.block_label(slow_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&is_object, &done_label, &slow_label);
+    ctx.current_block = slow_idx;
+    {
+        let blk = ctx.block();
+        let coerced = blk.call(DOUBLE, "js_this_coerce_sloppy", &[(DOUBLE, &value)]);
+        blk.store(DOUBLE, &coerced, slot);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+}
+
+/// The body of a top-level function that reads its dynamic `this`: the
+/// function compiled with the receiver as a leading `i64 %js_this`
+/// parameter. Its value wrapper passes the receiver it was given; the public
+/// `perry_fn_*` symbol every direct call (and every other module) names is a
+/// forwarder passing `undefined` — a direct call binds no receiver.
+pub(crate) fn receiver_body_name(public_name: &str) -> String {
+    format!("{public_name}$this")
+}

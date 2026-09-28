@@ -328,15 +328,11 @@ pub(crate) fn string(
 
 pub(crate) extern "C" fn regexp_thunk(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     input: f64,
     replacement: f64,
 ) -> f64 {
-    api::finish(regexp(
-        crate::object::js_implicit_this_get(),
-        input,
-        replacement,
-    ))
+    api::finish(regexp(this.as_f64(), input, replacement))
 }
 
 #[no_mangle]

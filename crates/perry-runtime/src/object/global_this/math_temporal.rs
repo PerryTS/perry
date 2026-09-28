@@ -415,9 +415,9 @@ fn build_temporal_now_namespace() -> f64 {
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_proto_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let recv = super::super::js_implicit_this_get();
+    let recv = this.as_f64();
     let cl = closure as usize;
     let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
     let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
@@ -442,10 +442,10 @@ extern "C" fn temporal_proto_getter_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let recv = super::super::js_implicit_this_get();
+    let recv = this.as_f64();
     let cl = closure as usize;
     let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
     let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
@@ -641,9 +641,9 @@ fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     // The accessor's name is `"get <prop>"`; recover the bare property.
     let name = temporal_closure_name(closure);
     let prop = name.strip_prefix("get ").unwrap_or(&name);
@@ -660,10 +660,10 @@ extern "C" fn temporal_zdt_proto_getter_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     let name = temporal_closure_name(closure);
     if crate::temporal::temporal_kind(this) != Some(crate::temporal::TemporalKind::ZonedDateTime) {
         temporal_brand_type_error("Temporal.ZonedDateTime", &name);

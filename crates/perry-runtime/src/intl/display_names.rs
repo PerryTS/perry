@@ -198,9 +198,9 @@ extern "C" fn bound_resolved_options_thunk(
 
 pub(super) extern "C" fn resolved_options_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", super::KIND_DISPLAY_NAMES);
+    let obj = this_intl_object(this, "resolvedOptions", super::KIND_DISPLAY_NAMES);
     resolved_options_object(obj)
 }
 
@@ -356,10 +356,10 @@ extern "C" fn bound_of_thunk(
 
 pub(super) extern "C" fn of_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     code: f64,
 ) -> f64 {
-    let obj = this_intl_object("of", super::KIND_DISPLAY_NAMES);
+    let obj = this_intl_object(this, "of", super::KIND_DISPLAY_NAMES);
     of_value(obj, code)
 }
 

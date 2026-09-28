@@ -756,11 +756,20 @@ mod by_name_method_closure_tests {
     /// The `build` function's body, and only it — the closure bodies are
     /// separate `define`s and contain none of what is asserted below.
     pub(super) fn build_fn(ir: &str) -> String {
+        // `build` reads its dynamic `this` (the analysis counts the methods'
+        // `captures_this`), so it is compiled as a receiver-taking
+        // `__build$this` body behind a forwarding `__build`; the lowering
+        // under test is in the body.
+        let marker = if ir.contains("__build$this(") {
+            "__build$this("
+        } else {
+            "__build("
+        };
         let mut body = Vec::new();
         let mut inside = false;
         for line in ir.lines() {
             if line.starts_with("define ") {
-                inside = line.contains("__build(");
+                inside = line.contains(marker);
                 continue;
             }
             if inside {

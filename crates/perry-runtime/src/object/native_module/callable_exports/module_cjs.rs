@@ -255,22 +255,22 @@ extern "C" fn module_prototype_method_thunk(
 
 extern "C" fn module_prototype_load_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     filename: f64,
     _b: f64,
     _c: f64,
 ) -> f64 {
-    crate::process::js_module_instance_load(filename)
+    crate::process::js_module_instance_load(this, filename)
 }
 
 extern "C" fn module_prototype_require_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     specifier: f64,
     _b: f64,
     _c: f64,
 ) -> f64 {
-    crate::process::js_module_instance_require(specifier)
+    crate::process::js_module_instance_require(this, specifier)
 }
 
 fn module_prototype_method(name: &str, length: u32) -> f64 {

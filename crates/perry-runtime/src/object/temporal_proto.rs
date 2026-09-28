@@ -48,9 +48,9 @@ fn throw_brand(member: &str) -> ! {
 /// `"hour"`), and routes to the brand router; a non-Temporal `this` throws.
 pub(super) extern "C" fn temporal_proto_getter_thunk(
     c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let recv = f64::from_bits(IMPLICIT_THIS.with(|x| x.get()));
+    let recv = f64::from_bits(this.bits());
     let full = closure_name(c);
     let prop = full.strip_prefix("get ").unwrap_or(&full);
     match tdispatch::get_property(recv, prop) {
@@ -64,10 +64,10 @@ pub(super) extern "C" fn temporal_proto_getter_thunk(
 /// receiver, and routes to the brand router with the rest-array args.
 pub(super) extern "C" fn temporal_proto_method_thunk(
     c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let recv = f64::from_bits(IMPLICIT_THIS.with(|x| x.get()));
+    let recv = f64::from_bits(this.bits());
     let name = closure_name(c);
     if crate::temporal::temporal_kind(recv).is_none() {
         throw_brand(&name);

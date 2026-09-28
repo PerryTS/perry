@@ -375,12 +375,16 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
     .map(|result| result.is_some())
 }
 
-pub(crate) fn test_value(receiver: f64, argument: f64) -> Result<bool, EngineError> {
+pub(crate) fn test_value(
+    this: crate::closure::JsThis,
+    receiver: f64,
+    argument: f64,
+) -> Result<bool, EngineError> {
     require_object(receiver)?;
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let previous = scope.root_nanbox_f64(this.as_f64());
     let input =
         api::caught(|| crate::value::js_jsvalue_to_string_coerce(argument.get_nanbox_f64()));
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());

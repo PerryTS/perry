@@ -248,7 +248,11 @@ fn perex_dispatch_generic_prototype_test_coerces_before_getting_exec() {
     assert_eq!(ORDER.with(Cell::get), 123);
     ORDER.with(|n| n.set(0));
     assert!(matches!(
-        dispatch::test_value(1.0, argument.get_nanbox_f64()),
+        dispatch::test_value(
+            crate::closure::body_call::current_this(),
+            1.0,
+            argument.get_nanbox_f64()
+        ),
         Err(EngineError::Type(_))
     ));
     assert_eq!(

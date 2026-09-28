@@ -601,7 +601,7 @@ extern "C" fn webassembly_module_ctor_thunk(
 
 extern "C" fn webassembly_instance_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     module: f64,
     imports: f64,
 ) -> f64 {
@@ -610,22 +610,18 @@ extern "C" fn webassembly_instance_ctor_thunk(
     }
     #[cfg(feature = "wasm-host")]
     {
-        crate::webassembly::js_webassembly_instance_new(
-            module,
-            imports,
-            crate::object::js_implicit_this_get(),
-        )
+        crate::webassembly::js_webassembly_instance_new(module, imports, this.as_f64())
     }
     #[cfg(not(feature = "wasm-host"))]
     {
-        let _ = (module, imports);
+        let _ = (this, module, imports);
         crate::exception::js_throw(wasm_unsupported_error(b"LinkError", "WebAssembly.Instance"));
     }
 }
 
 extern "C" fn webassembly_table_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     descriptor: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
@@ -633,21 +629,18 @@ extern "C" fn webassembly_table_ctor_thunk(
     }
     #[cfg(feature = "wasm-host")]
     {
-        crate::webassembly::js_webassembly_table_new(
-            descriptor,
-            crate::object::js_implicit_this_get(),
-        )
+        crate::webassembly::js_webassembly_table_new(descriptor, this.as_f64())
     }
     #[cfg(not(feature = "wasm-host"))]
     {
-        let _ = descriptor;
+        let _ = (this, descriptor);
         crate::exception::js_throw(wasm_unsupported_error(b"RuntimeError", "WebAssembly.Table"));
     }
 }
 
 extern "C" fn webassembly_global_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     descriptor: f64,
     initial: f64,
 ) -> f64 {
@@ -656,15 +649,11 @@ extern "C" fn webassembly_global_ctor_thunk(
     }
     #[cfg(feature = "wasm-host")]
     {
-        crate::webassembly::js_webassembly_global_new(
-            descriptor,
-            initial,
-            crate::object::js_implicit_this_get(),
-        )
+        crate::webassembly::js_webassembly_global_new(descriptor, initial, this.as_f64())
     }
     #[cfg(not(feature = "wasm-host"))]
     {
-        let _ = (descriptor, initial);
+        let _ = (this, descriptor, initial);
         crate::exception::js_throw(wasm_unsupported_error(
             b"RuntimeError",
             "WebAssembly.Global",
@@ -745,7 +734,7 @@ fn wasm_memory_new_buffer(pages: u32) -> f64 {
 
 extern "C" fn webassembly_memory_ctor_thunk(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     descriptor: f64,
 ) -> f64 {
     if !invoked_as_constructor(closure) {
@@ -764,7 +753,7 @@ extern "C" fn webassembly_memory_ctor_thunk(
     };
     // The dynamic construct path pre-allocated the receiver with
     // `Memory.prototype` linked (so `instanceof` works); fill it in place.
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     #[cfg(feature = "wasm-host")]
     {
         crate::webassembly::js_webassembly_memory_new(
@@ -873,10 +862,10 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
 
 extern "C" fn webassembly_memory_grow_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     delta: f64,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     match wasm_memory_grow_on(this, delta) {
         Ok(old_pages) => old_pages as f64,
         Err(MemoryCtorError::Type(msg)) => {

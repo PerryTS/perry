@@ -1664,7 +1664,7 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
 /// the bound resource's async id active.
 extern "C" fn async_resource_bind_trampoline(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -1677,7 +1677,7 @@ extern "C" fn async_resource_bind_trampoline(
         return TAG_UNDEFINED_F64;
     }
     if JSValue::from_bits(this_arg.to_bits()).is_undefined() {
-        this_arg = crate::object::js_implicit_this_get();
+        this_arg = this.as_f64();
     }
     let args_array_ptr = ptr_from_nanboxed(rest) as i64;
     js_async_resource_run_in_async_scope(handle, callback, this_arg, args_array_ptr)

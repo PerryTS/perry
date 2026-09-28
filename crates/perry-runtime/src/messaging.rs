@@ -268,8 +268,8 @@ fn with_port_states<R>(f: impl FnOnce(&mut HashMap<usize, PortState>) -> R) -> R
 }
 
 /// Resolve the current method receiver (`this`) to a port object pointer.
-fn this_port_ptr() -> usize {
-    let this = object::js_implicit_this_get();
+fn this_port_ptr(this: crate::closure::JsThis) -> usize {
+    let this = this.as_f64();
     crate::value::js_nanbox_get_pointer(this) as usize
 }
 
@@ -394,11 +394,11 @@ fn schedule_delivery(port_ptr: usize) {
 /// `port.postMessage(data[, transferList])`.
 extern "C" fn port_post_message(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     data: f64,
     _transfer: f64,
 ) -> f64 {
-    let self_ptr = this_port_ptr();
+    let self_ptr = this_port_ptr(this);
     if self_ptr == 0 {
         return js_undefined();
     }
@@ -442,13 +442,13 @@ fn start_port(self_ptr: usize) {
     }
 }
 
-extern "C" fn port_start(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    start_port(this_port_ptr());
+extern "C" fn port_start(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    start_port(this_port_ptr(this));
     js_undefined()
 }
 
-extern "C" fn port_close(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    let self_ptr = this_port_ptr();
+extern "C" fn port_close(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let self_ptr = this_port_ptr(this);
     if self_ptr != 0 {
         with_port_states(|map| {
             let Some(state) = map.get_mut(&self_ptr) else {
@@ -478,9 +478,9 @@ extern "C" fn port_close(_closure: *const ClosureHeader, _this: crate::closure::
 /// `port.onmessage` getter — return the stored handler (null if unset).
 extern "C" fn port_onmessage_get(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let self_ptr = this_port_ptr();
+    let self_ptr = this_port_ptr(this);
     if self_ptr == 0 {
         return js_null();
     }
@@ -491,10 +491,10 @@ extern "C" fn port_onmessage_get(
 /// start the port, flushing any queued messages.
 extern "C" fn port_onmessage_set(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let self_ptr = this_port_ptr();
+    let self_ptr = this_port_ptr(this);
     if self_ptr == 0 {
         return js_undefined();
     }
@@ -507,11 +507,11 @@ extern "C" fn port_onmessage_set(
 
 extern "C" fn port_add_event_listener(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     type_value: f64,
     listener: f64,
 ) -> f64 {
-    let self_ptr = this_port_ptr();
+    let self_ptr = this_port_ptr(this);
     if self_ptr == 0 || !is_message_type(type_value) || !value_is_callable(listener) {
         return js_undefined();
     }
@@ -539,11 +539,11 @@ extern "C" fn port_add_event_listener(
 
 extern "C" fn port_remove_event_listener(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     type_value: f64,
     listener: f64,
 ) -> f64 {
-    let self_ptr = this_port_ptr();
+    let self_ptr = this_port_ptr(this);
     if self_ptr == 0 || !is_message_type(type_value) {
         return js_undefined();
     }

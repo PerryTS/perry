@@ -150,16 +150,11 @@ pub(super) extern "C" fn ns_remove_listener2(
 
 pub(super) extern "C" fn ns_off2(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
-    ns_remove_listener2(
-        closure,
-        crate::closure::body_call::current_this(),
-        event,
-        cb,
-    )
+    ns_remove_listener2(closure, this, event, cb)
 }
 
 pub(super) extern "C" fn ns_remove_all_listeners1(

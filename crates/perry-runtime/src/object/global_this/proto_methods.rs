@@ -4,8 +4,8 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
-fn web_method_receiver(name: &str) -> *mut ObjectHeader {
-    let receiver = crate::object::js_implicit_this_get();
+fn web_method_receiver(this: crate::closure::JsThis, name: &str) -> *mut ObjectHeader {
+    let receiver = this.as_f64();
     if crate::object::web_builtin_to_string_tag(receiver) == Some(name) {
         return crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader;
     }
@@ -17,25 +17,28 @@ fn web_method_receiver(name: &str) -> *mut ObjectHeader {
 
 extern "C" fn url_prototype_href_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    crate::url::js_url_get_href(web_method_receiver("URL"))
+    crate::url::js_url_get_href(web_method_receiver(this, "URL"))
 }
 
 extern "C" fn abort_controller_prototype_abort_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    crate::url::js_abort_controller_abort_reason(web_method_receiver("AbortController"), reason);
+    crate::url::js_abort_controller_abort_reason(
+        web_method_receiver(this, "AbortController"),
+        reason,
+    );
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn abort_signal_prototype_throw_if_aborted_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    crate::url::js_abort_signal_throw_if_aborted(web_method_receiver("AbortSignal"))
+    crate::url::js_abort_signal_throw_if_aborted(web_method_receiver(this, "AbortSignal"))
 }
 
 fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
@@ -232,23 +235,23 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
 
 extern "C" fn object_prototype_dunder_proto_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     // Spec (Annex B §B.3.1 `get __proto__`): `ToObject(this).[[GetPrototypeOf]]()`.
     // `js_object_get_prototype_of` already implements exactly this shape —
     // wrapper-prototype resolution for primitives, Proxy/Temporal/handle
     // receivers, and a throw on `null`/`undefined` (the `ToObject` failure
     // case) — so the getter is a direct delegation, not a reimplementation.
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     crate::object::js_object_get_prototype_of(receiver)
 }
 
 extern "C" fn object_prototype_dunder_proto_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     crate::proxy::legacy_dunder_proto_set(receiver, value);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

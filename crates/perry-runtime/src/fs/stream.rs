@@ -436,8 +436,8 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
-fn current_receiver_value() -> f64 {
-    let this_value = crate::object::js_implicit_this_get();
+fn current_receiver_value(this: crate::closure::JsThis) -> f64 {
+    let this_value = this.as_f64();
     if object_ptr_from_value(this_value).is_some() {
         this_value
     } else {
@@ -1159,7 +1159,7 @@ pub(crate) extern "C" fn write_stream_write_impl(
 
 pub(crate) extern "C" fn write_stream_end_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -1199,27 +1199,27 @@ pub(crate) extern "C" fn write_stream_end_impl(
     } else {
         emit_stored_error(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn write_stream_on_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     stream_on_common(stream_id_of(closure), event, cb, false);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn write_stream_once_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     stream_on_common(stream_id_of(closure), event, cb, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn stream_emit_impl(
@@ -1255,7 +1255,7 @@ pub(crate) use utf8_stream::*;
 
 pub(crate) extern "C" fn write_stream_close_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1272,7 +1272,7 @@ pub(crate) extern "C" fn write_stream_close_impl(
         }
     });
     maybe_close_stream(id, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 fn read_chunk_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
@@ -1489,7 +1489,7 @@ fn read_stream_pump(id: usize) {
 
 pub(crate) extern "C" fn read_stream_on_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1503,12 +1503,12 @@ pub(crate) extern "C" fn read_stream_on_impl(
         });
         schedule_read_stream_turn(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_once_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1522,7 +1522,7 @@ pub(crate) extern "C" fn read_stream_once_impl(
         });
         schedule_read_stream_turn(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_pipe_impl(
@@ -1548,19 +1548,19 @@ pub(crate) extern "C" fn read_stream_pipe_impl(
 
 pub(crate) extern "C" fn read_stream_pause_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&stream_id_of(closure)) {
             state.paused = true;
         }
     });
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_resume_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
@@ -1569,7 +1569,7 @@ pub(crate) extern "C" fn read_stream_resume_impl(
         }
     });
     schedule_read_stream_turn(id);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_is_paused_impl(
@@ -1588,7 +1588,7 @@ pub(crate) extern "C" fn read_stream_is_paused_impl(
 
 pub(crate) extern "C" fn read_stream_close_impl(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1603,7 +1603,7 @@ pub(crate) extern "C" fn read_stream_close_impl(
         }
     });
     maybe_close_stream(id, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {

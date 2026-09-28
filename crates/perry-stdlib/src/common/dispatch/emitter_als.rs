@@ -48,7 +48,7 @@ fn async_local_storage_method_name_static(property: &str) -> Option<&'static [u8
 
 extern "C" fn async_local_storage_unbound_method_thunk(
     closure: *const perry_runtime::closure::ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -58,7 +58,7 @@ extern "C" fn async_local_storage_unbound_method_thunk(
         let name_str = std::str::from_utf8(name).unwrap_or("");
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let rest = scope.root_nanbox_f64(rest);
-        let receiver_handle = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
+        let receiver_handle = scope.root_nanbox_f64(this.as_f64());
         let receiver = receiver_handle.get_nanbox_f64();
         let receiver_raw = if receiver.to_bits() >> 48 == 0x7FFD {
             (receiver.to_bits() & POINTER_MASK_BITS) as i64

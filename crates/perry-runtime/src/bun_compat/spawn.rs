@@ -933,13 +933,9 @@ extern "C" fn bun_pty_subprocess_unref(
 #[cfg(unix)]
 extern "C" fn bun_pty_subprocess_dispose(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = bun_pty_subprocess_kill(
-        closure,
-        crate::closure::body_call::current_this(),
-        cp_undefined(),
-    );
+    let _ = bun_pty_subprocess_kill(closure, this, cp_undefined());
     cp_undefined()
 }
 

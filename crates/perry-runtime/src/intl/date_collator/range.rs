@@ -182,11 +182,11 @@ pub(crate) fn date_time_format_range_parts_value(
 
 pub(crate) extern "C" fn date_time_format_range_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatRange", KIND_DATE_TIME);
+    let obj = this_intl_object(this, "formatRange", KIND_DATE_TIME);
     if let Some(kind) = crate::temporal::temporal_kind(start) {
         validate_temporal_dtf_overlap(kind, obj);
     }
@@ -208,11 +208,11 @@ pub(crate) extern "C" fn date_time_format_bound_range_thunk(
 
 pub(crate) extern "C" fn date_time_format_range_to_parts_thunk(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatRangeToParts", KIND_DATE_TIME);
+    let obj = this_intl_object(this, "formatRangeToParts", KIND_DATE_TIME);
     if let Some(kind) = crate::temporal::temporal_kind(start) {
         validate_temporal_dtf_overlap(kind, obj);
     }

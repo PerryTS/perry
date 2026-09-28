@@ -1066,16 +1066,11 @@ extern "C" fn worker_add_event_listener(
 /// `worker.removeEventListener(type, listener)`.
 extern "C" fn worker_remove_event_listener(
     closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    worker_off(
-        closure,
-        perry_runtime::closure::current_this(),
-        event,
-        callback,
-    )
+    worker_off(closure, this, event, callback)
 }
 
 fn worker_add_listener(

@@ -296,10 +296,10 @@ extern "C" fn iterator_helper_next_thunk(
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    super::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// Set `obj[Symbol.toStringTag] = tag` with the spec descriptor

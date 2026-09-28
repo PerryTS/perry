@@ -1322,9 +1322,9 @@ unsafe fn compute_stack_value(receiver: f64) -> f64 {
 /// consulted at access time, not capture time).
 extern "C" fn error_stack_lazy_getter(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     unsafe { compute_stack_value(receiver) }
 }
 

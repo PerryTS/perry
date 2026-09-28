@@ -304,20 +304,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // so `Expr::SuperPropertyGet` (value-form `super.<method>`) can
     // materialize them via `js_closure_alloc_singleton(@__perry_wrap_<method>)`.
     // Methods have signature `perry_method_<...>(this_box, args...)`;
-    // the JS body ABI is `(i64 closure, i64 this, double a0, ...)`. The
-    // receiver still comes from IMPLICIT_THIS (stage 1 of this-as-a-parameter:
-    // the `this` parameter carries the same value, which witness builds
-    // check), set by the dispatcher right before the call:
+    // the JS body ABI is `(i64 closure, i64 this, double a0, ...)`, so the
+    // wrapper forwards its receiver parameter as the method's `this`. The
+    // receiver is the call site's:
     //   * A method-style invocation of a stored super-method value
     //     (`this._complete = super._complete; obj._complete()` — rxjs's
     //     `OperatorSubscriber` forwarding `complete`/`error`/`next` to the
-    //     base `Subscriber` when no override callback was supplied) sets
-    //     IMPLICIT_THIS to the receiver, so the base method runs with the
+    //     base `Subscriber` when no override callback was supplied) passes
+    //     the receiver, so the base method runs with the
     //     right `this`. Pre-fix this hardcoded `this=undefined`, so the
     //     forwarded `complete` never reached `this.destination.complete()`
     //     and the pipeline stalled (top-level await never settled, #5138).
-    //   * A bare call (`const fn = super.greet; fn(x)`) leaves
-    //     IMPLICIT_THIS undefined, matching strict-mode `this`.
+    //   * A bare call (`const fn = super.greet; fn(x)`) passes `undefined`,
+    //     matching strict-mode `this`.
     let mut emitted_wrappers: std::collections::HashSet<String> = std::collections::HashSet::new();
     for class in &hir.classes {
         for method in &class.methods {
@@ -339,9 +338,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
             crate::expr::body_call::emit_this_param_witness(blk, witness_site.as_ref());
-            // Forward the call-site receiver (IMPLICIT_THIS) as `this`,
-            // then the args. See the block comment above (#5138).
-            let this_box = blk.call(DOUBLE, "js_implicit_this_get", &[]);
+            // Forward the call-site receiver (the `this` parameter) as the
+            // method's `this`, then the args. See the block comment above
+            // (#5138).
+            let this_box = blk.bitcast_i64_to_double(crate::expr::body_call::JS_BODY_THIS);
             let mut call_args: Vec<(LlvmType, String)> = Vec::with_capacity(arity + 1);
             call_args.push((DOUBLE, this_box));
             for i in 0..arity {

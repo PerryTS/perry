@@ -202,8 +202,8 @@ fn trace_id_symbol() -> f64 {
     })
 }
 
-fn this_trace_id() -> i64 {
-    let this_value = crate::object::js_implicit_this_get();
+fn this_trace_id(this: crate::closure::JsThis) -> i64 {
+    let this_value = this.as_f64();
     let Some(_) = object_ptr_from_value(this_value) else {
         throw_invalid_this();
     };
@@ -319,25 +319,25 @@ extern "C" fn trace_tracing_constructor(
 
 extern "C" fn trace_tracing_enable(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    set_trace_enabled(this_trace_id(), true);
+    set_trace_enabled(this_trace_id(this), true);
     undefined()
 }
 
 extern "C" fn trace_tracing_disable(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    set_trace_enabled(this_trace_id(), false);
+    set_trace_enabled(this_trace_id(this), false);
     undefined()
 }
 
 extern "C" fn trace_categories_getter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let id = this_trace_id();
+    let id = this_trace_id(this);
     let categories = trace_state_value(id, |state| state.categories);
     let scope = crate::gc::RuntimeHandleScope::new();
     let categories = scope.root_nanbox_f64(categories);
@@ -346,9 +346,9 @@ extern "C" fn trace_categories_getter(
 
 extern "C" fn trace_enabled_getter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let id = this_trace_id();
+    let id = this_trace_id(this);
     trace_state_value(id, |state| bool_value(state.enabled))
 }
 
