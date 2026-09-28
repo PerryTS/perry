@@ -299,6 +299,8 @@ pub(crate) struct DirectParser<'a> {
     /// costs nothing inside record-heavy string loops.
     cached_string: Option<ParseStringReuse>,
     batch: Option<crate::arena::ConstructionBatch>,
+    /// The remaining-input record estimate is spent (see `parse_array`).
+    record_estimate_spent: bool,
 }
 
 impl<'a> DirectParser<'a> {
@@ -320,6 +322,7 @@ impl<'a> DirectParser<'a> {
             source: std::ptr::null(),
             cached_string: None,
             batch: None,
+            record_estimate_spent: false,
         }
     }
 
@@ -372,6 +375,7 @@ impl<'a> DirectParser<'a> {
             source: std::ptr::null(),
             cached_string: None,
             batch: None,
+            record_estimate_spent: false,
         }
     }
 
@@ -1289,13 +1293,22 @@ impl<'a> DirectParser<'a> {
         if self.peek() != Some(b'{') {
             return self.parse_array_prefix(saved_roots);
         }
-        // Same `[{...}]` pre-size heuristic as the typed path.
-        // Preserve the object-leading estimate on large record arrays.
-        let array = super::construction_array::ConstructionArray::presized_records(
-            &mut self.batch,
-            (self.input.len() - self.pos) / 96,
-        );
-        self.parse_array_tail(array, saved_roots)
+        // Same `[{...}]` pre-size heuristic as the typed path, for the one
+        // record array a document is usually built around: the root, or a
+        // member of the root object (`{"items":[...]}`). The estimate is the
+        // whole remaining input, so it is spent once per parse. Every nested
+        // `[{...}]` sized from it reserved slots for the rest of the document:
+        // a 24 MB npm packument holds a two-entry `signatures` array per
+        // version and parsed into 4.2 GB (#11642).
+        if self.depth <= 2 && !self.record_estimate_spent {
+            self.record_estimate_spent = true;
+            let array = super::construction_array::ConstructionArray::presized_records(
+                &mut self.batch,
+                (self.input.len() - self.pos) / 96,
+            );
+            return self.parse_array_tail(array, saved_roots);
+        }
+        self.parse_array_prefix(saved_roots)
     }
 
     /// The direct parser's existing suppression window protects these native
@@ -1344,7 +1357,7 @@ impl<'a> DirectParser<'a> {
         for &value in values {
             array.push(&mut self.batch, value);
         }
-        let result = array.finish(&self.batch);
+        let result = array.finish(&mut self.batch);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(result.cast())
     }
@@ -1371,7 +1384,7 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
-        let result = array.finish(&self.batch);
+        let result = array.finish(&mut self.batch);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(result.cast())
     }
@@ -1545,6 +1558,9 @@ impl<'a> DirectParser<'a> {
 #[path = "parser_scan_tests.rs"]
 mod scan_tests;
 
+#[cfg(test)]
+#[path = "parser_nested_record_presize_tests.rs"]
+mod nested_record_presize_tests;
 #[cfg(test)]
 #[path = "parser_short_array_tests.rs"]
 mod short_array_tests;
