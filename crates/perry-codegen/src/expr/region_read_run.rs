@@ -157,7 +157,7 @@ pub(crate) fn try_lower_region_add_tree(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    if !region_guard::emission_allowed() {
+    if !region_guard::emission_allowed() || !ctx.region_loop_facts.is_empty() {
         return Ok(None);
     }
     let Some(plan) = plan(expr) else {

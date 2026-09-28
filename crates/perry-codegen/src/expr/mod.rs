@@ -1044,6 +1044,10 @@ pub(crate) struct FnCtx<'a> {
     /// slow clone's preheader BEFORE committing any side effect of the
     /// current iteration.
     pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
+    /// Step 4b (#10884): loop / body regions whose body is not lowered yet
+    /// (`stmt::region_loop`), and the facts active while an F-body lowers.
+    pub region_loops: Vec<crate::stmt::region_loop::Pending>,
+    pub region_loop_facts: Vec<crate::stmt::region_loop::Active>,
 
     /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
     /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST

@@ -1687,6 +1687,77 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
     u64,
 ) -> u64 = js_region_guard_prime;
 
+/// Step 4b loop regions: pack a LOOP region's word, which licenses bare
+/// STORES as well as bare reads, or return [`REGION_GUARD_WORD_EMPTY`].
+///
+/// [`js_region_guard_pack`] proves each key is an ordinary own inline slot of
+/// `shape_id` (ordinary kind, semantic generation 0, no tombstones, every key
+/// inline). A store additionally needs every covered key to be a WRITABLE DATA
+/// property, which is the shape's attribute summary: zero means every key the
+/// shape names carries default attributes (data, writable, enumerable,
+/// configurable). A nonzero summary refuses the whole word; the loop then runs
+/// its generic body, which is today's code. Refusing is always correct.
+///
+/// The per-object store facts that are NOT shape facts yet (receiver kind,
+/// Array-subclass numeric proof: DESIGN §6.5a) are tested by the emitted
+/// guard itself, on the object, not here.
+#[no_mangle]
+pub extern "C" fn js_region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+) -> u64 {
+    match shape_record_by_id(shape_id) {
+        Some(record) if record.summary() == 0 => {}
+        _ => return REGION_GUARD_WORD_EMPTY,
+    }
+    js_region_guard_pack(shape_id, n, k0, k1, k2, k3, k4)
+}
+
+/// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
+/// store-side twin of [`js_region_guard_prime`], with its memory ordering.
+///
+/// # Safety
+///
+/// `word` must be null or point to a live, 8-byte-aligned `AtomicU64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_region_loop_prime(
+    word: *const core::sync::atomic::AtomicU64,
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+) -> u64 {
+    let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4);
+    if word.is_null() || packed == REGION_GUARD_WORD_EMPTY {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
+    packed
+}
+
+/// Keepalive anchor — `js_region_loop_prime` is called only from generated
+/// code (a loop region's entry miss).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
+    *const core::sync::atomic::AtomicU64,
+    u32,
+    u32,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+) -> u64 = js_region_loop_prime;
+
 /// Mint a process-global ShapeId for a codegen-registered typed layout and
 /// install its structural descriptor in the current agent. Unlike
 /// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
