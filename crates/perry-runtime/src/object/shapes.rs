@@ -1718,8 +1718,16 @@ pub extern "C" fn js_region_loop_pack(
     js_region_guard_pack(shape_id, n, k0, k1, k2, k3, k4)
 }
 
+/// The word a loop region's site holds once its last bounded prime attempt
+/// was refused: all ones. Its id half is `REGION_GUARD_WORD_EMPTY`'s, which no
+/// object carries, so it can never match; the emitted guard tests for it
+/// FIRST and skips the receiver test (DESIGN §4.3).
+pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
+
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// store-side twin of [`js_region_guard_prime`], with its memory ordering.
+/// `last` is non-zero on the site's final bounded attempt: a refusal then
+/// publishes [`REGION_LOOP_WORD_RETIRED`].
 ///
 /// # Safety
 ///
@@ -1734,9 +1742,19 @@ pub unsafe extern "C" fn js_region_loop_prime(
     k2: u64,
     k3: u64,
     k4: u64,
+    last: u32,
 ) -> u64 {
     let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4);
-    if word.is_null() || packed == REGION_GUARD_WORD_EMPTY {
+    if word.is_null() {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    if packed == REGION_GUARD_WORD_EMPTY {
+        if last != 0 {
+            (*word).store(
+                REGION_LOOP_WORD_RETIRED,
+                core::sync::atomic::Ordering::Relaxed,
+            );
+        }
         return REGION_GUARD_WORD_EMPTY;
     }
     (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
@@ -1756,6 +1774,7 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u64,
     u64,
     u64,
+    u32,
 ) -> u64 = js_region_loop_prime;
 
 /// Mint a process-global ShapeId for a codegen-registered typed layout and

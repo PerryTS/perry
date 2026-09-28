@@ -64,6 +64,10 @@ const SLOT_BITS: u32 = 6;
 const PRIME_ATTEMPTS: &str = "8";
 /// `REGION_GUARD_WORD_EMPTY`.
 const EMPTY_WORD: &str = "4294967295";
+/// `REGION_LOOP_WORD_RETIRED` (all ones): the runtime publishes it when the
+/// last bounded prime attempt fails, and the guard then skips even the
+/// receiver test (DESIGN §4.3: "the retirement check moves into the word").
+const RETIRED_WORD: &str = "-1";
 /// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) — DESIGN §6.5a fact F-B.
 const PROOF_FLAG_I16: &str = "128";
 /// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` and its admitted
@@ -143,6 +147,10 @@ pub(crate) struct Active {
     /// Emitted bare accesses: (block index, instruction index) — what
     /// [`verify`] checks.
     emitted: Vec<(usize, usize)>,
+    /// The last handle derived per receiver in this F-body, with where it was
+    /// derived (block, instruction index) — [`region_handle`] reuses it while
+    /// nothing that can collect lies between.
+    handles: Vec<(Recv, String, usize, usize)>,
 }
 
 thread_local! {
@@ -1038,24 +1046,33 @@ fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool) -> String
 fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)> {
     let sites: Sites = region_guard::state_globals(ctx);
     rv.sites = Some((sites.word_g.clone(), sites.tries_g.clone()));
-    let recv_box = lower_recv(ctx, rv.recv)?;
-    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
-    let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    // A retired region (every bounded prime refused) is decided by the word
+    // alone: one load and one compare, before the receiver is even tested.
+    let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
+    let live = ctx.block().icmp_ne(I64, &word, RETIRED_WORD);
+    let open = ctx.new_block("rloop.guard.open");
     let chk = ctx.new_block("rloop.guard.chk");
     let miss = ctx.new_block("rloop.guard.miss");
     let prime = ctx.new_block("rloop.guard.prime");
     let join = ctx.new_block("rloop.guard.join");
+    let open_l = ctx.block_label(open);
     let chk_l = ctx.block_label(chk);
     let miss_l = ctx.block_label(miss);
     let prime_l = ctx.block_label(prime);
     let join_l = ctx.block_label(join);
+    let retired_l = ctx.block().label.clone();
+    ctx.block().cond_br(&live, &open_l, &join_l);
+
+    ctx.current_block = open;
+    let recv_box = lower_recv(ctx, rv.recv)?;
+    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+    let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
     let entry_l = ctx.block().label.clone();
     ctx.block()
         .cond_br(&test.is_object_pointer, &chk_l, &join_l);
 
     ctx.current_block = chk;
     let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
-    let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
     let expected = ctx.block().trunc(I64, &word, I32);
     let sid = field_i32(ctx, &handle, 4);
     let eq = ctx.block().icmp_eq(I32, &sid, &expected);
@@ -1078,6 +1095,8 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     ctx.current_block = prime;
     let next = ctx.block().add(I32, &tries, "1");
     ctx.block().store(I32, &next, &sites.tries_g);
+    let is_last = ctx.block().icmp_eq(I32, &next, PRIME_ATTEMPTS);
+    let last = ctx.block().zext(I1, &is_last, I32);
     let mut key_bits: Vec<String> = Vec::with_capacity(MAX_KEYS);
     for i in 0..MAX_KEYS {
         if let Some(key) = rv.keys.get(i) {
@@ -1103,6 +1122,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
             (I64, &key_bits[2]),
             (I64, &key_bits[3]),
             (I64, &key_bits[4]),
+            (I32, &last),
         ],
     );
     // The prime is not a collection point for the receiver's facts: it reads
@@ -1126,6 +1146,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     let word_out = ctx.block().phi(
         I64,
         &[
+            (EMPTY_WORD, retired_l.as_str()),
             (EMPTY_WORD, entry_l.as_str()),
             (word.as_str(), chk_end.as_str()),
             (EMPTY_WORD, miss_l.as_str()),
@@ -1135,6 +1156,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     let pass_out = ctx.block().phi(
         I1,
         &[
+            ("false", retired_l.as_str()),
             ("false", entry_l.as_str()),
             (pass.as_str(), chk_end.as_str()),
             ("false", miss_l.as_str()),
@@ -1509,6 +1531,7 @@ pub(crate) fn lower_split(
         trees,
         dirty_slot: dirty_slot.clone(),
         emitted: Vec::new(),
+        handles: Vec::new(),
     });
     let r = lower_list(ctx, tail);
     let active = ctx.region_loop_facts.pop().expect("pushed above");
@@ -1573,6 +1596,128 @@ fn active_slot(ctx: &mut FnCtx<'_>, e: &Expr, r: Recv, key: &str) -> Option<Stri
     Some(ctx.block().and(I64, &s, "63"))
 }
 
+/// The receiver's handle for a bare access. Every derivation reads the
+/// binding's root afresh (the object may have moved), so two accesses with
+/// nothing collecting between them would each pay a root reload and a mask
+/// that name the same address. When the previous derivation for this
+/// receiver DOMINATES the current block and no instruction on any path from
+/// it to here can collect, the same handle is still the object's address and
+/// is reused; otherwise a fresh one is derived. The question is answered on
+/// the emitted IR, not on the HIR, so a lowering that adds a call is seen.
+fn region_handle(ctx: &mut FnCtx<'_>, r: Recv) -> Result<String> {
+    let cached = ctx
+        .region_loop_facts
+        .last()
+        .and_then(|a| a.handles.iter().find(|h| h.0 == r).cloned());
+    if let Some((_, h, b0, i0)) = cached {
+        if nothing_collects_since(ctx, b0, i0) {
+            return Ok(h);
+        }
+    }
+    let recv_box = lower_recv(ctx, r)?;
+    let h = handle_of(ctx, &recv_box);
+    let b = ctx.current_block;
+    let i = ctx.func.blocks()[b].insts().len();
+    if let Some(a) = ctx.region_loop_facts.last_mut() {
+        a.handles.retain(|x| x.0 != r);
+        a.handles.push((r, h.clone(), b, i));
+    }
+    Ok(h)
+}
+
+/// Does (block `b0`, instruction `i0`) dominate the current insertion point
+/// with no possibly-collecting instruction on any path between? Walks the
+/// current block's predecessors backwards and gives up (answers no) at any
+/// block created before `b0` — conservative, never wrong.
+fn nothing_collects_since(ctx: &FnCtx<'_>, b0: usize, i0: usize) -> bool {
+    let blocks = ctx.func.blocks();
+    let cur = ctx.current_block;
+    let tail = |b: usize, from: usize| {
+        let insts = blocks[b].insts();
+        insts[from.min(insts.len())..].iter().any(inst_may_collect)
+    };
+    if cur == b0 {
+        return !tail(b0, i0);
+    }
+    if cur < b0 || tail(b0, i0) || tail(cur, 0) {
+        return false;
+    }
+    let mut by_label: HashMap<&str, usize> = HashMap::new();
+    for (i, b) in blocks.iter().enumerate() {
+        by_label.insert(b.label.as_str(), i);
+    }
+    let mut preds: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, b) in blocks.iter().enumerate() {
+        if i == cur {
+            continue;
+        }
+        for s in successors(b) {
+            if let Some(&t) = by_label.get(s.as_str()) {
+                preds.entry(t).or_default().push(i);
+            }
+        }
+    }
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut work = vec![cur];
+    while let Some(b) = work.pop() {
+        let ps = match preds.get(&b) {
+            Some(ps) if !ps.is_empty() => ps,
+            // Reached a block with no predecessor without passing `b0`.
+            _ => return false,
+        };
+        for &p in ps {
+            if p == b0 {
+                continue;
+            }
+            if p < b0 || p == cur {
+                return false;
+            }
+            if seen.insert(p) {
+                if tail(p, 0) {
+                    return false;
+                }
+                work.push(p);
+            }
+        }
+    }
+    true
+}
+
+/// Can this instruction run a collection (and so move the receiver)?
+fn inst_may_collect(inst: &crate::inst::LlInst) -> bool {
+    use crate::gc_call_effects::{classify_direct_callee, GcCallEffect};
+    use crate::inst::LlInst;
+    let named = |callee: &str| -> bool {
+        !(callee.starts_with("llvm.")
+            || matches!(classify_direct_callee(callee), GcCallEffect::CannotCollect)
+            || crate::root_reload::is_non_collecting(callee))
+    };
+    match inst {
+        LlInst::Call { callee, .. } => named(callee),
+        LlInst::CallIndirect { .. } => true,
+        LlInst::Raw(s) => {
+            let t = s.trim_start();
+            if !(t.contains("call ") || t.starts_with("invoke") || t.contains(" invoke ")) {
+                return false;
+            }
+            if t.contains(" asm ") {
+                return false;
+            }
+            match t.find('@') {
+                Some(at) => {
+                    let name: String = t[at + 1..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '$')
+                        .collect();
+                    named(&name)
+                }
+                None => true,
+            }
+        }
+        _ => false,
+    }
+}
+
 fn note_emitted(ctx: &mut FnCtx<'_>) {
     let b = ctx.current_block;
     let i = ctx.func.blocks()[b].insts().len();
@@ -1605,8 +1750,7 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
     let Some(slot) = active_slot(ctx, e, r, property) else {
         return Ok(None);
     };
-    let recv_box = lower_recv(ctx, r)?;
-    let h = handle_of(ctx, &recv_box);
+    let h = region_handle(ctx, r)?;
     let p = slot_ptr(ctx, &h, &slot);
     note_emitted(ctx);
     let v = ctx.block().load(DOUBLE, &p);
@@ -1640,8 +1784,7 @@ pub(crate) fn try_lower_bare_put(
     let raw_double = crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
     let val_double = lower_expr(ctx, value)?;
     let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-    let recv_box = lower_recv(ctx, r)?;
-    let h = handle_of(ctx, &recv_box);
+    let h = region_handle(ctx, r)?;
     let p = slot_ptr(ctx, &h, &slot);
     note_emitted(ctx);
     if raw_double {
@@ -1710,8 +1853,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             ));
         }
     }
-    let recv_box = lower_recv(ctx, r)?;
-    let h = handle_of(ctx, &recv_box);
+    let h = region_handle(ctx, r)?;
     for (i, l) in all.iter().enumerate() {
         if let Expr::PropertyGet { property, .. } = l {
             let slot = active_slot(ctx, l, r, property).expect("planned with its tree");
@@ -1766,6 +1908,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         trees: HashSet::new(),
         dirty_slot: None,
         emitted: Vec::new(),
+        handles: Vec::new(),
     });
     let slow = lower_expr(ctx, e);
     ctx.region_loop_facts.pop();
