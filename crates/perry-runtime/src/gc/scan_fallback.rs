@@ -51,6 +51,7 @@
 //! rather than observed. The two compose — census first, enforcement second.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A `force_full_scan()` callsite. Ordering matters only for the counter array.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,12 +80,12 @@ pub(crate) enum ConservativeScanSite {
     /// less. That is a different risk with a different proof obligation, and
     /// bundling it would have made one A/B answer two questions.
     ManualMinor,
-    /// `PERRY_GC_SAFEPOINT_ONLY` heal (#7174 research): a precise-root
-    /// collection began outside a declared safepoint, so the contract forces
-    /// the scan for that cycle rather than consuming roots that native
-    /// stack maps only describe at mapped PCs. Automatic, and research-mode
-    /// only — it cannot fire unless the contract env is set.
-    SafepointContractHeal,
+    // ★ There is deliberately no `SafepointContractHeal` variant any more.
+    // `PERRY_GC_SAFEPOINT_ONLY`'s heal arm forced the scan when a precise-root
+    // collection began outside a declared safepoint. RFC deferred collection
+    // step S5 made that property the default invariant (`gc/alloc_point.rs`):
+    // an allocation point never starts a precise collection, so nothing can
+    // produce the heal, and the arm was deleted under the knob kill-policy.
     // ★ There is deliberately no `ManualCollect` variant either. `gc()` used to
     // force the scan (#4977) and be counted here; #7558 established that the
     // precise root set covers its callsite and removed the force. The variant
@@ -104,7 +105,7 @@ pub(crate) enum ConservativeScanSite {
 }
 
 impl ConservativeScanSite {
-    pub(crate) const COUNT: usize = 5;
+    pub(crate) const COUNT: usize = 4;
 
     const fn index(self) -> usize {
         match self {
@@ -112,7 +113,6 @@ impl ConservativeScanSite {
             Self::NurseryChurnSlackValve => 1,
             Self::EmergencyReclaim => 2,
             Self::ManualMinor => 3,
-            Self::SafepointContractHeal => 4,
         }
     }
 
@@ -122,7 +122,6 @@ impl ConservativeScanSite {
             Self::NurseryChurnSlackValve => "nursery_churn_slack_valve",
             Self::EmergencyReclaim => "emergency_reclaim",
             Self::ManualMinor => "manual_minor",
-            Self::SafepointContractHeal => "safepoint_contract_heal",
         }
     }
 
@@ -133,8 +132,7 @@ impl ConservativeScanSite {
         match self {
             Self::OldReclaimAllocPoint
             | Self::NurseryChurnSlackValve
-            | Self::EmergencyReclaim
-            | Self::SafepointContractHeal => true,
+            | Self::EmergencyReclaim => true,
             Self::ManualMinor => false,
         }
     }
@@ -145,7 +143,6 @@ impl ConservativeScanSite {
         Self::NurseryChurnSlackValve,
         Self::EmergencyReclaim,
         Self::ManualMinor,
-        Self::SafepointContractHeal,
     ];
 }
 
@@ -191,6 +188,23 @@ impl SafepointDrainKind {
     }
 }
 
+/// Process-global mirrors of the per-thread counters below, for the exit
+/// summary and the valve ledger (`gc/alloc_point.rs`): a valve that fires on a
+/// worker thread must still show up in the process's one ledger line.
+static SCAN_FALLBACKS_ALL_THREADS: [AtomicU64; ConservativeScanSite::COUNT] =
+    [const { AtomicU64::new(0) }; ConservativeScanSite::COUNT];
+static SAFEPOINT_DRAINS_ALL_THREADS: AtomicU64 = AtomicU64::new(0);
+
+/// `site`'s count summed over every thread of this process.
+pub(crate) fn scan_fallback_count_any_thread(site: ConservativeScanSite) -> u64 {
+    SCAN_FALLBACKS_ALL_THREADS[site.index()].load(Ordering::Relaxed)
+}
+
+/// Precise safepoint drains (every kind) summed over every thread.
+pub(crate) fn safepoint_drain_total_any_thread() -> u64 {
+    SAFEPOINT_DRAINS_ALL_THREADS.load(Ordering::Relaxed)
+}
+
 thread_local! {
     static SCAN_FALLBACKS: Cell<[u64; ConservativeScanSite::COUNT]> =
         const { Cell::new([0; ConservativeScanSite::COUNT]) };
@@ -207,6 +221,7 @@ thread_local! {
 /// prints a line so an ops/benchmark run shows which sites a program reaches
 /// and how often.
 pub(crate) fn record_scan_fallback(site: ConservativeScanSite) {
+    SCAN_FALLBACKS_ALL_THREADS[site.index()].fetch_add(1, Ordering::Relaxed);
     let count = SCAN_FALLBACKS.with(|c| {
         let mut counts = c.get();
         counts[site.index()] = counts[site.index()].saturating_add(1);
@@ -227,6 +242,7 @@ pub(crate) fn record_scan_fallback(site: ConservativeScanSite) {
 /// the collection that a `force_full_scan()` site would otherwise have run
 /// conservatively at an allocation point.
 pub(crate) fn record_safepoint_drain(kind: SafepointDrainKind) {
+    SAFEPOINT_DRAINS_ALL_THREADS.fetch_add(1, Ordering::Relaxed);
     let count = SAFEPOINT_DRAINS.with(|c| {
         let mut counts = c.get();
         counts[kind.index()] = counts[kind.index()].saturating_add(1);

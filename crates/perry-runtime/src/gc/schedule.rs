@@ -676,9 +676,14 @@ pub(crate) fn report_exit_summary() {
     if SUMMARY_EMITTED.swap(true, Ordering::SeqCst) {
         return;
     }
+    // `frames_verified` is the unmapped-frame verifier's liveness counter
+    // (RFC deferred collection S5): a seeded run arms it, and a run that walked
+    // no unmatched frame at all has not exercised it.
+    let (frames_verified, _) = super::roots::frame_verify_counters();
     eprintln!(
         "[gc-schedule] done: seed={seed} safepoints={} scheduled_collections={} \
-         polls_paced={} copying_minors={} moved_objects={} loop_polls={}",
+         polls_paced={} copying_minors={} moved_objects={} loop_polls={} \
+         frames_verified={frames_verified}",
         gc_schedule_safepoints(),
         gc_schedule_forced_collections(),
         schedule_polls_paced(),

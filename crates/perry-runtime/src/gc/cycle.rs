@@ -731,6 +731,30 @@ impl GcCycleState {
         self.phase
     }
 
+    /// Whether this cycle's next step reads frame roots: the root scan, or the
+    /// budgeted final remark (the barrier-seed drain that precedes it runs in
+    /// the same step, so it counts once it is the current subphase and the
+    /// remark is due next). RFC deferred collection S5 (D2): an allocation
+    /// point never starts such a step on a budgeted cycle.
+    pub(super) fn next_step_reads_frame_roots(&self) -> bool {
+        match self.phase {
+            GcCyclePhase::RootScan => true,
+            GcCyclePhase::AtomicFinalize => self.atomic_finalize.as_ref().is_some_and(|state| {
+                state.subphase == AtomicFinalizeSubphase::FinalRootRemark
+            }),
+            _ => false,
+        }
+    }
+
+    /// D2's guard inside the stepper: a BUDGETED cycle does not enter a
+    /// frame-root phase from an allocation point. Synchronous cycles are never
+    /// refused here — the only ones that start at an allocation point force the
+    /// conservative scan, which `alloc_point::assert_d2_synchronous_collection`
+    /// checks, and refusing one would spin `run_to_completion` forever.
+    fn frame_root_phase_refused(&self) -> bool {
+        self.progress_kind.is_budgeted() && super::alloc_point::at_allocation_point()
+    }
+
     #[cfg(test)]
     pub(super) fn atomic_finalize_subphase_for_tests(&self) -> Option<&'static str> {
         let subphase = self.atomic_finalize.as_ref()?.subphase;
@@ -919,6 +943,10 @@ impl GcCycleState {
     }
 
     fn step_root_scan(&mut self, budget: GcWorkBudget) {
+        if self.frame_root_phase_refused() {
+            // Parked: the caller arms the poll (`policy.rs`).
+            return;
+        }
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let consider_evacuation = self
             .minor
@@ -1101,6 +1129,12 @@ impl GcCycleState {
                     | AtomicFinalizeSubphase::RememberedSetRebuild
                     | AtomicFinalizeSubphase::WeakProcessing
             );
+            if subphase == AtomicFinalizeSubphase::FinalRootRemark
+                && self.frame_root_phase_refused()
+            {
+                // Parked before the remark; see `step_root_scan`.
+                break;
+            }
             let sub_budget = if sliced {
                 budget.work_units
             } else {

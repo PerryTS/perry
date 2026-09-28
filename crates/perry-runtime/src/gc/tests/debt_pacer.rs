@@ -171,7 +171,9 @@ fn active_cycle_gc_check_trigger_calls_pay_bounded_assist_work() {
 /// #6180: allocation-side mutator assists must drive the *entire* budgeted
 /// cycle to completion — through `AtomicFinalize`, `Sweep`, and `Reclaim` —
 /// using only the slice of work performed from `gc_check_trigger` (the
-/// allocator), never a host safepoint (`js_gc_step_work_units`).
+/// allocator) plus the loop's own back-edge poll, never a host safepoint
+/// (`js_gc_step_work_units`). Since RFC deferred collection S5 the two
+/// frame-root phases run at that poll rather than in an assist (D2).
 ///
 /// Before #6180 the assist path bailed at the first non-mark phase, so a pure
 /// compute loop that never reached the event pump would start a cycle, advance
@@ -221,6 +223,8 @@ fn allocation_assists_complete_finalize_sweep_and_reclaim() {
     let mut completed = false;
     for _ in 0..500_000 {
         gc_check_trigger();
+        // S5: the frame-root phases wait for the loop's back-edge poll.
+        back_edge_poll();
         js_gc_step_status(&mut status);
         if status.phase == GcCyclePhase::AtomicFinalize.ffi_code() {
             reached_finalize = true;
@@ -673,6 +677,8 @@ fn debt_scaled_assists_cannot_be_outrun_by_allocation() {
             let _ = young_leaf();
         }
         gc_check_trigger();
+        // S5: the frame-root phases wait for the loop's back-edge poll.
+        back_edge_poll();
         calls += 1;
         assert!(
             calls <= 300,

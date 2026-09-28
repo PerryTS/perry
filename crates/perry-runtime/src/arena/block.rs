@@ -961,6 +961,10 @@ pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usi
     // on the first cut of #7022, where the reservation still happened inside
     // `alloc_fresh_block` under the borrow.)
     let fresh = reserve_arena_block(size);
+    // Decision 10 of RFC deferred collection: growth an unsafe zone forced
+    // (no poll or valve can collect inside one). Diagnostic; one relaxed load
+    // on the block-acquire path only.
+    crate::gc::note_block_if_unsafe_zone(block_size_for(size));
 
     let _borrow = ArenaBorrowGuard::new();
     (*arena).install_reserved_block(fresh);

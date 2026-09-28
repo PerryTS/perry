@@ -161,6 +161,20 @@ pub(super) fn gc_collection_count() -> u64 {
     GC_STATS.with(|s| s.borrow().collection_count)
 }
 
+/// What a compiled allocating loop does at its back-edge: reach the declared
+/// poll. Since RFC deferred collection S5 an allocation point parks a budgeted
+/// cycle at its frame-root phases (`RootScan`, the final remark) and only a
+/// declared poll serves them, so a test that drives a cycle "from allocation
+/// alone" models the compiled loop — allocation plus its back-edge poll — by
+/// calling this after each assist. With a budgeted cycle active the poll
+/// either serves the parked phase or is blocked; it never starts a collection
+/// of its own, so it does not change what else the test observes.
+pub(super) fn back_edge_poll() {
+    if gc_budgeted_cycle_active() {
+        let _ = gc_safepoint_moving_minor();
+    }
+}
+
 pub(super) fn complete_budgeted_gc_cycle() -> JsGcStepResult {
     let mut result = JsGcStepResult::default();
     for _ in 0..500_000 {

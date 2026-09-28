@@ -355,6 +355,20 @@ pub(super) fn parse_function_table(
     origin: usize,
     out: &mut Vec<FunctionEntry>,
 ) -> Option<()> {
+    parse_functions(section, bytes, origin, out, &mut Vec::new())
+}
+
+/// [`parse_function_table`], also collecting the address of every ZERO-record
+/// function entry into `unrecorded`. Codegen lists those only in an
+/// instrumented build, for the unmapped-frame verifier; they never enter the
+/// record index (see the note at the `record_count == 0` check).
+pub(super) fn parse_functions(
+    section: u16,
+    bytes: &[u8],
+    origin: usize,
+    out: &mut Vec<FunctionEntry>,
+    unrecorded: &mut Vec<usize>,
+) -> Option<()> {
     let mut base = 0usize;
     while base + 16 <= bytes.len() {
         if bytes.get(base..base + 4)? != super::GC_MAP_MAGIC {
@@ -441,6 +455,7 @@ pub(super) fn parse_function_table(
             // derived its function list from records and so excluded these by
             // construction; excluding them here keeps that property.
             if record_count == 0 {
+                unrecorded.push(address);
                 continue;
             }
             out.push(FunctionEntry {

@@ -25,7 +25,6 @@
 //! which libtest thread ran first (`knob_overrides` in `gc/mod.rs` records
 //! what that cost us — 5 failures in 100 runs across three unrelated cases).
 
-use super::super::policy::{safepoint_only_contract_from_value, SafepointOnlyContract};
 use super::super::{env_default_on_from_value, env_flag_from_value};
 
 /// Every spelling a human might reasonably use to mean "off", plus the two
@@ -156,39 +155,11 @@ fn the_two_vocabularies_disagree_only_on_the_unrecognised_case() {
     }
 }
 
-/// `PERRY_GC_SAFEPOINT_ONLY` is three-state. Its boolean arm must share the one
-/// vocabulary; only `strict` is its own.
-#[test]
-fn safepoint_only_is_three_state_over_the_shared_vocabulary() {
-    for raw in OFF_SPELLINGS {
-        assert_eq!(
-            safepoint_only_contract_from_value(*raw),
-            SafepointOnlyContract::Off,
-            "{raw:?} must leave the safepoint-only contract Off"
-        );
-    }
-    for raw in ON_SPELLINGS {
-        assert_eq!(
-            safepoint_only_contract_from_value(Some(raw)),
-            SafepointOnlyContract::Heal,
-            "{raw:?} must select Heal"
-        );
-    }
-    for raw in ["strict", "STRICT", " strict "] {
-        assert_eq!(
-            safepoint_only_contract_from_value(Some(raw)),
-            SafepointOnlyContract::Strict,
-            "{raw:?} must select Strict"
-        );
-    }
-    for raw in UNRECOGNISED {
-        assert_eq!(
-            safepoint_only_contract_from_value(Some(raw)),
-            SafepointOnlyContract::Off,
-            "{raw:?} is unrecognised and must not arm a contract enforcer"
-        );
-    }
-}
+// `PERRY_GC_SAFEPOINT_ONLY`'s runtime contract (Off/Heal/Strict) is gone: RFC
+// deferred collection S5 made "a precise collection begins only at a declared
+// point" the default invariant (`gc/alloc_point.rs`, tested in
+// `alloc_point_invariant.rs`). The knob survives only as codegen's research
+// switch for `AllocNoReentry` leaves, which it parses itself.
 
 /// The decisive arm: the **live cached reader**, initialised in a child
 /// process under a real `PERRY_GC_DIAG=0`.
