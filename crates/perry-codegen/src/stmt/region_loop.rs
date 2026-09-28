@@ -1082,13 +1082,140 @@ fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool) -> String
 /// Emit the full guard for one receiver from the CURRENT block. Returns the
 /// word (EMPTY on every failing edge) and the pass flag, both valid in the
 /// block the function leaves current.
-fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String, String)> {
+/// Bump the bounded attempt counter and ask the runtime to pack and publish
+/// this receiver's word for `sid`; returns what it published (or EMPTY).
+fn emit_prime_call(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    sites: &Sites,
+    tries: &str,
+    sid: &str,
+) -> String {
+    let next = ctx.block().add(I32, tries, "1");
+    ctx.block().store(I32, &next, &sites.tries_g);
+    let is_last = ctx.block().icmp_eq(I32, &next, PRIME_ATTEMPTS);
+    let last = ctx.block().zext(I1, &is_last, I32);
+    let mut key_bits: Vec<String> = Vec::with_capacity(MAX_KEYS);
+    for i in 0..MAX_KEYS {
+        if let Some(key) = rv.keys.get(i) {
+            let idx = ctx.strings.intern(key);
+            let g = format!("@{}", ctx.strings.entry(idx).handle_global);
+            let boxed = ctx.block().load(DOUBLE, &g);
+            key_bits.push(ctx.block().bitcast_double_to_i64(&boxed));
+        } else {
+            key_bits.push("0".to_string());
+        }
+    }
+    let n = rv.keys.len().to_string();
+    let word_g = sites.word_g.clone();
+    ctx.block().call(
+        I64,
+        "js_region_loop_prime",
+        &[
+            (crate::types::PTR, &word_g),
+            (I32, sid),
+            (I32, &n),
+            (I64, &key_bits[0]),
+            (I64, &key_bits[1]),
+            (I64, &key_bits[2]),
+            (I64, &key_bits[3]),
+            (I64, &key_bits[4]),
+            (I32, &last),
+            (I32, &rv.stored_mask.to_string()),
+        ],
+    )
+}
+
+/// The guard's first half: the receiver's site globals and one load of its
+/// word. Returns the word.
+fn emit_guard_word(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> (Sites, String) {
     let sites: Sites = region_guard::state_globals(ctx);
     rv.sites = Some((sites.word_g.clone(), sites.tries_g.clone()));
     note(ctx, Route::RloopGuard);
+    let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
+    (sites, word)
+}
+
+/// A single-receiver BODY region's guard, emitted as control flow straight
+/// into its F copies: the all-inline word's match branches to `inline_l`, the
+/// spill word's to `spill_l`, anything else to `fail_l`. Run every iteration,
+/// so no state is merged and re-tested. A prime publishes for the NEXT
+/// iteration; this one runs G (`word`, loaded before F-body was lowered, is
+/// the one F-body decodes, and the prime's result is not it).
+fn emit_body_guard_direct(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    sites: &Sites,
+    word: &str,
+    inline_l: &str,
+    spill_l: &str,
+    fail_l: &str,
+) -> Result<()> {
+    let live = ctx.block().icmp_ne(I64, word, RETIRED_WORD);
+    let open = ctx.new_block("rloop.guard.open");
+    let chk = ctx.new_block("rloop.guard.chk");
+    let flip = ctx.new_block("rloop.guard.flip");
+    let miss = ctx.new_block("rloop.guard.miss");
+    let prime = ctx.new_block("rloop.guard.prime");
+    let open_l = ctx.block_label(open);
+    let chk_l = ctx.block_label(chk);
+    let flip_l = ctx.block_label(flip);
+    let miss_l = ctx.block_label(miss);
+    let prime_l = ctx.block_label(prime);
+    ctx.block().cond_br(&live, &open_l, fail_l);
+
+    ctx.current_block = open;
+    note(ctx, Route::RloopOpen);
+    let recv_box = lower_recv(ctx, rv.recv)?;
+    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+    let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    ctx.block().cond_br(&test.is_object_pointer, &chk_l, fail_l);
+
+    ctx.current_block = chk;
+    let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
+    let expected = ctx.block().trunc(I64, word, I32);
+    let sid = field_i32(ctx, &handle, 4);
+    let eq = ctx.block().icmp_eq(I32, &sid, &expected);
+    let admit = if rv.has_store {
+        Some(store_admission(ctx, &handle, true))
+    } else {
+        None
+    };
+    let to =
+        |ctx: &mut FnCtx<'_>, cond: &str, target: &str, other: &str, admit: &Option<String>| {
+            match admit {
+                Some(a) => {
+                    let adm = ctx.new_block("rloop.guard.admit");
+                    let adm_l = ctx.block_label(adm);
+                    ctx.block().cond_br(cond, &adm_l, other);
+                    ctx.current_block = adm;
+                    ctx.block().cond_br(a, target, fail_l);
+                }
+                None => ctx.block().cond_br(cond, target, other),
+            }
+        };
+    to(ctx, &eq, inline_l, &flip_l, &admit);
+
+    ctx.current_block = flip;
+    let exp_f = ctx.block().xor(I32, &expected, FLIP_I32);
+    let eq_f = ctx.block().icmp_eq(I32, &sid, &exp_f);
+    to(ctx, &eq_f, spill_l, &miss_l, &admit);
+
+    ctx.current_block = miss;
+    let tries = ctx.block().load(I32, &sites.tries_g);
+    let may = ctx.block().icmp_ult(I32, &tries, PRIME_ATTEMPTS);
+    ctx.block().cond_br(&may, &prime_l, fail_l);
+
+    ctx.current_block = prime;
+    let _ = emit_prime_call(ctx, rv, sites, &tries, &sid);
+    ctx.block().br(fail_l);
+    Ok(())
+}
+
+fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String, String)> {
     // A retired region (every bounded prime refused) is decided by the word
     // alone: one load and one compare, before the receiver is even tested.
-    let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
+    let (sites, word) = emit_guard_word(ctx, rv);
     let live = ctx.block().icmp_ne(I64, &word, RETIRED_WORD);
     let open = ctx.new_block("rloop.guard.open");
     let chk = ctx.new_block("rloop.guard.chk");
@@ -1175,39 +1302,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String,
     ctx.block().cond_br(&may, &prime_l, &join_l);
 
     ctx.current_block = prime;
-    let next = ctx.block().add(I32, &tries, "1");
-    ctx.block().store(I32, &next, &sites.tries_g);
-    let is_last = ctx.block().icmp_eq(I32, &next, PRIME_ATTEMPTS);
-    let last = ctx.block().zext(I1, &is_last, I32);
-    let mut key_bits: Vec<String> = Vec::with_capacity(MAX_KEYS);
-    for i in 0..MAX_KEYS {
-        if let Some(key) = rv.keys.get(i) {
-            let idx = ctx.strings.intern(key);
-            let g = format!("@{}", ctx.strings.entry(idx).handle_global);
-            let boxed = ctx.block().load(DOUBLE, &g);
-            key_bits.push(ctx.block().bitcast_double_to_i64(&boxed));
-        } else {
-            key_bits.push("0".to_string());
-        }
-    }
-    let n = rv.keys.len().to_string();
-    let word_g = sites.word_g.clone();
-    let primed = ctx.block().call(
-        I64,
-        "js_region_loop_prime",
-        &[
-            (crate::types::PTR, &word_g),
-            (I32, &sid),
-            (I32, &n),
-            (I64, &key_bits[0]),
-            (I64, &key_bits[1]),
-            (I64, &key_bits[2]),
-            (I64, &key_bits[3]),
-            (I64, &key_bits[4]),
-            (I32, &last),
-            (I32, &rv.stored_mask.to_string()),
-        ],
-    );
+    let primed = emit_prime_call(ctx, rv, &sites, &tries, &sid);
     // The prime is not a collection point for the receiver's facts: it reads
     // shapes and key bytes only. The object may still have moved in theory
     // (unclassified callee), so the handle is re-derived for the admission.
@@ -1628,6 +1723,7 @@ pub(crate) fn lower_split(
     // once `verify` has judged F-body.
     let decide;
     let mut decide_top: Option<(usize, String, String)> = None;
+    let mut direct: Option<(Sites, String)> = None;
     match &valid_slot {
         Some(slot) => {
             let v = ctx.block().load(I1, slot);
@@ -1678,6 +1774,16 @@ pub(crate) fn lower_split(
                 decide_top = Some((top_idx, need, rc_l));
                 decide = (rc_idx, ok);
             }
+        }
+        None if receivers.len() == 1 => {
+            // Body region, one receiver: load the word now (F-body decodes
+            // it); the rest of the guard is emitted at the end, as branches
+            // straight into whichever F copies verified.
+            let (sites, word) = emit_guard_word(ctx, &mut receivers[0]);
+            receivers[0].word = word.clone();
+            direct = Some((sites, word));
+            stat(1, 1);
+            decide = (ctx.current_block, String::new());
         }
         None => {
             // Body region: the full guard, every iteration.
@@ -1761,7 +1867,20 @@ pub(crate) fn lower_split(
         }
     }
     ctx.current_block = decide.0;
-    if copies.len() == 2 {
+    if let Some((sites, word)) = &direct {
+        let inline_t = if copies[0].1 {
+            copies[0].0.clone()
+        } else {
+            slow_l.clone()
+        };
+        let spill_t = if copies.len() == 2 && copies[1].1 {
+            copies[1].0.clone()
+        } else {
+            slow_l.clone()
+        };
+        let rv = receivers[0].clone();
+        emit_body_guard_direct(ctx, &rv, sites, word, &inline_t, &spill_t, &slow_l)?;
+    } else if copies.len() == 2 {
         // Body region: the guard passed -> pick the copy for the word's layout.
         let target = |c: &(String, bool)| if c.1 { c.0.clone() } else { slow_l.clone() };
         let (inline_t, spill_t) = (target(&copies[0]), target(&copies[1]));
