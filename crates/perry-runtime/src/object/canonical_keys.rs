@@ -697,6 +697,10 @@ impl Appended {
                 Some(atom) => Appended::Key(atom),
                 None => self,
             },
+            // An SSO short string carries its bytes in the value itself, so
+            // its bits ARE its identity: equal texts are already equal words
+            // and there is no heap string to replace with an atom.
+            Appended::Slot(v) if v.is_short_string() => self,
             Appended::Slot(v) if v.is_string() => {
                 match crate::string::atom_for_key(v.as_string_ptr(), h) {
                     Some(atom) => Appended::Slot(JSValue::string_ptr(atom as *mut StringHeader)),
