@@ -307,25 +307,45 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             env_class,
         } => {
             let cap_len = captures.len().to_string();
-            let mut caps_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
-            ctx.block().call_void("js_tdz_suppress_begin", &[]);
-            for (index, capture) in captures.iter().enumerate() {
-                let value = lower_expr(ctx, capture)?;
-                if let Some(env_class) = env_class {
-                    super::class_env::store_class_env_slot(
-                        ctx,
-                        env_class,
-                        index as u32,
-                        &value,
-                        capture,
-                    );
-                }
-                caps_arr = ctx.block().call(
-                    I64,
-                    "js_array_push_f64",
-                    &[(I64, &caps_arr), (DOUBLE, &value)],
-                );
-            }
+            // The capture array is live across every capture's lowering, and a
+            // capture can collect (a property read through an IC miss, a
+            // getter): it lives in a root slot, and each push re-reads it from
+            // there. Each push's result (the array may grow) is rooted in turn;
+            // only the last one becomes a register, after the last capture.
+            use crate::rooting::{call_rooted, call_with_roots, Arg};
+            let caps_arr = if captures.is_empty() {
+                ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)])
+            } else {
+                let first = call_rooted(ctx, I64, "js_array_alloc", &[Arg::Plain(I32, &cap_len)]);
+                ctx.block().call_void("js_tdz_suppress_begin", &[]);
+                let last = captures.len() - 1;
+                let pushed = (|| -> Result<String> {
+                    let mut current = first.clone();
+                    for (index, capture) in captures.iter().enumerate() {
+                        let value = lower_expr(ctx, capture)?;
+                        if let Some(env_class) = env_class {
+                            super::class_env::store_class_env_slot(
+                                ctx,
+                                env_class,
+                                index as u32,
+                                &value,
+                                capture,
+                            );
+                        }
+                        let args = [Arg::Root(&current), Arg::Plain(DOUBLE, &value)];
+                        if index == last {
+                            return Ok(call_with_roots(ctx, I64, "js_array_push_f64", &args));
+                        }
+                        current = call_rooted(ctx, I64, "js_array_push_f64", &args);
+                    }
+                    unreachable!("the last capture returns")
+                })();
+                // A stack cut: releases every slot pushed after `first` too, on
+                // the error path as well.
+                first.release(ctx);
+                pushed?
+            };
             ctx.block().call_void("js_tdz_suppress_end", &[]);
             let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
             // Lower after the allocating array operations so a movable class

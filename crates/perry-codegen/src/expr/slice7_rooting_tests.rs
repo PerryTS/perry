@@ -556,3 +556,55 @@ fn proxy_function_apply_uses_argument_validation_bridge() {
         "Function.prototype.apply must validate and convert its argument list"
     );
 }
+
+// ---------------------------------------------------------------------------
+// expr/static_field_meta.rs — RefreshClassExprCaptures
+// ---------------------------------------------------------------------------
+
+/// A class expression's capture refresh builds its capture array with one
+/// push per capture. The array is live across every capture's lowering, and a
+/// capture can collect, so each push must read the array from its root, not
+/// from the `js_array_alloc` register (gc-root-dominance --stale-registers
+/// flagged `source=alloc -> sink=js_array_push_f64` on #11609).
+#[test]
+fn class_expr_capture_refresh_rereads_its_capture_array_below_each_capture() {
+    let ir = compile_body(
+        "refresh_class_expr_captures",
+        vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            class_value: Box::new(Expr::Undefined),
+            captures: vec![allocating("first"), allocating("second")],
+            env_class: None,
+        })],
+    );
+    require_call_line(&ir, "js_array_alloc");
+    assert_operand_survives_the_window(
+        &ir,
+        "js_array_push_f64",
+        0,
+        "the capture array pushed after the first capture",
+    );
+    let pushes: Vec<usize> = ir
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            l.contains("@js_array_push_f64(") && !l.trim_start().starts_with("declare")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(pushes.len(), 2, "one push per capture:\n{ir}");
+    let last = *pushes.last().unwrap();
+    let line = ir.lines().nth(last).unwrap();
+    let reg = line
+        .split("@js_array_push_f64(i64 ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap_or_else(|| panic!("unexpected push shape: {line}"))
+        .to_string();
+    let def = require_definition_line(&ir, &reg);
+    let alloc = last_alloc_before(&ir, last);
+    assert!(
+        def > alloc,
+        "the second push reads {reg} (line {def}) from above the second capture's allocation \
+         (line {alloc}):\n{ir}"
+    );
+}
