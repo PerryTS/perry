@@ -34,6 +34,7 @@ const NOTE_CALL: &str = "call void @js_gc_note_slot_layout(";
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),

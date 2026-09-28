@@ -27,7 +27,7 @@
     },
     {
       "path": "crates/perry-codegen/src/codegen/mod.rs",
-      "function": "compile_module",
+      "function": "compile_module_impl",
       "access": "raw:module_local_types",
       "count": 1,
       "classification": "metadata-only",

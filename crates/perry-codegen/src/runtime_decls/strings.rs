@@ -1243,13 +1243,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_gc_typed_shape_id_for_keys",
         I32,
-        &[I32, I64, I32, PTR, I32, PTR, I32],
+        &[I32, I64, I32, PTR, I32, PTR, I32, I32],
     );
+    // Design step 4: the per-class mint with the driver's static id, and the
+    // literal-shape seed.
     module.declare_function(
-        "js_register_imported_class_shape_slot",
-        VOID,
-        &[I32, I32, PTR, PTR, PTR],
+        "js_object_shape_id_for_class_keys_static",
+        I32,
+        &[I64, I32, I32, I32, I32],
     );
+    module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32]);
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive
     // allocators resolve it in a public wrapper and forward it as a hidden body

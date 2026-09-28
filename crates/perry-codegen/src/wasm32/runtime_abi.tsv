@@ -1489,7 +1489,7 @@ js_gc_temp_root_get	i64	i32u
 js_gc_temp_root_push	i32u	i64
 js_gc_temp_root_set	void	i32u,i64
 js_gc_temp_root_truncate	void	i32u
-js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u
+js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u,i32u
 js_gc_write_barriers_emitted	void	i32u
 js_ge	i64	i64,i64
 js_generator_attach_closure_prototype	f64	f64,ptr
@@ -3276,7 +3276,6 @@ js_register_handle_property_set_dispatch	void	ptr
 js_register_handle_property_set_dispatch_extension	void	ptr
 js_register_handle_prototype_dispatch	void	ptr
 js_register_http_agent_handle_probe	void	ptr
-js_register_imported_class_shape_slot	void	i32u,i32u,ptr,ptr,ptr
 js_register_jsx_render_stream	void	ptr
 js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr

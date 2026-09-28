@@ -6,6 +6,7 @@ use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
 
 fn options(target: Option<&str>) -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
         target: target.map(str::to_string),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),

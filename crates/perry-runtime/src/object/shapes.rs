@@ -733,6 +733,8 @@ impl ShapeTable {
 /// stamp in a plain object's `parent_class_id` can never be mistaken for
 /// inheritance data — and vice versa.
 pub(crate) const SHAPE_ID_BASE: u32 = 0x8000_0000;
+// Generated code names static ids relative to the ABI's copy.
+const _: () = assert!(SHAPE_ID_BASE == crate::codegen_abi::SHAPE_ID_BASE);
 /// Exclusive end of the ShapeId range (2^30 ids ≈ one per shape BIRTH,
 /// unreachable in practice).
 pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
@@ -787,7 +789,8 @@ pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
 /// No id-to-shape table exists: after the seed, the only record of
 /// "these facts have this id" is the shape record itself, in the intern
 /// structure every later mint probes.
-pub(crate) const STATIC_SHAPE_ID_END: u32 = SHAPE_ID_BASE + (1 << 20);
+pub(crate) const STATIC_SHAPE_ID_END: u32 =
+    SHAPE_ID_BASE + crate::codegen_abi::STATIC_SHAPE_ID_COUNT;
 const _: () = assert!(STATIC_SHAPE_ID_END < DICTIONARY_SHAPE_ID_BASE);
 
 /// Is `v` in the compiler-assigned band ([`STATIC_SHAPE_ID_END`])? A fact of
@@ -1989,16 +1992,13 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
     u32,
 ) -> u64 = js_region_loop_prime;
 
-/// Mint a process-global ShapeId for a codegen-registered typed layout and
+/// Mint a fresh (counter) ShapeId for a codegen-registered typed layout and
 /// install its structural descriptor in the current agent. Unlike
 /// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
 /// keys alone: two objects with identical property names but different raw
-/// slot representations must never share a pre-baked GC descriptor.
-pub(crate) fn mint_registered_typed_shape_id(
-    keys: *const ArrayHeader,
-    key_count: u32,
-    proto_id: u64,
-) -> u32 {
+/// slot representations must never share a pre-baked GC descriptor. The
+/// fallback of [`install_static_typed_shape_id`].
+pub(crate) fn mint_typed_shape_id(keys: *const ArrayHeader, key_count: u32, proto_id: u64) -> u32 {
     let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
     if !shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id) {
         invalid_shape_facts_abort();
@@ -2006,20 +2006,21 @@ pub(crate) fn mint_registered_typed_shape_id(
     id
 }
 
-/// Install an already-minted process-global typed ShapeId in this agent (for
-/// another module or worker that reuses the same compiled class identity).
-///
-/// `proto_id` is the prototype identity the id was MINTED with (the typed
-/// registry records it): a class id's prototype identity read later can
-/// differ (a module whose codegen reused the id for an anonymous shape), and
-/// a ShapeId's facts never change.
-pub(crate) fn install_registered_typed_shape_id(
+/// Install the driver's static id for a typed layout in this agent (design
+/// step 4). The id's content includes the layout's masks, so it names one
+/// typed layout in the program. Accepted when the id is in the static band
+/// and either absent from this agent or present with exactly these facts —
+/// an importing module's structural mint adopted it first. `false` means the
+/// caller mints a fresh id instead ([`mint_typed_shape_id`]): code comparing
+/// against the static id then only misses.
+pub(crate) fn install_static_typed_shape_id(
     id: u32,
     keys: *const ArrayHeader,
     key_count: u32,
     proto_id: u64,
 ) -> bool {
-    shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id)
+    is_static_shape_id(id)
+        && shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id)
 }
 
 // ---------------------------------------------------------------------------

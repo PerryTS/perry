@@ -10,6 +10,7 @@ use perry_hir::{Module, ModuleInitKind};
 
 fn entry_opts(target: Option<&str>) -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
         target: target.map(str::to_string),
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),

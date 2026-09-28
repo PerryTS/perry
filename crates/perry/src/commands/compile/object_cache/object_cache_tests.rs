@@ -11,6 +11,7 @@ use tempfile::tempdir;
 /// to vary one field mutate the returned value before hashing.
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
         target: Some("aarch64-apple-darwin".to_string()),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),

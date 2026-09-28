@@ -78,17 +78,18 @@ fn the_counter_never_mints_into_the_static_band() {
 
 #[test]
 fn a_class_seed_takes_the_class_prototype_identity() {
-    const CLASS_ID: u32 = 0x0074_1c11;
+    const SEEDED_CLASS_ID: u32 = 0x0074_1c11;
     let packed = b"lt4k_a\0lt4k_b\0";
-    let keys = crate::object::js_build_class_keys_array(CLASS_ID, 2, packed.as_ptr(), 14) as u64;
+    let keys =
+        crate::object::js_build_class_keys_array(SEEDED_CLASS_ID, 2, packed.as_ptr(), 14) as u64;
     let requested = SHAPE_ID_BASE + 0x3456;
-    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, CLASS_ID, requested);
+    let id = js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested);
     let record = shapes::shape_descriptor_by_id(id).expect("seeded record");
-    assert_eq!(record.proto_id, shapes::class_proto_id(CLASS_ID));
+    assert_eq!(record.proto_id, shapes::class_proto_id(SEEDED_CLASS_ID));
     // Registration is idempotent: a second registration (another module
     // importing the class) resolves to the same id.
     assert_eq!(
-        js_object_shape_id_for_class_keys_static(keys, 2, 2, CLASS_ID, requested),
+        js_object_shape_id_for_class_keys_static(keys, 2, 2, SEEDED_CLASS_ID, requested),
         id
     );
     assert!(is_carrier(id));

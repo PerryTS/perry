@@ -13,6 +13,7 @@ use perry_hir::{
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),

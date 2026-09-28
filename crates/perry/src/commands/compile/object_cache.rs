@@ -325,6 +325,10 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // Design step 4 (DESIGN 7.2): the static ShapeIds this module's code
+    // embeds as immediates. A cached object is reused exactly when every id
+    // it embeds is unchanged.
+    h.field("static_shape_ids", &format!("{:?}", opts.static_shape_ids));
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.
     h.field(

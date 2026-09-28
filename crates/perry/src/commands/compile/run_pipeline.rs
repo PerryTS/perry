@@ -5538,6 +5538,8 @@ pub fn run_with_parse_cache(
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             imported_classes,
             constructor_param_counts: Default::default(),
+            // Filled per module after the static-shape pre-pass.
+            static_shape_ids: Vec::new(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
@@ -5665,6 +5667,71 @@ pub fn run_with_parse_cache(
         }
     }
     let constructor_contracts = constructor_contracts.resolve();
+    // Design step 4 (DESIGN 7.2): link-time ShapeIds. Collect the content of
+    // every class birth each module's string pool will mint — from codegen's
+    // own derivation, run on the options the module's codegen gets — and
+    // assign each distinct content one id in the static band, probing on
+    // collision. A module then embeds the ids of its own contents; nothing
+    // is keyed by class name.
+    let static_shape_started = Instant::now();
+    let module_births: Vec<(&PathBuf, Vec<perry_codegen::BirthShape>)> = module_pool
+        .install(|| {
+            ctx.native_modules
+                .par_iter()
+                .map(|(path, hir_module)| -> Result<_, String> {
+                    if hir_module.classes.is_empty()
+                        && prepare_module(path, hir_module, true)?
+                            .imported_classes
+                            .is_empty()
+                    {
+                        return Ok((path, Vec::new()));
+                    }
+                    let mut opts = prepare_module(path, hir_module, false)?;
+                    constructor_contracts.apply(
+                        &compute_module_prefix(&path.to_string_lossy(), &ctx.project_root),
+                        hir_module,
+                        &mut opts,
+                    );
+                    let births = perry_codegen::module_birth_shapes(hir_module, opts)
+                        .map_err(|e| format!("{}: {e:#}", path.display()))?;
+                    Ok((path, births))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .map_err(|error| anyhow!(error))?;
+    let static_shape_ids =
+        perry_codegen::assign_static_shape_ids(module_births.iter().flat_map(|(_, b)| b));
+    let static_shape_ids_by_module: HashMap<&PathBuf, Vec<(perry_codegen::BirthShape, u32)>> =
+        module_births
+            .into_iter()
+            .map(|(path, births)| {
+                let mut ids: Vec<(perry_codegen::BirthShape, u32)> = births
+                    .into_iter()
+                    .filter_map(|b| static_shape_ids.get(&b).map(|&id| (b, id)))
+                    .collect();
+                ids.sort();
+                ids.dedup();
+                (path, ids)
+            })
+            .collect();
+    if std::env::var_os("PERRY_STATIC_SHAPE_IDS_REPORT").is_some() {
+        let literal = static_shape_ids
+            .keys()
+            .filter(|b| b.proto == perry_codegen::BirthProto::Literal)
+            .count();
+        let typed = static_shape_ids
+            .keys()
+            .filter(|b| b.typed.is_some())
+            .count();
+        eprintln!(
+            "perry: static shape ids: {} contents ({} literal, {} typed), {} distinct ids, {:.1} ms",
+            static_shape_ids.len(),
+            literal,
+            typed,
+            static_shape_ids.values().collect::<HashSet<_>>().len(),
+            static_shape_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = module_pool.install(|| {
         ctx.native_modules.par_iter().map(|(path, hir_module)| {
             let _permit =
@@ -5696,6 +5763,10 @@ pub fn run_with_parse_cache(
                 hir_module,
                 &mut opts,
             );
+            opts.static_shape_ids = static_shape_ids_by_module
+                .get(path)
+                .cloned()
+                .unwrap_or_default();
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry
