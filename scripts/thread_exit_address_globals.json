@@ -19,7 +19,7 @@
   {
    "type": "Hook",
    "verdict": "no_heap_address",
-   "why": "perry-stdlib's link-time feature slot (common/feature_hooks.rs): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
+   "why": "the link-time feature slot (perry-runtime/src/feature_hooks.rs, also used by perry-stdlib): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
   }
  ],
  "entries": [
