@@ -482,7 +482,11 @@ mod tests {
         "js_object_get_class_id",
         "js_closure_get_capture_bits",
         "js_closure_exact_func_guard",
-        "js_box_alloc_bits",
+        // js_box_alloc_bits is deliberately NOT pinned here: #11179 made box/
+        // scope-cell allocation go through arena_alloc -> arena_cell_alloc,
+        // which can reach gc_try_emergency_reclaim, so the generated tables
+        // now (correctly) classify it AllocOnly, not Leaf. The read/write
+        // helpers below still are.
         "js_box_set_bits",
         "js_i32_box_get",
         "js_box_release",
