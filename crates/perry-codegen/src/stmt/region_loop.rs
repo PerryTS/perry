@@ -1319,6 +1319,64 @@ fn expr_refused(e: &Expr) -> bool {
     body_refused(&[Stmt::Expr(e.clone())])
 }
 
+/// Lower the loop (`lower` is the tier dispatch that would run without a
+/// region). A LOOP region is versioned at its preheader: when the guard
+/// passed, the loop whose body is split (F-body / G-body, re-check at the top
+/// of each iteration); when it did not, the loop exactly as it lowers without
+/// a region. The choice is made once, before the first iteration, so neither
+/// version ever hands the loop to the other — which is what keeps every tier's
+/// own loop state (a private i32 counter, a hoisted bound) sound — and a
+/// receiver the guard refuses pays one branch per loop ENTRY, not a split
+/// body per iteration. A body region (per-iteration receiver) is not
+/// versioned: its guard is inside the body.
+pub(crate) fn lower_loop(
+    ctx: &mut FnCtx<'_>,
+    token: Option<u64>,
+    lower: &mut dyn FnMut(&mut FnCtx<'_>) -> Result<()>,
+) -> Result<()> {
+    let Some(t) = token else {
+        return lower(ctx);
+    };
+    let Some(pos) = ctx.region_loops.iter().position(|p| p.token == t) else {
+        return lower(ctx);
+    };
+    let Some(valid_slot) = ctx.region_loops[pos].valid_slot.clone() else {
+        return lower(ctx);
+    };
+    let split = ctx.new_block("rloop.version.split");
+    let plain = ctx.new_block("rloop.version.plain");
+    let merge = ctx.new_block("rloop.version.merge");
+    let split_l = ctx.block_label(split);
+    let plain_l = ctx.block_label(plain);
+    let merge_l = ctx.block_label(merge);
+    let v = ctx.block().load(I1, &valid_slot);
+    ctx.block().cond_br(&v, &split_l, &plain_l);
+
+    ctx.current_block = split;
+    lower(ctx)?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
+    }
+
+    // The plain version: the region is not registered while it lowers, so
+    // its body is today's body.
+    let pos = ctx
+        .region_loops
+        .iter()
+        .position(|p| p.token == t)
+        .expect("the region is still registered");
+    let pending = ctx.region_loops.remove(pos);
+    ctx.current_block = plain;
+    let r = lower(ctx);
+    ctx.region_loops.push(pending);
+    r?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
+    }
+    ctx.current_block = merge;
+    Ok(())
+}
+
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
     if let Some(t) = token {
         ctx.region_loops.retain(|p| p.token != t);
@@ -1498,14 +1556,21 @@ pub(crate) fn lower_split(
 
 // ------------------------------------------------------- bare accesses
 
-fn active_slot(ctx: &FnCtx<'_>, e: &Expr, r: Recv, key: &str) -> Option<String> {
+/// The slot of `key`, decoded from the region word AT THE USE. Every bare
+/// access addresses `fields + ((word >> (32 + 6i)) & 63) * 8` from the one
+/// word, the uniform form that lets LLVM gather a run of loads (§L7.6.1), and
+/// one word is one register where five decoded slots are five.
+fn active_slot(ctx: &mut FnCtx<'_>, e: &Expr, r: Recv, key: &str) -> Option<String> {
     let a = ctx.region_loop_facts.last()?;
     if !a.bare.contains(&(e as *const Expr as usize)) {
         return None;
     }
     let rv = a.receivers.iter().find(|x| x.recv == r)?;
     let i = rv.keys.iter().position(|k| k == key)?;
-    Some(rv.slots[i].clone())
+    let word = rv.word.clone();
+    let shift = (32 + SLOT_BITS * i as u32).to_string();
+    let s = ctx.block().lshr(I64, &word, &shift);
+    Some(ctx.block().and(I64, &s, "63"))
 }
 
 fn note_emitted(ctx: &mut FnCtx<'_>) {

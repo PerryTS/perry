@@ -7251,11 +7251,13 @@ pub(crate) fn lower_for(
     // body) region guards its receivers once here, in the preheader, and
     // splits the body when the tier below lowers it (`stmt::region_loop`).
     let region = super::region_loop::begin(ctx, condition, body, update)?;
-    let lowered = match i32_counter::lower(ctx, init, condition, update, body) {
-        Ok(true) => Ok(()),
-        Ok(false) => lower_for_after_init(ctx, init, condition, update, body, "for"),
-        Err(e) => Err(e),
-    };
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        if i32_counter::lower(ctx, init, condition, update, body)? {
+            Ok(())
+        } else {
+            lower_for_after_init(ctx, init, condition, update, body, "for")
+        }
+    });
     super::region_loop::end(ctx, region);
     lowered
 }
@@ -9927,7 +9929,9 @@ pub(crate) fn lower_while(
     body: &[Stmt],
 ) -> Result<()> {
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
-    let lowered = lower_while_impl(ctx, condition, body);
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_while_impl(ctx, condition, body)
+    });
     super::region_loop::end(ctx, region);
     lowered
 }
@@ -10007,7 +10011,9 @@ pub(crate) fn lower_do_while(
     condition: &perry_hir::Expr,
 ) -> Result<()> {
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
-    let lowered = lower_do_while_impl(ctx, body, condition);
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_do_while_impl(ctx, body, condition)
+    });
     super::region_loop::end(ctx, region);
     lowered
 }
