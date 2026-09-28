@@ -1641,6 +1641,14 @@ def run_self_tests() -> int:
                 "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
                 "}\n"
             ),
+            # Step 4b's bare pointer store (one marker, the same put.pic
+            # bookkeeping), so V-P1 tracks the real binding table.
+            "crates/perry-codegen/src/stmt/region_loop/bare.rs": (
+                "// GC_STORE_AUDIT(BARRIERED): planted\n"
+                "fn lower_put(ctx: &mut FnCtx) {\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
+                "}\n"
+            ),
             STEM_REGISTRY_PATH: (
                 "pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[\n"
                 + registry
