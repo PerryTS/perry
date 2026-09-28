@@ -1125,7 +1125,7 @@ pub(super) enum GcCollectionKind {
 }
 
 impl GcCollectionKind {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {
@@ -1164,7 +1164,7 @@ pub(super) enum GcTriggerKind {
 }
 
 impl GcTriggerKind {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     #[inline]
     pub(super) fn as_str(self) -> &'static str {
         match self {
@@ -1243,7 +1243,7 @@ impl DeferredGcRequest {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(super) struct GcStepSnapshot {
     pub(super) arena_step_bytes: usize,
     pub(super) next_arena_trigger_bytes: usize,
@@ -2325,7 +2325,7 @@ pub(super) fn note_copying_minor_young_survival(survival_permille: u64) {
 /// Whether the last copying minor measured a retaining heap. Trace/test
 /// observability — a gate that cannot see this cannot prove which arm paced a
 /// given run.
-#[cfg(any(feature = "diagnostics", test))]
+#[cfg(any(perry_diagnostics, test))]
 pub(super) fn major_pacing_retaining() -> bool {
     GC_MAJOR_PACING_RETAINING.with(|c| c.get())
 }
@@ -2576,7 +2576,7 @@ thread_local! {
 }
 
 /// Current arena-growth escalation backoff shift.
-#[cfg(any(feature = "diagnostics", test))]
+#[cfg(any(perry_diagnostics, test))]
 pub(super) fn major_pacing_backoff_shift() -> u32 {
     GC_MAJOR_PACING_BACKOFF_SHIFT.with(|shift| shift.get())
 }
@@ -2595,7 +2595,7 @@ pub(super) fn major_pacing_backoff_shift() -> u32 {
 // `test` as well as `diagnostics` (matching `major_pacing_backoff_shift`), so
 // the test that pins snapshot-vs-predicate agreement still builds under
 // `--no-default-features`, where the trace itself is compiled out.
-#[cfg(any(feature = "diagnostics", test))]
+#[cfg(any(perry_diagnostics, test))]
 pub(super) fn major_pacing_snapshot() -> (usize, u32, Option<usize>) {
     let baseline = GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.get());
     let shift = major_pacing_backoff_shift();

@@ -38,7 +38,7 @@
 // constant "off" (inlined, so every caller's guarded branch folds away and the
 // instrument links nothing); the rest of the module stays compiled so it
 // cannot rot, hence the allow.
-#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -77,22 +77,22 @@ crate::perry_thread_local! {
 /// unparsable value selects the default interval.
 /// The sampling interval, or 0 when off. A constant 0 without the
 /// `gc-instruments` feature, so the allocation fast paths drop the check.
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 #[inline(always)]
 fn current_interval() -> usize {
     INTERVAL.load(Ordering::Relaxed)
 }
 
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 #[inline(always)]
 fn current_interval() -> usize {
     0
 }
 
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 pub(crate) fn init_from_env() {}
 
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 pub(crate) fn init_from_env() {
     let raw = std::env::var("PERRY_ALLOC_SITE_SAMPLE").ok();
     let interval = parse_interval(raw.as_deref());

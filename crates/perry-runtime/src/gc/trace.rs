@@ -14,7 +14,7 @@ crate::perry_thread_local! {
     /// unclassifiable in that synthetic state, so the differential verifier
     /// must stand down for the rest of the thread's test. Read only by the
     /// verifier, which `gc-instruments` serves.
-    #[cfg_attr(not(feature = "gc-instruments"), allow(dead_code))]
+    #[cfg_attr(not(perry_gc_instruments), allow(dead_code))]
     pub(crate) static CLASSIFIER_VERIFY_SUPPRESSED: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
@@ -89,11 +89,11 @@ pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
 /// #6179: differential-verification mode for the page-metadata classifier.
 /// A `gc-instruments` knob (#10572): constant `false` without the feature.
 pub(super) fn classifier_verify_enabled() -> bool {
-    #[cfg(not(feature = "gc-instruments"))]
+    #[cfg(not(perry_gc_instruments))]
     return false;
     // The cached process-wide switch first: this runs on every census hit, and
     // the suppression flag is a thread-local (#10182).
-    #[cfg(feature = "gc-instruments")]
+    #[cfg(perry_gc_instruments)]
     {
         static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *crate::once_init::get_or_init(&CACHED, || {

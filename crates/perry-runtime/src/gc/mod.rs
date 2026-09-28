@@ -282,12 +282,12 @@ pub use schedule::{
 pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 mod heap_snapshot;
 mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 pub(crate) use heap_stats::heap_stats;
 
@@ -977,9 +977,9 @@ pub fn gc_init() {
         return;
     }
     crate::perf_hooks::init_time_origin();
-    #[cfg(not(feature = "gc-instruments"))]
+    #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     crate::hot_diag::refuse_knobs_without_hot_diag();
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.

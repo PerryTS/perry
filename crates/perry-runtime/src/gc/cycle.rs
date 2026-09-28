@@ -17,7 +17,7 @@ pub(super) enum GcCyclePhase {
 }
 
 impl GcCyclePhase {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {

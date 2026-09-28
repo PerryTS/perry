@@ -119,7 +119,7 @@ thread_local! {
 // which is itself `allow(dead_code)` without the `diagnostics` feature — so a
 // product build (`cargo check -p perry --bins`, `-D warnings`) sees this as
 // unused. Same `cfg_attr` the three sibling sites in `telemetry.rs` use.
-#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(super) fn remembered_reconstruct_census() -> RememberedReconstructCensus {
     RECONSTRUCT_CENSUS.with(Cell::get)
 }

@@ -65,9 +65,9 @@ extern "C" fn process_report_function_write_report(
         .unwrap_or_else(process_report_default_filename);
     // OFF stub: unreachable in practice (the compiler enables `diagnostics`
     // whenever a program references `process.report`).
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     let report_json = process_report_json_string("API", Some(&filename));
-    #[cfg(not(feature = "diagnostics"))]
+    #[cfg(not(perry_diagnostics))]
     let report_json = String::from("{}");
     if let Err(err) = std::fs::write(&filename, report_json) {
         crate::fs::validate::throw_type_error_with_code(
@@ -342,7 +342,7 @@ fn process_report_unix_time_ms() -> f64 {
         .unwrap_or(0.0)
 }
 
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
     let args: Vec<String> = super::process_args_lossy().collect();
     let command_line = if args.is_empty() {

@@ -50,6 +50,14 @@ concurrency:
   group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || (inputs.cut_release && inputs.candidate_sha) || github.run_id }}
   cancel-in-progress: false
 
+# Shipped runtime archives carry no GC/diagnostic instruments: perry-runtime's
+# build script compiles them out when this is set (see its
+# `emit_instrument_cfgs`). Every cargo build in these jobs sees it, including
+# the per-ext-crate invocations that rebuild the runtime, so all shipped
+# archives share one feature set (#6303). The container builds pass it through.
+env:
+  PERRY_RELEASE_STRIP_INSTRUMENTS: "1"
+
 jobs:
   # ---------------------------------------------------------------------------
   # Resolve the run mode + release tag ONCE, up front. Every downstream job
@@ -764,6 +772,7 @@ jobs:
             --env CARGO_TARGET_DIR=/work/target-glibc231 \
             --env PERRY_ABORT_TARGET_DIR=/work/target-glibc231-abort \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --env PERRY_RELEASE_STRIP_INSTRUMENTS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$GITHUB_WORKSPACE:/work" \
@@ -810,6 +819,7 @@ jobs:
             --env CARGO_TARGET_DIR=/work/target-musl \
             --env PERRY_ABORT_TARGET_DIR=/work/target-musl-abort \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --env PERRY_RELEASE_STRIP_INSTRUMENTS \
             --volume "$HOME/.cargo:/tmp/cargo-home" \
             --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$GITHUB_WORKSPACE:/work" \

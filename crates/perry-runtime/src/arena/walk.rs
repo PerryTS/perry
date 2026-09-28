@@ -421,7 +421,7 @@ pub(crate) struct ArenaRegionTelemetry {
 }
 
 #[derive(Clone, Copy, Default)]
-#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) arena: ArenaRegionTelemetry,
     pub(crate) survivor0: ArenaRegionTelemetry,

@@ -24,7 +24,7 @@
 
 // Without `hot-diag` the probes below have no armed caller. `allow` rather
 // than a cascade of cfgs keeps them compiled, so they cannot rot unbuilt.
-#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_hot_diag), allow(dead_code, unused_imports))]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ pub(crate) fn sink_from_env(name: &str) -> Option<Sink> {
 /// `HOT_DIAG_KNOBS` in the compiler's `optimized_libs/freshness.rs` (pinned by
 /// `hot_diag_knobs_match_the_runtime`).
 // Read only by the feature-off startup check below.
-#[cfg_attr(feature = "hot-diag", allow(dead_code))]
+#[cfg_attr(perry_hot_diag, allow(dead_code))]
 pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_REGEX_DIAG",
     "PERRY_IC_DIAG",
@@ -65,7 +65,7 @@ pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
 
 /// Startup check for binaries built without the instruments: a knob that
 /// would arm one (same spelling rules as [`sink_from_env`]) aborts.
-#[cfg(not(feature = "hot-diag"))]
+#[cfg(not(perry_hot_diag))]
 pub(crate) fn refuse_knobs_without_hot_diag() {
     if let Some(knob) = HOT_DIAG_KNOBS
         .iter()
@@ -76,7 +76,7 @@ pub(crate) fn refuse_knobs_without_hot_diag() {
     }
 }
 
-#[cfg(not(feature = "hot-diag"))]
+#[cfg(not(perry_hot_diag))]
 #[cold]
 #[inline(never)]
 fn hot_diag_unavailable(knob: &str) -> ! {
@@ -147,9 +147,9 @@ fn regex_sink() -> &'static Option<Sink> {
 /// Is the regex instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn regex_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if REGEX_SINK.get().is_none() {
             regex_sink();
@@ -566,9 +566,9 @@ pub fn layout_on() -> bool {
     if let Some(armed) = LAYOUT_TEST_ARMED.with(std::cell::Cell::get) {
         return armed;
     }
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if LAYOUT_SINK.get().is_none() {
             layout_sink();
@@ -826,9 +826,9 @@ impl Drop for LayoutDiagTestGuard {
 /// Is the IC-miss instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn ic_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if IC_SINK.get().is_none() {
             ic_sink();
@@ -1249,9 +1249,9 @@ fn enum_sink() -> &'static Option<Sink> {
 /// Is the enumeration/concat execution counter armed?
 #[inline]
 pub fn enum_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if ENUM_SINK.get().is_none() {
             enum_sink();
@@ -1421,9 +1421,9 @@ fn buffer_sink() -> &'static Option<Sink> {
 /// Is the buffer-probe instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn buffer_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if BUFFER_SINK.get().is_none() {
             buffer_sink();

@@ -496,7 +496,7 @@ impl Drop for FinalRemarkTimer {
 /// built on the knob pass having exercised nothing, so the process aborts at
 /// startup instead — see CLAUDE.md "Four ways a gate can be unable to fail".
 // Read only by the feature-off startup check below.
-#[cfg_attr(feature = "gc-instruments", allow(dead_code))]
+#[cfg_attr(perry_gc_instruments, allow(dead_code))]
 pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_CENSUS",
     "PERRY_GC_PROTECT_FROMSPACE",
@@ -510,7 +510,7 @@ pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
 ];
 
 /// The first instrument knob set (non-empty) in the environment, if any.
-#[cfg_attr(feature = "gc-instruments", allow(dead_code))]
+#[cfg_attr(perry_gc_instruments, allow(dead_code))]
 pub(crate) fn requested_instrument_knob() -> Option<&'static str> {
     INSTRUMENT_KNOBS
         .iter()
@@ -519,14 +519,14 @@ pub(crate) fn requested_instrument_knob() -> Option<&'static str> {
 }
 
 /// Startup check for binaries built without the instruments (see above).
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 pub(crate) fn refuse_instrument_knobs_without_instruments() {
     if let Some(knob) = requested_instrument_knob() {
         instruments_unavailable(knob);
     }
 }
 
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 #[cold]
 #[inline(never)]
 fn instruments_unavailable(knob: &str) -> ! {
