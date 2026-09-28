@@ -21,7 +21,8 @@
 //! format did not change.
 //!
 //! Only a PRECISE collection is checked: a conservative one scans the whole
-//! native stack, unmapped frames included, and does not move.
+//! native stack, unmapped frames included, and does not move. So is a
+//! collection whose caller requested the scan (the allocation-point arms).
 //!
 //! Armed by `PERRY_GC_VERIFY_FRAMES=1`, by a resolved `PERRY_GC_SCHEDULE_SEED`
 //! (the pairing the RFC names: at `RATE=1` every legal collection point is
@@ -59,10 +60,17 @@ pub(super) fn unmatched_frame(index: &StackMapIndex, ip: usize, function_start: 
     if function_start == 0 || !index.is_generated_function(function_start) {
         return;
     }
-    if matches!(
-        crate::gc::conservative_stack_scan_decision(),
-        crate::gc::ConservativeStackScanDecision::Scan
-    ) {
+    // A conservative collection scanned this frame's words and does not move.
+    // A collection that REQUESTED the scan is one of the allocation-point arms
+    // D2 allows, even when `PERRY_CONSERVATIVE_STACK_SCAN=off` (the bisection
+    // escape hatch) overrode the request: that frame is at an allocating call,
+    // which is exactly where the escape hatch is documented to be unsound.
+    if crate::gc::conservative_scan_requested()
+        || matches!(
+            crate::gc::conservative_stack_scan_decision(),
+            crate::gc::ConservativeStackScanDecision::Scan
+        )
+    {
         return;
     }
     GENERATED_UNMAPPED.fetch_add(1, Ordering::Relaxed);
