@@ -39,7 +39,7 @@ use std::cell::Cell;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-thread_local! {
+crate::perry_thread_local! {
     /// Depth of `gc_check_trigger` evaluations on this thread. Nesting is
     /// possible (a root-lock flush inside an evaluation), so a counter rather
     /// than a flag.
@@ -352,7 +352,7 @@ pub(super) fn write_valve_ledger_line() {
 }
 
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     static TEST_SLACK: Cell<Option<usize>> = const { Cell::new(None) };
 }
 

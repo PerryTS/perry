@@ -104,7 +104,7 @@ pub(crate) struct ManualGcScanGuard {
     engaged: bool,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// How many `ManualGcScanGuard`s are live on this thread, whether or not
     /// each managed to pin the override. The allocation-point invariant
     /// (`gc/alloc_point.rs`) checks this REQUEST, which no override can hide.
