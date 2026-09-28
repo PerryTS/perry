@@ -3278,6 +3278,7 @@ js_register_path_init	void	ptr,i64,i64
 js_register_path_module	void	f64,f64
 js_register_path_module_partial	void	f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
+js_register_readable_handle_predicate	void	ptr
 js_register_set_text_handler	void	ptr
 js_register_show_toast_handler	void	ptr
 js_register_stdin_flow_ops	void	ptr,ptr

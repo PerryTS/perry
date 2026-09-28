@@ -934,6 +934,16 @@ fn stream_on(handle: i64, event: String, cb: i64) {
     flush_buffered(handle);
 }
 
+fn stream_off(handle: i64, event: &str, cb: i64) {
+    if let Some(events) = statics().lock().unwrap().listeners.get_mut(&handle) {
+        if let Some(list) = events.get_mut(event) {
+            if let Some(at) = list.iter().rposition(|&c| c == cb) {
+                list.remove(at);
+            }
+        }
+    }
+}
+
 fn stream_pipe(handle: i64, dest_bits: u64) {
     if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
         s.pipes.push(dest_bits);
@@ -1226,6 +1236,14 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             if let Some(ev) = event_name(args[0]) {
                 let cb = (args[1].to_bits() & POINTER_MASK) as i64;
                 stream_on(handle, ev, cb);
+            }
+            self_ref
+        }
+        // #11620: a `for await` that stops early detaches its listeners.
+        "off" | "removeListener" if args.len() >= 2 => {
+            if let Some(ev) = event_name(args[0]) {
+                let cb = (args[1].to_bits() & POINTER_MASK) as i64;
+                stream_off(handle, &ev, cb);
             }
             self_ref
         }

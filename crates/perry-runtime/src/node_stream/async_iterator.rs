@@ -309,6 +309,46 @@ fn iterator_set_error(iterator: f64, err: f64) {
 
 // ── persistent stream-event listeners feeding the iterator ─────────────────
 
+/// #11620: readable streams that are bare handles, not objects — a zlib
+/// transform. perry-stdlib owns them, so it registers the predicate.
+static READABLE_HANDLE_PREDICATE: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_readable_handle_predicate(f: unsafe extern "C" fn(i64) -> i32) {
+    READABLE_HANDLE_PREDICATE.store(f as *mut (), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A handle-band value that perry-stdlib says is a readable stream. It has no
+/// hidden fields; its listeners go through its own `on`/`off`.
+pub(crate) fn is_readable_handle(value: f64) -> bool {
+    let bits = value.to_bits();
+    if bits >> 48 != 0x7FFD {
+        return false;
+    }
+    let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if !crate::value::addr_class::is_handle_band(raw) {
+        return false;
+    }
+    let p = READABLE_HANDLE_PREDICATE.load(std::sync::atomic::Ordering::Relaxed);
+    if p.is_null() {
+        return false;
+    }
+    let f: unsafe extern "C" fn(i64) -> i32 = unsafe { std::mem::transmute(p) };
+    unsafe { f(raw as i64) != 0 }
+}
+
+/// `for await` over a readable handle: the node:stream iterator, with its
+/// listeners attached through the handle's `on`/`off`.
+pub(crate) fn readable_handle_async_iterator(value: f64) -> Option<f64> {
+    is_readable_handle(value).then(|| build_readable_async_iterator(value, true))
+}
+
+fn uses_method_listeners(stream: f64) -> bool {
+    has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY))
+        || is_readable_handle(stream)
+}
+
 pub(super) fn is_foreign_readable(stream: f64) -> bool {
     has_truthy_hidden(stream, hidden_key(FOREIGN_READABLE_KEY))
 }
@@ -449,7 +489,7 @@ fn attach_iterator_listener(
     js_closure_set_capture_f64(cb, 0, iterator);
     let cb_value = box_pointer(cb as *const u8);
     set_hidden_value(iterator, hidden_key(store_key), cb_value);
-    if has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY)) {
+    if uses_method_listeners(stream) {
         call_stream_listener_method(stream, b"on", event, cb_value);
         return;
     }
@@ -531,7 +571,7 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
 
 fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &[u8]) {
     if let Some(cb_value) = get_hidden_value(iterator, hidden_key(store_key)) {
-        if has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY)) {
+        if uses_method_listeners(stream) {
             call_stream_listener_method(stream, b"off", event, cb_value);
             set_hidden_value(
                 iterator,

@@ -120,6 +120,30 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_property_set_dispatch(js_handle_property_set_dispatch);
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
+    // #11620: zlib transforms are handles; `for await` needs to know one is a
+    // readable stream to iterate it through its `on`/`off`.
+    #[cfg(feature = "compression-gzip")]
+    {
+        extern "C" {
+            fn js_register_readable_handle_predicate(f: unsafe extern "C" fn(i64) -> i32);
+        }
+        unsafe extern "C" fn is_readable_handle(handle: i64) -> i32 {
+            crate::zlib::is_zlib_stream_handle(handle) as i32
+        }
+        js_register_readable_handle_predicate(is_readable_handle);
+    }
+    // Optimized builds take zlib from perry-ext-zlib, which answers the same.
+    #[cfg(feature = "external-zlib-pump")]
+    {
+        extern "C" {
+            fn js_register_readable_handle_predicate(f: unsafe extern "C" fn(i64) -> i32);
+            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
+        }
+        unsafe extern "C" fn is_readable_handle(handle: i64) -> i32 {
+            js_ext_zlib_is_stream_handle(handle)
+        }
+        js_register_readable_handle_predicate(is_readable_handle);
+    }
     crate::string_decoder::string_decoder_prototype_value();
     // Dynamic `new <bound async_hooks ctor>()` -> real handle. Next.js does
     // `globalThis.AsyncLocalStorage = AsyncLocalStorage` then
