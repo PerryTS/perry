@@ -260,6 +260,20 @@ pub(crate) fn apply_budget_spill_retry<'a>(
                         violation.cap,
                     );
                 }
+                crate::inprocess::Rs4gcBudgetCause::PredictedFastEmit {
+                    relocations,
+                    predicted_instructions,
+                } => eprintln!(
+                    "perry: `{}` keeps its GC roots in a shadow frame instead of statepoints: \
+                     under the relocation cap ({} relocations), but rewrite-statepoints-for-gc \
+                     is predicted to grow it to about {} instructions, above the fast-emit \
+                     machine-pipeline budget {} — past that budget LLVM falls back to its O0 \
+                     machine pipeline instead of the optimized one (#11624). The function is \
+                     still compiled at the requested optimization level; only its GC-root \
+                     representation changes, and its roots stay precise. Override with \
+                     PERRY_LL_FAST_EMIT_MAX_INSTRS.",
+                    violation.name, relocations, predicted_instructions, violation.cap,
+                ),
             }
         }
     }

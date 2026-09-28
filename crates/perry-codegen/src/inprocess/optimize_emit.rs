@@ -86,8 +86,20 @@ pub(super) fn optimize_and_emit(
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
         let preflight_cap = root_spill_relocation_threshold();
+        // Same resolved budget `fast_emit_fallbacks` uses below, including the
+        // `PERRY_LL_FAST_EMIT_MAX_INSTRS` override — the preflight predicts
+        // the same cliff that decision measures for real after RS4GC and the
+        // IR optimizer run (#11624 follow-up).
+        let fast_emit_cap = match fast_emit_budget(effective_target) {
+            FastEmitBudget::Off => None,
+            FastEmitBudget::Cap(cap) => Some(cap),
+        };
         let rewritten_functions = rs4gc_functions(module);
-        let pre_sizes = if budget == RewriteBudget::Off && preflight_cap == 0 && stats.is_none() {
+        let pre_sizes = if budget == RewriteBudget::Off
+            && preflight_cap == 0
+            && fast_emit_cap.is_none()
+            && stats.is_none()
+        {
             std::collections::HashMap::new()
         } else {
             pre_rewrite_sizes(module)
@@ -122,7 +134,7 @@ pub(super) fn optimize_and_emit(
         let liveness_started = std::time::Instant::now();
         let liveness = gc_liveness::analyze_module(module, &rewritten_functions);
         let liveness_secs = liveness_started.elapsed().as_secs_f64();
-        enforce_rs4gc_preflight_budget(&liveness, preflight_cap, &pre_sizes)?;
+        enforce_rs4gc_preflight_budget(&liveness, preflight_cap, &pre_sizes, fast_emit_cap)?;
         let rewrite_started = std::time::Instant::now();
         module
             .run_passes(

@@ -698,6 +698,46 @@ fn fast_emit_fallbacks(
 /// lowers it, `warn:<n>` only warns, and `0`/`off` disables the check.
 const DEFAULT_RS4GC_MAX_INSTRS: usize = 1_572_864;
 
+/// Instructions RS4GC adds to a function's body per predicted relocation,
+/// used to predict whether a function will cross the fast-emit budget
+/// ([`default_fast_emit_max_instrs`]) *before* paying for the rewrite and
+/// the IR optimizer (#11624 follow-up: the relocation cap alone let
+/// `__25747` reach the claude-code bundle with 0.4 M relocations — comfortably
+/// under the 1.5 Mi relocation cap — but its rewritten body crossed the
+/// 600 k-instruction x86-64 fast-emit budget and fell back to LLVM's O0
+/// machine pipeline, growing its `.text` ~11x).
+///
+/// Measured on the #11624 128-unit claude-code 2.1.112 audit
+/// (`PERRY_CODEGEN_UNIT_TIMINGS`): summed over all 128 units, post-RS4GC
+/// instructions exceeded pre-RS4GC instructions by 10,006,633 while RS4GC
+/// emitted 8,751,060 relocations — a corpus-wide average of ~1.14
+/// instructions per relocation. Per-function samples (the widest function in
+/// each of 5 audited units) ranged from 1.28x to 5.15x, so this constant is
+/// rounded well above the corpus average for headroom. A low-relocation
+/// function is insensitive to this factor's precision either way — its
+/// pre-rewrite size already dominates the prediction and keeps it far under
+/// budget — so the imprecision this rounds past only matters for the
+/// high-relocation functions where the fast-emit cliff can actually happen,
+/// and those are exactly the ones the corpus average describes.
+const POST_RS4GC_GROWTH_FACTOR: f64 = 2.0;
+
+/// Predict a function's post-RS4GC instruction count from its pre-rewrite
+/// size and its predicted relocation count (see [`POST_RS4GC_GROWTH_FACTOR`]).
+///
+/// This deliberately predicts the RAW post-rewrite count, not the count
+/// after the IR optimizer that runs on top of it — `fast_emit_fallbacks`
+/// compares against the latter, which is measured after the pipeline has
+/// had a chance to shrink the rewritten body (DCE, SimplifyCFG, and friends,
+/// on IR that RS4GC's rewrite already canonicalized). The raw count is
+/// therefore an upper bound on what `fast_emit_fallbacks` will see: this can
+/// spill a function whose optimized size would have stayed under budget, but
+/// never the reverse. Conservative in the safe direction, per the #11624
+/// follow-up.
+fn predicted_post_rewrite_instructions(pre_instructions: usize, relocations: u64) -> usize {
+    let growth = (relocations as f64 * POST_RS4GC_GROWTH_FACTOR).ceil();
+    pre_instructions.saturating_add(growth as usize)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RewriteBudget {
     Off,
@@ -727,6 +767,16 @@ pub(crate) enum Rs4gcBudgetCause {
     /// RS4GC finished, but its relocation fan-out made the rewritten body too
     /// large for the normal optimization pipeline.
     PostRewrite { post_instructions: usize },
+    /// Predicted (before RS4GC runs) to cross the fast-emit machine-pipeline
+    /// budget — the cliff into LLVM's O0 instruction selection / register
+    /// allocation (#10586) — even though it is under the relocation cap.
+    /// See [`predicted_post_rewrite_instructions`].
+    PredictedFastEmit {
+        /// The `gc.relocate`s RS4GC would emit.
+        relocations: u64,
+        /// [`predicted_post_rewrite_instructions`]'s estimate.
+        predicted_instructions: usize,
+    },
 }
 
 impl Rs4gcBudgetCause {
@@ -952,18 +1002,52 @@ pub(crate) fn with_test_root_spill_threshold<T>(cap: u64, run: impl FnOnce() -> 
 }
 
 /// Every RS4GC-participating function whose exact relocation count exceeds
-/// `cap`, with the liveness facts the retry message reports.
+/// `cap`, OR — under `cap` but predicted to cross the fast-emit
+/// machine-pipeline budget (`fast_emit_cap`, `None` when that fallback is
+/// disabled) — whose predicted post-rewrite instruction count exceeds it.
+/// The relocation cap is checked first: it already implies a spill, and its
+/// message is the more specific one when both would apply. `cap == 0`
+/// disables spilling entirely (`PERRY_ROOT_SPILL_RELOCATIONS=0`), including
+/// the fast-emit prediction.
 fn rs4gc_preflight_violations(
     liveness: &[(String, gc_liveness::FunctionLiveness)],
     cap: u64,
-) -> Vec<(String, Rs4gcBudgetCause)> {
+    pre: &std::collections::HashMap<String, usize>,
+    fast_emit_cap: Option<usize>,
+) -> Vec<Rs4gcBudgetViolation> {
     if cap == 0 {
         return Vec::new();
     }
     liveness
         .iter()
-        .filter(|(_, l)| l.relocation_bound() > cap)
-        .map(|(name, l)| (name.clone(), Rs4gcBudgetCause::pre_rewrite(l)))
+        .filter_map(|(name, l)| {
+            let relocations = l.relocation_bound();
+            if relocations > cap {
+                return Some(Rs4gcBudgetViolation {
+                    name: name.clone(),
+                    pre_instructions: pre.get(name).copied(),
+                    cause: Rs4gcBudgetCause::pre_rewrite(l),
+                    cap: cap as usize,
+                });
+            }
+            let fast_emit_cap = fast_emit_cap?;
+            let pre_instructions = pre.get(name).copied().unwrap_or(0);
+            let predicted_instructions =
+                predicted_post_rewrite_instructions(pre_instructions, relocations);
+            if predicted_instructions > fast_emit_cap {
+                Some(Rs4gcBudgetViolation {
+                    name: name.clone(),
+                    pre_instructions: Some(pre_instructions),
+                    cause: Rs4gcBudgetCause::PredictedFastEmit {
+                        relocations,
+                        predicted_instructions,
+                    },
+                    cap: fast_emit_cap,
+                })
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -973,16 +1057,9 @@ fn enforce_rs4gc_preflight_budget(
     liveness: &[(String, gc_liveness::FunctionLiveness)],
     cap: u64,
     pre: &std::collections::HashMap<String, usize>,
+    fast_emit_cap: Option<usize>,
 ) -> Result<()> {
-    let violations: Vec<Rs4gcBudgetViolation> = rs4gc_preflight_violations(liveness, cap)
-        .into_iter()
-        .map(|(name, cause)| Rs4gcBudgetViolation {
-            pre_instructions: pre.get(&name).copied(),
-            name,
-            cause,
-            cap: cap as usize,
-        })
-        .collect();
+    let violations = rs4gc_preflight_violations(liveness, cap, pre, fast_emit_cap);
     if violations.is_empty() {
         Ok(())
     } else {
@@ -1044,6 +1121,26 @@ fn rewrite_budget_message(violation: &Rs4gcBudgetViolation, retry: bool) -> Stri
                  super-linear on statepoint relocation fan-out of this size; {outcome} (#8679). \
                  Override with PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or \
                  =0 (disable).",
+                violation.name, violation.cap
+            )
+        }
+        Rs4gcBudgetCause::PredictedFastEmit {
+            relocations,
+            predicted_instructions,
+        } => {
+            let pre = violation
+                .pre_instructions
+                .map(|n| format!(" ({n} before the rewrite)"))
+                .unwrap_or_default();
+            format!(
+                "before rewrite-statepoints-for-gc, `{}` would emit {relocations} relocations, \
+                 under the relocation cap but predicted to grow the function to about \
+                 {predicted_instructions} instructions{pre} — above the fast-emit \
+                 machine-pipeline budget {}. Past that budget LLVM keeps the optimized IR but \
+                 falls back to its O0 machine pipeline for instruction selection and register \
+                 allocation, which is size, not correctness, but real (#11624); {outcome}. \
+                 Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or =0 (disable this \
+                 check and the O0 fallback it predicts).",
                 violation.name, violation.cap
             )
         }

@@ -475,11 +475,11 @@ fn the_spill_decision_flips_at_the_threshold() {
     assert_eq!(liveness[0].1.relocations, 7);
 
     let pre = super::super::pre_rewrite_sizes(&module);
-    super::super::enforce_rs4gc_preflight_budget(&liveness, 7, &pre)
+    super::super::enforce_rs4gc_preflight_budget(&liveness, 7, &pre, None)
         .expect("7 relocations are within a budget of 7");
-    super::super::enforce_rs4gc_preflight_budget(&liveness, 0, &pre)
+    super::super::enforce_rs4gc_preflight_budget(&liveness, 0, &pre, None)
         .expect("a budget of 0 disables spilling");
-    let err = super::super::enforce_rs4gc_preflight_budget(&liveness, 6, &pre)
+    let err = super::super::enforce_rs4gc_preflight_budget(&liveness, 6, &pre, None)
         .expect_err("7 relocations exceed a budget of 6");
     let retry = super::super::rs4gc_budget_retry(&err).expect("the request stays typed");
     assert_eq!(retry.len(), 1);
@@ -513,6 +513,84 @@ fn the_spill_decision_flips_at_the_threshold() {
     }
     // A function outside RS4GC (a shadow-frame function) is never counted.
     assert!(analyze_module(&module, &std::collections::HashSet::new()).is_empty());
+}
+
+/// #11624 follow-up: a function can sit comfortably under the relocation cap
+/// and still be predicted to cross the fast-emit machine-pipeline budget —
+/// the actual claude-code shape (`__25747`: 0.4 M relocations, under the
+/// 1.5 Mi cap, but its rewritten body crossed the 600 k x86-64 fast-emit
+/// ceiling and fell back to LLVM's O0 pipeline). The relocation cap alone
+/// must not catch this; the fast-emit prediction must.
+#[test]
+fn a_function_under_the_relocation_cap_but_over_the_fast_emit_budget_spills() {
+    let tm = target_machine();
+    let context = Context::create();
+    let module = parse_ir_text(&context, &ir(INVOKE), "fast-emit-cliff").expect("parses");
+    module.set_triple(&TargetTriple::create(TRIPLE));
+    module.set_data_layout(&tm.get_target_data().get_data_layout());
+    let rewritten = super::super::rs4gc_functions(&module);
+    run(&module, &tm, crate::linker::STATEPOINT_PREPARE_PASSES);
+    let liveness = analyze_module(&module, &rewritten);
+    assert_eq!(liveness.len(), 1);
+    assert_eq!(liveness[0].1.relocations, 7);
+    let pre = super::super::pre_rewrite_sizes(&module);
+
+    // Comfortably under the default relocation cap, and with no fast-emit
+    // budget in play (`None`), the fixture must not spill.
+    super::super::enforce_rs4gc_preflight_budget(
+        &liveness,
+        super::super::DEFAULT_ROOT_SPILL_RELOCATIONS,
+        &pre,
+        None,
+    )
+    .expect("7 relocations must not trip the default relocation cap");
+
+    // A fast-emit budget far below the fixture's predicted post-rewrite size
+    // (pre-rewrite instructions plus 2x its 7 relocations) must spill it,
+    // even though the relocation cap is untouched.
+    let err = super::super::enforce_rs4gc_preflight_budget(
+        &liveness,
+        super::super::DEFAULT_ROOT_SPILL_RELOCATIONS,
+        &pre,
+        Some(5),
+    )
+    .expect_err("a predicted post-rewrite size over a 5-instruction fast-emit budget must spill");
+    let retry = super::super::rs4gc_budget_retry(&err).expect("the request stays typed");
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0].name, "inv");
+    assert_eq!(retry[0].cap, 5);
+    match &retry[0].cause {
+        super::super::Rs4gcBudgetCause::PredictedFastEmit {
+            relocations,
+            predicted_instructions,
+        } => {
+            assert_eq!(*relocations, 7);
+            assert!(
+                *predicted_instructions > 5,
+                "predicted {predicted_instructions} must exceed the 5-instruction budget"
+            );
+        }
+        other => panic!("expected PredictedFastEmit, got {other:?}"),
+    }
+    let msg = format!("{err:#}");
+    for needle in [
+        "before rewrite-statepoints-for-gc",
+        "`inv`",
+        "would emit 7 relocations",
+        "under the relocation cap",
+        "fast-emit",
+        "budget 5",
+        "PERRY_LL_FAST_EMIT_MAX_INSTRS",
+    ] {
+        assert!(
+            msg.contains(needle),
+            "message must carry {needle:?}:\n{msg}"
+        );
+    }
+
+    // 0 disables spilling entirely, including the fast-emit prediction.
+    super::super::enforce_rs4gc_preflight_budget(&liveness, 0, &pre, Some(5))
+        .expect("a budget of 0 disables spilling entirely, even under a tiny fast-emit cap");
 }
 
 /// The relocation budget is the post-RS4GC instruction budget: every
