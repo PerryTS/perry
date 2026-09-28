@@ -841,8 +841,13 @@ fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
         // A derived constructor's `this` may still be in its TDZ (before
         // `super()`), and reading it throws: the preheader must not hoist
         // that read, so such a body's `this` is not a region receiver.
+        // A `this` whose shape is already PROVEN (a `$pshape` method clone)
+        // reads its slots with no guard at all; a region would only add one.
         Recv::This => {
-            !ctx.this_stack.is_empty() && !ctx.in_static_member && ctx.super_called_stack.is_empty()
+            !ctx.this_stack.is_empty()
+                && !ctx.in_static_member
+                && ctx.super_called_stack.is_empty()
+                && ctx.ptr_shape_receiver_fact(&Expr::This).is_none()
         }
         Recv::Local(id) => {
             !ctx.boxed_vars.contains(&id)

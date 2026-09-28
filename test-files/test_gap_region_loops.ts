@@ -518,3 +518,19 @@ function urlPortRead(u: any, n: number): number {
   return h;
 }
 out("urlPortRead", urlPortRead(new URL("http://example.com:81/p"), 3));
+
+// 36. A YOUNG receiver read, then an allocation that can collect (but cannot
+// run JS, so the facts survive), then read again: the second read must derive
+// the receiver's address afresh, because the collection may have moved it.
+function allocBetween(o: any, n: number): number {
+  const keep: any[] = [];
+  let h = 0;
+  for (let i = 0; i < n; i++) {
+    const x = o.a;
+    keep.push({ i, pad: [i, i] });
+    const y = o.b;
+    h += x.v + y.v;
+  }
+  return h + keep.length;
+}
+out("allocBetween", allocBetween({ a: { v: 1 }, b: { v: 2 } }, 30000));
