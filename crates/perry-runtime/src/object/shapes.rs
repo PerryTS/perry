@@ -376,8 +376,9 @@ pub(crate) fn test_position_bound_of(obj: *const crate::object::ObjectHeader) ->
 }
 
 /// Walk every present record of this agent's slab: `(records, positional,
-/// ordinary records with an accessor key, disagreements)`, where a disagreement is a record whose stored positional
-/// bit differs from [`ShapeRecord::positional_by_facts`].
+/// ordinary records with an accessor key, disagreements)`, where a
+/// disagreement is a record whose stored POSBOUND differs from
+/// [`ShapeRecord::position_bound_by_facts`].
 #[cfg(test)]
 pub(crate) fn test_positional_census() -> (usize, usize, usize, Vec<u32>) {
     let table = &crate::state::state().shapes;
@@ -388,7 +389,7 @@ pub(crate) fn test_positional_census() -> (usize, usize, usize, Vec<u32>) {
             return;
         }
         n += 1;
-        if r.positional_bit() {
+        if r.stored_position_bound() > 0 {
             positional += 1;
         }
         if r.object_kind() == ShapeObjectKind::Ordinary
@@ -396,19 +397,19 @@ pub(crate) fn test_positional_census() -> (usize, usize, usize, Vec<u32>) {
         {
             accessor += 1;
         }
-        if r.positional_bit() != r.positional_by_facts() {
+        if r.stored_position_bound() != r.position_bound_by_facts() {
             bad.push(id);
         }
     });
     (n, positional, accessor, bad)
 }
 
-/// `(stored positional bit, its definition)` for shape `id`.
+/// `(stored POSBOUND, its definition)` for shape `id`.
 #[cfg(test)]
-pub(crate) fn test_positional_of_id(id: u32) -> Option<(bool, bool)> {
+pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
     shape_record_by_id(id).map(|r| unsafe {
         let r = &*r.0.as_ptr();
-        (r.positional_bit(), r.positional_by_facts())
+        (r.stored_position_bound(), r.position_bound_by_facts())
     })
 }
 
@@ -458,12 +459,13 @@ pub(crate) unsafe fn slot_guess_confirmed(
     key: *const crate::StringHeader,
     guess: usize,
 ) -> bool {
-    let record = ShapeSlab::ordinary_record(shape_id);
+    // SAFETY: this thread's own mirror.
+    let record = unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) };
     if record.is_null() {
         return false;
     }
     let r = &*record;
-    if guess >= r.position_bound() as usize {
+    if guess >= r.position_bound_raw() as usize {
         return false;
     }
     // A bound > 0 means the record names a live keys array (the collector
