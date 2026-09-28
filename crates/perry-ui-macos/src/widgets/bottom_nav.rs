@@ -306,15 +306,8 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
             let _: () = msg_send![&*badge, setBordered: false];
             let _: () = msg_send![&*badge, setDrawsBackground: true];
 
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let red: Retained<AnyObject> = msg_send![
-                color_cls,
-                colorWithSRGBRed: 0.85f64,
-                green: 0.20f64,
-                blue: 0.20f64,
-                alpha: 1.0f64
-            ];
-            let white: Retained<AnyObject> = msg_send![color_cls, whiteColor];
+            let red = crate::srgb::ns_color(0.85, 0.20, 0.20, 1.0);
+            let white = objc2_app_kit::NSColor::whiteColor();
             let _: () = msg_send![&*badge, setBackgroundColor: &*red];
             let _: () = msg_send![&*badge, setTextColor: &*white];
             let font_cls = AnyClass::get(c"NSFont").unwrap();
@@ -374,36 +367,15 @@ fn apply_styling(bar_handle: i64) {
             return;
         };
         unsafe {
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let selected: Retained<AnyObject> = match state.selected_tint {
-                Some((r, g, b, a)) => msg_send![
-                    color_cls,
-                    colorWithSRGBRed: r,
-                    green: g,
-                    blue: b,
-                    alpha: a
-                ],
-                None => msg_send![
-                    color_cls,
-                    colorWithSRGBRed: 0.000f64,
-                    green: 0.478f64,
-                    blue: 1.000f64,
-                    alpha: 1.0f64
-                ],
-            };
-            let muted: Retained<AnyObject> = match state.unselected_tint {
-                Some((r, g, b, a)) => msg_send![
-                    color_cls,
-                    colorWithSRGBRed: r,
-                    green: g,
-                    blue: b,
-                    alpha: a
-                ],
-                None => msg_send![color_cls, secondaryLabelColor],
+            let (r, g, b, a) = state.selected_tint.unwrap_or((0.000, 0.478, 1.000, 1.0));
+            let selected = crate::srgb::ns_color(r, g, b, a);
+            let muted = match state.unselected_tint {
+                Some((r, g, b, a)) => crate::srgb::ns_color(r, g, b, a),
+                None => objc2_app_kit::NSColor::secondaryLabelColor(),
             };
             for (i, item) in state.items.iter().enumerate() {
                 let is_selected = i as i64 == state.selected_index;
-                let color: &AnyObject = if is_selected { &*selected } else { &*muted };
+                let color: &objc2_app_kit::NSColor = if is_selected { &selected } else { &muted };
                 // Tint the icon symbol.
                 let _: () = msg_send![&*item.icon_view, setContentTintColor: color];
                 // Tint the label.

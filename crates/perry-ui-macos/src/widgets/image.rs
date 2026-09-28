@@ -303,11 +303,8 @@ pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             return;
         }
         unsafe {
-            let color: *mut objc2::runtime::AnyObject = msg_send![
-                objc2::runtime::AnyClass::get(c"NSColor").unwrap(),
-                colorWithSRGBRed: r, green: g, blue: b, alpha: a
-            ];
-            let _: () = msg_send![&*view, setContentTintColor: color];
+            let color = crate::srgb::ns_color(r, g, b, a);
+            let _: () = msg_send![&*view, setContentTintColor: &*color];
         }
     }
 }

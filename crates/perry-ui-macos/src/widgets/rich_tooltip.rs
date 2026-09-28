@@ -249,14 +249,8 @@ fn present_panel(widget_handle: i64) {
         let layer: *mut AnyObject = msg_send![panel_content, layer];
         let _: () = msg_send![layer, setCornerRadius: 8.0_f64 as CGFloat];
         let _: () = msg_send![layer, setMasksToBounds: true];
-        let bg_color: *mut AnyObject = msg_send![
-            AnyClass::get(c"NSColor").unwrap(),
-            colorWithSRGBRed: 0.10 as CGFloat,
-            green: 0.10 as CGFloat,
-            blue: 0.10 as CGFloat,
-            alpha: 0.92 as CGFloat
-        ];
-        let cg: *mut AnyObject = msg_send![bg_color, CGColor];
+        let bg_color = crate::srgb::ns_color(0.10, 0.10, 0.10, 0.92);
+        let cg: *mut AnyObject = msg_send![&*bg_color, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
 
         // Place the user content view inside the panel content with `pad`

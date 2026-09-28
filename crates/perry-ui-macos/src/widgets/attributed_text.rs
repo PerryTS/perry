@@ -127,14 +127,7 @@ pub fn append(
         }
 
         if a > 0.0 {
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let color: Retained<AnyObject> = msg_send![
-                color_cls,
-                colorWithSRGBRed: r as objc2_core_foundation::CGFloat,
-                green: g as objc2_core_foundation::CGFloat,
-                blue: b as objc2_core_foundation::CGFloat,
-                alpha: a as objc2_core_foundation::CGFloat
-            ];
+            let color = crate::srgb::ns_color(r, g, b, a);
             let color_key = NSString::from_str("NSColor");
             let _: () = msg_send![&*attrs, setObject: &*color, forKey: &*color_key];
         }
