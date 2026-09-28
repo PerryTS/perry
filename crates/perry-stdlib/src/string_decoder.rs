@@ -346,22 +346,15 @@ pub unsafe fn string_decoder_own_property_names(handle: i64) -> f64 {
 /// detected from the top 16 bits.
 unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
     let u = bits as u64;
-    let top16 = u >> 48;
-    // SHORT_STRING_TAG = 0x7FFA. Payload is bytes inline in the
-    // remaining 48 bits, length in bits 44..47 of the top 16.
-    if top16 == 0x7FFA {
-        let len = ((u >> 44) & 0xF) as usize;
-        if len == 0 {
-            return Some(String::new());
-        }
-        if len > 6 {
-            return None;
-        }
-        let mut bytes = [0u8; 6];
-        for (i, b) in bytes.iter_mut().enumerate().take(len) {
-            *b = ((u >> (i * 8)) & 0xFF) as u8;
-        }
-        return Some(String::from_utf8_lossy(&bytes[..len]).into_owned());
+    // A NaN-boxed string, heap or inline SSO (#11519). The inline arm here used
+    // to decode tag 0x7FFA -- BIGINT_TAG -- with a made-up layout, so a real SSO
+    // encoding name (SHORT_STRING_TAG 0x7FF9) fell through to the pointer read
+    // below and dereferenced its characters.
+    if JSValue::from_bits(u).is_any_string() {
+        return perry_runtime::string::with_string_value_bytes(f64::from_bits(u), |b| {
+            (b.len() <= 32).then(|| String::from_utf8_lossy(b).into_owned())
+        })
+        .flatten();
     }
     // STRING_TAG / POINTER_TAG / raw pointer — all keep the heap address
     // in the low 48 bits.

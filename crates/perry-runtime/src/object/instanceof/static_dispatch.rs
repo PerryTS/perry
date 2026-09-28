@@ -296,6 +296,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // still an instance of Builtin. Ordinary objects may store their chain
     // through a synthetic class id rather than per-object prototype metadata.
     // Native cells retain their brand path unless their prototype is recorded.
+    // Only a hit is final: a miss falls through to the class-id chain, which
+    // still knows builtin subclasses whose prototype chain is not materialized.
     if let Some(name) = heap_builtin_name(class_id) {
         let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
@@ -304,8 +306,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         } else {
             recorded_prototype_instanceof_builtin(value, name)
         };
-        if let Some(matches) = matches {
-            return if matches { true_val } else { false_val };
+        if matches == Some(true) {
+            return true_val;
         }
     }
 

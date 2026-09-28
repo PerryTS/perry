@@ -830,15 +830,23 @@ pub extern "C" fn js_error_new_kind_with_options_from_value(
 /// `TypeError` when it is omitted or non-iterable), stores `.message`, and
 /// applies the `{ cause }` option from `options` if present.
 ///
-/// `errors` and `options` arrive as raw NaN-boxed values (the iterable must
-/// not be pre-coerced to an array pointer — Sets / strings / generators must
-/// reach `materialize_iterable` intact).
+/// `errors`, `message` and `options` all arrive as raw NaN-boxed values. The
+/// iterable must not be pre-coerced to an array pointer — Sets / strings /
+/// generators must reach `materialize_iterable` intact. `message` used to be a
+/// codegen-masked `*StringHeader`, which turned an inline SSO message
+/// (`new AggregateError(e, String(n))`) into a garbage address (#11519); it is
+/// now coerced here like every other Error constructor's message.
 #[no_mangle]
 pub extern "C" fn js_aggregateerror_new_full(
     errors: f64,
-    message: *mut StringHeader,
+    message: f64,
     options: f64,
 ) -> *mut ErrorHeader {
+    // Every operand is rooted: the iterable walk, the error allocation and the
+    // `cause` read can each collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message_h = scope.root_nanbox_f64(message);
+    let options_h = scope.root_nanbox_f64(options);
     // #2838: reuse the spec-shaped iterable→array converter that backs the
     // Promise combinators (`Promise.any`/`all`/…). It accepts arrays, strings,
     // Set/Map, buffers, generators, and any object exposing `[Symbol.iterator]`
@@ -849,17 +857,15 @@ pub extern "C" fn js_aggregateerror_new_full(
         Ok(arr) => arr,
         Err(_) => throw_not_iterable_type_error(),
     };
+    let arr_h = scope.root_raw_mut_ptr(arr);
+    let err = js_error_new_kind_from_value(ERROR_KIND_AGGREGATE_ERROR, message_h.get_nanbox_f64());
+    let err_h = scope.root_raw_mut_ptr(err);
     unsafe {
-        let ptr = alloc_error(
-            ERROR_KIND_AGGREGATE_ERROR,
-            b"AggregateError",
-            message,
-            !message.is_null(),
-        );
-        error_set_errors(ptr, arr);
-        apply_cause_from_options(ptr, options);
-        ptr
+        err_h.with_mut_ptr(|err| arr_h.with_mut_ptr(|arr| error_set_errors(err, arr)));
+        let options = options_h.get_nanbox_f64();
+        err_h.with_mut_ptr(|err| apply_cause_from_options(err, options));
     }
+    err_h.with_mut_ptr(|err| err)
 }
 
 /// #2904: `Error.isError(value)` — V8/Node duck-check that returns `true`
@@ -1711,11 +1717,8 @@ static KEEP_ERROR_NEW_KIND_WITH_OPTIONS: extern "C" fn(
 ) -> *mut ErrorHeader = js_error_new_kind_with_options;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
-    f64,
-    *mut StringHeader,
-    f64,
-) -> *mut ErrorHeader = js_aggregateerror_new_full;
+static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(f64, f64, f64) -> *mut ErrorHeader =
+    js_aggregateerror_new_full;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;

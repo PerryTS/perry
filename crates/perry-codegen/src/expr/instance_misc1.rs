@@ -1747,7 +1747,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParseReviver { text, reviver } => {
             rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
                 let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &vals[0]);
+                // #11519: the text may be an inline SSO string (`"12"`).
+                let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
                 let r_handle = unbox_to_i64(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,
@@ -1760,7 +1761,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParseWithReviver(text, reviver) => {
             rooting::with_operands_rooted(ctx, &[text, reviver], |ctx, vals| {
                 let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &vals[0]);
+                // #11519: the text may be an inline SSO string (`"12"`).
+                let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
                 let r_handle = unbox_to_i64(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,

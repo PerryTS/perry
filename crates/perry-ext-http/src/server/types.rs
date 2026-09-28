@@ -98,7 +98,7 @@ pub unsafe fn extract_port(opts: f64, default_port: u16) -> u16 {
 /// the `listen(port, hostname, cb)` overload).
 pub unsafe fn extract_host(opts: f64, default_host: &str) -> String {
     let v = JsValue::from_bits(opts.to_bits());
-    if v.is_string() {
+    if v.is_string() || v.is_short_string() {
         if let Some(s) = jsvalue_to_owned_string(opts) {
             return s;
         }
@@ -191,7 +191,7 @@ pub(super) unsafe fn parse_listen_values(values: impl IntoIterator<Item = f64>) 
             out.opts = f64::from_bits(bits);
             continue;
         }
-        if v.is_string() {
+        if v.is_string() || v.is_short_string() {
             if let Some(s) = jsvalue_to_owned_string(f64::from_bits(bits)) {
                 out.host = Some(s);
             }
@@ -208,6 +208,10 @@ pub fn jsvalue_to_owned_string(value: f64) -> Option<String> {
     let v = JsValue::from_bits(value.to_bits());
     if v.is_undefined() || v.is_null() {
         return None;
+    }
+    if v.is_short_string() {
+        // Inline SSO (#11519): `res.end(String(n))`, an `"on" + "e"` event name.
+        return v.to_owned_string();
     }
     if v.is_string() {
         let bits = value.to_bits();

@@ -128,6 +128,25 @@ fn slot_ptr(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>, slot: Option<usize>) -
     }
 }
 
+/// [`slot_ptr`] for the `command`/`file` operand, which the runtime reads as a
+/// `*const StringHeader`. An inline SSO command (`"ls"`, `"echo"` built at
+/// runtime) has no header behind its masked bits, so it goes through
+/// `js_ffi_arg_ptr`'s scratch copy instead (#11519). The runtime copies the
+/// command out before it does anything else.
+fn slot_str_ptr(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    slot: Option<usize>,
+) -> Result<String> {
+    match slot {
+        Some(i) => {
+            let boxed = group.reread(ctx, i)?;
+            Ok(crate::expr::unbox_ffi_str_arg(ctx.block(), &boxed))
+        }
+        None => Ok("0".to_string()),
+    }
+}
+
 /// #3079: emit a setup-time `command`/`file` validation call. `cmd_box` is the
 /// original NaN-boxed value; `name` is the static argument name (`"command"`
 /// for exec/execSync, `"file"` for execFile/execFileSync/spawn/spawnSync). The
@@ -240,7 +259,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // been evaluated).
                 let cmd_box = g.reread(ctx, 0)?;
                 emit_cp_validate_command(ctx, &cmd_box, "command");
-                let cmd_str = slot_ptr(ctx, g, at[0])?;
+                let cmd_str = slot_str_ptr(ctx, g, at[0])?;
                 let opts_str = slot_ptr(ctx, g, at[1])?;
                 // js_child_process_exec_sync(cmd: i64, opts: i64) -> f64.
                 // #1937/#1938: the runtime returns an already-NaN-boxed value
@@ -263,7 +282,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             with_rooted_group(ctx, exprs.len(), |ctx, g| {
                 lower_cp_args(ctx, g, &exprs, None, false)?;
                 emit_cp_validators(ctx, g, &at, "file", true, false)?;
-                let cmd_str = slot_ptr(ctx, g, at[0])?;
+                let cmd_str = slot_str_ptr(ctx, g, at[0])?;
                 let args_str = slot_ptr(ctx, g, at[1])?;
                 let opts_str = slot_ptr(ctx, g, at[2])?;
                 // js_child_process_spawn_sync(cmd: i64, args: i64, opts: i64) -> i64
@@ -323,7 +342,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             with_rooted_group(ctx, exprs.len(), |ctx, g| {
                 lower_cp_args(ctx, g, &exprs, None, false)?;
                 emit_cp_validators(ctx, g, &at, "file", false, false)?;
-                let cmd_str = slot_ptr(ctx, g, at[0])?;
+                let cmd_str = slot_str_ptr(ctx, g, at[0])?;
                 let args_str = slot_ptr(ctx, g, at[1])?;
                 let opts_str = slot_ptr(ctx, g, at[2])?;
                 // #1780: spawn returns a streaming ChildProcess (EventEmitter with
@@ -403,7 +422,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 emit_cp_validate_command(ctx, &cmd_box, "command");
                 let arg1 = slot_box(ctx, g, at[1], &undef)?;
                 let arg2 = slot_box(ctx, g, at[2], &undef)?;
-                let cmd_str = slot_ptr(ctx, g, at[0])?;
+                let cmd_str = slot_str_ptr(ctx, g, at[0])?;
                 Ok(ctx.block().call(
                     DOUBLE,
                     "js_child_process_exec",

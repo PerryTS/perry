@@ -646,6 +646,10 @@ pub(crate) struct ObjectHotTables {
     /// entry and fall back to the complete open-addressed tables.
     pub(crate) array_tail_direct:
         std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailDirectIndex]>>,
+    /// Set before the first entry is published into either tail table; while
+    /// false every slot of both is `EMPTY`, so the GC scan and the prune have
+    /// nothing to visit (see `array_tail_transition::tables_may_hold_entries`).
+    pub(crate) array_tail_occupied: Cell<bool>,
 }
 
 impl ObjectHotTables {
@@ -679,6 +683,7 @@ impl ObjectHotTables {
             array_tail_direct: std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(
                 array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE,
             )),
+            array_tail_occupied: Cell::new(false),
         }
     }
 }

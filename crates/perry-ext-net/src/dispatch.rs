@@ -109,6 +109,15 @@ fn unbox_to_i64(v: f64) -> i64 {
     (v.to_bits() & POINTER_MASK) as i64
 }
 
+/// Unbox a string argument (an event name, an address, an encoding) for a native that takes a
+/// `*const StringHeader` as `i64` and copies the name out on entry. An inline
+/// SSO name (`"da" + "ta"`, `String(n)`) has no header behind its masked bits,
+/// so it goes through `string_arg_ptr`'s scratch copy (#11519); every other
+/// value unboxes exactly as [`unbox_to_i64`] does.
+fn str_arg(v: f64) -> i64 {
+    perry_ffi::string_arg_ptr(v) as i64
+}
+
 /// Coerce a nanboxed JS number to a plain `f64`. perry stores small integers as
 /// a tagged int32 (`0x7FFE` high bits), not a raw double, so passing the raw
 /// nanboxed value where a real number is expected (e.g. `BlockList.addSubnet`'s
@@ -275,7 +284,7 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             undefined()
         }
         "emit" if !args.is_empty() => {
-            let event = unbox_to_i64(args[0]);
+            let event = str_arg(args[0]);
             let rest = args.get(1..).unwrap_or(&[]);
             crate::js_ext_net_socket_emit(handle, event, rest.as_ptr(), rest.len())
         }
@@ -289,23 +298,19 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             undefined()
         }
         "on" | "addListener" if args.len() >= 2 => {
-            crate::js_net_socket_on(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            crate::js_net_socket_on(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         // #10441 — same shape as `once` below, but inserted at the FRONT of
         // the listener list.
         "prependListener" if args.len() >= 2 => {
-            crate::js_net_socket_prepend_listener(
-                handle,
-                unbox_to_i64(args[0]),
-                unbox_to_i64(args[1]),
-            );
+            crate::js_net_socket_prepend_listener(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "prependOnceListener" if args.len() >= 2 => {
             crate::js_net_socket_prepend_once_listener(
                 handle,
-                unbox_to_i64(args[0]),
+                str_arg(args[0]),
                 unbox_to_i64(args[1]),
             );
             nanbox_handle(handle)
@@ -341,24 +346,20 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         "getSession" => nanbox_ptr(crate::js_ext_net_socket_tls_session(handle)),
         "isSessionReused" => crate::js_ext_net_socket_tls_session_reused(handle),
         "once" if args.len() >= 2 => {
-            crate::js_net_socket_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            crate::js_net_socket_once(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            crate::js_net_socket_remove_listener(
-                handle,
-                unbox_to_i64(args[0]),
-                unbox_to_i64(args[1]),
-            );
+            crate::js_net_socket_remove_listener(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "removeAllListeners" => {
-            let event = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let event = args.first().copied().map(str_arg).unwrap_or(0);
             crate::js_net_socket_remove_all_listeners(handle, event);
             nanbox_handle(handle)
         }
         "listenerCount" if !args.is_empty() => {
-            crate::js_net_socket_listener_count(handle, unbox_to_i64(args[0]))
+            crate::js_net_socket_listener_count(handle, str_arg(args[0]))
         }
         "getMaxListeners" => crate::js_ext_net_socket_get_max_listeners(handle),
         "setMaxListeners" if !args.is_empty() => {
@@ -366,11 +367,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "eventNames" => json_str_to_value(crate::js_net_socket_event_names(handle)),
         "listeners" if !args.is_empty() => {
-            let arr = crate::js_net_socket_listeners(handle, unbox_to_i64(args[0]));
+            let arr = crate::js_net_socket_listeners(handle, str_arg(args[0]));
             nanbox_ptr(arr as *mut ArrayHeader)
         }
         "rawListeners" if !args.is_empty() => {
-            let arr = crate::js_net_socket_raw_listeners(handle, unbox_to_i64(args[0]));
+            let arr = crate::js_net_socket_raw_listeners(handle, str_arg(args[0]));
             nanbox_ptr(arr as *mut ArrayHeader)
         }
         "address" => json_str_to_value(crate::js_net_socket_address(handle)),
@@ -395,9 +396,10 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             let enc_ptr = args
                 .first()
                 .map(|a| {
+                    // Heap or inline SSO (`"utf8"`, `"hex"`, #11519).
                     let bits = a.to_bits();
-                    if (bits >> 48) == 0x7FFF {
-                        (bits & 0x0000_FFFF_FFFF_FFFF) as i64
+                    if (bits >> 48) == 0x7FFF || (bits >> 48) == 0x7FF9 {
+                        str_arg(*a)
                     } else {
                         0
                     }
@@ -447,52 +449,44 @@ unsafe fn server_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "address" => json_str_to_value(crate::js_net_server_address(handle)),
         "on" | "addListener" if args.len() >= 2 => {
-            crate::js_net_server_on(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            crate::js_net_server_on(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "once" if args.len() >= 2 => {
-            crate::js_net_server_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            crate::js_net_server_once(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "prependListener" if args.len() >= 2 => {
-            crate::js_net_server_prepend_listener(
-                handle,
-                unbox_to_i64(args[0]),
-                unbox_to_i64(args[1]),
-            );
+            crate::js_net_server_prepend_listener(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "prependOnceListener" if args.len() >= 2 => {
             crate::js_net_server_prepend_once_listener(
                 handle,
-                unbox_to_i64(args[0]),
+                str_arg(args[0]),
                 unbox_to_i64(args[1]),
             );
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            crate::js_net_server_remove_listener(
-                handle,
-                unbox_to_i64(args[0]),
-                unbox_to_i64(args[1]),
-            );
+            crate::js_net_server_remove_listener(handle, str_arg(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
         "removeAllListeners" => {
-            let event = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let event = args.first().copied().map(str_arg).unwrap_or(0);
             crate::js_net_server_remove_all_listeners(handle, event);
             nanbox_handle(handle)
         }
         "listenerCount" if !args.is_empty() => {
-            crate::js_net_server_listener_count(handle, unbox_to_i64(args[0]))
+            crate::js_net_server_listener_count(handle, str_arg(args[0]))
         }
         "eventNames" => json_str_to_value(crate::js_net_server_event_names(handle)),
         "listeners" if !args.is_empty() => {
-            let arr = crate::js_net_server_listeners(handle, unbox_to_i64(args[0]));
+            let arr = crate::js_net_server_listeners(handle, str_arg(args[0]));
             nanbox_ptr(arr as *mut ArrayHeader)
         }
         "rawListeners" if !args.is_empty() => {
-            let arr = crate::js_net_server_raw_listeners(handle, unbox_to_i64(args[0]));
+            let arr = crate::js_net_server_raw_listeners(handle, str_arg(args[0]));
             nanbox_ptr(arr as *mut ArrayHeader)
         }
         "ref" | "unref" => nanbox_handle(handle),
@@ -523,18 +517,18 @@ unsafe fn block_list_method(handle: i64, method: &str, args: &[f64]) -> Option<f
 
     let result = match method {
         "addAddress" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
+            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
             crate::js_net_block_list_add_address(handle, address, family)
         }
         "addRange" => {
-            let start = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let end = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
+            let start = args.first().copied().map(str_arg).unwrap_or(0);
+            let end = args.get(1).copied().map(str_arg).unwrap_or(0);
+            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
             crate::js_net_block_list_add_range(handle, start, end, family)
         }
         "addSubnet" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
             // A missing `prefix` must reach `js_net_validate_block_list_prefix`
             // as a non-numeric value so it throws `ERR_INVALID_ARG_TYPE`, matching
             // Node (the parameter is required). Defaulting to a real number here
@@ -544,12 +538,12 @@ unsafe fn block_list_method(handle: i64, method: &str, args: &[f64]) -> Option<f
                 .copied()
                 .map(unbox_to_f64)
                 .unwrap_or_else(undefined);
-            let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
+            let family = args.get(2).copied().map(str_arg).unwrap_or(0);
             crate::js_net_block_list_add_subnet(handle, address, prefix, family)
         }
         "check" => {
-            let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let family = args.get(1).copied().map(unbox_to_i64).unwrap_or(0);
+            let address = args.first().copied().map(str_arg).unwrap_or(0);
+            let family = args.get(1).copied().map(str_arg).unwrap_or(0);
             crate::js_net_block_list_check(handle, address, family)
         }
         "rules" | "toJSON" => crate::js_net_block_list_to_json(handle),

@@ -540,6 +540,10 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 unsafe fn extract_string_value(val_f64: f64) -> Option<String> {
     let bits = val_f64.to_bits();
     let upper = bits >> 48;
+    if upper == 0x7FF9 {
+        // Inline SSO string (#11519).
+        return JsValue::from_bits(bits).to_owned_string();
+    }
     let ptr: *const StringHeader = if upper == 0x7FFF || upper == 0x7FFD {
         (bits & PTR_MASK) as *const StringHeader
     } else if upper == 0 && bits >= 0x10000 {

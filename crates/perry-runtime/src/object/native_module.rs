@@ -46,12 +46,12 @@ pub(crate) use callable_exports::{
     module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
     module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
     native_string_value, prune_dead_builtin_closure_metadata_owners,
-    scan_builtin_closure_metadata_roots_mut, scan_tls_derived_prototype_roots_mut,
-    set_bound_native_closure_name, set_builtin_closure_length,
-    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
-    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
-    tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
-    zlib_codes_object,
+    prune_dead_builtin_closure_metadata_owners_young, scan_builtin_closure_metadata_roots_mut,
+    scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
+    set_builtin_closure_length, set_builtin_closure_non_constructable,
+    sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
+    timers_promises_parent_namespace, tls_constructor_prototype_is_instance_of,
+    util_inspect_default_options_value, zlib_codes_object,
 };
 pub(crate) use constants::get_native_module_constant;
 pub(crate) use constructor_exports::{

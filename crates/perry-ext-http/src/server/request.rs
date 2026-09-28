@@ -1109,7 +1109,8 @@ pub unsafe extern "C" fn js_node_http_im_add_header_line(
     let existing_f64 = f64::from_bits(existing.bits());
     match kind {
         HeaderFieldKind::List | HeaderFieldKind::Cookie => {
-            if JsValue::from_bits(existing.bits()).is_string() {
+            let existing_js = JsValue::from_bits(existing.bits());
+            if existing_js.is_string() || existing_js.is_short_string() {
                 let sep = if matches!(kind, HeaderFieldKind::Cookie) {
                     "; "
                 } else {

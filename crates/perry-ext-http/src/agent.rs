@@ -309,16 +309,8 @@ unsafe fn read_bool_field(obj_f64: f64, field: &str) -> Option<bool> {
 
 unsafe fn read_string_field(obj_f64: f64, field: &str) -> Option<String> {
     let bits = read_field_bits(obj_f64, field)?;
-    let val = JsValue::from_bits(bits);
-    if !val.is_string() {
-        return None;
-    }
-    let ptr = val.as_string_ptr();
-    if ptr.is_null() {
-        return None;
-    }
-    let js = JsString::from_raw(ptr);
-    perry_ffi::read_string(js).map(String::from)
+    // Heap or inline SSO string (#11519).
+    JsValue::from_bits(bits).to_owned_string()
 }
 
 extern "C" fn agent_connection_abort_listener(
