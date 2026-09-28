@@ -1329,6 +1329,8 @@ js_function_prototype_value_for_read	Reenters
 js_gc_collect	Reenters
 js_gc_declare_typed_shape_layout	Leaf
 js_gc_enter_unsafe_zone	Leaf
+js_gc_entry_safepoint	Reenters
+js_gc_entry_safepoint_args	Reenters
 js_gc_exit_unsafe_zone	Leaf
 js_gc_forget_object_layout	Leaf
 js_gc_init	Leaf

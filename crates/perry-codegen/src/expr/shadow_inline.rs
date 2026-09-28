@@ -503,24 +503,27 @@ mod tests {
         // This test asserts on the SHADOW-STACK lowering. Native roots are the
         // default now, so it has to say which lowering it is testing.
         let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        // Register numbers below are pinned; the allocating fixture's entry
+        // poll scaffold (RFC deferred collection S5, `crate::entry_polls`)
+        // takes two (`load volatile` + `icmp`) ahead of them.
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains("ss.chk_top") && body.contains("ss.chk_len"),
             "inline store must keep both guards; body:\n{body}"
         );
         assert!(
-            body.contains("icmp eq i64 %r16, -1"),
+            body.contains("icmp eq i64 %r18, -1"),
             "frame_top must be tested against the usize::MAX no-frame sentinel; \
              body:\n{body}"
         );
         assert!(
-            body.contains("icmp ult i64 %r18, %r20"),
+            body.contains("icmp ult i64 %r20, %r22"),
             "slot index must be bounds-checked against ShadowStackState::len; \
              body:\n{body}"
         );
         assert!(
             body.contains(&format!(
-                "getelementptr inbounds i8, ptr %r13, i64 {}",
+                "getelementptr inbounds i8, ptr %r15, i64 {}",
                 SHADOW_STATE_LEN_OFFSET
             )),
             "the bounds check must read len at offset {SHADOW_STATE_LEN_OFFSET}; \
@@ -539,6 +542,9 @@ mod tests {
         // This test asserts on the SHADOW-STACK lowering. Native roots are the
         // default now, so it has to say which lowering it is testing.
         let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        // Register numbers below are pinned; the allocating fixture's entry
+        // poll scaffold (RFC deferred collection S5, `crate::entry_polls`)
+        // takes two (`load volatile` + `icmp`) ahead of them.
         let body = roots_body(&rooted_local_ir());
         assert!(
             body.contains(
@@ -548,7 +554,7 @@ mod tests {
              body:\n{body}"
         );
         assert!(
-            body.contains("call void @js_write_barrier_root_nanbox(i64 %r26)"),
+            body.contains("call void @js_write_barrier_root_nanbox(i64 %r28)"),
             "inline bind must shade the value it just stored when a cycle is in \
              flight; body:\n{body}"
         );

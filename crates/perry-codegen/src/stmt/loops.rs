@@ -7921,7 +7921,7 @@ fn lower_for_after_init_impl(
 /// polls that nothing consumes. `policy::moving_loop_polls_enabled_from_env`
 /// carries the full argument for the flip and for why leaving it off was the
 /// more dangerous state after #7682.
-fn moving_safepoint_polls_enabled() -> bool {
+pub(crate) fn moving_safepoint_polls_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {

@@ -35,6 +35,14 @@ use std::time::{Duration, Instant};
 
 mod types;
 pub use types::*;
+/// RFC deferred collection S5: allocation never begins a precise or moving
+/// collection phase (D2). See the module docs.
+mod alloc_point;
+/// RFC deferred collection S5: the function-entry poll entries.
+mod entry_poll;
+pub(crate) use alloc_point::note_block_if_unsafe_zone;
+pub use alloc_point::{alloc_point_counters, AllocPointCounters};
+pub use entry_poll::entry_polls_reached;
 mod json_defer;
 mod policy;
 pub(crate) use json_defer::JsonParseAllocation;
@@ -370,10 +378,11 @@ fn gc_collect_minor_with_trigger_inner(
     escalation: FullEscalation,
     copying: CopyingFastPath,
 ) -> GcCollectOutcome {
-    // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
-    // consumer of the scan decision (root scan, copying eligibility,
-    // evacuation pinning, verifier) sees the same healed answer.
-    let _contract_heal = policy::contract_scan_heal_guard();
+    // D2 (RFC deferred collection S5): a collection that begins at an
+    // allocation point must already have the conservative scan forced, which
+    // also makes the copying minor ineligible. Structurally unreachable;
+    // panics rather than heals.
+    alloc_point::assert_d2_synchronous_collection();
     gc_drain_active_budgeted_cycle();
     // Barriers-off ⇒ the remembered set is not being maintained, and a
     // minor's black-leafed old parents would hide live children. Route
@@ -826,10 +835,8 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
 
-    // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
-    // gc() engages its own force_full_scan first, which this detects as
-    // already-Scan and no-ops.
-    let _contract_heal = policy::contract_scan_heal_guard();
+    // D2: see gc_collect_minor_with_trigger_inner.
+    alloc_point::assert_d2_synchronous_collection();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
     diag_sites::full_started(diag_sites::take_full_site(), trigger.kind);
@@ -1431,6 +1438,7 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     diag_sites::report_charges("exit");
     diag_sites::report_primitive_dispatch("exit");
     emit_incremental_liveness_diag();
+    alloc_point::write_valve_ledger_line();
     emit_schedule_liveness_verdict();
 }
 
@@ -1479,6 +1487,13 @@ fn emit_incremental_liveness_diag() {
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
         trace::forwarded_stub_membership_recoveries(),
+    );
+    eprintln!("{}", alloc_point::alloc_point_exit_line());
+    let (frames_verified, unmapped_generated) = roots::frame_verify_counters();
+    eprintln!(
+        "[gc-verify-frames] armed={} frames_verified={frames_verified} \
+         unmapped_generated={unmapped_generated}",
+        roots::stack_maps_frame_verify_active(),
     );
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();

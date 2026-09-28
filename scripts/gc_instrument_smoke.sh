@@ -206,6 +206,34 @@ echo
 echo "  [seeded schedule] pressure-only=$pressure_retired < seeded(0.25)=$sched_retired < rate-1=$rate1_retired"
 echo "  [seeded schedule] same seed twice: $sched_retired == $sched_repeat (reproducible)"
 
+# ---- arm 8: the unmapped-frame verifier (RFC deferred collection S5) ---------
+#
+# `PERRY_GC_VERIFY_FRAMES=1` and a resolved schedule seed both arm the
+# verifier: a precise collection that walks a generated frame with no stack
+# map at its call panics. Non-vacuity: `frames_verified` counts the unmatched
+# frames it classified, so a run whose collections never walked a native frame
+# (shadow-frame build, no precise collection) reads as 0 and fails here.
+echo
+echo "== arm 8: unmapped-frame verifier (explicit knob, then the seed) =="
+for arm in "PERRY_GC_VERIFY_FRAMES=1" "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1"; do
+  set +e
+  # shellcheck disable=SC2086
+  out="$(env $arm PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_DIAG=1 "$WORK/fixture" 2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]] || ! grep -q '^bad 0$' <<<"$out"; then
+    echo "FAIL [verify-frames: $arm]: exit $rc" >&2
+    echo "$out" | grep -E 'safety net|panicked|^bad' | head -5 >&2
+    exit 1
+  fi
+  verified="$(grep -o 'frames_verified=[0-9]*' <<<"$out" | head -1 | cut -d= -f2)"
+  if [[ -z "$verified" || "$verified" -eq 0 ]]; then
+    echo "FAIL [verify-frames: $arm]: frames_verified=${verified:-missing}; the verifier never ran." >&2
+    exit 1
+  fi
+  echo "  [verify-frames: $arm] clean, frames_verified=$verified"
+done
+
 # ---- arm 7: the quarantine, aimed at real programs --------------------------
 #
 # #7341. Everything above drives the instrument with PERRY_GC_MOVING_LOOP_POLLS

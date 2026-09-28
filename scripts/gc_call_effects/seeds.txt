@@ -37,6 +37,8 @@ poll regex ^perry_runtime::gc::idle_reclaim::(?![A-Z][A-Z0-9_]*::) -- idle recla
 # moving collection can begin inside the call.
 poll exact js_gc_loop_safepoint -- the loop back-edge poll
 poll exact js_gc_safepoint -- the explicit safepoint entry
+poll exact js_gc_entry_safepoint -- the function-entry poll (RFC deferred collection S5): the loop poll's body under another name
+poll exact js_gc_entry_safepoint_args -- the value-wrapper entry poll: roots its spilled arguments across the loop poll's body
 poll regex ^perry_runtime::gc::policy::manual_gc_collect_now -- the collection behind gc() / perry/gc: a declared poll
 poll regex ^perry_runtime::gc::policy::gc_safepoint_moving_minor -- the poll body: runs the moving minor at a declared safepoint
 

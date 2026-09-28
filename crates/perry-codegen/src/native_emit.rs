@@ -95,6 +95,7 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
         skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
     }
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
+    crate::gc_map::note_statepoint_functions(&funcs);
     let gc_leaf_callees = crate::gc_call_effects::transitive_leaf_functions(&funcs);
     let (typed_insts, raw_insts) =
         stream_functions(context, &module, &funcs, false, &gc_leaf_callees)?;

@@ -58,7 +58,9 @@ mod versioned_indexed_loop;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
-pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
+pub(crate) use loops::{
+    emit_js_value_is_number, lower_do_while, lower_for, lower_while, moving_safepoint_polls_enabled,
+};
 pub(crate) use switch_stmt::lower_switch;
 pub(crate) use try_stmt::lower_try;
 

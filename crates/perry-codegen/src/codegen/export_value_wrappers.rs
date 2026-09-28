@@ -121,16 +121,29 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let wrap_name = format!("__perry_wrap_{}", original_name);
         let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
         let _ = wf.create_block("entry");
-        let blk = wf.block_mut(0).unwrap();
+        // RFC deferred collection S5: this forwarder is how a top-level
+        // function is entered as a callback, so it carries the indirect-entry
+        // poll. The wrapper has no root slots, so the poll spills its
+        // arguments for the runtime to root and hands back the (possibly
+        // relocated) values; `finalize_module` drops it when the forwarded
+        // function is a proven leaf.
+        let (this_closure, forwarded) =
+            if crate::entry_polls::entry_polls_enabled() && !f.body.is_empty() {
+                crate::entry_polls::emit_wrapper_entry_poll(wf, "%this_closure", &arg_names)
+            } else {
+                ("%this_closure".to_string(), arg_names.clone())
+            };
+        let last = wf.num_blocks() - 1;
+        let blk = wf.block_mut(last).unwrap();
         // Call the underlying function with just the arg doubles.
         let call_args: Vec<(LlvmType, &str)> =
-            arg_names.iter().map(|n| (DOUBLE, n.as_str())).collect();
+            forwarded.iter().map(|n| (DOUBLE, n.as_str())).collect();
         let mut result = blk.call(DOUBLE, &original_name, &call_args);
         if function_body_returns_generator_object(&f.body) {
             result = blk.call(
                 DOUBLE,
                 "js_generator_attach_closure_prototype",
-                &[(DOUBLE, &result), (I64, "%this_closure")],
+                &[(DOUBLE, &result), (I64, &this_closure)],
             );
         }
         blk.ret(DOUBLE, &result);

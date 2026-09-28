@@ -178,6 +178,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // collection can run at a precise-root safepoint. No-op at runtime unless
     // moving mode is on and a collection is pending.
     module.declare_function("js_gc_loop_safepoint", VOID, &[]);
+    // RFC deferred collection S5: the function-entry polls (`entry_polls.rs`).
+    // Same runtime path as the back-edge poll; distinct symbols so the module
+    // leaf analysis can tell them apart.
+    module.declare_function("js_gc_entry_safepoint", VOID, &[]);
+    module.declare_function("js_gc_entry_safepoint_args", VOID, &[PTR, I32]);
     // The poll's arming word (`perry-runtime/src/gc/poll_arm.rs`). Non-zero
     // means `js_gc_loop_safepoint` has something to consider; zero is a proof
     // it would return immediately, so `emit_gc_loop_safepoint` loads this and

@@ -104,9 +104,23 @@ pub(crate) struct ManualGcScanGuard {
     engaged: bool,
 }
 
+crate::perry_thread_local! {
+    /// How many `ManualGcScanGuard`s are live on this thread, whether or not
+    /// each managed to pin the override. The allocation-point invariant
+    /// (`gc/alloc_point.rs`) checks this REQUEST, which no override can hide.
+    static SCAN_REQUESTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether some caller on this thread has requested the conservative scan for
+/// the collection now running.
+pub(crate) fn conservative_scan_requested() -> bool {
+    SCAN_REQUESTS.with(|c| c.get() != 0)
+}
+
 impl ManualGcScanGuard {
     pub(crate) fn force_full_scan(site: super::ConservativeScanSite) -> Self {
         super::record_scan_fallback(site);
+        SCAN_REQUESTS.with(|c| c.set(c.get() + 1));
         let engaged = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| {
             if c.get().is_some() {
                 return false;
@@ -120,6 +134,7 @@ impl ManualGcScanGuard {
 
 impl Drop for ManualGcScanGuard {
     fn drop(&mut self) {
+        SCAN_REQUESTS.with(|c| c.set(c.get().saturating_sub(1)));
         if self.engaged {
             CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.set(None));
         }

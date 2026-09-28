@@ -11,8 +11,9 @@ mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
+pub(super) use stack_maps::frame_verify::active as stack_maps_frame_verify_active;
+pub(super) use stack_maps::frame_verify::counters as frame_verify_counters;
 pub(super) use stack_maps::initialize as initialize_stack_maps;
-pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
 pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
@@ -45,11 +46,11 @@ pub(crate) use stack_roots::with_stack_roots;
 // `shadow_stack` re-exports below.
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_stack_scan_decision, conservative_stack_scan_decision_for,
-    conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
-    resolve_conservative_stack_scan_mode, set_conservative_stack_scan_override,
-    ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,
-    CONSERVATIVE_STACK_SCAN_OVERRIDE,
+    conservative_scan_requested, conservative_stack_scan_decision,
+    conservative_stack_scan_decision_for, conservative_stack_scan_mode,
+    conservative_stack_scan_mode_from_value, resolve_conservative_stack_scan_mode,
+    set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
+    ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
 pub(crate) use shadow_stack::SHADOW;

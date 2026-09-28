@@ -191,6 +191,9 @@ pub struct LlFunction {
     /// Slots withdrawn by [`Self::forget_pre_return_box_release`]; a later
     /// registration of the same slot stays withdrawn.
     withheld_box_release_slots: Vec<String>,
+    /// RFC deferred collection S5: this function's entry-poll scaffold, if
+    /// lowering emitted one (`crate::entry_polls`).
+    pub(crate) entry_poll: Option<crate::entry_polls::EntryPollSite>,
 }
 
 /// Render the frame-push instruction. Kept in one place so the eager
@@ -318,6 +321,7 @@ impl LlFunction {
             pre_return_void_calls: Vec::new(),
             pre_return_box_releases: Vec::new(),
             withheld_box_release_slots: Vec::new(),
+            entry_poll: None,
         }
     }
 
@@ -895,6 +899,16 @@ impl LlFunction {
         self.stack_map_requested
     }
 
+    /// Whether this function is rendered with `gc "statepoint-example"`, i.e.
+    /// whether its frames are described by the native GC map. The one
+    /// predicate the renderer and the GC map's zero-record listing share
+    /// (`gc_map::note_statepoint_functions`).
+    pub(crate) fn uses_statepoint_strategy(&self) -> bool {
+        self.stack_map_requested
+            && !self.force_shadow_frame
+            && crate::codegen::helpers::native_stack_roots_enabled()
+    }
+
     /// Label of the last-created block — convenience for expression codegen
     /// that needs to feed a phi node the predecessor label after compiling a
     /// sub-expression whose control flow may have split.
@@ -1010,10 +1024,7 @@ impl LlFunction {
         // on it and reintroduce the relocation fan-out the spill avoids. Its
         // `stack_map_requested` is already false (enable_shadow_frame_inner
         // took the shadow branch), so this is belt-and-braces.
-        let gc_strategy = if self.stack_map_requested
-            && !self.force_shadow_frame
-            && crate::codegen::helpers::native_stack_roots_enabled()
-        {
+        let gc_strategy = if self.uses_statepoint_strategy() {
             " gc \"statepoint-example\""
         } else {
             ""

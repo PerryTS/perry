@@ -1387,6 +1387,15 @@ pub(super) fn compile_function(
         buffer_alias_base,
     };
 
+    // RFC deferred collection S5: a top-level function is entered directly,
+    // so its entry poll survives only as the poll of a recursive SCC
+    // (`crate::entry_polls::finalize_module`). Parameters are rooted above;
+    // `arguments` materialisation below can already allocate.
+    crate::entry_polls::emit_entry_poll(
+        &mut ctx,
+        &f.body,
+        crate::entry_polls::EntryPollKind::Direct,
+    );
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
         &mut ctx,

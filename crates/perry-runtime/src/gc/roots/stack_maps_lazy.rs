@@ -349,11 +349,26 @@ pub(super) fn unzigzag(value: u32) -> i32 {
 ///
 /// `origin` is the runtime address of `bytes[0]`; the v6 function fields are
 /// offsets from their blob, so the table cannot be read without it.
+#[cfg(test)]
 pub(super) fn parse_function_table(
     section: u16,
     bytes: &[u8],
     origin: usize,
     out: &mut Vec<FunctionEntry>,
+) -> Option<()> {
+    parse_functions(section, bytes, origin, out, &mut Vec::new())
+}
+
+/// [`parse_function_table`], also collecting the address of every ZERO-record
+/// function entry into `unrecorded`. Codegen lists those only in an
+/// instrumented build, for the unmapped-frame verifier; they never enter the
+/// record index (see the note at the `record_count == 0` check).
+pub(super) fn parse_functions(
+    section: u16,
+    bytes: &[u8],
+    origin: usize,
+    out: &mut Vec<FunctionEntry>,
+    unrecorded: &mut Vec<usize>,
 ) -> Option<()> {
     let mut base = 0usize;
     while base + 16 <= bytes.len() {
@@ -441,6 +456,7 @@ pub(super) fn parse_function_table(
             // derived its function list from records and so excluded these by
             // construction; excluding them here keeps that property.
             if record_count == 0 {
+                unrecorded.push(address);
                 continue;
             }
             out.push(FunctionEntry {

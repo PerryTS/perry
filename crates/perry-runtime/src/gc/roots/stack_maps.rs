@@ -127,6 +127,9 @@ struct StackMapIndex {
     /// Sorted by address. Duplicates are kept, not deduplicated: two entries
     /// can share a relocated address and each brings its own records.
     functions: Vec<lazy::FunctionEntry>,
+    /// Sorted start addresses of generated functions the map lists with ZERO
+    /// records (the unmapped-frame verifier's view; `stack_maps_frame_verify.rs`).
+    unrecorded_functions: Vec<usize>,
     eager: Option<EagerIndex>,
 }
 
@@ -803,13 +806,6 @@ pub(in crate::gc) fn ensure_built() {
     STACK_MAPS_INITIALIZED.store(true, Ordering::Release);
 }
 
-/// Whether this image carries any native stack-map records — i.e. whether
-/// precise frame roots depend on mapped PCs at all. Consumed by the
-/// `PERRY_GC_SAFEPOINT_ONLY` contract assert.
-pub(in crate::gc) fn native_maps_active() -> bool {
-    !stack_maps().index.is_empty()
-}
-
 fn stack_maps() -> RwLockReadGuard<'static, PublishedStackMapIndex> {
     STACK_MAPS.read()
 }
@@ -877,13 +873,14 @@ fn build_index_from_sections(
     // fourth gate-failure mode (the gate runs, its subject never did), so
     // fail loudly instead. In practice this can only mean a binary whose
     // compiler and runtime disagree about the map format.
-    let mut functions = Vec::new();
+    let (mut functions, mut unrecorded_functions) = (Vec::new(), Vec::new());
     for (index, section) in sections.iter().enumerate() {
         let section_index = u16::try_from(index).unwrap_or_else(|_| {
             panic!("perry: {} loaded images carry a GC map section; the index addresses them with a u16", sections.len())
         });
         let origin = origins[index];
-        if lazy::parse_function_table(section_index, section, origin, &mut functions).is_none() {
+        let (out, unrecorded) = (&mut functions, &mut unrecorded_functions);
+        if lazy::parse_functions(section_index, section, origin, out, unrecorded).is_none() {
             undecodable_section(section.len());
         }
     }
@@ -892,6 +889,7 @@ fn build_index_from_sections(
     // symbol, or the linker can fold identical code, and each entry brings its
     // own records. Deduplicating would drop one set silently.
     crate::cold_sort::sort_by_u64_key(&mut functions, |entry| entry.address as u64);
+    unrecorded_functions.sort_unstable();
 
     let eager = match mode {
         IndexMode::Lazy => None,
@@ -901,6 +899,7 @@ fn build_index_from_sections(
         mode,
         sections,
         functions,
+        unrecorded_functions,
         eager,
     }
 }
@@ -1302,14 +1301,9 @@ fn sve_vector_length_bytes() -> Option<usize> {
 pub(super) fn visit_stack_map_root_slots(
     visit: &mut impl FnMut(MutableRootSlot),
 ) -> NativeStackWalkStats {
-    // The invariant is not "initialize ran" but "an empty index means this
-    // image genuinely has no native roots". Stating it that way keeps the
-    // check live in EVERY configuration: perry-runtime's unit tests reach the
-    // scan without `js_gc_init`, and they pass because their harness carries
-    // no gc-map section — the right reason — rather than by being exempted
-    // from the check. Exempting them by build config would leave no check in
-    // precisely the configuration where the index is legitimately unbuilt,
-    // which is a hole the moment a test binary does carry statepoint frames.
+    // The invariant is "an empty index means this image genuinely has no
+    // native roots", not "initialize ran": that keeps the check live in every
+    // configuration, unit tests (which carry no gc-map section) included.
     assert!(
         stack_maps_initialized() || !image_has_stack_map_sections(),
         "perry: the native root scan ran before the stack-map index was built. \
@@ -1328,16 +1322,9 @@ pub(super) fn visit_stack_map_root_slots(
             root.visit_with_context(visit)
         }),
         WalkerMode::Fast => {
-            // No whole-image `chain_walkable` precondition any more. v4 decided
-            // it once by scanning every root slot in the section — 4.9M of them
-            // for claude-code — which a lazy index cannot do and should not:
-            // the fast walk now checks the frame it is about to resolve and
-            // fails closed to the unwinder if THAT record uses a base it cannot
-            // reconstruct. That is strictly narrower than disabling the fast
-            // path for the whole image because one function somewhere uses an
-            // exotic register, and it reuses the mid-walk bail this walker
-            // already performs for `x19_is_body_sp` and an unvalidated
-            // `caller_fp`.
+            // No whole-image `chain_walkable` precondition (v4 scanned 4.9M
+            // slots for it): the fast walk checks each frame it resolves and
+            // fails closed to the unwinder for a base it cannot reconstruct.
             if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
                 root.visit_with_context(visit)
             }) {
@@ -1368,6 +1355,7 @@ mod unwind {
             argument: *mut c_void,
         ) -> i32;
         fn _Unwind_GetIP(context: *mut UnwindContext) -> usize;
+        fn _Unwind_GetRegionStart(context: *mut UnwindContext) -> usize;
         fn _Unwind_GetGR(context: *mut UnwindContext, register: i32) -> usize;
         /// The frame's canonical frame address — the supported way to reach a
         /// frame's stack pointer. `_Unwind_GetGR` on the SP column is not a
@@ -1437,6 +1425,10 @@ mod unwind {
         }
         let index = state.index;
         let Some(matched) = index.match_records(ip) else {
+            if frame_verify::active() {
+                let start = _Unwind_GetRegionStart(context);
+                frame_verify::unmatched_frame(index, ip, start);
+            }
             return 0;
         };
         let mut records = index.matched(&matched);
@@ -1459,13 +1451,7 @@ mod unwind {
                 // alike — so there is no return-address adjustment to make and
                 // no per-architecture constant left to get wrong.
                 //
-                // It stayed invisible because this is the FALLBACK path: on
-                // aarch64 the x29 chain walk normally answers, and wherever it
-                // bailed this read unrelated words instead of the roots, which
-                // nothing downstream can notice — no code knows what a root slot
-                // is supposed to contain. Cross-checked directly on
-                // `02_survivor_promotion`: at the CFA the slot holds a NaN-boxed
-                // pointer (`0x7ffd…`); one frame lower it holds a stack address.
+                // (#7392 has why it stayed invisible: this is the fallback path.)
                 let base = if location.dwarf_reg == ARCH_DWARF_SP {
                     _Unwind_GetCFA(context)
                 } else {
@@ -1700,6 +1686,12 @@ mod unwind {
             let entry = unsafe {
                 RtlLookupFunctionEntry(context.rip, &mut image_base, std::ptr::null_mut())
             };
+            let rip = context.rip as usize;
+            if frame_verify::active() && !entry.is_null() && index.match_records(rip).is_none() {
+                // RUNTIME_FUNCTION.BeginAddress is its first u32, image-relative.
+                let begin = unsafe { *(entry as *const u32) } as usize + image_base as usize;
+                frame_verify::unmatched_frame(index, rip, begin);
+            }
             if entry.is_null() {
                 // No unwind info. On Win64 only the innermost frame can be a
                 // leaf (a function that has performed a call must carry
@@ -1835,7 +1827,12 @@ mod fp_chain {
             // table answers containment exactly and in one binary search, and
             // a filter that is even slightly too NARROW drops a real frame's
             // roots — which is not a tradeoff worth making to save a compare.
-            if let Some(matched) = index.match_records(return_address) {
+            let matched = index.match_records(return_address);
+            if matched.is_none() && frame_verify::active() {
+                let start = frame_verify::function_start_of(return_address);
+                frame_verify::unmatched_frame(index, return_address, start);
+            }
+            if let Some(matched) = matched {
                 // The record describes the caller's frame; its locations are
                 // relative to the caller's own x29, which is exactly the saved
                 // word we just read.
@@ -1946,6 +1943,9 @@ mod lazy;
 /// `stack_maps_verify.rs` is: the parent is at the repo's 2000-line cap.
 #[path = "stack_maps_index.rs"]
 mod index;
+
+#[path = "stack_maps_frame_verify.rs"]
+pub(in crate::gc) mod frame_verify;
 
 #[path = "stack_maps_decode.rs"]
 mod decode;
