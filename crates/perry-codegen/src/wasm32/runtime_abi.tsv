@@ -440,7 +440,6 @@ js_buffer_read_uint32_le	f64	f64,i32s
 js_buffer_read_uint8	f64	f64,i32s
 js_buffer_read_uint_be	f64	f64,i32s,i32s
 js_buffer_read_uint_le	f64	f64,i32s,i32s
-js_buffer_register_external	void	usize
 js_buffer_resolve_object_url	f64	f64
 js_buffer_set	void	ptr,i32s,i32s
 js_buffer_set_from	void	ptr,ptr,i32s

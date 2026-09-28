@@ -241,9 +241,6 @@ fn observe_pointer(addr: usize) {
         if crate::symbol::is_registered_symbol(addr) {
             mark_old(ReceiverReprFamily::SymbolGlobal);
         }
-        if crate::buffer::is_external_buffer(addr) {
-            mark_old(ReceiverReprFamily::ExternalBuffer);
-        }
         return;
     }
 
@@ -492,13 +489,8 @@ mod tests {
                 false,
             )
         });
-        assert_fixture(ReceiverReprFamily::ExternalBuffer, || {
-            let buffer = Box::into_raw(Box::new(crate::buffer::BufferHeader {
-                length: 0,
-                capacity: 0,
-            }));
-            crate::buffer::js_buffer_register_external(buffer as usize);
-            (buffer as usize, false)
+        assert_fixture_migrated(ReceiverReprFamily::ExternalBuffer, || {
+            crate::buffer::buffer_alloc_foreign(std::ptr::null_mut(), 0) as usize
         });
         assert_fixture(ReceiverReprFamily::Sab, || {
             (crate::shared_sab::alloc_shared_sab(1) as usize, false)

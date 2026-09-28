@@ -413,21 +413,18 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
 
-        // SharedArrayBuffer: a process-global backing store (no GcHeader).
+        // SharedArrayBuffer is an immortal process-global buffer cell.
         // Pass it by reference so the receiving agent aliases the same bytes
-        // (#4913). This MUST precede the GcHeader read below — a SAB header has
-        // no preceding GcHeader, so reading one would misclassify it.
+        // rather than taking the ordinary per-agent copy path below.
         if crate::shared_sab::is_shared_sab(raw_ptr as usize) {
             return SerializedValue::SharedArrayBuffer {
                 addr: raw_ptr as usize,
             };
         }
 
-        // Uint8Array can be backed by an ordinary GC allocation, a registered
-        // view, or an external BufferHeader with no preceding GcHeader. Brand
-        // detection must therefore precede the GcHeader read below, just like
-        // SharedArrayBuffer detection does. Always read through buffer_data so
-        // views and external storage copy their authoritative byte window.
+        // Byte views copy their authoritative span through buffer_data, so a
+        // foreign-backed Uint8Array crosses by value exactly as a structured
+        // clone does in node; its native backing is never shared.
         if crate::buffer::is_uint8array_buffer(raw_ptr as usize) {
             let buffer = raw_ptr as *const crate::buffer::BufferHeader;
             let len = (*buffer).length as usize;

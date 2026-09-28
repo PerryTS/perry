@@ -119,3 +119,4 @@ mod dyn_eval_registry;
 mod private_evaluation_storage;
 
 mod event_internal_slots;
+mod external_buffer;

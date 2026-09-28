@@ -2022,15 +2022,6 @@
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
-    "EXTERNAL_BUFFER_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of externally-registered buffers, removed only by the dead-buffer finalizer or re-registration; freed addresses are dropped at thread exit.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
     "EXTERNAL_UINT8ARRAY_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -2060,7 +2051,7 @@
     "BUFFER_LIKE_ADDR_WINDOW"
    ],
    "verdict": "conservative_filter",
-   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), EXTERNAL_BUFFER_REGISTRY, shared_sab's registry via is_registered_buffer_slow."
+   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), shared_sab's registry via is_registered_buffer_slow."
   },
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",

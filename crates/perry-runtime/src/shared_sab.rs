@@ -34,7 +34,7 @@ use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER};
 /// Set of `BufferHeader` addresses that back a `SharedArrayBuffer`.
 static SHARED_SAB_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 
-/// Latched true by the first SAB allocation. Mirrors `EXTERNAL_BUFFERS_NONEMPTY`
+/// Latched true by the first SAB allocation. Mirrors the external-Uint8Array latch
 /// in `buffer::header` and exists for the same reason: `is_shared_sab` sits on
 /// two hot paths that run for *every* pointer-shaped value —
 /// `buffer::is_registered_buffer`'s final fallback (which JSON.stringify runs
@@ -124,7 +124,7 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     // without it ever entering their thread-local registries, so both latches
     // must be armed before this address can be found — an arm placed after the
     // insert leaves a window in which the entry is live and a probe still takes
-    // the idle fast path. (This is the ordering `js_buffer_register_external`
+    // the idle fast path. (This is the ordering `register_buffer`
     // already documents; see also `crate::registry_latch`.)
     SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
     crate::buffer::note_buffer_like_registered(buf as usize);

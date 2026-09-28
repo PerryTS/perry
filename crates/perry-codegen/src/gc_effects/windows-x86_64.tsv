@@ -445,7 +445,6 @@ js_buffer_read_uint32_le	Reenters
 js_buffer_read_uint8	Reenters
 js_buffer_read_uint_be	Reenters
 js_buffer_read_uint_le	Reenters
-js_buffer_register_external	Leaf
 js_buffer_resolve_object_url	Leaf
 js_buffer_set	Leaf
 js_buffer_set_from	Reenters
