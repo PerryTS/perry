@@ -2289,6 +2289,11 @@ jobs:
       - name: GC rooting-bug instruments (inert-when-off, live-when-on)
         run: ./scripts/gc_instrument_smoke.sh target/release/perry
 
+      # GATING (RFC deferred collection, decision 5): no allocation-point valve
+      # fires on the GC ratchet probes, and every probe reports.
+      - name: GC valve ledger over the ratchet probes
+        run: ./scripts/gc_valve_ratchet_probes.sh target/release/perry
+
       - name: Run GC write-barrier stress tests
         # Informational: these are ~200s nondeterministic corruption-window
         # hunts (#5029). Kept out of the gate so a flake never blocks a PR.
@@ -3109,11 +3114,22 @@ jobs:
             export PERRY_BIN="$PWD/target/release/perry"
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
+          # RFC deferred collection, decision 5: an allocation-point GC valve
+          # firing on the gap suite is a hard failure. Every Perry binary the
+          # harness runs appends one line to this ledger at exit; the check
+          # below requires a line per passing test (the proof it ran) and
+          # zero valve firings on every line.
+          export PERRY_GC_VALVE_LEDGER="$RUNNER_TEMP/gc-valve-ledger.txt"
+          rm -f "$PERRY_GC_VALVE_LEDGER"
+          python3 scripts/gc_valve_ledger_check.py --self-test
           if [ "$GAP_TOTAL" = "1" ]; then
             ./scripts/run_gap_tests.sh
           else
             ./scripts/run_gap_tests.sh --shard "$GAP_SHARD/$GAP_TOTAL"
           fi
+          python3 scripts/gc_valve_ledger_check.py \
+            --ledger "$PERRY_GC_VALVE_LEDGER" \
+            --expect-min-from-report test-parity/reports/latest.json
 
       # Only produced by a `workflow_dispatch` with update_gap_snapshot=true
       # (one shard, whole suite). Download it and commit test-parity/

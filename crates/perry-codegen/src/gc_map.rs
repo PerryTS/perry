@@ -1214,6 +1214,95 @@ struct GcMapStats {
     roots: usize,
 }
 
+/// Names of every statepoint-strategy function codegen rendered in this
+/// process, recorded only while [`list_unrecorded_functions`] holds. Names are
+/// module-prefixed, so a process-wide union across modules is unambiguous.
+static STATEPOINT_FUNCTIONS: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// RFC deferred collection S5 (the unmapped-frame verifier): list, in the GC
+/// map, the statepoint-strategy functions that have NO records — functions
+/// whose every call is a `gc-leaf-function`. The runtime keeps them out of the
+/// record index (v6 already skips zero-record entries) and uses them only to
+/// recognise a generated frame that a collection found at an unmapped call.
+///
+/// Instrumented builds only: `PERRY_GC_INSTRUMENTS=1`, `PERRY_GC_VERIFY_FRAMES`
+/// or `PERRY_GC_SCHEDULE_SEED` set at compile time — the same condition that
+/// links the runtime's instruments. A shipped binary pays no map bytes for it.
+pub(crate) fn list_unrecorded_functions() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let set = |value: Result<String, std::env::VarError>| {
+            value.is_ok_and(|v| !v.trim().is_empty())
+        };
+        std::env::var("PERRY_GC_INSTRUMENTS")
+            .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+            || set(std::env::var("PERRY_GC_VERIFY_FRAMES"))
+            || set(std::env::var("PERRY_GC_SCHEDULE_SEED"))
+    })
+}
+
+/// Record `functions`' statepoint-strategy members for
+/// [`append_unrecorded_functions`]. A no-op unless listing is on.
+pub(crate) fn note_statepoint_functions(functions: &[&crate::function::LlFunction]) {
+    if !list_unrecorded_functions() {
+        return;
+    }
+    let mut guard = STATEPOINT_FUNCTIONS.lock().unwrap_or_else(|p| p.into_inner());
+    let set = guard.get_or_insert_with(Default::default);
+    for function in functions {
+        if function.uses_statepoint_strategy() {
+            set.insert(function.name.clone());
+        }
+    }
+}
+
+/// Append a zero-record entry for every recorded statepoint-strategy function
+/// DEFINED in this assembly that the stack map does not already list.
+fn append_unrecorded_functions(
+    lines: &[&str],
+    block: &RawBlock,
+    target: &str,
+    functions: &mut Vec<FunctionMap>,
+) {
+    if !list_unrecorded_functions() {
+        return;
+    }
+    let guard = STATEPOINT_FUNCTIONS.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(names) = guard.as_ref() else {
+        return;
+    };
+    let prefix = if matches!(format_for(target), ObjectFormat::MachO) {
+        "_"
+    } else {
+        ""
+    };
+    let mut listed: std::collections::HashSet<String> =
+        functions.iter().map(|f| f.symbol.clone()).collect();
+    for (index, line) in lines.iter().enumerate() {
+        if (block.start_line..block.end_line).contains(&index) {
+            continue;
+        }
+        let Some((label, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if !(rest.is_empty() || rest.starts_with([' ', '\t'])) || label.starts_with(['\t', ' ', '.', '"']) {
+            continue;
+        }
+        let Some(name) = label.strip_prefix(prefix) else {
+            continue;
+        };
+        if names.contains(name) && listed.insert(label.to_string()) {
+            functions.push(FunctionMap {
+                symbol: label.to_string(),
+                stack_size: 0,
+                records: Vec::new(),
+            });
+        }
+    }
+}
+
 /// Rewrite the LLVM stack-map block in `asm` into the compact map.
 ///
 /// Returns `None` when there is no stack-map block to rewrite (the common case
@@ -1229,7 +1318,8 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         return Ok(None);
     }
     let block = parse_block(&lines, word_width_for(target))?;
-    let functions = decode_v3(&block)?;
+    let mut functions = decode_v3(&block)?;
+    append_unrecorded_functions(&lines, &block, target, &mut functions);
     let stream = encode_stream(&functions)?;
     verify_roundtrip(&functions, &stream)?;
 
@@ -1306,7 +1396,8 @@ pub(crate) fn decode_stack_map_roots(
         return Err("assembly carries no stack-map section".to_string());
     }
     let block = parse_block(&lines, word_width_for(target))?;
-    let functions = decode_v3(&block)?;
+    let mut functions = decode_v3(&block)?;
+    append_unrecorded_functions(&lines, &block, target, &mut functions);
     let stream = encode_stream(&functions)?;
     verify_roundtrip(&functions, &stream)?;
     Ok(functions

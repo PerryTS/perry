@@ -1317,10 +1317,7 @@ pub(super) fn visit_stack_map_root_slots(
     if index.is_empty() {
         return NativeStackWalkStats::default();
     }
-    // The unmapped-frame verifier needs each frame's function start, which the
-    // unwinder reports and the x29-chain walk does not.
-    let mode = if frame_verify::active() { WalkerMode::Unwind } else { walker_mode() };
-    match mode {
+    match walker_mode() {
         WalkerMode::Unwind => unwind::visit(index, &mut |root: ResolvedRoot| {
             root.visit_with_context(visit)
         }),
@@ -1830,7 +1827,12 @@ mod fp_chain {
             // table answers containment exactly and in one binary search, and
             // a filter that is even slightly too NARROW drops a real frame's
             // roots — which is not a tradeoff worth making to save a compare.
-            if let Some(matched) = index.match_records(return_address) {
+            let matched = index.match_records(return_address);
+            if matched.is_none() && frame_verify::active() {
+                let start = frame_verify::function_start_of(return_address);
+                frame_verify::unmatched_frame(index, return_address, start);
+            }
+            if let Some(matched) = matched {
                 // The record describes the caller's frame; its locations are
                 // relative to the caller's own x29, which is exactly the saved
                 // word we just read.

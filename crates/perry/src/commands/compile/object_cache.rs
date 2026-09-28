@@ -1142,6 +1142,15 @@ fn compute_object_cache_key_with_env(
         "env_gc_safepoint_only",
         env_var("PERRY_GC_SAFEPOINT_ONLY").as_deref().unwrap_or(""),
     );
+    // RFC deferred collection S5: an instrumented compile lists zero-record
+    // statepoint functions in the GC map (the unmapped-frame verifier).
+    for var in [
+        "PERRY_GC_INSTRUMENTS",
+        "PERRY_GC_VERIFY_FRAMES",
+        "PERRY_GC_SCHEDULE_SEED",
+    ] {
+        h.field(var, env_var(var).as_deref().unwrap_or(""));
+    }
     // #7088: flips the shadow-slot store between an inline sequence and the
     // `js_shadow_slot_*` calls. Two arms that shared a cached object would
     // silently measure the same code.

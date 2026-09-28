@@ -25,9 +25,9 @@
 //!
 //! Armed by `PERRY_GC_VERIFY_FRAMES=1`, by a resolved `PERRY_GC_SCHEDULE_SEED`
 //! (the pairing the RFC names: at `RATE=1` every legal collection point is
-//! checked), and in `debug_assertions` builds (`gcaudit`). Off in release: it
-//! needs the unwinder rather than the x29-chain walk, and the zero-record
-//! entries cost map bytes; see the S5 changelog for the numbers.
+//! checked), and in `debug_assertions` builds (`gcaudit`). Off in release by
+//! default: every unmatched frame costs an unwind-table lookup, and the
+//! zero-record entries cost map bytes; see the S5 changelog for the numbers.
 
 use super::StackMapIndex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,6 +80,43 @@ fn unmapped_generated_frame(ip: usize, function_start: usize) -> ! {
          roots were not visited. See RFC deferred collection §2 (the #11522 class).",
         ip.wrapping_sub(function_start)
     )
+}
+
+/// The start of the function containing `return_address`, for the x29-chain
+/// walker, which (unlike the unwinder) never learns it. `_Unwind_Find_FDE`
+/// answers from the same unwind tables the platform unwinder reads; 0 when
+/// there are none. Only called for frames the map did not match, and only
+/// while the verifier is armed.
+#[cfg(all(
+    any(target_vendor = "apple", target_os = "linux"),
+    target_arch = "aarch64"
+))]
+pub(super) fn function_start_of(return_address: usize) -> usize {
+    #[repr(C)]
+    struct DwarfEhBases {
+        tbase: *mut std::ffi::c_void,
+        dbase: *mut std::ffi::c_void,
+        func: *mut std::ffi::c_void,
+    }
+    unsafe extern "C" {
+        fn _Unwind_Find_FDE(
+            pc: *mut std::ffi::c_void,
+            bases: *mut DwarfEhBases,
+        ) -> *const std::ffi::c_void;
+    }
+    let mut bases = DwarfEhBases {
+        tbase: std::ptr::null_mut(),
+        dbase: std::ptr::null_mut(),
+        func: std::ptr::null_mut(),
+    };
+    // `- 1`: a call that ends its function returns just past the end.
+    let pc = return_address.wrapping_sub(1) as *mut std::ffi::c_void;
+    let fde = unsafe { _Unwind_Find_FDE(pc, &mut bases) };
+    if fde.is_null() {
+        0
+    } else {
+        bases.func as usize
+    }
 }
 
 /// `(frames_checked, generated_unmapped)` — the verifier's liveness counters.
