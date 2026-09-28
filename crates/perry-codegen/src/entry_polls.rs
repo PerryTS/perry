@@ -92,11 +92,7 @@ pub(crate) fn entry_polls_enabled() -> bool {
 /// unless the body provably cannot allocate (then it needs no poll: a
 /// function that allocates nothing adds no pressure between polls, however
 /// often it is entered).
-pub(crate) fn emit_entry_poll(
-    ctx: &mut FnCtx<'_>,
-    body: &[perry_hir::Stmt],
-    kind: EntryPollKind,
-) {
+pub(crate) fn emit_entry_poll(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt], kind: EntryPollKind) {
     if !entry_polls_enabled() || ctx.block().is_terminated() || ctx.func.entry_poll.is_some() {
         return;
     }
@@ -175,7 +171,10 @@ pub(crate) fn emit_wrapper_entry_poll(
             let slot = blk.gep(I64, &buffer, &[(I64, &(i + 1).to_string())]);
             blk.store(DOUBLE, param, &slot);
         }
-        blk.call_void(ENTRY_POLL_ARGS, &[(PTR, &buffer), (I32, &count.to_string())]);
+        blk.call_void(
+            ENTRY_POLL_ARGS,
+            &[(PTR, &buffer), (I32, &count.to_string())],
+        );
         let slot0 = blk.gep(I64, &buffer, &[(I64, "0")]);
         let bits = blk.load(I64, &slot0);
         reloaded.push(blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64));
@@ -247,7 +246,11 @@ pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollSta
     };
     let scaffold: HashMap<String, EntryPollKind> = functions
         .iter()
-        .filter_map(|f| f.entry_poll.as_ref().map(|site| (f.name.clone(), site.kind)))
+        .filter_map(|f| {
+            f.entry_poll
+                .as_ref()
+                .map(|site| (f.name.clone(), site.kind))
+        })
         .collect();
     let edges: HashMap<String, HashSet<String>> = graph
         .iter()
@@ -379,7 +382,12 @@ pub(crate) fn sccs_callees_first(graph: &HashMap<String, HashSet<String>>) -> Ve
             let mut s: Vec<&'g str> = state
                 .graph
                 .get(v)
-                .map(|c| c.iter().map(String::as_str).filter(|w| state.graph.contains_key(*w)).collect())
+                .map(|c| {
+                    c.iter()
+                        .map(String::as_str)
+                        .filter(|w| state.graph.contains_key(*w))
+                        .collect()
+                })
                 .unwrap_or_default();
             s.sort_unstable();
             s
@@ -463,8 +471,10 @@ mod tests {
     use super::*;
 
     fn graph(edges: &[(&str, &str)], nodes: &[&str]) -> HashMap<String, HashSet<String>> {
-        let mut g: HashMap<String, HashSet<String>> =
-            nodes.iter().map(|n| (n.to_string(), HashSet::new())).collect();
+        let mut g: HashMap<String, HashSet<String>> = nodes
+            .iter()
+            .map(|n| (n.to_string(), HashSet::new()))
+            .collect();
         for (a, b) in edges {
             g.entry(a.to_string()).or_default().insert(b.to_string());
         }
@@ -479,16 +489,30 @@ mod tests {
         );
         assert_eq!(
             recursive_sccs(&g),
-            vec![vec!["a".to_string()], vec!["b".to_string(), "c".to_string()]]
+            vec![
+                vec!["a".to_string()],
+                vec!["b".to_string(), "c".to_string()]
+            ]
         );
     }
 
     #[test]
     fn sccs_come_callees_first() {
-        let g = graph(&[("caller", "rec"), ("rec", "rec"), ("rec", "leaf")], &["caller", "rec", "leaf"]);
+        let g = graph(
+            &[("caller", "rec"), ("rec", "rec"), ("rec", "leaf")],
+            &["caller", "rec", "leaf"],
+        );
         let order = sccs_callees_first(&g);
-        let pos = |n: &str| order.iter().position(|c| c.contains(&n.to_string())).unwrap();
-        assert!(pos("leaf") < pos("rec") && pos("rec") < pos("caller"), "{order:?}");
+        let pos = |n: &str| {
+            order
+                .iter()
+                .position(|c| c.contains(&n.to_string()))
+                .unwrap()
+        };
+        assert!(
+            pos("leaf") < pos("rec") && pos("rec") < pos("caller"),
+            "{order:?}"
+        );
     }
 
     #[test]
@@ -498,7 +522,9 @@ mod tests {
         for w in names.windows(2) {
             g.entry(w[0].clone()).or_default().insert(w[1].clone());
         }
-        g.entry(names[49_999].clone()).or_default().insert(names[0].clone());
+        g.entry(names[49_999].clone())
+            .or_default()
+            .insert(names[0].clone());
         let sccs = recursive_sccs(&g);
         assert_eq!(sccs.len(), 1);
         assert_eq!(sccs[0].len(), 50_000);

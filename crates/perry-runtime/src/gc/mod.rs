@@ -40,9 +40,9 @@ pub use types::*;
 mod alloc_point;
 /// RFC deferred collection S5: the function-entry poll entries.
 mod entry_poll;
-pub use entry_poll::entry_polls_reached;
 pub(crate) use alloc_point::note_block_if_unsafe_zone;
 pub use alloc_point::{alloc_point_counters, AllocPointCounters};
+pub use entry_poll::entry_polls_reached;
 mod json_defer;
 mod policy;
 pub(crate) use json_defer::JsonParseAllocation;

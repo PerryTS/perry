@@ -14,9 +14,9 @@ pub mod debug_info;
 #[cfg(feature = "llvm-inprocess")]
 pub(crate) mod dialect;
 pub(crate) mod eh_mode;
+pub(crate) mod entry_polls;
 pub mod expr;
 pub mod ext_registry;
-pub(crate) mod entry_polls;
 pub mod function;
 pub(crate) mod gc_call_effects;
 pub mod gc_map;

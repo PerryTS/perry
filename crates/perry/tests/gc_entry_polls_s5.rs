@@ -45,7 +45,10 @@ fn compile(dir: &Path, source: &str, env: &[(&str, &str)]) -> (PathBuf, String) 
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    (output, String::from_utf8_lossy(&compile.stderr).into_owned())
+    (
+        output,
+        String::from_utf8_lossy(&compile.stderr).into_owned(),
+    )
 }
 
 fn kept_ir(stderr: &str) -> String {
@@ -181,7 +184,11 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
     assert!(!wrapper_of(&fns, "__pure").contains(WRAPPER_POLL));
 
     let run = Command::new(&bin).output().expect("run");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout).trim(),
         "true 1 3,5,7 9,11 2 5"
@@ -253,7 +260,10 @@ fn a_loop_free_recursion_drains_at_its_scc_poll_and_never_needs_the_valve() {
     let valve = diag_field(&stderr, "[gc-alloc-point]", "valve_fires");
     let wait = diag_field(&stderr, "[gc-alloc-point]", "max_poll_wait_bytes");
     // Subject live: the SCC poll was reached armed, and collections drained there.
-    assert!(entry_polls > 0, "no armed entry poll was reached:\n{stderr}");
+    assert!(
+        entry_polls > 0,
+        "no armed entry poll was reached:\n{stderr}"
+    );
     assert!(drains > 0, "no collection drained at a poll:\n{stderr}");
     // ... so the valve never had to fire, and a deferred collection waited far
     // less than the valve's 64 MiB slack for its poll.
