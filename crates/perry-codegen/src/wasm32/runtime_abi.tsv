@@ -3616,6 +3616,7 @@ js_string_normalize	ptr	ptr,f64
 js_string_pad_end	ptr	ptr,f64,ptr
 js_string_pad_fill	ptr	f64
 js_string_pad_start	ptr	ptr,f64,ptr
+js_string_pool_atom	ptr	ptr,i32u,i64,i32s
 js_string_position_to_index	i32s	f64
 js_string_print	void	ptr
 js_string_raw	ptr	f64,f64
