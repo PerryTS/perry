@@ -39,6 +39,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gc_root_dominance_check as dom  # noqa: E402
 
 POLLS = {"js_gc_loop_safepoint", "js_gc_entry_safepoint", "js_gc_entry_safepoint_args"}
+# Runtime entries that reach a declared poll themselves: the event-loop phases
+# and the microtask pump (RFC D1's pump boundary). A loop that calls one of
+# these passes a poll every iteration — `main`'s event-loop driver is the case.
+PUMP_POLLS = {
+    "js_promise_run_microtasks", "js_promise_run_microtasks_event_loop",
+    "js_promise_run_promise_jobs", "js_event_loop_poll_callbacks",
+    "js_event_loop_timers_phase", "js_event_loop_check_phase", "js_run_stdlib_pump",
+}
 ENTRY_POLLS = {"js_gc_entry_safepoint", "js_gc_entry_safepoint_args"}
 
 
@@ -121,7 +129,9 @@ def loop_may_allocate(func, body, allocating, defined):
 
 def loop_polls(func, body):
     return any(
-        ins.callee in POLLS for block in body for ins in func.insns[block]
+        ins.callee in POLLS or ins.callee in PUMP_POLLS
+        for block in body
+        for ins in func.insns[block]
     )
 
 
@@ -180,7 +190,12 @@ def check(funcs):
     by_name = {f.name: f for f in funcs}
     for f in funcs:
         idom = dom.dominators(f)
+        # One natural loop per header: several back edges into one header
+        # (a `continue`) are the same loop.
+        merged = {}
         for head, body in natural_loops(f, idom):
+            merged.setdefault(head, set()).update(body)
+        for head, body in merged.items():
             totals["loops"] += 1
             if not loop_may_allocate(f, body, allocating, defined):
                 continue

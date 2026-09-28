@@ -18,7 +18,7 @@ fn perry_bin() -> PathBuf {
 }
 
 const ENTRY_POLL: &str = "call void @js_gc_entry_safepoint()";
-const WRAPPER_POLL: &str = "@js_gc_entry_safepoint_args(";
+const WRAPPER_POLL: &str = "call void @js_gc_entry_safepoint_args(";
 
 fn compile(dir: &Path, source: &str, env: &[(&str, &str)]) -> (PathBuf, String) {
     let entry = dir.join("main.ts");
@@ -87,18 +87,27 @@ fn functions(ir: &str) -> Vec<(String, String)> {
     out
 }
 
-fn body_of<'a>(functions: &'a [(String, String)], suffix: &str) -> &'a str {
-    let matches: Vec<&(String, String)> = functions
+/// Entry polls in every non-wrapper clone of the function named `suffix`
+/// (codegen emits `$spec_*`, `.__arena` and `$generic` clones; each clone
+/// family can form its own recursive SCC), keyed by the clone's name.
+fn polls_by_clone(functions: &[(String, String)], suffix: &str) -> Vec<(String, usize)> {
+    let tag = format!("__{suffix}");
+    let clones: Vec<(String, usize)> = functions
         .iter()
-        .filter(|(name, _)| name.ends_with(suffix) && !name.starts_with("__perry_wrap_"))
+        .filter(|(name, _)| {
+            !name.starts_with("__perry_wrap_")
+                && name
+                    .split_once(&tag)
+                    .is_some_and(|(_, rest)| rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+        })
+        .map(|(name, body)| (name.clone(), body.matches(ENTRY_POLL).count()))
         .collect();
-    assert_eq!(
-        matches.len(),
-        1,
-        "expected exactly one function ending `{suffix}`, found {:?}",
-        matches.iter().map(|(n, _)| n).collect::<Vec<_>>()
-    );
-    &matches[0].1
+    assert!(!clones.is_empty(), "no function `{suffix}` in the IR");
+    clones
+}
+
+fn total_polls(functions: &[(String, String)], suffix: &str) -> usize {
+    polls_by_clone(functions, suffix).iter().map(|(_, n)| n).sum()
 }
 
 fn wrapper_of<'a>(functions: &'a [(String, String)], suffix: &str) -> &'a str {
@@ -148,29 +157,41 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
 
     // Recursion: a self-recursive allocator polls at its entry ...
     assert!(
-        body_of(&fns, "__tree").contains(ENTRY_POLL),
-        "a recursive SCC of one member must carry the entry poll"
+        total_polls(&fns, "tree") >= 1,
+        "a recursive SCC of one member must carry the entry poll: {:?}",
+        polls_by_clone(&fns, "tree")
     );
-    // ... and a mutually recursive pair carries exactly ONE poll between them.
-    let even = body_of(&fns, "__isEven").contains(ENTRY_POLL);
-    let odd = body_of(&fns, "__isOdd").contains(ENTRY_POLL);
+    // ... a mutually recursive pair carries exactly ONE poll per SCC: each
+    // clone family (`$spec_*`, `$generic`, the boxed body) pairs isEven with
+    // isOdd of the same family, so no family may poll in both.
+    let even = polls_by_clone(&fns, "isEven");
+    let odd = polls_by_clone(&fns, "isOdd");
     assert!(
-        even ^ odd,
-        "one poll per recursive SCC (isEven={even}, isOdd={odd})"
+        even.iter().chain(&odd).map(|(_, n)| n).sum::<usize>() >= 1,
+        "the mutually recursive pair must poll: {even:?} {odd:?}"
     );
+    for (name, polls) in &even {
+        let partner = name.replace("__isEven", "__isOdd");
+        let partner_polls = odd.iter().find(|(n, _)| *n == partner).map_or(0, |(_, p)| *p);
+        assert!(
+            polls + partner_polls <= 1,
+            "one poll per recursive SCC: {name}={polls}, {partner}={partner_polls}"
+        );
+    }
     // A non-recursive function entered directly gets none, allocating or not.
-    assert!(
-        !body_of(&fns, "__mk").contains(ENTRY_POLL),
+    assert_eq!(
+        total_polls(&fns, "mk"),
+        0,
         "a non-recursive direct-call function must not poll at entry"
     );
-    assert!(!body_of(&fns, "__pure").contains(ENTRY_POLL));
+    assert_eq!(total_polls(&fns, "pure"), 0);
 
     // Indirect entry: an allocating method polls, a non-allocating one does not.
     assert!(
-        body_of(&fns, "__wrap").contains(ENTRY_POLL),
+        total_polls(&fns, "wrap") >= 1,
         "an allocating method is entered indirectly and must poll"
     );
-    assert!(!body_of(&fns, "__plain").contains(ENTRY_POLL));
+    assert_eq!(total_polls(&fns, "plain"), 0);
     // An allocating closure body polls.
     assert!(
         fns.iter()
