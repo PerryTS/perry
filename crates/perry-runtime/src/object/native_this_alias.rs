@@ -568,13 +568,15 @@ pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f
     }
     let proto = scope.root_raw_mut_ptr(proto);
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    define_builtin_data_property(
-        proto.get_raw_mut_ptr(),
-        key,
-        constructor.get_nanbox_f64(),
-        "constructor".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
+    proto.with_mut_ptr(|proto_ptr| {
+        define_builtin_data_property(
+            proto_ptr,
+            key,
+            constructor.get_nanbox_f64(),
+            "constructor".to_string(),
+            PropertyAttrs::new(true, false, true),
+        );
+    });
     let func_ptr = server_response_prototype_method_thunk as *const u8;
     crate::closure::js_register_closure_arity(func_ptr, 3);
     for method in SERVER_RESPONSE_PROTOTYPE_METHODS {
@@ -585,24 +587,33 @@ pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f
         crate::closure::js_closure_set_capture_ptr(method_closure, 0, method.as_ptr() as i64);
         crate::closure::js_closure_set_capture_ptr(method_closure, 1, method.len() as i64);
         let method_closure = scope.root_raw_mut_ptr(method_closure);
-        set_bound_native_closure_name(method_closure.get_raw_mut_ptr(), method);
-        set_builtin_closure_length(method_closure.get_raw_mut_ptr::<u8>() as usize, 0);
+        method_closure
+            .with_mut_ptr(|closure_ptr| set_bound_native_closure_name(closure_ptr, method));
+        method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
+            set_builtin_closure_length(closure_ptr as usize, 0)
+        });
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-        define_builtin_data_property(
-            proto.get_raw_mut_ptr(),
-            key,
-            crate::value::js_nanbox_pointer(method_closure.get_raw_mut_ptr::<u8>() as i64),
-            (*method).to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
+        proto.with_mut_ptr(|proto_ptr| {
+            method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
+                define_builtin_data_property(
+                    proto_ptr,
+                    key,
+                    crate::value::js_nanbox_pointer(closure_ptr as i64),
+                    (*method).to_string(),
+                    PropertyAttrs::new(true, false, true),
+                );
+            });
+        });
     }
     let closure_addr =
         (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-    crate::closure::closure_set_dynamic_prop(
-        closure_addr,
-        "prototype",
-        crate::value::js_nanbox_pointer(proto.get_raw_mut_ptr::<u8>() as i64),
-    );
+    proto.with_mut_ptr(|proto_ptr: *mut u8| {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "prototype",
+            crate::value::js_nanbox_pointer(proto_ptr as i64),
+        );
+    });
     let closure_addr =
         (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
     set_builtin_property_attrs(
