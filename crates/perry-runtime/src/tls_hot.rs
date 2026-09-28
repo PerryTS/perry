@@ -338,6 +338,7 @@ fn fill(slots: *mut HotTls) {
             .runtime_handle_stack
             .set(crate::gc::runtime_handle_stack_hot_addr());
         (*slots).agent_ptrs.set(crate::agent_ptrs::hot_addr());
+        crate::stack_guard::publish_stack_limit();
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache

@@ -29,6 +29,8 @@ pub use crate::codegen_abi::AGENT_PTR_IMPLICIT_THIS;
 /// Slots in the block. **Must equal `AGENT_PTR_SLOTS` in
 /// `perry-codegen/src/expr/agent_ptr.rs`** (the emitted global's type).
 pub use crate::codegen_abi::AGENT_PTR_SLOTS;
+/// Slot 2: this agent's stack limit (`stack_guard`, #10812).
+pub use crate::codegen_abi::AGENT_PTR_STACK_LIMIT;
 
 #[repr(C)]
 pub struct AgentPtrs([Cell<*const u8>; AGENT_PTR_SLOTS]);
@@ -52,6 +54,12 @@ pub static PERRY_AGENT_PTRS: AgentPtrs =
 #[inline]
 pub(crate) fn publish(slot: usize, ptr: *const u8) {
     PERRY_AGENT_PTRS.0[slot].set(ptr);
+}
+
+/// Read one of this agent's pointers.
+#[inline]
+pub(crate) fn read(slot: usize) -> *const u8 {
+    PERRY_AGENT_PTRS.0[slot].get()
 }
 
 /// This thread's block address, for `HotTls::agent_ptrs`.

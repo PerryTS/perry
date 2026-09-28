@@ -174,6 +174,12 @@
       "why": "#9794 allocation-site sampling: bytes remaining until the next sample. A `Cell<usize>` countdown, decremented per allocation and reset on fire \u2014 a quantity, never an address."
     },
     {
+      "file": "crates/perry-runtime/src/stack_guard.rs",
+      "name": "LIMITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10812: this thread's two stack-limit ADDRESSES for the prologue stack check. They point into the native stack, never into the GC heap, and are only ever compared against a frame address."
+    },
+    {
       "file": "crates/perry-runtime/src/arena/from_space.rs",
       "name": "SEALED_YOUNG_BYTES",
       "verdict": "not_a_gc_pointer",
