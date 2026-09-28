@@ -270,9 +270,8 @@ pub(crate) fn js_jsvalue_to_string_impl(
             // `temporal.toString()` produce the value's canonical ISO-8601 /
             // IXDTF string, not "[object Object]". Detected here for the same
             // reason as Date — the cell is smaller than an ObjectHeader.
-            #[cfg(feature = "temporal")]
             if crate::temporal::is_temporal_cell_addr(ptr as usize) {
-                if let Some(s) = crate::temporal::temporal_iso_string(value) {
+                if let Some(s) = crate::temporal::hooked::iso_string(value) {
                     return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 }
             }

@@ -44,7 +44,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         // recover that cell and compare its kind. The receiver reaches here both
         // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
         // how module-level object vars are stored) — accept both. (#5587)
-        #[cfg(feature = "temporal")]
         {
             let bits = value.to_bits();
             let top16 = bits >> 48;
@@ -56,7 +55,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 0
             };
             if raw != 0 {
-                if let Some(cell) = unsafe { crate::object::temporal_subclass_cell(raw) } {
+                if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
                     if crate::temporal::temporal_kind(cell) == Some(kind) {
                         return f64::from_bits(crate::value::TAG_TRUE);
                     }
@@ -425,8 +424,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // Intl constructor value can exist (the namespace install is a no-op), so
     // the probe could never match — and skipping it keeps this always-live
     // dispatcher from statically pinning every Intl constructor thunk (~204 KB).
-    #[cfg(feature = "intl-namespace")]
-    if let Some(is_inst) = crate::intl::intl_instanceof(value, type_ref) {
+    if let Some(is_inst) = crate::intl::hooked::intl_instanceof(value, type_ref) {
         return if is_inst {
             f64::from_bits(crate::value::TAG_TRUE)
         } else {

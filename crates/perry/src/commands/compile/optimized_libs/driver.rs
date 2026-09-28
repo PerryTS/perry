@@ -649,10 +649,25 @@ pub(crate) fn build_optimized_libs(
                 // A deferred dynamic-code site can reach a module by runtime
                 // string, so such programs keep installing everything.
                 stdlib_installs: if perry_hir::has_deferred_dynamic_code_sites() {
-                    crate::commands::stdlib_installs::StdlibInstalls::Compiled
+                    crate::commands::stdlib_installs::FeatureInstalls::Compiled
                 } else {
-                    crate::commands::stdlib_installs::StdlibInstalls::Selected(
+                    crate::commands::stdlib_installs::FeatureInstalls::Selected(
                         features.iter().map(|f| f.to_string()).collect(),
+                    )
+                },
+                // Both runtime fallbacks here (the prebuilt `panic=abort`
+                // variant, or `None` = the prebuilt `libperry_runtime.a`) carry
+                // every runtime feature too: install the ones an auto-optimized
+                // rebuild would compile for this program.
+                runtime_installs: if perry_hir::has_deferred_dynamic_code_sites() {
+                    crate::commands::stdlib_installs::FeatureInstalls::Compiled
+                } else {
+                    crate::commands::stdlib_installs::FeatureInstalls::Selected(
+                        auto_optimized_cross_features(ctx, &features, cli_features)
+                            .iter()
+                            .filter_map(|f| f.strip_prefix("perry-runtime/"))
+                            .map(str::to_string)
+                            .collect(),
                     )
                 },
                 ..OptimizedLibs::empty()
@@ -816,7 +831,8 @@ pub(crate) fn build_optimized_libs(
             extra_bc: Vec::new(),
             prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
             well_known_libs,
-            stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls::Compiled,
+            stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
+            runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
         };
     }
 
@@ -1309,6 +1325,7 @@ pub(crate) fn build_optimized_libs(
         extra_bc,
         prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
-        stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls::Compiled,
+        stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
+        runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
     }
 }

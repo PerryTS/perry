@@ -204,10 +204,9 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // (the test262 subclassing-ignored shape) requires that object, not `null`.
     // Resolve it via the live namespace; fall back to `null` only if Temporal
     // isn't reachable. (#5587)
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(obj_value) {
         if let Some(kind) = crate::temporal::temporal_kind(obj_value) {
-            let proto = crate::object::global_this::temporal_kind_prototype(kind);
+            let proto = crate::temporal::hooked::kind_prototype(kind);
             if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
                 return proto;
             }

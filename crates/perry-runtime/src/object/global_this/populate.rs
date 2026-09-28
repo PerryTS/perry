@@ -751,10 +751,13 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
                     set_intrinsic_to_string_tag(ns_obj, "Atomics");
                 }
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
-                #[cfg(feature = "temporal")]
+                // Members come from the `temporal` install (see
+                // `crate::temporal::hooked`); without it the namespace stays a
+                // plain empty object, as in a build without the feature.
                 "Temporal" => {
-                    install_temporal_namespace(ns_obj);
-                    set_intrinsic_to_string_tag(ns_obj, "Temporal");
+                    if crate::temporal::hooked::install_namespace(ns_obj) {
+                        set_intrinsic_to_string_tag(ns_obj, "Temporal");
+                    }
                 }
                 _ => {}
             }

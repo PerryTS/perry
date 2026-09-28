@@ -1834,14 +1834,13 @@ pub(crate) fn get_field_by_name_object_tail(
         // (cross-) trigger the other marker's reader, an infinite recursion that
         // stack-overflows. Methods read as fused `inst.m(...)` calls are handled
         // in `native_call_method.rs`. (#5587)
-        #[cfg(feature = "temporal")]
         if !key.is_null()
             && key_bytes != crate::object::TEMPORAL_SUBCLASS_CELL_FIELD
             && key_bytes != FETCH_SUBCLASS_HANDLE_FIELD
         {
-            if let Some(cell) = crate::object::temporal_subclass_cell(obj as usize) {
+            if let Some(cell) = crate::temporal::hooked::subclass_cell(obj as usize) {
                 let name = String::from_utf8_lossy(key_bytes);
-                if let Some(v) = crate::temporal::dispatch::get_property(cell, &name) {
+                if let Some(v) = crate::temporal::hooked::get_property(cell, &name) {
                     return JSValue::from_bits(v.to_bits());
                 }
                 // A prototype METHOD read as a value (`sub.abs`, not `sub.abs()`):
@@ -1849,7 +1848,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 // `js_native_call_method` (whose Temporal-subclass arm forwards to
                 // the cell). Only bind genuine method names so an unknown property
                 // still reads as `undefined`. Mirrors the fetch body-method bind.
-                if crate::temporal::dispatch::has_method(cell, &name) {
+                if crate::temporal::hooked::has_method(cell, &name) {
                     let this_f64 = crate::value::js_nanbox_pointer(obj as i64);
                     let heap_name = {
                         let layout =

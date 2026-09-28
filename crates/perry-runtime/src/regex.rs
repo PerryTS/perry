@@ -103,6 +103,43 @@ use utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 /// always-linked iterator-prototype dispatch, so it stays ungated even when
 /// the regex engine (which produces these iterators) is compiled out.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
+
+/// `matchAll` iterator methods reached from the always-live generic dispatchers
+/// (`js_native_call_method`, the iterator prototypes' `next`). They reach the
+/// regex engine only through slots the `regex-engine` install fills (see
+/// `crate::feature_hooks`); without it no RegExp string iterator exists and
+/// these answer `None`, so the dispatchers take their no-regex path.
+static ITERATOR_METHOD: crate::feature_hooks::Hook<
+    unsafe fn(*mut crate::ObjectHeader, &str) -> f64,
+> = crate::feature_hooks::Hook::empty();
+static ITERATOR_METHOD_BUILTIN: crate::feature_hooks::Hook<
+    unsafe fn(*mut crate::ObjectHeader, &str) -> f64,
+> = crate::feature_hooks::Hook::empty();
+
+/// # Safety
+/// `iter` must be a live RegExp string iterator object.
+pub(crate) unsafe fn hooked_iterator_method(
+    iter: *mut crate::ObjectHeader,
+    method: &str,
+) -> Option<f64> {
+    ITERATOR_METHOD.get().map(|f| f(iter, method))
+}
+
+/// # Safety
+/// `iter` must be a live RegExp string iterator object.
+pub(crate) unsafe fn hooked_iterator_method_builtin(
+    iter: *mut crate::ObjectHeader,
+    method: &str,
+) -> Option<f64> {
+    ITERATOR_METHOD_BUILTIN.get().map(|f| f(iter, method))
+}
+
+/// The `regex-engine` install's hub half.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn install_iterator_hooks() {
+    ITERATOR_METHOD.set(dispatch_regexp_string_iterator_method);
+    ITERATOR_METHOD_BUILTIN.set(dispatch_regexp_string_iterator_method_builtin);
+}
 #[cfg(feature = "regex-engine")]
 pub use perex_replace_compat::*;
 #[cfg(not(feature = "regex-engine"))]

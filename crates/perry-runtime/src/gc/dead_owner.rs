@@ -464,12 +464,13 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::closure::prune_dead_closure_side_table_owners,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
-    #[cfg(feature = "dyn-eval")]
+    // Always listed; the prunes forward to the interpreter once `dyn-eval` is
+    // installed (see `crate::dyn_eval_hooks`).
     DeadKeyPrune {
         table: "dyn_eval::LIFETIME.owners + FN_REGISTRY",
         owner: DeadKeyOwner::Closure,
-        prune: crate::dyn_eval::prune_dead_function_owners,
-        young_prune: Some(crate::dyn_eval::prune_dead_function_owners_young),
+        prune: crate::dyn_eval_hooks::prune_dead_function_owners,
+        young_prune: Some(crate::dyn_eval_hooks::prune_dead_function_owners_young),
     },
     DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",

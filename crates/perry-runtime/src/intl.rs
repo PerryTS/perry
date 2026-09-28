@@ -26,6 +26,7 @@ use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
 use crate::StringHeader;
 
 mod ctor_guard;
+pub(crate) mod hooked;
 use ctor_guard::{constructor_target_prototype, require_new_target};
 mod display_names;
 mod duration_format;
@@ -1785,11 +1786,29 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
 /// reclaims the constructor/option/format machinery that nothing else
 /// reaches. `toLocale*` / `localeCompare` are unaffected — their entry points
 /// and helpers live outside this gate.
-#[cfg(not(feature = "intl-namespace"))]
-pub fn install_intl_namespace(_ns_obj: *mut ObjectHeader) {}
+///
+/// `globalThis` population is live in every program, so it reaches the members
+/// only through a slot the `intl-namespace` install fills (see
+/// `crate::feature_hooks`); an empty slot leaves the namespace empty, exactly
+/// as a build without the feature does.
+pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
+    if let Some(install) = INTL_NAMESPACE_MEMBERS.get() {
+        install(ns_obj);
+    }
+}
+
+static INTL_NAMESPACE_MEMBERS: crate::feature_hooks::Hook<fn(*mut ObjectHeader)> =
+    crate::feature_hooks::Hook::empty();
+
+/// The `intl-namespace` install.
+#[cfg(feature = "intl-namespace")]
+pub(crate) fn install_intl_namespace_feature() {
+    INTL_NAMESPACE_MEMBERS.set(install_intl_namespace_members);
+    hooked::install();
+}
 
 #[cfg(feature = "intl-namespace")]
-pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
+fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
     }

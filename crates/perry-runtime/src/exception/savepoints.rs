@@ -36,7 +36,6 @@ pub(crate) mod catch_subsystem {
     // way, or a build without the feature fails `-D warnings` as dead code.
     #[cfg(feature = "regex-engine")]
     pub(crate) const REGEX_FACTORY: u32 = 1 << 9;
-    #[cfg(feature = "dyn-eval")]
     pub(crate) const DYN_EVAL: u32 = 1 << 10;
     pub(crate) const NAMESPACE_OVERRIDE: u32 = 1 << 11;
 }
@@ -254,10 +253,12 @@ catch_savepoints! {
     restore: crate::regex::site_test::active_factory_stack_restore,
     latch: catch_subsystem::REGEX_FACTORY, idle: 0;
     // #6559: rooted interpreter values AND the packed call depth.
-    #[cfg(feature = "dyn-eval")]
+    // Always present: the capture/restore forward to the interpreter once
+    // `dyn-eval` is installed, and capture answers the idle value otherwise
+    // (see `crate::dyn_eval_hooks`).
     dyn_eval: u64,
-    capture: crate::dyn_eval::interp_savepoint,
-    restore: crate::dyn_eval::interp_restore,
+    capture: crate::dyn_eval_hooks::interp_savepoint,
+    restore: crate::dyn_eval_hooks::interp_restore,
     latch: catch_subsystem::DYN_EVAL, idle: 0;
 }
 

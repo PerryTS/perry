@@ -24,10 +24,9 @@ pub(super) unsafe fn dispatch_primitive(
     // `Temporal.*` value is a NaN-boxed pointer to a custom cell with no
     // codegen fast-path, so every method call funnels through here. The router
     // throws `TypeError` for an unknown method name on a real Temporal receiver.
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(object) {
         let args = refreshed_args();
-        return Some(crate::temporal::dispatch::call_method(
+        return Some(crate::temporal::hooked::call_method(
             object,
             method_name,
             &args,

@@ -1342,15 +1342,14 @@ pub fn tls_domain_to_ascii(host: &str) -> String {
         return String::new();
     }
 
-    #[cfg(feature = "url-engine")]
-    {
-        return idna::domain_to_ascii(&normalized)
-            .ok()
+    if let Some(ascii) = crate::url::idna_domain_to_ascii(&normalized) {
+        return ascii
             .and_then(|ascii| crate::url::whatwg_canonicalize_host(&ascii))
             .unwrap_or_default();
     }
 
-    #[cfg(not(feature = "url-engine"))]
+    // Without the URL engine installed (the reduced TLS runtime omits the
+    // URL/IDNA tables):
     {
         // The reduced TLS runtime deliberately omits the URL/IDNA tables. Keep
         // Node's important numeric-host coercion and reject non-ASCII input

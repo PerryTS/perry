@@ -87,6 +87,8 @@ pub mod bigint;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;
+pub(crate) mod dyn_eval_hooks;
+pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
 pub(crate) mod cold_sort;

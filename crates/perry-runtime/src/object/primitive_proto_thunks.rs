@@ -360,7 +360,6 @@ pub(super) extern "C" fn number_proto_to_locale_string_thunk(
     rest: f64,
 ) -> f64 {
     let n = number_receiver_or_throw("toLocaleString");
-    #[cfg(feature = "intl-namespace")]
     {
         let args = super::global_this::global_this_rest_array_values(rest);
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -368,12 +367,15 @@ pub(super) extern "C" fn number_proto_to_locale_string_thunk(
         let options = args.get(1).copied().unwrap_or(undef);
         let defaulted = crate::value::JSValue::from_bits(locales.to_bits()).is_undefined()
             && crate::value::JSValue::from_bits(options.to_bits()).is_undefined();
+        // The ECMA-402 formatter is reached through the `intl-namespace`
+        // install (see `crate::intl::hooked`); without it this keeps the
+        // plain grouping helper, as a build without the feature does.
         if !defaulted {
-            return string_value(crate::intl::number_to_locale_string(n, locales, options));
+            if let Some(s) = crate::intl::hooked::number_to_locale_string(n, locales, options) {
+                return string_value(s);
+            }
         }
     }
-    #[cfg(not(feature = "intl-namespace"))]
-    let _ = rest;
     string_value(crate::date::js_number_to_locale_string(n))
 }
 
@@ -436,11 +438,8 @@ pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let _locales = args.first().copied().unwrap_or(undef);
     let _options = args.get(1).copied().unwrap_or(undef);
-    #[cfg(feature = "intl-namespace")]
-    {
-        string_value(crate::intl::bigint_to_locale_string(
-            value, _locales, _options,
-        ))
+    if let Some(s) = crate::intl::hooked::bigint_to_locale_string(value, _locales, _options) {
+        return string_value(s);
     }
     // Binary size: this thunk is the ONLY retainer of the ECMA-402
     // number-formatting machinery in a program that never mentions
@@ -453,10 +452,7 @@ pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
     // supplied `locales`/`options` either. ECMA-262 leaves the result
     // implementation-defined when ECMA-402 is absent, so render plain
     // decimal digits.
-    #[cfg(not(feature = "intl-namespace"))]
-    {
-        string_value(crate::value::js_jsvalue_to_string_radix(value, 10.0))
-    }
+    string_value(crate::value::js_jsvalue_to_string_radix(value, 10.0))
 }
 
 /// `String.prototype.toString()` — brand-checked: returns the underlying string

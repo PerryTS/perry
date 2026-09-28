@@ -30,6 +30,7 @@ use crate::value::JSValue;
 pub mod dispatch;
 #[cfg(feature = "temporal")]
 pub mod duration;
+pub mod hooked;
 #[cfg(feature = "temporal")]
 pub mod instant;
 #[cfg(feature = "temporal")]
@@ -321,8 +322,12 @@ pub fn duration_unit_values(value: f64) -> Option<[f64; 10]> {
 /// (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay, ZonedDateTime),
 /// or `None` for types without a calendar (Instant, PlainTime, Duration) or
 /// non-Temporal values.
-#[cfg(feature = "temporal")]
 pub fn temporal_calendar_id(value: f64) -> Option<&'static str> {
+    hooked::calendar_id(value)
+}
+
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_calendar_id_impl(value: f64) -> Option<&'static str> {
     match temporal_value_ref(value)? {
         TemporalValue::PlainDate(d) => Some(d.calendar().identifier()),
         TemporalValue::PlainDateTime(dt) => Some(dt.calendar().identifier()),
@@ -333,11 +338,6 @@ pub fn temporal_calendar_id(value: f64) -> Option<&'static str> {
     }
 }
 
-#[cfg(not(feature = "temporal"))]
-pub fn temporal_calendar_id(_value: f64) -> Option<&'static str> {
-    None
-}
-
 /// Drop the embedded `temporal_rs` value when a Temporal cell is swept,
 /// releasing any Rust-heap it owns (e.g. a `ZonedDateTime` timezone string).
 /// Registered as the `TemporalCleanup` finalize hook in `gc/types.rs`.
@@ -345,19 +345,21 @@ pub fn temporal_calendar_id(_value: f64) -> Option<&'static str> {
 /// # Safety
 /// `cell` must point at a live, fully-initialized `TemporalCell` that the GC is
 /// about to reclaim; it is not read again afterwards.
-#[cfg(feature = "temporal")]
+///
+/// The GC sweeper is live in every program, so it reaches the drop only through
+/// the slot the `temporal` install fills (see `hooked`); without Temporal no
+/// cell is ever allocated and nothing is reached.
 pub unsafe fn finalize_temporal_cell_for_gc(cell: *mut TemporalCell) {
+    hooked::finalize_cell(cell);
+}
+
+#[cfg(feature = "temporal")]
+pub(crate) unsafe fn finalize_temporal_cell_impl(cell: *mut TemporalCell) {
     if cell.is_null() {
         return;
     }
     std::ptr::drop_in_place(cell);
 }
-
-/// Temporal gated off: no Temporal cell is ever allocated, so the GC never
-/// reaches this finalize hook. Kept as a no-op so `gc/types.rs`'s registration
-/// resolves without the engine.
-#[cfg(not(feature = "temporal"))]
-pub unsafe fn finalize_temporal_cell_for_gc(_cell: *mut TemporalCell) {}
 
 /// Convert a Temporal value to epoch milliseconds for Intl.DateTimeFormat.
 ///
@@ -368,8 +370,12 @@ pub unsafe fn finalize_temporal_cell_for_gc(_cell: *mut TemporalCell) {}
 /// - `PlainYearMonth`: use day=1 for the epoch base
 /// - `PlainMonthDay`: use year=1970 for the epoch base
 /// - `Duration`: no epoch representation → `None`
-#[cfg(feature = "temporal")]
 pub fn temporal_to_epoch_ms(tv: &TemporalValue) -> Option<f64> {
+    hooked::to_epoch_ms(tv)
+}
+
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_to_epoch_ms_impl(tv: &TemporalValue) -> Option<f64> {
     let secs: i64 = match tv {
         TemporalValue::Instant(i) => return Some(i.epoch_milliseconds() as f64),
         TemporalValue::ZonedDateTime(z) => return Some(z.epoch_milliseconds() as f64),
@@ -411,11 +417,6 @@ pub fn temporal_to_epoch_ms(tv: &TemporalValue) -> Option<f64> {
         TemporalValue::Duration(_) => return None,
     };
     Some(secs as f64 * 1000.0)
-}
-
-#[cfg(not(feature = "temporal"))]
-pub fn temporal_to_epoch_ms(_tv: &TemporalValue) -> Option<f64> {
-    match *_tv {}
 }
 
 /// Render a Temporal value as its canonical ISO-8601 / IXDTF string — the form

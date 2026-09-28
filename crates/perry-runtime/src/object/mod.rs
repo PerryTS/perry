@@ -127,6 +127,15 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 /// the GC contract.
 pub(crate) mod chain_store;
 mod global_this;
+#[cfg(feature = "dyn-eval")]
+pub(crate) use global_this::install_dyn_eval;
+#[cfg(feature = "temporal")]
+pub(crate) use global_this::{
+    install_temporal_namespace as global_this_install_temporal_namespace,
+    temporal_ctor_kind_impl as global_this_temporal_ctor_kind,
+    temporal_kind_prototype as global_this_temporal_kind_prototype,
+    temporal_subclass_super as global_this_temporal_subclass_super,
+};
 pub mod handle_expando;
 pub(crate) mod inherited_read_cache;
 pub(crate) mod prop_plan;

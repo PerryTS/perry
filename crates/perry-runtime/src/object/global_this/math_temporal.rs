@@ -751,8 +751,18 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
 /// same-named user closure never matches). Used by `instanceof` to make
 /// `zdt instanceof Temporal.ZonedDateTime` resolve to `true` even though
 /// Temporal values dispatch via brand arms, not a real prototype chain.
-#[cfg(feature = "temporal")]
+///
+/// `instanceof`, class construction and `Function.prototype` reads are live in
+/// every program; comparing against the constructor closures would pin every
+/// Temporal constructor, so they reach the comparison through the slot the
+/// `temporal` install fills (see `crate::temporal::hooked`). Without it no
+/// Temporal constructor exists and this answers `None`.
 pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
+    crate::temporal::hooked::ctor_kind(type_ref)
+}
+
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_ctor_kind_impl(type_ref: f64) -> Option<crate::temporal::TemporalKind> {
     use crate::temporal::TemporalKind;
     let jv = JSValue::from_bits(type_ref.to_bits());
     if !jv.is_pointer() {
@@ -805,14 +815,6 @@ pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::Tempo
         .iter()
         .find(|(ptr, _)| *ptr as usize == fp)
         .map(|(_, k)| *k)
-}
-
-/// Temporal gated off: no Temporal constructor exists, so nothing is ever a
-/// Temporal constructor. Kept compiled because `instanceof` / class-registry
-/// dispatch (always linked) call it.
-#[cfg(not(feature = "temporal"))]
-pub(crate) fn temporal_ctor_kind(_type_ref: f64) -> Option<crate::temporal::TemporalKind> {
-    None
 }
 
 /// Resolve `Temporal.<kind>.prototype` for a Temporal value's `kind` by

@@ -167,9 +167,8 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     // the Temporal dispatch via the generic method-call path (which preserves
     // args).  Only the zero-arg form arrives here; dispatch it with an empty
     // slice so the Temporal method applies its type-appropriate defaults.
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(receiver) {
-        return crate::temporal::dispatch::call_method(receiver, "toLocaleString", &[]);
+        return crate::temporal::hooked::call_method(receiver, "toLocaleString", &[]);
     }
     // #7428: a BigInt receiver must format through
     // `BigInt.prototype.toLocaleString`, i.e. with the DEFAULT locale's digit
@@ -188,11 +187,11 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     // `bigint_proto_to_locale_string_thunk`. That asymmetry is why the explicit
     // `toLocaleString(undefined)` was already correct while the bare call was
     // not — the two forms never met.
-    #[cfg(feature = "intl-namespace")]
     if jsval.is_bigint() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let s = crate::intl::bigint_to_locale_string(receiver, undef, undef);
-        return f64::from_bits(JSValue::string_ptr(s).bits());
+        if let Some(s) = crate::intl::hooked::bigint_to_locale_string(receiver, undef, undef) {
+            return f64::from_bits(JSValue::string_ptr(s).bits());
+        }
     }
     // Primitive receivers (including pointer-tagged Symbols) inherit the
     // Object method but resolve `toString` on their own prototype chain.
