@@ -56,6 +56,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::Result;
 use perry_hir::{BinaryOp, CompareOp, Expr, Stmt, UnaryOp};
 
+use crate::expr::receiver_range::Route;
 use crate::expr::region_guard::{self, Sites, MAX_KEYS};
 use crate::expr::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
@@ -1051,6 +1052,7 @@ fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool) -> String
 fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)> {
     let sites: Sites = region_guard::state_globals(ctx);
     rv.sites = Some((sites.word_g.clone(), sites.tries_g.clone()));
+    note(ctx, Route::RloopGuard);
     // A retired region (every bounded prime refused) is decided by the word
     // alone: one load and one compare, before the receiver is even tested.
     let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
@@ -1069,6 +1071,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     ctx.block().cond_br(&live, &open_l, &join_l);
 
     ctx.current_block = open;
+    note(ctx, Route::RloopOpen);
     let recv_box = lower_recv(ctx, rv.recv)?;
     let bits = ctx.block().bitcast_double_to_i64(&recv_box);
     let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
@@ -1380,6 +1383,7 @@ pub(crate) fn lower_loop(
     ctx.block().cond_br(&v, &split_l, &plain_l);
 
     ctx.current_block = split;
+    note(ctx, Route::RloopSplit);
     lower(ctx)?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_l);
@@ -1394,6 +1398,7 @@ pub(crate) fn lower_loop(
         .expect("the region is still registered");
     let pending = ctx.region_loops.remove(pos);
     ctx.current_block = plain;
+    note(ctx, Route::RloopPlain);
     let r = lower(ctx);
     ctx.region_loops.push(pending);
     r?;
@@ -1491,6 +1496,7 @@ pub(crate) fn lower_split(
                 // terminator of `top` is written at the end, like `decide`.
                 let top_idx = ctx.current_block;
                 ctx.current_block = rc;
+                note(ctx, Route::RloopRecheck);
                 let mut ok = "true".to_string();
                 for rv in &receivers {
                     let recv_box = lower_recv(ctx, rv.recv)?;
@@ -1528,6 +1534,7 @@ pub(crate) fn lower_split(
 
     // F-body.
     ctx.current_block = fast;
+    note(ctx, Route::RloopF);
     let fast_first_block = fast;
     let scan_start = ctx.func.num_blocks();
     ctx.region_loop_facts.push(Active {
@@ -1558,6 +1565,7 @@ pub(crate) fn lower_split(
 
     // G-body: today's lowering.
     ctx.current_block = slow;
+    note(ctx, Route::RloopG);
     lower_list(ctx, tail)?;
     if !ctx.block().is_terminated() {
         ctx.block().br(&join_l);
@@ -1694,6 +1702,7 @@ fn inst_may_collect(inst: &crate::inst::LlInst) -> bool {
     use crate::inst::LlInst;
     let named = |callee: &str| -> bool {
         !(callee.starts_with("llvm.")
+            || callee == "js_recv_route_note"
             || matches!(classify_direct_callee(callee), GcCallEffect::CannotCollect)
             || crate::root_reload::is_non_collecting(callee))
     };
@@ -1723,7 +1732,14 @@ fn inst_may_collect(inst: &crate::inst::LlInst) -> bool {
     }
 }
 
+/// A route-census note (`PERRY_RECV_ROUTE_COUNT=1` builds only; nothing is
+/// emitted otherwise).
+fn note(ctx: &mut FnCtx<'_>, route: Route) {
+    crate::expr::receiver_range::emit_route_note(ctx.block(), route);
+}
+
 fn note_emitted(ctx: &mut FnCtx<'_>) {
+    note(ctx, Route::RloopBare);
     let b = ctx.current_block;
     let i = ctx.func.blocks()[b].insts().len();
     if let Some(a) = ctx.region_loop_facts.last_mut() {
@@ -1957,6 +1973,7 @@ fn cannot_run_js(callee: &str) -> bool {
                 | "js_write_barrier_root_heap_word"
                 | "js_string_addref_if_heap_string"
                 | "js_region_loop_prime"
+                | "js_recv_route_note"
         )
 }
 

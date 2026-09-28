@@ -1745,6 +1745,7 @@ pub unsafe extern "C" fn js_region_loop_prime(
     last: u32,
 ) -> u64 {
     let packed = js_region_loop_pack(shape_id, n, k0, k1, k2, k3, k4);
+    region_loop_prime_census(shape_id, packed);
     if word.is_null() {
         return REGION_GUARD_WORD_EMPTY;
     }
@@ -1754,11 +1755,36 @@ pub unsafe extern "C" fn js_region_loop_prime(
                 REGION_LOOP_WORD_RETIRED,
                 core::sync::atomic::Ordering::Relaxed,
             );
+            crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_RLOOP_RETIRE);
         }
         return REGION_GUARD_WORD_EMPTY;
     }
     (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
     packed
+}
+
+/// The route census's verdict on one loop-region prime (a relaxed load and a
+/// not-taken branch outside a census build): accepted, or WHY it was refused
+/// — the site band, a non-zero attribute summary, a shape with spilled keys,
+/// or anything else the packer declines (kind, generation, holes, key absent).
+fn region_loop_prime_census(shape_id: u32, packed: u64) {
+    use crate::hot_diag::{
+        recv_route_note_runtime as note, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_BAND,
+        RT_ROUTE_RLOOP_REFUSE_OTHER, RT_ROUTE_RLOOP_REFUSE_SPILLED, RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+    };
+    if packed != REGION_GUARD_WORD_EMPTY {
+        note(RT_ROUTE_RLOOP_PRIME_OK);
+    } else if !is_site_matchable_shape_id(shape_id) {
+        note(RT_ROUTE_RLOOP_REFUSE_BAND);
+    } else if shape_record_by_id(shape_id).is_some_and(|r| r.summary() != 0) {
+        note(RT_ROUTE_RLOOP_REFUSE_SUMMARY);
+    } else if shape_descriptor_by_id(shape_id)
+        .is_some_and(|d| d.live_inline_slot_count != d.logical_key_count)
+    {
+        note(RT_ROUTE_RLOOP_REFUSE_SPILLED);
+    } else {
+        note(RT_ROUTE_RLOOP_REFUSE_OTHER);
+    }
 }
 
 /// Keepalive anchor — `js_region_loop_prime` is called only from generated
