@@ -17,8 +17,11 @@ compare per loop entry; a region whose shape could never be learned retires
 in its word after a bounded number of attempts. Keys a receiver keeps in its
 spill buffer are read through it (the S5 facts: the word carries the ShapeId
 with `PACKED_SPILL_FLIP` flipped, and the loop runs its spill-reading copy);
-a stored key must be inline. A sum of property reads is verified by its
-result (one ordered compare) instead of one tag test per leaf. Stores keep
+a stored key must be inline. A region forms only where it pays for the code it copies:
+at most 16 HIR nodes copied per bare access (every matrix loop is under 14;
+most real-code candidates, which hardly ever execute, are over it). A sum of
+property reads is verified by its result (one ordered compare) instead of one
+tag test per leaf. Stores keep
 the store IC's GC obligations and the two per-object store facts are tested
 at the guard. `PERRY_REGIONS=0` disables regions at compile time;
 `PERRY_RECV_ROUTE_COUNT=1` builds count region entries, F/G iterations, bare

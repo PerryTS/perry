@@ -101,14 +101,22 @@ const CLASSLESS_ADMIT_I16: &str = "512";
 /// `PERRY_REGIONS=0` switches loop regions off in ONE compiler (A/B arm);
 /// `PERRY_REGION_READS=0` (slices 1/2) switches them off too.
 /// Does a region pay for the code it copies? A loop region versions the whole
-/// loop and a body region copies its tail, so the copied HIR per bare access
-/// is bounded (`PERRY_REGION_NODES_PER_BARE`, default unbounded while it is
-/// measured). `PERRY_REGION_DIAG=3` prints every candidate's size.
+/// loop and a body region copies its tail, so the HIR copied per bare access
+/// is bounded by [`NODES_PER_BARE`] (`PERRY_REGION_NODES_PER_BARE` overrides
+/// it for measurement). `PERRY_REGION_DIAG=3` prints every candidate's size.
+///
+/// Measured 2026-09-28: every matrix candidate is at most 13 nodes per bare
+/// access (406 candidates); tsc + Zod offer 128 candidates at a median of 28
+/// and up to 201, 6,065 nodes in all, for 23 region entries in a whole
+/// transpile. At 16, all matrix regions stay and tsc/Zod keep 39 regions
+/// (649 nodes, 63 bare accesses): the copies that bought nothing go.
+const NODES_PER_BARE: usize = 16;
+
 fn pays(ctx: &FnCtx<'_>, kind: &str, nodes: usize, bare: usize) -> bool {
     let limit: usize = std::env::var("PERRY_REGION_NODES_PER_BARE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(usize::MAX);
+        .unwrap_or(NODES_PER_BARE);
     if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("3") {
         eprintln!(
             "[perry region] candidate kind={kind} nodes={nodes} bare={bare} fn={}",
