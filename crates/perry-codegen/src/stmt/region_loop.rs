@@ -146,6 +146,10 @@ pub(crate) struct Active {
 }
 
 thread_local! {
+    /// Module-level bindings declared `const` in the module being compiled:
+    /// invariant after initialisation, so a region may guard them once.
+    static CONST_MODULE_GLOBALS: std::cell::RefCell<HashSet<u32>> =
+        std::cell::RefCell::new(HashSet::new());
     static NEXT_TOKEN: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
     static STATS: std::cell::RefCell<[u64; 6]> = const { std::cell::RefCell::new([0; 6]) };
 }
@@ -154,6 +158,25 @@ thread_local! {
 /// bare reads, bare stores, F-bodies discarded by the verifier, loops refused.
 fn stat(i: usize, n: u64) {
     STATS.with(|s| s.borrow_mut()[i] += n);
+}
+
+/// Per-module setup, from codegen's module entry.
+pub(crate) fn begin_module(hir: &perry_hir::Module) {
+    let set: HashSet<u32> = hir
+        .init
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Let {
+                id, mutable: false, ..
+            } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    CONST_MODULE_GLOBALS.with(|c| *c.borrow_mut() = set);
+}
+
+fn const_module_global(id: u32) -> bool {
+    CONST_MODULE_GLOBALS.with(|c| c.borrow().contains(&id))
 }
 
 pub(crate) fn take_stats() -> [u64; 6] {
@@ -807,13 +830,19 @@ fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool)> {
 /// change, stored the plain way (a NaN-boxed root slot or a capture)?
 fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
     match r {
-        Recv::This => !ctx.this_stack.is_empty() && !ctx.in_static_member,
+        // A derived constructor's `this` may still be in its TDZ (before
+        // `super()`), and reading it throws: the preheader must not hoist
+        // that read, so such a body's `this` is not a region receiver.
+        Recv::This => {
+            !ctx.this_stack.is_empty() && !ctx.in_static_member && ctx.super_called_stack.is_empty()
+        }
         Recv::Local(id) => {
             !ctx.boxed_vars.contains(&id)
                 && !ctx.prealloc_boxes.contains(&id)
                 && !ctx.tdz_boxes.contains(&id)
-                // A module-level binding can be assigned by any call.
-                && !ctx.module_globals.contains_key(&id)
+                // A module-level binding can be assigned by any call, unless
+                // it is `const`.
+                && (!ctx.module_globals.contains_key(&id) || const_module_global(id))
                 && !ctx.pod_records.contains_key(&id)
                 && !ctx.scalar_replaced.contains_key(&id)
                 && !ctx.spec_ta_bindings.contains_key(&id)
@@ -821,7 +850,9 @@ fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
                 && !ctx.integer_locals.contains(&id)
                 && !ctx.receiver_descriptors.contains_buffer_view(id)
                 && ctx.ptr_shape_receiver_fact(&Expr::LocalGet(id)).is_none()
-                && (ctx.locals.contains_key(&id) || ctx.closure_captures.contains_key(&id))
+                && (ctx.locals.contains_key(&id)
+                    || ctx.closure_captures.contains_key(&id)
+                    || ctx.module_globals.contains_key(&id))
         }
     }
 }
