@@ -651,6 +651,11 @@ CODEGEN_BARRIERED_BINDINGS = {
     # hit and the key-add hit), each discharged by the `put.pic`-stem
     # bookkeeping emitted right after it.
     "crates/perry-codegen/src/expr/put_value_store_ic.rs": ("put.pic", 2),
+    # Step 4b (#10884): a loop region's bare store of a pointer-capable value,
+    # discharged by the same `put.pic`-stem bookkeeping the store IC emits
+    # (`emit_static_store_ic_bookkeeping`), witnessed in IR by
+    # `region_loop_tests::a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping`.
+    "crates/perry-codegen/src/stmt/region_loop/bare.rs": ("put.pic", 1),
 }
 
 RUNTIME_MARKER_RE = re.compile(r"GC_STORE_AUDIT\((BARRIERED|EXTERNAL_BARRIERED)\)")
