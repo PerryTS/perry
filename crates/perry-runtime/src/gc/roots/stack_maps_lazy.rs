@@ -349,6 +349,7 @@ pub(super) fn unzigzag(value: u32) -> i32 {
 ///
 /// `origin` is the runtime address of `bytes[0]`; the v6 function fields are
 /// offsets from their blob, so the table cannot be read without it.
+#[cfg(test)]
 pub(super) fn parse_function_table(
     section: u16,
     bytes: &[u8],

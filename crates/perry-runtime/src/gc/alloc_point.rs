@@ -162,7 +162,7 @@ pub(super) fn clear_park() {
 }
 
 /// Whether a cycle is currently parked at a frame-root phase on this thread.
-#[inline]
+#[cfg(test)]
 pub(super) fn root_phase_parked() -> bool {
     PARKED_AT.with(|parked| parked.get().is_some())
 }
@@ -259,19 +259,15 @@ pub fn alloc_point_counters() -> AllocPointCounters {
 
 #[cfg(test)]
 pub(crate) fn reset_alloc_point_counters() {
-    for counter in [
-        &D2_VIOLATIONS,
-        &ROOT_PHASES_PARKED,
-        &ROOT_PHASES_SERVED_AT_POLL,
-        &PARKED_VALVE_FIRES,
-        &OWED_REQUESTS_ROUTED,
-        &OWED_REQUESTS_SERVED,
-        &UNSAFE_ZONE_GROWTH_BYTES,
-        &UNSAFE_ZONE_GROWTH_EVENTS,
-        &MAX_POLL_WAIT_BYTES,
-    ] {
-        counter.store(0, Ordering::Relaxed);
-    }
+    D2_VIOLATIONS.store(0, Ordering::Relaxed);
+    ROOT_PHASES_PARKED.store(0, Ordering::Relaxed);
+    ROOT_PHASES_SERVED_AT_POLL.store(0, Ordering::Relaxed);
+    PARKED_VALVE_FIRES.store(0, Ordering::Relaxed);
+    OWED_REQUESTS_ROUTED.store(0, Ordering::Relaxed);
+    OWED_REQUESTS_SERVED.store(0, Ordering::Relaxed);
+    UNSAFE_ZONE_GROWTH_BYTES.store(0, Ordering::Relaxed);
+    UNSAFE_ZONE_GROWTH_EVENTS.store(0, Ordering::Relaxed);
+    MAX_POLL_WAIT_BYTES.store(0, Ordering::Relaxed);
     clear_park();
 }
 
