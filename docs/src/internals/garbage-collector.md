@@ -68,6 +68,41 @@ ladder and fail on a mismatch (`crates/perry-runtime/src/gc/trigger_watermark.rs
 <!-- gc-symbol: repeated_gc_malloc_is_answered_by_the_fast_path in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 <!-- gc-symbol: a_watermark_the_ladder_disagrees_with_trips_the_verifier in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 
+**Where a collection may begin (RFC deferred collection, S5).** A phase that
+reads frame roots precisely, or that moves anything, begins only at a declared
+point: a loop back-edge or function-entry poll, the outermost microtask-pump
+boundary, a host step (the event loop, regex quanta), or an explicit
+collection request (`gc()`, `perry/gc`, memory pressure, idle reclaim). An
+allocation — the dynamic extent of `gc_check_trigger`, which every allocation
+slow path, the JSON mid-parse checks and the root-lock flush of a deferred
+trigger check funnel into — may only take a block, arm the poll, run heap-only
+budgeted work, or run one of the conservative non-moving arms: the nursery
+slack valve, the old-gen reclaim arm, or the emergency reclaim. A budgeted
+cycle that reaches its root scan or final remark from an allocation is parked
+and served by the next poll; a collection requested while a root lock was held
+runs at the next poll rather than at the lock exit. A synchronous collection
+begun at an allocation point without requesting the conservative scan panics
+in every build (`crates/perry-runtime/src/gc/alloc_point.rs`). The one remaining precise
+read at an allocation point is the parked-cycle valve (a program that allocates
+the valve slack past the park point without reaching any poll), which is
+counted and held to zero in CI together with the nursery valve:
+`PERRY_GC_VALVE_LEDGER=<file>` makes every process append one line at exit,
+and `scripts/gc_valve_ledger_check.py` gates the gap suite and the ratchet
+probes on it. `PERRY_GC_DIAG=1` prints the counters on `[gc-alloc-point]`.
+<!-- gc-symbol: assists_park_at_both_root_phases_and_the_poll_serves_them in crates/perry-runtime/src/gc/tests/alloc_point_invariant.rs -->
+<!-- gc-symbol: a_precise_collection_begun_at_an_allocation_point_panics in crates/perry-runtime/src/gc/tests/alloc_point_invariant.rs -->
+<!-- gc-symbol: root_lock_exit_hands_an_owed_collection_to_the_poll in crates/perry-runtime/src/gc/tests/alloc_point_invariant.rs -->
+
+**The unmapped-frame verifier.** A precise collection that walks a generated
+frame whose return address has no stack-map record — a frame suspended at a
+call compiled as `gc-leaf-function` whose callee collected anyway — panics
+instead of skipping the frame (`crates/perry-runtime/src/gc/roots/stack_maps_frame_verify.rs`).
+It is armed by `PERRY_GC_VERIFY_FRAMES=1`, by `PERRY_GC_SCHEDULE_SEED`, and in
+`debug_assertions` builds. A program compiled with the GC instruments also lists
+its zero-record statepoint functions in the GC map, so the verifier recognises
+a generated frame even in a function whose every call is a leaf.
+<!-- gc-symbol: unmatched_generated_frame_fails_loudly_and_runtime_frames_do_not in crates/perry-runtime/src/gc/roots/stack_maps_frame_verify.rs -->
+
 **Per-live-object cost of a synchronous full.** Three parts of a full scale
 with the live set, and each has a cheaper exact form:
 
@@ -351,14 +386,16 @@ Rooting stress uses `PERRY_GC_SCHEDULE_SEED`,
 `PERRY_GC_SCHEDULE_RATE`, `PERRY_GC_SCHEDULE_ALLOC_KB`,
 `PERRY_GC_FORCE_EVACUATE`, `PERRY_GC_VERIFY_EVACUATION`,
 `PERRY_GC_PROTECT_FROMSPACE`, `PERRY_GC_PROTECT_FROMSPACE_DEPTH`,
-`PERRY_GC_FROMSPACE_SCAN`, and `PERRY_GC_FROMSPACE_SCAN_ABORT`. Their exact
+`PERRY_GC_FROMSPACE_SCAN`, `PERRY_GC_FROMSPACE_SCAN_ABORT` and
+`PERRY_GC_VERIFY_FRAMES`. Their exact
 contracts and non-vacuity requirements live in the
 [rooting invariant](gc-rooting-invariant.md). Research/bisection controls such
 as `PERRY_GC_INCREMENTAL`, `PERRY_GC_IDLE_RECLAIM`,
 `PERRY_GC_MAJOR_PACING_FLOOR_MB`, `PERRY_GC_MAJOR_PACING_GROWTH`,
 `PERRY_GC_MOVING_SAFEPOINT`, `PERRY_GC_MOVING_LOOP_POLLS`,
-`PERRY_GC_SAFEPOINT_ONLY`, and `PERRY_STACKMAP_WALKER` are accepted but are not
-additional supported collector modes.
+`PERRY_GC_SAFEPOINT_ONLY` (a codegen-only research switch since S5 made its
+runtime contract the default invariant), and `PERRY_STACKMAP_WALKER` are
+accepted but are not additional supported collector modes.
 
 `scripts/check_gc_env_knobs.py` derives the accepted names from live
 runtime/codegen/compiler parsers and rejects a current document, executable

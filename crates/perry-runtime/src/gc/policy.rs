@@ -1400,92 +1400,18 @@ crate::perry_thread_local! {
     /// Meaningless while `GC_SAFEPOINT_PENDING` is false.
     pub(super) static GC_SAFEPOINT_DEFER_ARENA_BASE: Cell<usize> = const { Cell::new(0) };
     /// True while a DECLARED safepoint drain is running: a loop back-edge
-    /// poll, the outermost microtask-pump moving minor, or an explicit
-    /// `gc()`. Consumed by the `PERRY_GC_SAFEPOINT_ONLY` contract assert in
-    /// the root-scan subphase.
+    /// poll or the outermost microtask-pump moving minor. Diagnostic only
+    /// (the copying minor's trace line reports it). The property the old
+    /// `PERRY_GC_SAFEPOINT_ONLY` contract asserted with it — "a precise-root
+    /// collection begins only at a declared safepoint" — is now the default
+    /// invariant, enforced at the allocation point (`gc/alloc_point.rs`).
     pub(super) static GC_AT_DECLARED_SAFEPOINT: Cell<bool> = const { Cell::new(false) };
-}
-
-/// `PERRY_GC_SAFEPOINT_ONLY` — research contract for the native-root modes
-/// (`exp/stackmap-viability`): a collection that skips the conservative stack
-/// scan consumes only precise roots, and with native stack maps active those
-/// roots exist only at mapped PCs — so such a collection may begin only at a
-/// declared safepoint; anywhere else it must scan conservatively. Codegen
-/// reads the same env to stop emitting statepoints around audited
-/// allocate-but-never-reenter helpers; the enforcement in `cycle.rs` is what
-/// turns the property from emergent (every possibly-collecting call happens
-/// to be mapped) into enforced.
-///
-/// `1`/`on`/`true` — HEAL: an undeclared precise-root cycle has the
-/// conservative scan forced for that cycle (sound: the scan restores
-/// liveness, and a conservatively-scanned cycle is non-moving). This is the
-/// measuring mode: alloc-point full collections are legitimate today and
-/// simply pay the scan.
-/// `strict` — PANIC on any undeclared precise-root cycle. This is the gate
-/// mode that proves the enforcement is live.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SafepointOnlyContract {
-    Off,
-    Heal,
-    Strict,
-}
-
-pub(super) fn gc_safepoint_only_contract() -> SafepointOnlyContract {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<SafepointOnlyContract> = OnceLock::new();
-    *crate::once_init::get_or_init(&CACHED, || {
-        safepoint_only_contract_from_value(std::env::var("PERRY_GC_SAFEPOINT_ONLY").ok().as_deref())
-    })
-}
-
-/// Pure value→contract mapping (#7991), so both directions are testable without
-/// touching the process environment. The boolean arm shares the one GC
-/// boolean-ish vocabulary; `strict` is this knob's own third state.
-pub(super) fn safepoint_only_contract_from_value(raw: Option<&str>) -> SafepointOnlyContract {
-    if matches!(
-        raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
-        Some("strict")
-    ) {
-        return SafepointOnlyContract::Strict;
-    }
-    if super::env_flag_from_value(raw) {
-        return SafepointOnlyContract::Heal;
-    }
-    SafepointOnlyContract::Off
-}
-
-/// Contract enforcement chokepoint, called once at every synchronous
-/// collection entry. When an undeclared precise-root collection is about to
-/// begin, heal mode returns a scan-override guard that must be held for the
-/// WHOLE collection: it flips the thread-local override that every consumer
-/// of `conservative_stack_scan_decision()` reads — the root-scan subphase,
-/// copying-minor eligibility, and the evacuation verifier alike. A previous
-/// revision healed by overriding a local variable inside the root-scan
-/// subphase only; copying-minor eligibility still read the global decision,
-/// concluded there were no conservative roots to pin, and forced evacuation
-/// moved objects that raw native-stack words still pointed at.
-pub(super) fn contract_scan_heal_guard() -> Option<super::roots::ManualGcScanGuard> {
-    if gc_safepoint_only_contract() == SafepointOnlyContract::Off {
-        return None;
-    }
-    if !super::roots::native_stack_maps_active() || GC_AT_DECLARED_SAFEPOINT.with(Cell::get) {
-        return None;
-    }
-    if matches!(
-        super::roots::conservative_stack_scan_decision(),
-        super::roots::ConservativeStackScanDecision::Scan
-    ) {
-        return None;
-    }
-    if gc_safepoint_only_contract() == SafepointOnlyContract::Strict {
-        panic!(
-            "PERRY_GC_SAFEPOINT_ONLY: precise-root collection began outside \
-             a declared safepoint"
-        );
-    }
-    Some(super::roots::ManualGcScanGuard::force_full_scan(
-        super::ConservativeScanSite::SafepointContractHeal,
-    ))
+    /// A collection a root-lock exit owed but did not run (RFC deferred
+    /// collection S5: "D stops collecting"). Served by the next declared poll
+    /// in `gc_safepoint_moving_minor`; `CheckTrigger` never lands here — it is
+    /// an allocation-point evaluation and runs at the flush as before.
+    static GC_POLL_OWED_REQUEST: Cell<DeferredGcRequest> =
+        const { Cell::new(DeferredGcRequest::None) };
 }
 
 /// RAII marker for a declared-safepoint drain. Nesting-safe: restores the
@@ -1618,27 +1544,62 @@ pub(super) fn flush_deferred_gc_request() {
     }
     match take_deferred_gc_request() {
         DeferredGcRequest::None => {}
+        // An allocation-point evaluation, held to D2 like any other: it may
+        // only arm the poll or run a conservative non-moving arm.
+        DeferredGcRequest::CheckTrigger => gc_check_trigger(),
+        // RFC deferred collection S5, "D stops collecting" (option 2 of
+        // #11523): a root-lock exit is an arbitrary point inside a runtime
+        // helper, not a declared poll, so a collection that was requested
+        // while the lock was held is handed to the next poll instead of
+        // running here. This closes the #11523 class structurally rather than
+        // one noncollecting guard at a time.
+        request => route_owed_request_to_poll(request),
+    }
+}
+
+/// Park a deferred collection for the next declared poll and arm the poll.
+fn route_owed_request_to_poll(request: DeferredGcRequest) {
+    GC_POLL_OWED_REQUEST.with(|owed| owed.set(owed.get().merge(request)));
+    super::alloc_point::note_owed_request_routed();
+    arm_precise_safepoint();
+}
+
+/// Run a collection a root-lock exit owed, at a declared poll. Returns whether
+/// one was owed. The unsafe-zone checks are the ones the flush used to make.
+fn serve_owed_request_at_poll() -> bool {
+    let request = GC_POLL_OWED_REQUEST.with(|owed| owed.replace(DeferredGcRequest::None));
+    match request {
+        DeferredGcRequest::None => return false,
         DeferredGcRequest::CheckTrigger => gc_check_trigger(),
         DeferredGcRequest::DirectMinor => {
-            if gc_blocked_by_unsafe_zone() {
-                return;
+            if !gc_blocked_by_unsafe_zone() {
+                gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
+                    .emit_after_current();
             }
-            gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct))
-                .emit_after_current();
         }
         DeferredGcRequest::Collect(GcTriggerKind::Manual) => {
-            if manual_gc_blocked_by_unsafe_zone() {
-                return;
+            if !manual_gc_blocked_by_unsafe_zone() {
+                manual_gc_collect_now();
             }
-            manual_gc_collect_now();
         }
         DeferredGcRequest::Collect(kind) => {
-            if gc_blocked_by_unsafe_zone() {
-                return;
+            if !gc_blocked_by_unsafe_zone() {
+                gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(kind))
+                    .emit_after_current();
             }
-            gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(kind)).emit_after_current();
         }
     }
+    super::alloc_point::note_owed_request_served();
+    true
+}
+
+fn owed_request_pending() -> bool {
+    GC_POLL_OWED_REQUEST.with(|owed| !matches!(owed.get(), DeferredGcRequest::None))
+}
+
+#[cfg(test)]
+pub(super) fn poll_owed_request_pending() -> bool {
+    owed_request_pending()
 }
 
 pub fn gc_suppress() {
@@ -3151,6 +3112,13 @@ fn gc_check_trigger_evaluate() {
     if GC_BUDGETED_STEP_ACTIVE.with(Cell::get) {
         return;
     }
+    // RFC deferred collection S5 (D2): everything below runs at an ALLOCATION
+    // POINT. It may arm the poll, run heap-only budgeted work, or run one of
+    // the conservative non-moving arms (OldReclaim, the nursery valve). It
+    // never starts a phase that reads frame roots precisely or moves — the
+    // budgeted stepper parks at those phases and the synchronous chokepoints
+    // assert it (`gc/alloc_point.rs`).
+    let _alloc_point = super::alloc_point::AllocationPointGuard::enter();
     // Issue #62: single TLS access covers both `in_alloc` and `suppressed`.
     let flags = GC_FLAGS.with(|f| f.get());
     if flags & GC_FLAG_SUPPRESSED != 0 {
@@ -3369,6 +3337,7 @@ fn gc_check_trigger_evaluate() {
                     }
                     return;
                 }
+                note_pending_poll_wait();
                 // The deferral never drained. The direct minor below IS the
                 // collection that was owed, so retire the request — leaving it
                 // pending would pin `GC_SAFEPOINT_DEFER_ARENA_BASE` at a stale,
@@ -3469,6 +3438,36 @@ fn gc_check_trigger_evaluate() {
     if !gc_budgeted_cycle_active() && due().is_none() {
         super::trigger_watermark::publish_trigger_watermark(nothing_due_watermark.get());
         return;
+    }
+
+    // S5 (D2): a budgeted cycle whose next work reads frame roots (`RootScan`,
+    // `FinalRootRemark`) does not advance from an allocation point. It is
+    // parked, the poll is armed, and the next declared poll serves the phase
+    // with a precise root set (`gc_safepoint_moving_minor`). The heap-only
+    // phases around it keep advancing from assists exactly as before.
+    //
+    // The park has a valve, measured like the nursery deferral's: a program
+    // that allocates the slack past the park point without reaching any poll
+    // has the phase served here instead, so a straight-line body cannot hold
+    // a cycle — and with it every other collection, which an active cycle
+    // blocks — open forever. That is counted, and gated to zero in CI; see
+    // `alloc_point::note_parked_valve_fired` for why it is sound until S6.
+    if gc_budgeted_cycle_active() {
+        if budgeted_cycle_next_step_reads_frame_roots() {
+            let arena_total = crate::arena::arena_total_bytes();
+            if !super::alloc_point::park_root_phase(arena_total, arm_precise_safepoint)
+                && super::alloc_point::parked_valve_due(
+                    arena_total,
+                    gc_moving_defer_slack_dyn_bytes(),
+                )
+            {
+                super::alloc_point::note_parked_valve_fired();
+                super::diag_sites::trigger_decision("alloc_point_slack", "parked_root_phase");
+                super::alloc_point::with_allocation_point_lifted(serve_budgeted_root_phase);
+            }
+            return;
+        }
+        super::alloc_point::clear_park();
     }
 
     let units = gc_mutator_assist_scaled_work_units();
@@ -3797,6 +3796,40 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     let in_alloc = flags & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0;
     let unsafe_zone = gc_blocked_by_unsafe_zone();
     let root_lock = GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0);
+    // S5: a collection a root-lock exit owed runs here, at the declared poll,
+    // rather than at the lock exit (`flush_deferred_gc_request`).
+    if !(in_alloc || unsafe_zone || root_lock) && serve_owed_request_at_poll() {
+        note_pending_poll_wait();
+        set_safepoint_pending(false);
+        return true;
+    }
+    // S5 (D2): the budgeted cycle's frame-root phases run at declared points
+    // only. An allocation point that reached one parked the cycle and armed
+    // this poll; serve the phase now, with precise roots. The guard is the
+    // budgeted stepper's own resume guard, not the one above: a budgeted MINOR
+    // holds `GC_FLAG_IN_ALLOC` for its whole life (`new_minor_fallback`), so
+    // `in_alloc` is always set while one is parked.
+    if gc_budgeted_cycle_active()
+        && budgeted_cycle_next_step_reads_frame_roots()
+        && !gc_budgeted_resume_blocked()
+    {
+        let _declared = DeclaredSafepointGuard::enter();
+        // One host-sized slice per poll, exactly as a host step slices the root
+        // scan; the poll stays armed until the phase is done, so the next poll
+        // continues it. Serving the whole scan in one step made the worst
+        // budgeted pause ~20% longer on the server fixture.
+        let done = serve_budgeted_root_phase_slice();
+        if done {
+            super::alloc_point::note_root_phase_served_at_poll();
+        }
+        // An owed collection the in-alloc guard above held back (a budgeted
+        // minor holds `GC_FLAG_IN_ALLOC`) keeps the poll armed for later.
+        if done && !owed_request_pending() {
+            note_pending_poll_wait();
+            set_safepoint_pending(false);
+        }
+        return true;
+    }
     let budgeted = gc_budgeted_cycle_active();
     if in_alloc || unsafe_zone || root_lock || budgeted {
         // Blocked right now — leave GC_SAFEPOINT_PENDING set so the next poll
@@ -3836,6 +3869,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // `set_safepoint_pending`, not a raw `.set(false)`: since #7735 the pending
     // flag is mirrored into the poll arming word, and clearing it behind the
     // mirror would leave the back-edge poll armed forever.
+    note_pending_poll_wait();
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     let kind = match due {
@@ -4663,6 +4697,23 @@ pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
 /// stale would make `moving_defer_within_slack` read an already-exceeded
 /// baseline and disable deferral for the rest of the process, the #7024 shape).
 fn defer_nursery_cap_to_precise_safepoint() {
+    arm_precise_safepoint();
+}
+
+/// Record how far the arena grew between arming the pending poll and now
+/// (`alloc_point::note_poll_wait`). A no-op when nothing was pending.
+fn note_pending_poll_wait() {
+    if GC_SAFEPOINT_PENDING.with(Cell::get) {
+        let base = GC_SAFEPOINT_DEFER_ARENA_BASE.with(Cell::get);
+        super::alloc_point::note_poll_wait(crate::arena::arena_total_bytes().saturating_sub(base));
+    }
+}
+
+/// Arm the next declared poll, recording the arena baseline the nursery valve
+/// measures its slack from — exactly as the nursery deferral does. Shared by
+/// every arm that hands work to a poll: the nursery cap, a parked budgeted
+/// root phase, and a collection a root-lock exit owed (S5).
+fn arm_precise_safepoint() {
     if GC_SAFEPOINT_PENDING.with(Cell::get) {
         return;
     }
@@ -4813,8 +4864,74 @@ fn gc_budgeted_start_or_step(
     });
 
     match outcome {
-        BudgetedStepOutcome::Result(result) => result,
-        BudgetedStepOutcome::Completed(cycle) => gc_finish_budgeted_cycle(cycle),
+        BudgetedStepOutcome::Result(result) => {
+            // S5 (D2): an assist that just walked the cycle up to a frame-root
+            // phase parks it there and arms the poll. The step itself refused
+            // to enter the phase (`GcCycleState::step`).
+            if super::alloc_point::at_allocation_point() {
+                if budgeted_cycle_next_step_reads_frame_roots() {
+                    super::alloc_point::park_root_phase(
+                        crate::arena::arena_total_bytes(),
+                        arm_precise_safepoint,
+                    );
+                }
+            } else if !budgeted_cycle_next_step_reads_frame_roots() {
+                super::alloc_point::clear_park();
+            }
+            result
+        }
+        BudgetedStepOutcome::Completed(cycle) => {
+            super::alloc_point::clear_park();
+            gc_finish_budgeted_cycle(cycle)
+        }
+    }
+}
+
+/// Whether the active budgeted cycle's next step reads frame roots — a phase
+/// D2 forbids an allocation point to start.
+fn budgeted_cycle_next_step_reads_frame_roots() -> bool {
+    GC_BUDGETED_CYCLE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|cycle| cycle.state.next_step_reads_frame_roots())
+    })
+}
+
+/// Advance the active budgeted cycle through its frame-root phase in one go.
+/// Only the counted parked-cycle valve uses this; a declared poll serves one
+/// slice at a time (`serve_budgeted_root_phase_slice`). Unbounded work for the
+/// phase itself: `RootScan` is bounded by the root set, and `FinalRootRemark`
+/// is atomic by design (`gc-step-bounds.md`). Stops as soon as the next step
+/// no longer reads frame roots, so the heap-only work that follows stays with
+/// the assists and host steps.
+/// One normal-incremental slice of the active cycle's frame-root phase, at a
+/// declared poll. Returns whether the cycle has left its frame-root phase. The
+/// final remark is atomic by design and completes in its slice.
+fn serve_budgeted_root_phase_slice() -> bool {
+    if gc_budgeted_cycle_active() && budgeted_cycle_next_step_reads_frame_roots() {
+        let _ = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+    }
+    let done = !gc_budgeted_cycle_active() || !budgeted_cycle_next_step_reads_frame_roots();
+    if done {
+        super::alloc_point::clear_park();
+    }
+    done
+}
+
+fn serve_budgeted_root_phase() {
+    // A handful of steps: the build of the valid-pointer set may precede the
+    // root scan, and the barrier-seed drain precedes the remark.
+    for _ in 0..8 {
+        if !gc_budgeted_cycle_active() || !budgeted_cycle_next_step_reads_frame_roots() {
+            break;
+        }
+        let result = gc_budgeted_step_work_units_inner(usize::MAX);
+        if result.status == JS_GC_STEP_STATUS_SKIPPED {
+            break;
+        }
+    }
+    if !budgeted_cycle_next_step_reads_frame_roots() {
+        super::alloc_point::clear_park();
     }
 }
 

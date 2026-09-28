@@ -632,6 +632,7 @@ impl LlModule {
         ir.push('\n');
 
         let funcs = self.deduped_function_refs();
+        crate::gc_map::note_statepoint_functions(&funcs);
         let gc_leaf_callees = if crate::codegen::helpers::native_stack_roots_enabled() {
             crate::gc_call_effects::transitive_leaf_functions(&funcs)
         } else {
@@ -767,6 +768,7 @@ impl LlModule {
     /// into one object, keeping `compile_module`'s single-object API.
     pub(crate) fn codegen_unit_parts(&self, n: usize) -> Vec<CodegenUnitPart<'_>> {
         let funcs = self.deduped_function_refs();
+        crate::gc_map::note_statepoint_functions(&funcs);
         let gc_leaf_callees = Arc::new(if crate::codegen::helpers::native_stack_roots_enabled() {
             crate::gc_call_effects::transitive_leaf_functions(&funcs)
         } else {

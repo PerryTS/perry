@@ -115,6 +115,10 @@ fn the_same_plant_under_an_ordinary_lock_collects_on_release() {
         !deferred_gc_request_pending(),
         "an ordinary release flushes"
     );
+    // RFC deferred collection S5: the flush hands a collection to the next
+    // declared poll (a plain trigger check stays an allocation-point check,
+    // which defers to the poll too); the poll runs it.
+    assert!(gc_safepoint_moving_minor());
     assert!(
         gc_collection_count() > before,
         "the flushed request must have run a collection"
@@ -145,5 +149,8 @@ fn clean_and_inherited_requests_are_not_violations() {
         assert_eq!(gc_collection_count(), before);
     }
     assert!(!deferred_gc_request_pending());
+    // S5: the outer release hands the collection to the next poll.
+    assert_eq!(gc_collection_count(), before);
+    assert!(gc_safepoint_moving_minor());
     assert!(gc_collection_count() > before);
 }

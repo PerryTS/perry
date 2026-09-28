@@ -380,7 +380,14 @@ pub(crate) fn new_object_start_bitmap(size: usize) -> Box<[u64]> {
 /// violation [`arena_cell_alloc`] exists to avoid, on the out-of-memory path.
 /// `arena_cell_alloc` is the only caller; every `&mut self` path uses
 /// [`alloc_block_no_gc`].
+#[inline(never)]
 pub(crate) fn reserve_arena_block(min_size: usize) -> ArenaBlock {
+    // Decision 10 of RFC deferred collection: growth an unsafe zone forced (no
+    // poll or valve can collect inside one). Diagnostic, and here rather than
+    // in `arena_cell_alloc`: that function is inlined into every allocation,
+    // and a call added there stops it being inlined (measured +3.6% retired
+    // instructions on bench_string_heavy).
+    crate::gc::note_block_if_unsafe_zone(block_size_for(min_size));
     if let Some(block) = try_alloc_block(min_size, true) {
         return block;
     }

@@ -895,6 +895,16 @@ impl LlFunction {
         self.stack_map_requested
     }
 
+    /// Whether this function is rendered with `gc "statepoint-example"`, i.e.
+    /// whether its frames are described by the native GC map. The one
+    /// predicate the renderer and the GC map's zero-record listing share
+    /// (`gc_map::note_statepoint_functions`).
+    pub(crate) fn uses_statepoint_strategy(&self) -> bool {
+        self.stack_map_requested
+            && !self.force_shadow_frame
+            && crate::codegen::helpers::native_stack_roots_enabled()
+    }
+
     /// Label of the last-created block — convenience for expression codegen
     /// that needs to feed a phi node the predecessor label after compiling a
     /// sub-expression whose control flow may have split.
@@ -1010,10 +1020,7 @@ impl LlFunction {
         // on it and reintroduce the relocation fan-out the spill avoids. Its
         // `stack_map_requested` is already false (enable_shadow_frame_inner
         // took the shadow branch), so this is belt-and-braces.
-        let gc_strategy = if self.stack_map_requested
-            && !self.force_shadow_frame
-            && crate::codegen::helpers::native_stack_roots_enabled()
-        {
+        let gc_strategy = if self.uses_statepoint_strategy() {
             " gc \"statepoint-example\""
         } else {
             ""

@@ -141,6 +141,12 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #8583: selects the descriptor-backed lowering for large constant arrays.
     // The two paths emit different IR and therefore require distinct cache keys.
     "PERRY_GC_SAFEPOINT_ONLY",
+    // RFC deferred collection S5: any of these at compile time makes the GC
+    // map list zero-record statepoint functions for the unmapped-frame
+    // verifier (`gc_map::list_unrecorded_functions`), which changes the object.
+    "PERRY_GC_INSTRUMENTS",
+    "PERRY_GC_VERIFY_FRAMES",
+    "PERRY_GC_SCHEDULE_SEED",
     "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_VERIFY_NATIVE_REGIONS",
