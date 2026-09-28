@@ -203,7 +203,7 @@ const NON_COLLECTING: &[&str] = &[
     "perry_transition_cache_base",
     "js_transition_ic_note_hit",
     "js_inherited_read_cache_hit_f64",
-    // S2 GC-leaf IC hits; audited in `gc_call_effects.rs`.
+    // S2 GC-leaf IC hits; proven `Leaf` by the generated call-effects table.
     "js_object_get_field_ic_fast",
     "js_class_field_get_ic_fast",
     "js_class_field_set_ic_fast",
@@ -361,7 +361,13 @@ fn is_collecting(callee: &str) -> bool {
     if callee.starts_with("llvm.") {
         return false;
     }
-    !NON_COLLECTING.contains(&callee)
+    // `NON_COLLECTING` is a hand-kept list; the generated call-graph table
+    // (`gc_call_effects`) is the authority it must agree with. A name the
+    // table does not prove `Leaf` (e.g. `js_array_length`'s Proxy arm,
+    // #11522, or a GcRootRegistryGuard flush, #11523) stays collecting.
+    !(NON_COLLECTING.contains(&callee)
+        && crate::gc_call_effects::classify_direct_callee(callee)
+            == crate::gc_call_effects::GcCallEffect::CannotCollect)
 }
 
 /// Is `name` (no `@`) a string-literal handle global — `<mod>_.str.<N>.handle`?

@@ -198,6 +198,27 @@ impl JsValue {
         Some(len)
     }
 
+    /// Copy a string value — heap `STRING_TAG` or inline SSO — into an owned
+    /// `String`, replacing invalid UTF-8 lossily. Returns `None` for every
+    /// non-string value (#11519).
+    ///
+    /// Prefer this over `is_string()` + `as_string_ptr()`: that pair is
+    /// heap-only, so a short string built at runtime (`"da" + "ta"`,
+    /// `String(5)`, a template) silently reads as "not a string".
+    pub fn to_owned_string(self) -> Option<String> {
+        if self.is_short_string() {
+            let mut buf = [0u8; SHORT_STRING_MAX_LEN];
+            let len = self.short_string_to_buf(&mut buf)?;
+            return Some(String::from_utf8_lossy(&buf[..len]).into_owned());
+        }
+        if self.is_string() {
+            // SAFETY: a STRING_TAG value carries a live `StringHeader`, and
+            // `copy_string_from_raw` copies it out before returning.
+            return Some(unsafe { crate::copy_string_from_raw(self.as_string_ptr()) });
+        }
+        None
+    }
+
     /// True if the value is a heap object pointer (`POINTER_TAG` —
     /// covers ObjectHeader, ArrayHeader, ClosureHeader, etc).
     #[inline]
@@ -309,6 +330,26 @@ impl std::fmt::Debug for JsValue {
             write!(f, "JsValue::from_number({})", self.to_number())
         }
     }
+}
+
+// ── string arguments for `*const StringHeader` natives ───────────
+
+extern "C" {
+    fn js_ffi_arg_ptr(value: f64) -> i64;
+}
+
+/// Unbox `value` to the `*const StringHeader` a native entry expects (#11519).
+///
+/// An inline SSO string has no header behind its bits, so it is copied into a
+/// per-thread scratch header; a heap string unboxes exactly as
+/// `bits & POINTER_MASK` does. The scratch copy is recycled after 16 further
+/// SSO arguments, so the callee must only read the string during the call
+/// (copying it out if it keeps it) — the same contract every existing
+/// `*const StringHeader` native already has for a GC-movable heap string.
+#[inline]
+pub fn string_arg_ptr(value: f64) -> *const StringHeader {
+    // SAFETY: `js_ffi_arg_ptr` is a pure runtime entry that accepts any value.
+    unsafe { js_ffi_arg_ptr(value) as *const StringHeader }
 }
 
 // ── object / array allocation primitives ─────────────────────────

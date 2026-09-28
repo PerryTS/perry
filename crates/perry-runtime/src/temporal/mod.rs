@@ -221,7 +221,16 @@ pub fn is_temporal_cell_addr(addr: usize) -> bool {
         return false;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(header) => header.obj_type == crate::gc::GC_TYPE_TEMPORAL,
+        // #11558: a Box-leaked symbol has no `GcHeader`; the word before it
+        // can be the previous symbol's `id`, and id 18 reads as
+        // `GC_TYPE_TEMPORAL`. Same screen as `crate::date::is_date_cell_addr`.
+        Some(header) => {
+            header.obj_type == crate::gc::GC_TYPE_TEMPORAL
+                && !unsafe {
+                    crate::symbol::may_be_symbol_header(addr as *const u8)
+                        && crate::symbol::is_registered_symbol(addr)
+                }
+        }
         None => false,
     }
 }

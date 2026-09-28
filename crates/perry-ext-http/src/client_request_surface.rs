@@ -84,8 +84,10 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
                     .to_bool();
         let callback = (callback_value.to_bits() & PTR_MASK) as i64;
         let wrapper = (wrapper_value.to_bits() & PTR_MASK) as i64;
-        let event_ptr = (event_value.to_bits() & PTR_MASK) as *const StringHeader;
-        let event = read_str(event_ptr).unwrap_or_default();
+        // Heap or inline SSO event name (#11519).
+        let event = JsValue::from_bits(event_value.to_bits())
+            .to_owned_string()
+            .unwrap_or_default();
         let removed = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
             if factory_callback {
                 if request.response_raw_wrapper == wrapper {

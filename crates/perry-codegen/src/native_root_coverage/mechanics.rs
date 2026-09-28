@@ -351,15 +351,38 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
         let points = statepoints_of(&ir, target, "main");
         let callees = || points.iter().map(|sp| &sp.callee).collect::<Vec<_>>();
 
-        let gc_init = points
-            .iter()
-            .position(|sp| sp.callee == "js_gc_init")
-            .unwrap_or_else(|| {
-                panic!(
+        // `js_gc_init` used to be a statepoint and so its own anchor. The
+        // generated GC call-effects table proves it cannot collect, so it is
+        // now a leaf call; anchor it by its position in `main` instead: it must
+        // come before the first safepoint's call. Index -1 = before all.
+        let gc_init: isize = match points.iter().position(|sp| sp.callee == "js_gc_init") {
+            Some(p) => p as isize,
+            None => {
+                assert_eq!(
+                    crate::gc_call_effects::classify_direct_callee("js_gc_init"),
+                    crate::gc_call_effects::GcCallEffect::CannotCollect,
                     "[{target}] entry `main` must initialize the GC: {:?}",
                     callees()
-                )
-            });
+                );
+                let start = ir.find("@main(").expect("entry module defines main");
+                let body = &ir[start..];
+                let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+                let init_at = body
+                    .find("@js_gc_init(")
+                    .unwrap_or_else(|| panic!("[{target}] entry `main` must initialize the GC"));
+                let first_sp = body
+                    .find(&format!(
+                        "@{}(",
+                        points.iter().next().expect("main has a safepoint").callee
+                    ))
+                    .expect("the first safepoint's call is in main");
+                assert!(
+                    init_at < first_sp,
+                    "[{target}] js_gc_init must precede main's first safepoint"
+                );
+                -1
+            }
+        };
         let strings_init = points
             .iter()
             .position(|sp| sp.callee.starts_with("__perry_init_strings_"))
@@ -386,7 +409,7 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
             });
 
         assert!(
-            gc_init < first_rooted,
+            gc_init < first_rooted as isize,
             "[{target}] safepoint #{first_rooted} (`{}`) carries a live GC \
              value at or before `js_gc_init` (#{gc_init}) — before there is a \
              collector to relocate it or a heap it could have come from: {:?}",

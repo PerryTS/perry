@@ -309,6 +309,17 @@ pub(crate) fn object_prototype_addr() -> usize {
     resolve_prototype_addr(OBJECT_PROTO_CACHE)
 }
 
+/// `%Object.prototype%` if this thread has ALREADY memoized it, else 0 —
+/// never bootstraps. For a caller that may itself be reached from the
+/// bootstrap's `globalThis.Object` read: the inherited-read cache's walk runs
+/// under `js_object_get_field_by_name`, which that bootstrap calls, so asking
+/// [`object_prototype_addr`] from there recurses until the stack overflows.
+/// The memo is primed at the end of `populate_global_this_builtins`, so after
+/// startup this answers exactly what `object_prototype_addr` does.
+pub(crate) fn object_prototype_addr_if_resolved() -> usize {
+    memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
+}
+
 /// **This realm's** `%Function.prototype%` address, or 0 while this thread
 /// has no `globalThis` yet (no intrinsic exists, so nothing can be it). See
 /// the row-2 note on [`prototype_addrs`] (#10497).

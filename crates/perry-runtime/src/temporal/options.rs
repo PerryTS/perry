@@ -338,7 +338,7 @@ pub fn calendar_slot(v: f64) -> temporal_rs::Calendar {
         return Calendar::default();
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         let s = read_string(v);
         reject_bare_islamic(&s);
         return ok_or_throw(s.parse::<Calendar>());
@@ -364,7 +364,7 @@ pub fn calendar_slot(v: f64) -> temporal_rs::Calendar {
 /// Non-string values defer to [`calendar_slot`] (undefined → ISO, a Temporal
 /// value → its `[[Calendar]]`, anything else → TypeError).
 pub fn calendar_identifier(v: f64) -> temporal_rs::Calendar {
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         let s = read_string(v);
         reject_bare_islamic(&s);
         return ok_or_throw(temporal_rs::Calendar::try_from_utf8(s.as_bytes()));
@@ -561,7 +561,7 @@ fn num_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<f64>
 /// `obj.<name>` as a string, or `None` if absent / undefined / not a string.
 fn str_field(obj: *const crate::object::ObjectHeader, name: &str) -> Option<String> {
     let raw = field(obj, name);
-    if is_undefined(raw) || !JSValue::from_bits(raw.to_bits()).is_string() {
+    if is_undefined(raw) || !JSValue::from_bits(raw.to_bits()).is_any_string() {
         return None;
     }
     Some(read_string(raw))
@@ -580,7 +580,7 @@ fn str_field_coerce(obj: *const crate::object::ObjectHeader, name: &str) -> Opti
         return None;
     }
     let jv = JSValue::from_bits(raw.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         return Some(read_string(raw));
     }
     if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
@@ -665,7 +665,7 @@ pub fn rounding_options(arg: f64) -> RoundingOptions {
     o.rounding_mode = None;
     o.increment = None;
 
-    if JSValue::from_bits(arg.to_bits()).is_string() {
+    if JSValue::from_bits(arg.to_bits()).is_any_string() {
         o.smallest_unit = Some(parse_unit(&read_string(arg)));
         return o;
     }
@@ -696,7 +696,7 @@ pub fn duration_round_options(arg: f64) -> (RoundingOptions, Option<RelativeTo>)
     o.rounding_mode = None;
     o.increment = None;
 
-    if JSValue::from_bits(arg.to_bits()).is_string() {
+    if JSValue::from_bits(arg.to_bits()).is_any_string() {
         o.smallest_unit = Some(parse_unit(&read_string(arg)));
         return (o, None);
     }
@@ -721,7 +721,7 @@ pub fn duration_round_options(arg: f64) -> (RoundingOptions, Option<RelativeTo>)
 /// `relativeTo`. Options are read in spec (alphabetical) order: `relativeTo`,
 /// `unit`.
 pub fn total_options(arg: f64) -> (Unit, Option<RelativeTo>) {
-    if JSValue::from_bits(arg.to_bits()).is_string() {
+    if JSValue::from_bits(arg.to_bits()).is_any_string() {
         return (parse_unit(&read_string(arg)), None);
     }
     match as_obj(arg) {
@@ -764,7 +764,7 @@ fn read_fractional_second_digits(
         if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
             type_error("Cannot convert a Symbol value to a string".to_string());
         }
-        let s = if jv.is_string() {
+        let s = if jv.is_any_string() {
             read_string(raw)
         } else {
             let sh = crate::value::js_jsvalue_to_string_coerce(raw);
@@ -919,7 +919,7 @@ fn relative_to_field(obj: *const crate::object::ObjectHeader) -> Option<Relative
         });
     }
     // A string (ZonedDateTime form, falling back to PlainDate).
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         return Some(ok_or_throw(RelativeTo::try_from_str(&read_string(v))));
     }
     // A plain property-bag object. Per `ToRelativeTemporalObject`, the calendar
@@ -1334,7 +1334,7 @@ fn require_string_field(obj: *const crate::object::ObjectHeader, name: &str) -> 
         return None;
     }
     let jv = JSValue::from_bits(raw.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         return Some(read_string(raw));
     }
     if jv.is_pointer() && unsafe { crate::symbol::js_is_symbol(raw) } == 0 {
@@ -1347,7 +1347,7 @@ fn require_string_field(obj: *const crate::object::ObjectHeader, name: &str) -> 
         // IS a string (and then fails the month-code/offset syntax check).
         match unsafe { crate::value::to_string_primitive::ordinary_to_primitive_string(raw) } {
             Some(prim) => {
-                if JSValue::from_bits(prim.to_bits()).is_string() {
+                if JSValue::from_bits(prim.to_bits()).is_any_string() {
                     return Some(read_string(prim));
                 }
                 // non-string primitive result → require-string fails (TypeError)
@@ -1413,7 +1413,7 @@ pub fn optional_plain_time(v: f64) -> Option<PlainTime> {
     if let Some(super::TemporalValue::PlainTime(t)) = super::temporal_value_ref(v) {
         return Some(*t);
     }
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         return Some(ok_or_throw(read_string(v).parse::<PlainTime>()));
     }
     if let Some(o) = as_obj(v) {
@@ -1449,7 +1449,7 @@ pub fn optional_instant_timezone(arg: f64) -> Option<TimeZone> {
 /// Resolve a time-zone argument — a tz-identifier string or a
 /// `Temporal.ZonedDateTime` whose zone is reused.
 pub fn timezone(v: f64) -> TimeZone {
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         // A string identifier: an invalid one is a `RangeError`.
         return ok_or_throw(TimeZone::try_from_str(&read_string(v)));
     }
@@ -1470,7 +1470,7 @@ pub fn transition_direction(v: f64) -> TransitionDirection {
     // (the option is required) and for any non-object primitive (boolean, number,
     // bigint, symbol, null). Only a malformed *string* / object `direction` value
     // is a RangeError.
-    let s = if JSValue::from_bits(v.to_bits()).is_string() {
+    let s = if JSValue::from_bits(v.to_bits()).is_any_string() {
         read_string(v)
     } else if is_undefined(v) {
         type_error("getTimeZoneTransition: direction option is required".to_string());

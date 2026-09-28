@@ -293,14 +293,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::CryptoSha256(operand) => {
             let data_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
-            let data_handle = unbox_to_i64(blk, &data_box);
+            // #11519: an SSO string has no header behind its masked bits.
+            let data_handle = crate::expr::unbox_ffi_str_arg(blk, &data_box);
             let result = blk.call(I64, "js_crypto_sha256", &[(I64, &data_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
         Expr::CryptoMd5(operand) => {
             let data_box = lower_expr(ctx, operand)?;
             let blk = ctx.block();
-            let data_handle = unbox_to_i64(blk, &data_box);
+            let data_handle = crate::expr::unbox_ffi_str_arg(blk, &data_box);
             let result = blk.call(I64, "js_crypto_md5", &[(I64, &data_handle)]);
             Ok(nanbox_string_inline(blk, &result))
         }
