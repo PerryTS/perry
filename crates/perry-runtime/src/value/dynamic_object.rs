@@ -326,6 +326,23 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // Check if this is a NaN-boxed string - handle string properties like .length
     let bits = obj_value.to_bits();
+    // Inline SSO string (#11519): it carries no header, so the heap arm
+    // below cannot see it, and the pointer path further down unboxes it to 0.
+    let sso = crate::value::JSValue::from_bits(bits);
+    if sso.is_short_string() {
+        if property_name_ptr.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let name_slice = if property_name_len > 0 {
+            std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len)
+        } else {
+            std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char).to_bytes()
+        };
+        if name_slice == b"length" {
+            return sso.short_string_utf16_len() as f64;
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     if (bits & TAG_MASK) == STRING_TAG {
         let str_ptr = (bits & POINTER_MASK) as *const crate::string::StringHeader;
         if !str_ptr.is_null() {

@@ -383,6 +383,8 @@ pub(crate) fn record_numeric_tail_transition(
     // chain: the generic fallback mints a different predecessor, after which
     // no historical edge can match. Preserve colliding entries with bounded
     // open addressing instead of overwriting one direct-mapped slot.
+    // Arm before publish: once set, the collector walks both tables.
+    object_hot_for_owner(owner).array_tail_occupied.set(true);
     let forward = with_forward_for_owner(owner, |table| unsafe { insert_forward(table, entry) });
     let reverse = with_reverse_for_owner(owner, |table| unsafe { insert_reverse(table, entry) });
     if forward.is_none() && reverse.is_none() {
@@ -502,7 +504,55 @@ unsafe fn scan_table(
     }
 }
 
+/// May either tail table hold a non-`EMPTY` slot on this thread?
+///
+/// `false` is exact, not a heuristic: the flag is set by the only production
+/// writer (`record_numeric_tail_transition`) before its first `publish_entry`,
+/// and nothing but `test_clear` ever returns a slot to `EMPTY` (a pruned entry
+/// becomes a tombstone). So while it is clear, every slot of both tables is
+/// `EMPTY` and the GC scan and prune below would visit nothing — they were
+/// 2 x 8192 slot reads per pass, ~265k instructions per copying minor, on
+/// every program that never extends `Array`.
+#[inline]
+fn tables_may_hold_entries() -> bool {
+    let occupied = crate::state::state().object_hot.array_tail_occupied.get();
+    #[cfg(any(debug_assertions, test))]
+    if !occupied {
+        debug_assert_tables_empty();
+    }
+    occupied
+}
+
+/// The proof obligation behind a skipped walk, checked where it is relied on:
+/// a slot published without arming `array_tail_occupied` fails here instead of
+/// leaving an unvisited keys-array root in the table.
+#[cfg(any(debug_assertions, test))]
+fn debug_assert_tables_empty() {
+    for (name, table) in [
+        (
+            "forward",
+            &crate::state::state().object_hot.array_tail_forward,
+        ),
+        (
+            "reverse",
+            &crate::state::state().object_hot.array_tail_reverse,
+        ),
+    ] {
+        let table = unsafe { &*table.get() };
+        if let Some(index) = table.iter().position(|entry| !entry.is_empty()) {
+            panic!(
+                "array-tail {name} table slot {index} is occupied but \
+                 `array_tail_occupied` is clear: a writer published an entry \
+                 without arming the flag first, so the GC would skip its roots"
+            );
+        }
+    }
+}
+
 pub(crate) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if !tables_may_hold_entries() {
+        return;
+    }
     with_forward(|table| unsafe { scan_table(table, visitor) });
     with_reverse(|table| unsafe { scan_table(table, visitor) });
 }
@@ -547,12 +597,19 @@ unsafe fn note_live_entries(
 
 #[cold]
 pub(crate) fn prune_invalid_entries() {
+    if !tables_may_hold_entries() {
+        return;
+    }
     with_forward(|table| unsafe { prune_table(table) });
     with_reverse(|table| unsafe { prune_table(table) });
 }
 
 #[cfg(test)]
 pub(crate) fn test_clear() {
+    crate::state::state()
+        .object_hot
+        .array_tail_occupied
+        .set(false);
     with_forward(|table| unsafe {
         for entry in (*table).iter_mut() {
             *entry = ArrayTailTransitionEntry::EMPTY;
@@ -563,6 +620,45 @@ pub(crate) fn test_clear() {
             *entry = ArrayTailTransitionEntry::EMPTY;
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_tables_may_hold_entries() -> bool {
+    tables_may_hold_entries()
+}
+
+#[cfg(test)]
+pub(crate) fn test_prune() {
+    prune_invalid_entries();
+}
+
+#[cfg(test)]
+fn test_entry(shape_id: u32) -> ArrayTailTransitionEntry {
+    ArrayTailTransitionEntry {
+        predecessor_keys: 0,
+        successor_keys: 0,
+        predecessor_shape_id: shape_id,
+        successor_shape_id: shape_id + 1,
+        slot: 0,
+        array_index: 0,
+        predecessor_live_inline_slots: 0,
+        successor_live_inline_slots: 0,
+    }
+}
+
+/// A writer that forgets to arm: publish straight into the forward table.
+#[cfg(test)]
+pub(crate) fn test_publish_without_arming(shape_id: u32) {
+    with_forward(|table| unsafe { insert_forward(table, test_entry(shape_id)) });
+}
+
+/// Arm exactly as `record_numeric_tail_transition` does, then publish.
+#[cfg(test)]
+pub(crate) fn test_arm_and_publish(shape_id: u32) {
+    object_hot_for_owner(std::ptr::null())
+        .array_tail_occupied
+        .set(true);
+    with_forward(|table| unsafe { insert_forward(table, test_entry(shape_id)) });
 }
 
 #[cfg(test)]

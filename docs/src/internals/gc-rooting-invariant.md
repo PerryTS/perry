@@ -166,7 +166,7 @@ handles, still open for field reads.
 alloca in generated code. Within that scope it is the only instrument that sees
 a defect before it crashes, which is why it runs first.
 
-**It is blind to three classes, all found the hard way. A clean report is not
+**It is blind to four classes, all found the hard way. A clean report is not
 evidence for any of them:**
 
 - **Runtime tables and interning caches** (#7231) — it reads emitted IR and
@@ -180,6 +180,16 @@ evidence for any of them:**
   verbatim. Property sets classified `MOVING: YES`, property gets `MOVING: no`,
   and 31 stale uses were dropped by `--moving-only`. **Audit these sets against
   what codegen actually emits, the way #7227 audits `ALLOC_RE`.**
+
+- **A slot the collector was told not to visit** (#11550) — not a rooting
+  bug at all. The object spill store read a buffer's uninitialized tail as the
+  slot's old value; pointer-shaped leftovers turned the first store into a
+  "pointer over pointer" overwrite, which skips the GC slot-mask update, so the
+  slot was never marked or rewritten. Every root was correct, and the IR has
+  nothing to see. Tell: the holder of the stale value is a *live* object whose
+  sibling slots were rewritten, and `PERRY_GC_PROTECT_FROMSPACE_HOLDERS=1`'s
+  report names nothing. When a runtime store helper takes an `old_bits`
+  shortcut, the old bits must come from inside the element range the GC walks.
 
 For the classes above, the instruments that catch them are the schedule/quarantine
 arms below and a *dependency-scale* workload — #7280 records 25 curated corpus

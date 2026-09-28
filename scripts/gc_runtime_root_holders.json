@@ -89,6 +89,12 @@
       "why": "Cell<bool> set while the runtime runs its own builtin definitions (as_builtin_definition, #10697), so installs onto non-Map/Set/Date owners do not arm PERRY_OWN_NAMED_PROP_INSTALLED. A flag, never an address."
     },
     {
+      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
+      "name": "IN_SERVER_RESPONSE_FORWARD",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Cell<bool> re-entrancy latch for the ServerResponse.prototype method thunk (#10454). Only false/true are stored; the receiver and the aliased handle live in the traced alias table and the caller's frame."
+    },
+    {
       "file": "crates/perry-runtime/src/value/nanbox.rs",
       "name": "FFI_SSO_RING",
       "verdict": "not_a_gc_pointer",

@@ -365,3 +365,46 @@ fn test_setter_optional_args() {
     let d = alloc_date_cell(1_577_934_245_006.0);
     assert!(set_utc(d, 3, &[undef()]).is_nan());
 }
+
+/// #11558: a Box-leaked symbol has no `GcHeader`. Under mimalloc the word
+/// before it is the tail of the previous block, which for a symbol allocated
+/// right after another symbol is that symbol's `id` — and in claude-code
+/// 2.1.112 the id counter passes 17, which is `GC_TYPE_DATE_CELL`. The
+/// fixture lays that memory out by hand (the word, then a registered
+/// `SymbolHeader`) so the classifier sees exactly what cc's `doctor` fed it.
+#[test]
+fn a_headerless_symbol_behind_a_date_cell_tag_is_not_a_date() {
+    let block: &'static mut [u64; 4] = Box::leak(Box::new([0u64; 4]));
+    block[0] = crate::gc::GC_TYPE_DATE_CELL as u64;
+    let sym = unsafe { block.as_mut_ptr().add(1) } as *mut crate::symbol::SymbolHeader;
+    unsafe {
+        // GC_STORE_AUDIT(INIT): a Box-leaked, never-collected test symbol; no GC edge.
+        sym.write(crate::symbol::SymbolHeader {
+            magic: crate::symbol::SYMBOL_MAGIC,
+            registered: 1,
+            description: std::ptr::null_mut(),
+            id: 56,
+        });
+    }
+    crate::symbol::register_symbol_pointer(sym as usize);
+    let addr = sym as usize;
+    assert_eq!(
+        unsafe { crate::value::addr_class::try_read_gc_header(addr) }.map(|h| h.obj_type),
+        Some(crate::gc::GC_TYPE_DATE_CELL),
+        "fixture: the word before the symbol must read as a DateCell tag"
+    );
+    assert!(
+        crate::symbol::is_registered_symbol(addr),
+        "fixture: the symbol must be registered"
+    );
+    assert!(
+        !is_date_cell_addr(addr),
+        "a registered symbol must never classify as a DateCell"
+    );
+    let boxed = f64::from_bits(crate::value::JSValue::pointer(addr as *const u8).bits());
+    assert!(!is_date_value(boxed));
+
+    // A real Date still classifies.
+    let date = alloc_date_cell(0.0);
+    assert!(is_date_value(date));
+}

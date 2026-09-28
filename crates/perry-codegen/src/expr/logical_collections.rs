@@ -656,7 +656,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // conversion happens BELOW the re-read, which is the only
                     // place it can be correct (slice 1b's `BufferSlice` finding).
                     let url_handle = blk.call(I64, "js_fetch_input_ptr", &[(DOUBLE, &vals[0])]);
-                    let method_handle = unbox_to_i64(blk, &vals[1]);
+                    // #11519: `method: "GET"` built at runtime is an inline SSO
+                    // string; the runtime copies it out on entry.
+                    let method_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[1]);
                     // The shared BodyInit classifier: a stream or async-iterable
                     // body is handed to `js_fetch_with_options` out of band.
                     let body_handle =

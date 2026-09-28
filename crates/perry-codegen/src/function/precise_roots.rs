@@ -397,7 +397,10 @@ mod tests {
         use crate::types::{I32, I64, PTR, VOID};
         module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
         module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
-        module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+        // `js_closure_set_capture_bits` used to be the setter here; the
+        // generated table proves it can flush a deferred collection (#11523),
+        // so the leaf setter probed is the i32 box store.
+        module.declare_function("js_i32_box_set", VOID, &[I64, I32]);
         module.declare_function("js_box_alloc_bits", I64, &[I64]);
         module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
         module.declare_function("js_map_alloc", I64, &[I32]);
@@ -424,10 +427,7 @@ mod tests {
             "js_closure_get_capture_bits",
             &[(I64, "0"), (I32, "0")],
         );
-        entry.call_void(
-            "js_closure_set_capture_bits",
-            &[(I64, "0"), (I32, "0"), (I64, &cap)],
-        );
+        entry.call_void("js_i32_box_set", &[(I64, &box_ptr), (I32, "0")]);
         // Control: an unaudited callee stays a genuine safepoint.
         let unknown = entry.call(I64, "js_map_alloc", &[(I32, "1")]);
         let live = entry.load(I64, &root);
@@ -452,7 +452,7 @@ mod tests {
             "call i64 @js_box_alloc_bits(",
             "call void @js_box_set_bits(",
             "call i64 @js_closure_get_capture_bits(",
-            "call void @js_closure_set_capture_bits(",
+            "call void @js_i32_box_set(",
         ] {
             assert!(
                 rewritten.contains(direct),

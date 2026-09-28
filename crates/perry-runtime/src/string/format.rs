@@ -336,6 +336,18 @@ pub fn scan_small_int_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // A minor-scoped pass can neither move nor free a longlived object, and
+    // it does not trace through a pinned one (`mark_classified` skips a
+    // `Longlived` header carrying `GC_FLAG_PINNED`). Both writers of these
+    // caches (`small_int_cache_fill`, `ascii_char_string`) publish only
+    // longlived, pinned leaf strings, so every visit a minor would make here
+    // is a no-op: 384 classifications per pass, two passes per copying minor.
+    // Full-scope passes (which can relocate longlived space) still walk both.
+    if visitor.young_scope() {
+        #[cfg(any(debug_assertions, test))]
+        debug_assert_small_string_caches_not_minor_relevant();
+        return;
+    }
     SMALL_INT_CACHE.with(|c| unsafe {
         for slot in (*c.get()).iter_mut() {
             let mut addr = *slot as usize;
@@ -356,6 +368,47 @@ pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisito
                 *slot = addr as *mut StringHeader;
             }
         }
+    });
+}
+
+/// The proof obligation behind the minor skip above, checked where it is
+/// relied on: a writer that ever publishes a young or unpinned string into
+/// either cache fails here instead of leaving an unvisited young root.
+#[cfg(any(debug_assertions, test))]
+pub(crate) fn debug_assert_small_string_caches_not_minor_relevant() {
+    let check = |cache: &'static str, ptr: *mut StringHeader| {
+        if ptr.is_null() {
+            return;
+        }
+        let addr = ptr as usize;
+        let pinned = unsafe {
+            let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            (*header).gc_flags & crate::gc::GC_FLAG_PINNED != 0
+        };
+        assert!(
+            pinned && !crate::gc::young_log::addr_is_minor_collectible(addr),
+            "{cache} holds {addr:#x}, which is not a pinned non-young string: \
+             a minor-scoped scan skips this cache, so it must never hold one"
+        );
+    };
+    SMALL_INT_CACHE.with(|c| unsafe {
+        for &ptr in (*c.get()).iter() {
+            check("SMALL_INT_CACHE", ptr);
+        }
+    });
+    ASCII_CHAR_CACHE.with(|c| unsafe {
+        for &ptr in (*c.get()).iter() {
+            check("ASCII_CHAR_CACHE", ptr);
+        }
+    });
+}
+
+/// A writer that breaks the residency contract: publish `ptr` as-is.
+#[cfg(test)]
+pub(crate) fn test_write_small_int_cache_slot(idx: usize, ptr: *mut StringHeader) {
+    SMALL_INT_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): test-only sabotage writer; SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
+        (*c.get())[idx % SMALL_INT_CACHE_SIZE] = ptr;
     });
 }
 

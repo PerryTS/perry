@@ -9,7 +9,7 @@ use std::sync::{
 };
 
 use crate::object::ObjectHeader;
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::js_string_from_bytes;
 
 // ============================================================================
 // Background Process Registry
@@ -20,18 +20,14 @@ static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
 static PROCESS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<u64, std::process::Child>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Helper: extract a Rust string from a NaN-boxed f64 string value
+/// Helper: extract a Rust string from a NaN-boxed f64 string value — a heap
+/// `STRING_TAG` string or an inline SSO one (#11519; masking an SSO value's
+/// bits used to dereference its inline characters as an address).
 pub(crate) unsafe fn extract_string_from_nanboxed(val: f64) -> Option<String> {
-    use crate::value::POINTER_MASK;
-    let bits = val.to_bits();
-    let ptr = (bits & POINTER_MASK) as *const StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return None;
-    }
-    let len = (*ptr).byte_len as usize;
-    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, len);
-    std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+    crate::string::with_string_value_bytes(val, |bytes| {
+        std::str::from_utf8(bytes).ok().map(|s| s.to_string())
+    })
+    .flatten()
 }
 
 /// Build an object with two f64 fields and named keys.
