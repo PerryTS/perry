@@ -1242,6 +1242,14 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
+        let entry = existed.unwrap_or(0) & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK;
+        unsafe {
+            crate::object::shaped_symbols::define(obj_key, sym_key, value_bits, entry);
+        }
+        return existed.is_none();
+    }
     crate::closure::shape::note_function_own_state_changed(obj_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);

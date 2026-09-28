@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const FAMILY_COUNT: usize = 13;
+const FAMILY_COUNT: usize = 14;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -34,6 +34,7 @@ pub enum ReceiverReprFamily {
     SymbolGlobal,
     ExternalBuffer,
     Sab,
+    EventTarget,
     NullStub,
 }
 
@@ -52,6 +53,7 @@ impl ReceiverReprFamily {
         Self::SymbolGlobal,
         Self::ExternalBuffer,
         Self::Sab,
+        Self::EventTarget,
         Self::NullStub,
     ];
 
@@ -68,6 +70,7 @@ impl ReceiverReprFamily {
         "symbol_global",
         "external_buffer",
         "sab",
+        "event_target",
         "null_stub",
     ];
 
@@ -500,6 +503,15 @@ mod tests {
         assert_fixture(ReceiverReprFamily::Sab, || {
             (crate::shared_sab::alloc_shared_sab(1) as usize, false)
         });
+        // These cells were already pointers: migration also requires that
+        // private state no longer appears among their own string properties.
+        for make in crate::event_target::honest_tests::constructors() {
+            assert_fixture_migrated(ReceiverReprFamily::EventTarget, || {
+                let value = make();
+                crate::event_target::honest_tests::assert_surface(value);
+                (value.to_bits() & POINTER_MASK) as usize
+            });
+        }
         // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
         assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
             (crate::object::js_unresolved_namespace_stub().to_bits() & crate::value::POINTER_MASK)
@@ -525,6 +537,7 @@ mod tests {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = manifest.parent().and_then(Path::parent).unwrap();
         let witnesses = [
+            ("crates/perry-runtime/src/event_target.rs", "EventTarget", 1),
             // Both Common registration entrypoints now funnel through one
             // payload publisher and therefore share one diagnostic bump.
             ("crates/perry-stdlib/src/common/handle.rs", "Common", 1),

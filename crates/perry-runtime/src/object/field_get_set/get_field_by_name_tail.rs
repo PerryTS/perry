@@ -717,6 +717,17 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(v.to_bits());
                     }
                 }
+                if !crate::error::js_error_has_own_property(
+                    err_ptr,
+                    std::str::from_utf8(key_bytes).unwrap_or(""),
+                ) {
+                    if let Some(value) = super::super::prototype_chain::resolve_inherited_field(
+                        err_ptr as usize,
+                        key,
+                    ) {
+                        return value;
+                    }
+                }
                 match key_bytes {
                     b"message" => {
                         let s = crate::error::js_error_get_message(err_ptr);
@@ -1179,23 +1190,6 @@ pub(crate) fn get_field_by_name_object_tail(
                 std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
             if let Some(value) = crate::tty::tty_write_stream_dimension(property_name) {
                 return JSValue::from_bits(value.to_bits());
-            }
-        }
-
-        // AbortSignal method read through a DYNAMICALLY-typed receiver
-        // (`const s: any = c.signal; s.addEventListener` / `typeof
-        // s.addEventListener`). The static receiver form lowers to the native
-        // call, but this generic walk found no method property and returned
-        // undefined (the #5964 URLSearchParams dynamic-dispatch class).
-        // Returns a bound-method closure for the known signal methods.
-        if (*obj).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID && !key.is_null() {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if let Some(bound) =
-                crate::url::abort::abort_signal_method_bind(obj as *mut ObjectHeader, key_bytes)
-            {
-                return JSValue::from_bits(bound.to_bits());
             }
         }
 
@@ -1892,21 +1886,6 @@ pub(crate) fn get_field_by_name_object_tail(
                 {
                     return JSValue::from_bits(v.to_bits());
                 }
-            }
-        }
-
-        // #6301: `EventTarget`'s method surface, read as a VALUE
-        // (`typeof b.dispatchEvent`, `const add = t.addEventListener`).
-        // Deliberately LAST in the tail so an own property and a real
-        // class-vtable method (a subclass that *overrides* `dispatchEvent`) are
-        // resolved earlier and keep winning. See
-        // `event_target::event_target_value_read` for why placing it after the
-        // `keys_array.is_null()` early return above is correct.
-        if !key.is_null() {
-            if let Some(bound) =
-                crate::event_target::event_target_value_read(obj as *mut ObjectHeader, key_bytes)
-            {
-                return JSValue::from_bits(bound.to_bits());
             }
         }
 

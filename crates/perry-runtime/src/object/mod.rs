@@ -702,6 +702,7 @@ const KEYS_INDEX_THRESHOLD: u32 = 32;
 #[path = "keys_lookup.rs"]
 mod keys_lookup;
 mod object_keys;
+pub(crate) mod shaped_symbols;
 pub(crate) use object_keys::ObjectKeys;
 pub(crate) mod read_stub;
 pub(crate) use keys_lookup::*;
@@ -1478,6 +1479,7 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    crate::event_target::state::scan_roots(visitor);
     // Object-owned weak layout caches: rewrite moves without retaining keys.
     canonical_keys::scan_canonical_keys_roots_mut(visitor);
     scan_class_keys_roots_mut(visitor);

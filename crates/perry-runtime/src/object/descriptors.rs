@@ -1383,7 +1383,8 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
             for i in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(i));
-                if key_val.bits() == crate::value::TAG_HOLE
+                if !key_val.is_any_string()
+                    || key_val.bits() == crate::value::TAG_HOLE
                     || key_val.bits() == crate::value::TAG_UNDEFINED
                 {
                     continue;
@@ -1430,7 +1431,8 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             // Tombstoned slot from an O(1) delete: not a key. Same raw-push
             // hole hazard as `js_object_keys`' fast path — this loop emitted
             // the marker itself (visible as `null` in getOwnPropertyNames).
-            if key_val.bits() == crate::value::TAG_HOLE
+            if !key_val.is_any_string()
+                || key_val.bits() == crate::value::TAG_HOLE
                 || key_val.bits() == crate::value::TAG_UNDEFINED
             {
                 // Tombstoned slot from an O(1) delete. `js_array_get` translates

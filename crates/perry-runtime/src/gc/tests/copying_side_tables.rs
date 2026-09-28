@@ -86,7 +86,8 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };

@@ -28,7 +28,7 @@ use crate::native_value::{
 };
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::{
     array_kind_fact, attach_buffer_view_pointer_state_for_expr,
@@ -58,81 +58,8 @@ use guarded_array::{
 };
 use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 
-/// Emit a weak monomorphic IC for an exact own Symbol-keyed data property.
-///
-/// The cache stores raw bits, not roots.  Its epoch is advanced by every
-/// Symbol-property mutation and completed GC, so a moved/reclaimed receiver or
-/// value cannot hit and the cache cannot keep otherwise-dead objects alive.
-pub(crate) fn lower_symbol_property_get_ic(
-    ctx: &mut FnCtx<'_>,
-    obj_box: &str,
-    sym_box: &str,
-) -> String {
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = super::inline_cache_global_name(ctx, site_id);
-    ctx.ic_globals.push(cache_name.clone());
-
-    let probe_idx = ctx.new_block("symic.probe");
-    let hit_idx = ctx.new_block("symic.hit");
-    let miss_idx = ctx.new_block("symic.miss");
-    let merge_idx = ctx.new_block("symic.merge");
-    let probe_label = ctx.block_label(probe_idx);
-    let hit_label = ctx.block_label(hit_idx);
-    let miss_label = ctx.block_label(miss_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    // #9708: the cache sits behind a pointer slot that the miss handler fills
-    // on the first prime. The probe's three loads go through the pointer, so
-    // an absent cache branches straight to the miss — the edge a fresh
-    // (all-zero) global took anyway, since a zero epoch never matches.
-    let ic_slot = super::emit_inline_cache_slot(ctx, &cache_name);
-    let cache_ref = ic_slot.cache.clone();
-    let cache_slot_ref = ic_slot.slot_ref.clone();
-    ctx.block()
-        .cond_br(&ic_slot.present, &probe_label, &miss_label);
-
-    ctx.current_block = probe_idx;
-    let epoch = ctx
-        .block()
-        .load_atomic_acquire(I64, "@PERRY_SYMBOL_PROPERTY_IC_EPOCH", 8);
-    let cached_epoch_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
-    let cached_epoch = ctx.block().load_atomic_acquire(I64, &cached_epoch_ptr, 8);
-    let epoch_matches = ctx.block().icmp_eq(I64, &epoch, &cached_epoch);
-    let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
-    let cached_obj_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
-    let cached_obj = ctx.block().load(I64, &cached_obj_ptr);
-    let obj_matches = ctx.block().icmp_eq(I64, &obj_bits, &cached_obj);
-    let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
-    let cached_sym_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
-    let cached_sym = ctx.block().load(I64, &cached_sym_ptr);
-    let sym_matches = ctx.block().icmp_eq(I64, &sym_bits, &cached_sym);
-    let identity_matches = ctx.block().and(I1, &obj_matches, &sym_matches);
-    let hit = ctx.block().and(I1, &epoch_matches, &identity_matches);
-    ctx.block().cond_br(&hit, &hit_label, &miss_label);
-
-    ctx.current_block = hit_idx;
-    let cached_value_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
-    let cached_value_bits = ctx.block().load(I64, &cached_value_ptr);
-    let cached_value = ctx.block().bitcast_i64_to_double(&cached_value_bits);
-    let hit_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = miss_idx;
-    let miss_value = ctx.block().call(
-        DOUBLE,
-        "js_object_get_symbol_property_ic_miss",
-        &[(DOUBLE, obj_box), (DOUBLE, sym_box), (PTR, &cache_slot_ref)],
-    );
-    let miss_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[(&cached_value, &hit_end), (&miss_value, &miss_end)],
-    )
-}
+mod symbol_ic;
+pub(crate) use symbol_ic::lower_symbol_property_get_ic;
 
 /// #7494: deliberately `static_type_of`, not `receiver_class_name`.
 ///
@@ -1878,7 +1805,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let num_lbl = ctx.block_label(num_idx);
                 let merge_lbl = ctx.block_label(merge_idx);
                 ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
-                // Symbol key → side-table get.
+                // Symbol key → own-shape IC or the canonical property resolver.
                 ctx.current_block = sym_idx;
                 let v_sym = lower_symbol_property_get_ic(ctx, &obj_box, &idx_box);
                 let sym_end_lbl = ctx.block().label.clone();

@@ -45,6 +45,12 @@ pub const ERROR_KIND_SYNTAX_ERROR: u32 = 4;
 pub const ERROR_KIND_AGGREGATE_ERROR: u32 = 5;
 pub const ERROR_KIND_EVAL_ERROR: u32 = 6;
 pub const ERROR_KIND_URI_ERROR: u32 = 7;
+pub(crate) const ERROR_KIND_DOM_EXCEPTION: u32 = 8;
+
+pub(crate) unsafe fn mark_dom_exception(error: *mut ErrorHeader) {
+    (*error).error_kind = ERROR_KIND_DOM_EXCEPTION;
+    (*error).flags &= !ERROR_FLAG_HAS_MESSAGE;
+}
 
 const ERROR_FLAG_HAS_MESSAGE: u32 = 1 << 0;
 const ERROR_FLAG_HAS_CAUSE: u32 = 1 << 1;
@@ -75,6 +81,7 @@ pub(crate) fn error_kind_constructor_name(kind: u32) -> &'static str {
         ERROR_KIND_AGGREGATE_ERROR => "AggregateError",
         ERROR_KIND_EVAL_ERROR => "EvalError",
         ERROR_KIND_URI_ERROR => "URIError",
+        ERROR_KIND_DOM_EXCEPTION => "DOMException",
         _ => "Error",
     }
 }
@@ -883,7 +890,9 @@ pub extern "C" fn js_error_is_error(value: f64) -> f64 {
         if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
-        if ptr_is_native_error(ptr as usize) {
+        if ptr_is_native_error(ptr as usize)
+            || crate::event_target::is_dom_exception_object(ptr.cast())
+        {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
     }

@@ -207,7 +207,8 @@ fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() 
     clear_mark_seeds();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };
@@ -244,14 +245,15 @@ fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let static_sym_key = unsafe { alloc_nursery_test_symbol() };
     let static_value = young_leaf();
 
     let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     let sym_key_old = unsafe { alloc_old_test_symbol() };
     let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
     let static_sym_key_old = unsafe { alloc_old_test_symbol() };
@@ -326,11 +328,12 @@ fn test_symbol_side_table_budgeted_scanner_heals_entries_after_owner_rekey() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
     let valid_ptrs = build_valid_pointer_set();
-    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     let sym_key_old = unsafe { alloc_old_test_symbol() };
     let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
     unsafe {

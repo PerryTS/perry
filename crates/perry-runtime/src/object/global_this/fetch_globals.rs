@@ -526,7 +526,6 @@ fn is_uncallable_builtin_super_parent(name: &str) -> bool {
             | "Set"
             | "WeakMap"
             | "WeakSet"
-            | "EventTarget"
             | "Array"
             | "ArrayBuffer"
             | "SharedArrayBuffer"
@@ -565,7 +564,6 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
         "Set",
         "WeakMap",
         "WeakSet",
-        "EventTarget",
         "Array",
         "ArrayBuffer",
         "DataView",
@@ -950,6 +948,44 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 _ => None,
             }
         });
+    // These bases initialize the existing derived receiver's own symbol
+    // properties; replacing it would lose derived fields and prototype identity.
+    match kind {
+        Some("EventTarget") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+        }
+        Some("AbortController") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+        }
+        Some("AbortSignal") => {
+            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+        }
+        Some("Event") | Some("CustomEvent") => {
+            let arg0 = if args_len > 0 { *args_ptr } else { undef };
+            let arg1 = if args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return crate::event_target::js_event_subclass_init(
+                this_box,
+                arg0,
+                arg1,
+                args_len as u32,
+                u32::from(kind == Some("CustomEvent")),
+            );
+        }
+        Some("DOMException") => {
+            let arg0 = if args_len > 0 { *args_ptr } else { undef };
+            let arg1 = if args_len > 1 {
+                *args_ptr.add(1)
+            } else {
+                undef
+            };
+            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+        }
+        _ => {}
+    }
     // A native builtin base that cannot be called as a function still has to
     // perform its [[Construct]] work for `super()`. Construct it with the
     // current subclass as newTarget so the result carries the builtin's real

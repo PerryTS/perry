@@ -729,6 +729,55 @@ pub unsafe extern "C" fn js_super_construct_apply(
             );
             return undef;
         }
+        // A spread super call must initialize the same receiver as a direct
+        // call. Only the terminal native constructor owns this initialization;
+        // any registered user constructor above already ran and returned.
+        if matches!(
+            cur,
+            crate::native_class_ids::EVENT_TARGET
+                | crate::native_class_ids::ABORT_CONTROLLER
+                | crate::native_class_ids::ABORT_SIGNAL
+                | crate::native_class_ids::EVENT
+                | crate::native_class_ids::CUSTOM_EVENT
+                | crate::native_class_ids::DOM_EXCEPTION
+        ) {
+            let count = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            };
+            let arg = |i| {
+                if i < count {
+                    crate::array::js_array_get_f64(arr, i)
+                } else {
+                    undef
+                }
+            };
+            match cur {
+                crate::native_class_ids::EVENT_TARGET => {
+                    crate::event_target::js_event_target_subclass_init(this_value, 0);
+                }
+                crate::native_class_ids::ABORT_CONTROLLER => {
+                    crate::event_target::js_event_target_subclass_init(this_value, 1);
+                }
+                crate::native_class_ids::ABORT_SIGNAL => {
+                    crate::event_target::js_event_target_subclass_init(this_value, 2);
+                }
+                crate::native_class_ids::EVENT | crate::native_class_ids::CUSTOM_EVENT => {
+                    crate::event_target::js_event_subclass_init(
+                        this_value,
+                        arg(0),
+                        arg(1),
+                        count,
+                        u32::from(cur == crate::native_class_ids::CUSTOM_EVENT),
+                    );
+                }
+                _ => {
+                    crate::event_target::js_dom_exception_subclass_init(this_value, arg(0), arg(1));
+                }
+            }
+            return undef;
+        }
         let next = crate::object::get_parent_class_id(cur).unwrap_or(0);
         if next == cur {
             break;

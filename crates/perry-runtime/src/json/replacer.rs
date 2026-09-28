@@ -456,7 +456,9 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.
@@ -1055,7 +1057,9 @@ pub(crate) unsafe fn stringify_object_pretty(
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.
@@ -1265,7 +1269,9 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
         // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+        if tombstoned_key_slot(*keys_elements.add(f as usize))
+            || super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
+        {
             continue;
         }
         // #11232: physical class capture/private slots are not JS properties.

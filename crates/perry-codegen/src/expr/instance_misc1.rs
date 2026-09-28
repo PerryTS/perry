@@ -123,6 +123,12 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "BigUint64Array" => 0xFFFF003A,
         "Function" => 0xFFFF00F0,
         "URL" => 0xFFFF0063,
+        "EventTarget" => 0xFFFF2406,
+        "Event" => 0xFFFF2403,
+        "CustomEvent" => 0xFFFF2404,
+        "AbortController" => 0xFFFF2401,
+        "AbortSignal" => 0xFFFF2402,
+        "DOMException" => 0xFFFF2405,
         // #10556: `class Sub extends EventEmitter {}` — same shape as the
         // Array/Map/Set/Error builtins above. Without this edge,
         // `new Sub() instanceof EventEmitter` never reaches the class-chain
@@ -588,6 +594,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Temporal.PlainYearMonth" => 0xFFFF0205u32,
                 "Temporal.PlainMonthDay" => 0xFFFF0206u32,
                 "Temporal.ZonedDateTime" => 0xFFFF0207u32,
+                "AbortController" | "globalThis.AbortController" => 0xFFFF2401u32,
+                "AbortSignal" | "globalThis.AbortSignal" => 0xFFFF2402u32,
                 "Event" | "globalThis.Event" => 0xFFFF2403u32,
                 "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
                 "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,

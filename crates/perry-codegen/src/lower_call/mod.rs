@@ -62,7 +62,6 @@ mod ctor_prologue_stores;
 mod ctor_return_publish_tests;
 mod dataview_intrinsic;
 mod early_branches;
-mod event_target;
 mod extern_func;
 mod extern_timers;
 mod field_init;

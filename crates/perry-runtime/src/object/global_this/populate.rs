@@ -406,6 +406,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             // entry point — works in tandem with `.call`/`.apply` since
             // those arms (#970) rebind IMPLICIT_THIS before forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
+            crate::event_target::prototype::install_constructor_constants(name, closure_ptr.cast());
             if name == "Function" {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.
                 unsafe {
@@ -558,14 +559,19 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
-    // WebIDL inheritance carries prototype method values across these two
-    // interface pairs. Both constructors have been installed by this point.
-    for (child, parent) in [("AbortSignal", "EventTarget"), ("CustomEvent", "Event")] {
+    // Interface inheritance carries prototype methods. DOMException has
+    // Error.prototype as its instance parent, but no Error constructor parent.
+    for (child, parent, constructor_inherits) in [
+        ("AbortSignal", "EventTarget", true),
+        ("CustomEvent", "Event", true),
+        ("DOMException", "Error", false),
+    ] {
         let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
         let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
         let child_proto = builtin_prototype_value(child);
         let parent_proto = builtin_prototype_value(parent);
-        if JSValue::from_bits(child_ctor.to_bits()).is_pointer()
+        if constructor_inherits
+            && JSValue::from_bits(child_ctor.to_bits()).is_pointer()
             && JSValue::from_bits(parent_ctor.to_bits()).is_pointer()
         {
             crate::closure::closure_set_static_prototype(

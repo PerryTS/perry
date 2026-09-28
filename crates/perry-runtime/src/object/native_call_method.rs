@@ -1560,47 +1560,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     ) {
         return result;
     }
-    // AbortSignal on a type-erased receiver — same wall class as the
-    // URLSearchParams block above (#5961/#5964): the statically-typed receiver
-    // form lowers to the native call, but a fused dynamic method call lands
-    // here, and the generic field-scan would miss and throw
-    // `addEventListener is not a function` (the shape minified SDK code takes
-    // when it stores a signal in an untyped local). `options` (arg 2) is
-    // accepted and ignored — a signal only ever fires "abort" once, so
-    // `{ once: true }` is behaviorally implied.
-    if matches!(
-        method_name,
-        "addEventListener" | "removeEventListener" | "throwIfAborted"
-    ) && jsval().is_pointer()
-    {
-        let recv_ptr = (object().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
-        // Skip native handles (nanbox-pointer-tagged small integer ids in the
-        // low handle band) — dereferencing one as an `ObjectHeader` to read
-        // `class_id` would fault.
-        if !recv_ptr.is_null()
-            && !crate::value::addr_class::is_small_handle(recv_ptr as usize)
-            && (*recv_ptr).class_id == crate::url::abort::ABORT_SIGNAL_CLASS_ID
-        {
-            let arg = |i: usize| {
-                if i < args_len && !args_ptr.is_null() {
-                    *args_ptr.add(i)
-                } else {
-                    f64::from_bits(JSValue::undefined().bits())
-                }
-            };
-            return match method_name {
-                "addEventListener" => {
-                    crate::url::js_abort_signal_add_listener(recv_ptr, arg(0), arg(1));
-                    f64::from_bits(JSValue::undefined().bits())
-                }
-                "removeEventListener" => {
-                    crate::url::js_abort_signal_remove_listener(recv_ptr, arg(0), arg(1));
-                    f64::from_bits(JSValue::undefined().bits())
-                }
-                _ => crate::url::js_abort_signal_throw_if_aborted(recv_ptr),
-            };
-        }
-    }
     // Generic `Array.prototype` mutators borrowed onto a plain array-like
     // object (`Array.prototype.splice.call(obj, …)` whose synthesized member
     // call dispatches by name with no own method). The dense array arms further
@@ -2749,33 +2708,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }
-            }
-        }
-    }
-
-    // #6301: `class Bus extends EventTarget {}` — a fused
-    // `bus.dispatchEvent(ev)` / `this.addEventListener(...)` call. The static
-    // lowering in `lower_call/event_target.rs` only fires for a receiver whose
-    // class name is literally `EventTarget`, so a subclass call landed here and
-    // threw "<m> is not a function" (cac v7's `class CAC extends EventTarget`
-    // → #5931). Runs LAST, after every own-field / vtable / prototype-chain
-    // lookup above, so a subclass that OVERRIDES one of these names keeps its
-    // own method; only a genuine miss on a real event target reaches this.
-    if jsval().is_pointer()
-        && crate::event_target::is_event_target_method_name(method_name.as_bytes())
-    {
-        // Re-read the receiver from its root handle instead of reusing the
-        // `object` snapshot taken at entry: the dispatch arms above allocate, so
-        // a moving collection may have relocated it (the same reason the args go
-        // through `refreshed_args()`).
-        let receiver = object_handle.get_nanbox_f64();
-        let recv = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-        if !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) {
-            if let Some(bound) =
-                crate::event_target::event_target_method_bind(recv, method_name.as_bytes())
-            {
-                let args = refreshed_args();
-                return crate::closure::js_native_call_value(bound, args.as_ptr(), args.len());
             }
         }
     }

@@ -25,6 +25,14 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
     if src_obj_ptr == 0 {
         return Vec::new();
     }
+    if unsafe { crate::object::shaped_symbols::owner(src_obj_ptr).is_some() } {
+        return unsafe { crate::object::shaped_symbols::entries(src_obj_ptr, false) }
+            .into_iter()
+            .filter(|(symbol, _)| unsafe {
+                crate::object::shaped_symbols::accessor(src_obj_ptr, *symbol).is_none()
+            })
+            .collect();
+    }
     let mut entries = {
         let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         guard
@@ -49,6 +57,9 @@ pub(crate) fn clone_symbol_entries_for_obj_ptr(src_obj_ptr: usize) -> Vec<(usize
 }
 
 pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
+    if unsafe { crate::object::shaped_symbols::owner(owner).is_some() } {
+        return unsafe { crate::object::shaped_symbols::get(owner, sym_key) };
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     guard.as_ref().and_then(|map| {
         map.get(&owner)
@@ -75,6 +86,13 @@ pub(crate) fn get_symbol_property_attrs(
     owner: usize,
     sym_key: usize,
 ) -> Option<crate::object::PropertyAttrs> {
+    if unsafe { crate::object::shaped_symbols::owner(owner).is_some() } {
+        return unsafe { crate::object::shaped_symbols::entry(owner, sym_key) }.map(|entry| {
+            crate::object::PropertyAttrs {
+                bits: crate::object::key_attrs::entry_to_attr_bits(entry),
+            }
+        });
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
     guard
         .as_ref()
@@ -87,6 +105,18 @@ pub(crate) fn set_symbol_property_attrs(
     attrs: crate::object::PropertyAttrs,
 ) {
     if owner == 0 || sym_key == 0 {
+        return;
+    }
+    if unsafe { crate::object::shaped_symbols::owner(owner).is_some() } {
+        let old = unsafe { crate::object::shaped_symbols::entry(owner, sym_key) }.unwrap_or(0);
+        unsafe {
+            crate::object::shaped_symbols::set_entry(
+                owner,
+                sym_key,
+                (old & !crate::object::key_attrs::ENTRY_ATTR_MASK)
+                    | crate::object::key_attrs::attr_bits_to_entry(attrs.bits),
+            );
+        }
         return;
     }
     super::note_symbol_key_installed(sym_key);
@@ -112,6 +142,9 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     crate::array::note_array_proto_iterator_write(obj_key, sym_key);
     crate::object::map_set_subclass::note_iterator_symbol_write(obj_key, sym_key);
 
+    if crate::object::shaped_symbols::delete(obj_key, sym_key) {
+        return 1;
+    }
     accessors::clear_symbol_accessor_property(obj_key, sym_key);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
@@ -479,6 +512,10 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
 }
 
 fn object_symbol_data_property_exists(obj_key: usize, sym_key: usize) -> bool {
+    if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
+        return unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) }
+            .is_some_and(|entry| entry & crate::object::key_attrs::ENTRY_ACCESSOR == 0);
+    }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     guard.as_ref().is_some_and(|map| {
         map.get(&obj_key)
@@ -691,6 +728,9 @@ pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) ->
     }
     if accessors::has_own_symbol_accessor(obj_key, sym_key) {
         return true;
+    }
+    if crate::object::shaped_symbols::owner(obj_key).is_some() {
+        return crate::object::shaped_symbols::entry(obj_key, sym_key).is_some();
     }
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     if let Some(map) = guard.as_ref() {

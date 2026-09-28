@@ -1,18 +1,13 @@
-//! Minimal WHATWG `EventTarget` storage used by Node's `events` helpers.
-//!
-//! Perry models `EventTarget` as a regular runtime object with hidden fields:
-//! a marker, a listener-bag object keyed by event type, and a max-listener
-//! number. Keeping the listener arrays in object fields lets the normal GC
-//! trace callbacks without a separate native handle registry.
+//! WHATWG event classes with shared prototypes and symbol-keyed own state.
+//! Public and private state uses the ordinary property shape and GC barriers.
 
 use crate::{
     js_array_alloc, js_array_get, js_array_length, js_array_push_f64, js_nanbox_pointer,
-    js_object_alloc, js_object_get_field_by_name, js_object_get_field_by_name_f64,
-    js_object_set_field_by_name, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader,
-    StringHeader,
+    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
+    js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
-use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+pub(crate) mod prototype;
+pub(crate) mod state;
 
 pub const CLASS_ID_EVENT: u32 = crate::native_class_ids::EVENT;
 pub const CLASS_ID_CUSTOM_EVENT: u32 = crate::native_class_ids::CUSTOM_EVENT;
@@ -20,9 +15,9 @@ pub const CLASS_ID_DOM_EXCEPTION: u32 = crate::native_class_ids::DOM_EXCEPTION;
 /// `EventTarget` base class. Stamped on `new EventTarget()` instances and used
 /// as the PARENT class id of a user `class X extends EventTarget` (wired by
 /// `js_register_class_parent_dynamic` via `global_builtin_constructor_class_id`).
-/// Walking to it through the class chain is what lets a subclass instance be
-/// recognized as an event target (#6301). Keep in sync with the reserved id in
-/// perry-codegen/src/expr/instance_misc1.rs.
+/// The class chain selects native-base initialization for subclasses (#6301).
+/// Instance branding follows the prototype constructor's EventTarget marker.
+/// Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 pub const CLASS_ID_EVENT_TARGET: u32 = crate::native_class_ids::EVENT_TARGET;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -146,24 +141,15 @@ unsafe fn listener_signal(options: f64) -> Option<*mut ObjectHeader> {
     crate::url::abort::abort_signal_ptr_from_value(own_option_value(options, b"signal"))
 }
 
-fn set_event_field(event: *mut ObjectHeader, name: &[u8], value: f64) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let event = scope.root_raw_mut_ptr(event);
-    let value = scope.root_nanbox_f64(value);
-    let field_key = key(name);
-    js_object_set_field_by_name(event.get_raw_mut_ptr(), field_key, value.get_nanbox_f64());
-    crate::object::set_builtin_property_attrs(
-        event.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        String::from_utf8_lossy(name).into_owned(),
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
+fn set_event_field(event: *mut ObjectHeader, name: u32, value: f64) {
+    state::set(event, name, value);
 }
 
-fn event_bool_field(event: *mut ObjectHeader, name: &[u8]) -> bool {
+fn event_bool_field(event: *mut ObjectHeader, name: u32) -> bool {
     if event.is_null() {
         return false;
     }
-    let value = js_object_get_field_by_name_f64(event, key(name));
+    let value = state::get(event, name);
     crate::value::js_is_truthy(value) != 0
 }
 
@@ -172,8 +158,8 @@ extern "C" fn event_prevent_default_thunk(_closure: *const crate::closure::Closu
     let Some(event) = value_as_ptr::<ObjectHeader>(this_value) else {
         return undefined_value();
     };
-    if event_bool_field(event, b"cancelable") {
-        set_event_field(event, b"defaultPrevented", bool_value(true));
+    if event_bool_field(event, state::CANCELABLE) && !event_bool_field(event, state::PASSIVE) {
+        set_event_field(event, state::DEFAULT_PREVENTED, bool_value(true));
     }
     undefined_value()
 }
@@ -181,7 +167,8 @@ extern "C" fn event_prevent_default_thunk(_closure: *const crate::closure::Closu
 extern "C" fn event_stop_propagation_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
     let this_value = crate::object::js_implicit_this_get();
     if let Some(event) = value_as_ptr::<ObjectHeader>(this_value) {
-        set_event_field(event, b"_stopped", bool_value(true));
+        state::require_private(event, state::STOPPED);
+        set_event_field(event, state::STOPPED, bool_value(true));
     }
     undefined_value()
 }
@@ -191,30 +178,11 @@ extern "C" fn event_stop_immediate_propagation_thunk(
 ) -> f64 {
     let this_value = crate::object::js_implicit_this_get();
     if let Some(event) = value_as_ptr::<ObjectHeader>(this_value) {
-        set_event_field(event, b"_stopped", bool_value(true));
-        set_event_field(event, b"_immediateStopped", bool_value(true));
+        state::require_private(event, state::STOPPED);
+        set_event_field(event, state::STOPPED, bool_value(true));
+        set_event_field(event, state::IMMEDIATE_STOPPED, bool_value(true));
     }
     undefined_value()
-}
-
-fn install_event_method(
-    event: *mut ObjectHeader,
-    name: &str,
-    func: extern "C" fn(*const crate::closure::ClosureHeader) -> f64,
-) {
-    let func_ptr = func as *const u8;
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-    if closure.is_null() {
-        return;
-    }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::closure::closure_set_dynamic_prop(
-        closure as usize,
-        "name",
-        crate::value::js_nanbox_string(name_ptr as i64),
-    );
-    set_event_field(event, name.as_bytes(), boxed_ptr(closure));
 }
 
 fn construct_event(
@@ -224,12 +192,25 @@ fn construct_event(
     constructor_name: &[u8],
     detail: Option<f64>,
 ) -> *mut ObjectHeader {
-    let event = js_object_alloc(class_id, 0);
-    if event.is_null() {
-        return std::ptr::null_mut();
-    }
-    init_event_fields(event, type_value, options, constructor_name, detail);
-    event
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let type_value = scope.root_nanbox_f64(type_value);
+    let options = scope.root_nanbox_f64(options);
+    let detail = detail.map(|value| scope.root_nanbox_f64(value));
+    note_constructed();
+    let event = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
+    let (_, result) = event.across_mut(|| {
+        event.with_mut_ptr(|ptr| state::link(ptr, std::str::from_utf8(constructor_name).unwrap()));
+        event.with_mut_ptr(|ptr| {
+            init_event_fields(
+                ptr,
+                type_value.get_nanbox_f64(),
+                options.get_nanbox_f64(),
+                constructor_name,
+                detail.map(|v| v.get_nanbox_f64()),
+            );
+        });
+    });
+    result
 }
 
 /// Shared Event field/method initialization, applied either to a freshly
@@ -240,55 +221,43 @@ fn init_event_fields(
     event: *mut ObjectHeader,
     type_value: f64,
     options: f64,
-    constructor_name: &[u8],
+    _constructor_name: &[u8],
     detail: Option<f64>,
 ) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_raw_mut_ptr(event);
+    let options = scope.root_nanbox_f64(options);
+    let detail = detail.map(|value| scope.root_nanbox_f64(value));
     let type_ptr = string_from_value(type_value);
-    set_event_field(
-        event,
-        b"type",
-        crate::value::js_nanbox_string(type_ptr as i64),
-    );
-    unsafe {
+    event.with_mut_ptr(|ptr| {
         set_event_field(
-            event,
-            b"bubbles",
-            bool_value(option_bool(options, b"bubbles")),
-        );
-        set_event_field(
-            event,
-            b"cancelable",
-            bool_value(option_bool(options, b"cancelable")),
-        );
-        set_event_field(
-            event,
-            b"composed",
-            bool_value(option_bool(options, b"composed")),
-        );
+            ptr,
+            state::TYPE,
+            crate::value::js_nanbox_string(type_ptr as i64),
+        )
+    });
+    for (name, slot) in [
+        (b"bubbles".as_slice(), state::BUBBLES),
+        (b"cancelable", state::CANCELABLE),
+        (b"composed", state::COMPOSED),
+    ] {
+        let value = unsafe { option_bool(options.get_nanbox_f64(), name) };
+        event.with_mut_ptr(|ptr| set_event_field(ptr, slot, bool_value(value)));
     }
-    set_event_field(event, b"defaultPrevented", bool_value(false));
-    set_event_field(event, b"target", null_value());
-    set_event_field(event, b"currentTarget", null_value());
-    set_event_field(event, b"eventPhase", number_value(0.0));
-    set_event_field(event, b"isTrusted", bool_value(false));
-    set_event_field(event, b"timeStamp", number_value(0.0));
-    set_event_field(event, b"_stopped", bool_value(false));
-    set_event_field(event, b"_immediateStopped", bool_value(false));
+    for (name, value) in [
+        (state::DEFAULT_PREVENTED, bool_value(false)),
+        (state::TARGET, null_value()),
+        (state::TRUSTED, bool_value(false)),
+        (state::TIMESTAMP, number_value(0.0)),
+        (state::STOPPED, bool_value(false)),
+        (state::DISPATCHED, bool_value(false)),
+        (state::PASSIVE, bool_value(false)),
+    ] {
+        event.with_mut_ptr(|ptr| set_event_field(ptr, name, value));
+    }
     if let Some(detail) = detail {
-        set_event_field(event, b"detail", detail);
+        event.with_mut_ptr(|ptr| set_event_field(ptr, state::DETAIL, detail.get_nanbox_f64()));
     }
-    let ctor = crate::object::js_get_global_this_builtin_value(
-        constructor_name.as_ptr(),
-        constructor_name.len(),
-    );
-    set_event_field(event, b"constructor", ctor);
-    install_event_method(event, "preventDefault", event_prevent_default_thunk);
-    install_event_method(event, "stopPropagation", event_stop_propagation_thunk);
-    install_event_method(
-        event,
-        "stopImmediatePropagation",
-        event_stop_immediate_propagation_thunk,
-    );
 }
 
 /// `super(type, options)` from a user `class X extends Event` /
@@ -311,15 +280,31 @@ pub extern "C" fn js_event_subclass_init(
     if argc == 0 {
         throw_missing_arg("type");
     }
-    // `class X extends CustomEvent` must initialize as a CustomEvent: the
-    // `constructor` field resolves to the CustomEvent global and `detail` is
-    // read off the options bag (mirroring the direct `new CustomEvent(...)`
-    // path). Plain `extends Event` keeps `b"Event"` and no `detail`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_raw_mut_ptr(event);
+    let type_value = scope.root_nanbox_f64(type_value);
+    let options = scope.root_nanbox_f64(options);
     if is_custom != 0 {
-        let detail = unsafe { option_detail(options) };
-        init_event_fields(event, type_value, options, b"CustomEvent", Some(detail));
+        let detail = unsafe { option_detail(options.get_nanbox_f64()) };
+        event.with_mut_ptr(|ptr| {
+            init_event_fields(
+                ptr,
+                type_value.get_nanbox_f64(),
+                options.get_nanbox_f64(),
+                b"CustomEvent",
+                Some(detail),
+            )
+        });
     } else {
-        init_event_fields(event, type_value, options, b"Event", None);
+        event.with_mut_ptr(|ptr| {
+            init_event_fields(
+                ptr,
+                type_value.get_nanbox_f64(),
+                options.get_nanbox_f64(),
+                b"Event",
+                None,
+            )
+        });
     }
     undefined_value()
 }
@@ -351,26 +336,36 @@ pub extern "C" fn js_dom_exception_subclass_init(this_value: f64, message: f64, 
     let message_ptr = scope.root_string_ptr(message_ptr);
     let name_ptr = optional_string_from_value(name.get_nanbox_f64(), b"Error");
     let name_ptr = scope.root_string_ptr(name_ptr);
-    let name_string = unsafe {
-        let name_ptr = name_ptr.get_raw_const_ptr::<StringHeader>();
-        let len = (*name_ptr).byte_len as usize;
-        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    };
     set_event_field(
         value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
-        b"message",
-        crate::value::js_nanbox_string(message_ptr.get_raw_const_ptr::<StringHeader>() as i64),
+        state::DOM_MESSAGE,
+        message_ptr
+            .with_const_ptr::<StringHeader, _>(|ptr| crate::value::js_nanbox_string(ptr as i64)),
     );
     set_event_field(
         value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
-        b"name",
-        crate::value::js_nanbox_string(name_ptr.get_raw_const_ptr::<StringHeader>() as i64),
+        state::DOM_NAME,
+        name_ptr
+            .with_const_ptr::<StringHeader, _>(|ptr| crate::value::js_nanbox_string(ptr as i64)),
     );
-    set_event_field(
-        value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap(),
-        b"code",
-        dom_exception_code(&name_string),
+    let error = js_dom_exception_new(
+        message_ptr
+            .with_const_ptr::<StringHeader, _>(|ptr| crate::value::js_nanbox_string(ptr as i64)),
+        name_ptr
+            .with_const_ptr::<StringHeader, _>(|ptr| crate::value::js_nanbox_string(ptr as i64)),
+    );
+    let stack = crate::error::js_error_get_stack(error);
+    let _gc = crate::gc::GcSuppressScope::new();
+    let obj = value_as_ptr::<ObjectHeader>(exception.get_nanbox_f64()).unwrap();
+    js_object_set_field_by_name(
+        obj,
+        key(b"stack"),
+        crate::value::js_nanbox_string(stack as i64),
+    );
+    crate::object::set_builtin_property_attrs(
+        obj as usize,
+        "stack".to_owned(),
+        crate::object::PropertyAttrs::new(true, false, true),
     );
     undefined_value()
 }
@@ -382,29 +377,12 @@ static KEEP_JS_DOM_EXCEPTION_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 
     js_dom_exception_subclass_init;
 
 fn is_event_instance(event: *const ObjectHeader) -> bool {
-    if event.is_null() {
-        return false;
-    }
-    let class_id = unsafe { (*event).class_id };
-    if class_id == CLASS_ID_EVENT || class_id == CLASS_ID_CUSTOM_EVENT {
-        return true;
-    }
-    // A user subclass (`class CloseEvent extends Event`, e.g. the `ws`
-    // package's WebSocket events) carries its own class id; walk the
-    // registered parent chain looking for the Event base.
-    let mut cur = class_id;
-    for _ in 0..64 {
-        match crate::object::get_parent_class_id(cur) {
-            Some(parent) if parent != 0 && parent != cur => {
-                if parent == CLASS_ID_EVENT || parent == CLASS_ID_CUSTOM_EVENT {
-                    return true;
-                }
-                cur = parent;
-            }
-            _ => return false,
-        }
-    }
-    false
+    let valid = unsafe { crate::object::shaped_symbols::owner(event as usize).is_some() };
+    valid
+        && crate::value::JSValue::from_bits(
+            state::get(event as *mut ObjectHeader, state::TYPE).to_bits(),
+        )
+        .is_string()
 }
 
 /// `new Event(type, options?)`.
@@ -426,79 +404,17 @@ pub extern "C" fn js_custom_event_new(
     if argc == 0 {
         throw_missing_arg("type");
     }
-    let detail = unsafe { option_detail(options) };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let type_value = scope.root_nanbox_f64(type_value);
+    let options = scope.root_nanbox_f64(options);
+    let detail = unsafe { option_detail(options.get_nanbox_f64()) };
     construct_event(
-        type_value,
-        options,
+        type_value.get_nanbox_f64(),
+        options.get_nanbox_f64(),
         CLASS_ID_CUSTOM_EVENT,
         b"CustomEvent",
         Some(detail),
     )
-}
-
-fn dom_exception_errors() -> &'static Mutex<HashSet<usize>> {
-    static DOM_EXCEPTION_ERRORS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-    crate::once_init::get_or_init(&DOM_EXCEPTION_ERRORS, || Mutex::new(HashSet::new()))
-}
-
-/// Latched true by the first `DOMException` construction, so the per-dead-
-/// error GC cleanup below skips the mutex entirely in the (overwhelmingly
-/// common) processes that never create one.
-static DOM_EXCEPTIONS_CREATED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Death cleanup (2026-07-09 GC audit wave 2): `DOM_EXCEPTION_ERRORS` is a
-/// raw-address HashSet with zero removals, so it grew per DOMException and
-/// misidentified recycled addresses as DOMExceptions. Errors already run the
-/// `ErrorSideTables` finalize hook on death — this is called from
-/// `error_side_tables_clear_dead` for every dead error.
-pub(crate) fn dom_exception_error_clear_dead(err_addr: usize) {
-    if !DOM_EXCEPTIONS_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    if let Ok(mut set) = dom_exception_errors().lock() {
-        set.remove(&err_addr);
-    }
-}
-
-/// #11471: thread-exit release for `DOM_EXCEPTION_ERRORS`. Its only removal
-/// is the error finalize hook above, which `Arena::drop` never runs, so an
-/// exiting thread's DOMExceptions would leave addresses behind that make an
-/// unrelated Error at a reused address `instanceof DOMException`. Runs from a
-/// TLS destructor: one process-global lock, no thread-locals, no GC.
-pub(crate) fn release_dom_exception_errors_in_freed_ranges(
-    freed: &crate::arena::thread_exit::FreedRanges,
-) {
-    if !DOM_EXCEPTIONS_CREATED.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    dom_exception_errors()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .retain(|&addr| !freed.contains(addr));
-}
-
-/// Test probe (#11471): is `err_addr` recorded as a DOMException?
-#[doc(hidden)]
-pub fn dom_exception_error_registered_for_test(err_addr: usize) -> bool {
-    dom_exception_errors()
-        .lock()
-        .is_ok_and(|set| set.contains(&err_addr))
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_dom_exception_error(err_addr: usize) {
-    DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
-    if let Ok(mut set) = dom_exception_errors().lock() {
-        set.insert(err_addr);
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_dom_exception_error_registered(err_addr: usize) -> bool {
-    dom_exception_errors()
-        .lock()
-        .is_ok_and(|set| set.contains(&err_addr))
 }
 
 fn dom_exception_code(name: &str) -> f64 {
@@ -536,48 +452,53 @@ fn dom_exception_code(name: &str) -> f64 {
 /// `new DOMException(message?, name?)`.
 #[no_mangle]
 pub extern "C" fn js_dom_exception_new(message: f64, name: f64) -> *mut crate::error::ErrorHeader {
-    let message_ptr = optional_string_from_value(message, b"");
-    let name_ptr = optional_string_from_value(name, b"Error");
-    let name_string = unsafe {
-        let len = (*name_ptr).byte_len as usize;
-        let data = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name = scope.root_nanbox_f64(name);
+    let message_ptr = scope.root_string_ptr(optional_string_from_value(message, b""));
+    let name_ptr = optional_string_from_value(name.get_nanbox_f64(), b"Error");
+    let name_bytes = unsafe {
+        std::slice::from_raw_parts(
+            (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>()),
+            (*name_ptr).byte_len as usize,
+        )
+        .to_vec()
     };
-    let err =
-        crate::error::js_error_new_with_name_message_bytes(name_string.as_bytes(), message_ptr);
-    if !err.is_null() {
-        // #11541: registered before the first insert rather than named in
-        // `arena::thread_exit`'s dispatcher (which linked it into every
-        // binary). This is the table's only production insert.
-        static REGISTER: std::sync::Once = std::sync::Once::new();
-        REGISTER.call_once(|| {
-            crate::arena::thread_exit::register_thread_exit_range_hook(
-                release_dom_exception_errors_in_freed_ranges,
-            );
-        });
-        DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Ok(mut set) = dom_exception_errors().lock() {
-            set.insert(err as usize);
-        }
-        let ctor = crate::object::js_get_global_this_builtin_value(b"DOMException".as_ptr(), 12);
-        crate::node_submodules::set_error_user_prop(err as usize, "constructor", ctor);
-        crate::node_submodules::set_error_user_prop(
-            err as usize,
-            "code",
-            dom_exception_code(&name_string),
-        );
+    let err = message_ptr
+        .with_mut_ptr(|ptr| crate::error::js_error_new_with_name_message_bytes(&name_bytes, ptr));
+    note_constructed();
+    unsafe {
+        crate::error::mark_dom_exception(err);
     }
-    err
+    state::link(err.cast(), "DOMException").cast()
 }
 
-/// Runtime predicate for `value instanceof DOMException`.
 pub(crate) fn is_dom_exception_error(err: *const crate::error::ErrorHeader) -> bool {
-    if err.is_null() {
-        return false;
+    unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(err as usize)
+            .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_ERROR)
+            && (*err).error_kind == crate::error::ERROR_KIND_DOM_EXCEPTION
     }
-    dom_exception_errors()
-        .lock()
-        .is_ok_and(|set| set.contains(&(err as usize)))
+}
+
+/// Test-only observation of a cell's own brand, with allocator ownership
+/// checked first; no address registry survives the owning heap.
+#[doc(hidden)]
+pub fn dom_exception_has_error_brand_for_test(addr: usize) -> bool {
+    is_dom_exception_error(addr as *const crate::error::ErrorHeader)
+}
+
+pub(crate) fn is_dom_exception_object(obj: *const ObjectHeader) -> bool {
+    unsafe {
+        if !crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
+            .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            return false;
+        }
+        if !state::has(obj as *mut ObjectHeader, state::DOM_NAME) {
+            return false;
+        }
+        true
+    }
 }
 
 pub(crate) fn abort_dom_exception_value() -> f64 {
@@ -587,112 +508,34 @@ pub(crate) fn abort_dom_exception_value() -> f64 {
     crate::value::js_nanbox_pointer(err as i64)
 }
 
-/// True for `EventTarget`'s own reserved class id and for any user class whose
-/// registered parent chain reaches it — `class Bus extends EventTarget {}` and
-/// `class B extends A extends EventTarget` alike. The edge is wired at class-
-/// definition time by `js_register_class_parent_dynamic`, which resolves the
-/// `EventTarget` global through `global_builtin_constructor_class_id` (#6301).
-/// Mirrors `is_event_instance`'s walk for the `Event` base.
-pub(crate) fn class_chain_is_event_target(class_id: u32) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    if class_id == CLASS_ID_EVENT_TARGET {
-        return true;
-    }
-    let mut cur = class_id;
-    for _ in 0..64 {
-        match crate::object::get_parent_class_id(cur) {
-            Some(parent) if parent != 0 && parent != cur => {
-                if parent == CLASS_ID_EVENT_TARGET {
-                    return true;
-                }
-                cur = parent;
-            }
-            _ => return false,
-        }
-    }
-    false
-}
-
 pub(crate) unsafe fn is_event_target(target: *const ObjectHeader) -> bool {
-    if target.is_null() {
+    if crate::object::shaped_symbols::owner(target as usize).is_none() {
         return false;
     }
-    // Handle-based receivers (EventEmitter ids live at 0x38000..0x40000,
-    // widget/stream handles lower) are small integers, not heap pointers.
-    // Probing the GcHeader at handle-8 read unmapped memory and SIGSEGV'd
-    // when events.on(emitter, ...) validated its target (#4633).
-    if crate::value::addr_class::is_handle_band(target as usize) {
-        return false;
-    }
-    let gc_header =
-        (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
-        return false;
-    }
-    // A subclass instance carries its own class id and never ran
-    // `js_event_target_new`, so it has no `_eventTarget` marker field until
-    // `seed_event_target_state` lazily installs one. The class-chain edge is
-    // what identifies it (#6301).
-    if class_chain_is_event_target((*target).class_id) {
-        return true;
-    }
-    let marker = js_object_get_field_by_name_f64(target, key(b"_eventTarget"));
-    marker.to_bits() == JSValue::bool(true).bits()
-}
-
-/// Install the hidden EventTarget state (marker + listener bag + max-listener
-/// count) on an object that is an event target by class chain but has never
-/// been seeded — i.e. a `class Bus extends EventTarget` instance, whose
-/// constructor path allocates a plain subclass object rather than calling
-/// `js_event_target_new`. Seeding on first listener/dispatch use keeps the
-/// subclass ctor lowering untouched.
-///
-/// `js_object_alloc` and `key` (which interns a string) both allocate and can
-/// therefore GC-move `target`, so every heap value is rooted up front and
-/// re-read from its handle at each use. The bag and all three key strings are
-/// allocated BEFORE the first store on purpose: the inline form
-/// `js_object_set_field_by_name(target, key(b"…"), …)` allocates the key
-/// *after* Rust has already evaluated `target` (arguments evaluate
-/// left-to-right), which would leave a stale receiver pointer if interning that
-/// key triggered a collection.
-unsafe fn seed_event_target_state(target: *mut ObjectHeader) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_raw_mut_ptr(target);
-    let bag_handle = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-    let marker_key = scope.root_string_ptr(key(b"_eventTarget"));
-    let listeners_key = scope.root_string_ptr(key(b"_eventTargetListeners"));
-    let max_listeners_key = scope.root_string_ptr(key(b"_eventTargetMaxListeners"));
-
-    js_object_set_field_by_name(
-        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
-        marker_key.get_raw_mut_ptr::<StringHeader>(),
-        bool_value(true),
-    );
-    js_object_set_field_by_name(
-        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
-        listeners_key.get_raw_mut_ptr::<StringHeader>(),
-        boxed_ptr(bag_handle.get_raw_mut_ptr::<ObjectHeader>()),
-    );
-    js_object_set_field_by_name(
-        target_handle.get_raw_mut_ptr::<ObjectHeader>(),
-        max_listeners_key.get_raw_mut_ptr::<StringHeader>(),
-        10.0,
-    );
-
-    bag_handle.get_raw_mut_ptr::<ObjectHeader>()
+    let target = scope.root_raw_mut_ptr(target as *mut ObjectHeader);
+    let name = key(b"constructor");
+    let constructor = scope
+        .root_nanbox_f64(target.with_mut_ptr(|ptr| js_object_get_field_by_name_f64(ptr, name)));
+    let description = string_value(b"nodejs.event_target");
+    let marker = crate::symbol::js_symbol_for(description);
+    crate::value::js_is_truthy(crate::symbol::js_object_get_symbol_property(
+        constructor.get_nanbox_f64(),
+        marker,
+    )) != 0
 }
 
 unsafe fn listeners_bag(target: *mut ObjectHeader) -> Option<*mut ObjectHeader> {
     if !is_event_target(target) {
         return None;
     }
-    let bag = js_object_get_field_by_name_f64(target, key(b"_eventTargetListeners"));
-    if let Some(bag) = value_as_ptr::<ObjectHeader>(bag) {
+    let _gc = crate::gc::GcSuppressScope::new();
+    if let Some(bag) = value_as_ptr::<ObjectHeader>(state::get(target, state::LISTENERS)) {
         return Some(bag);
     }
-    Some(seed_event_target_state(target))
+    let bag = crate::map::js_map_alloc(0).cast::<ObjectHeader>();
+    state::set(target, state::LISTENERS, boxed_ptr(bag));
+    Some(bag)
 }
 
 unsafe fn event_array(
@@ -703,7 +546,10 @@ unsafe fn event_array(
     if bag.is_null() || event_name_ptr.is_null() {
         return None;
     }
-    let existing = js_object_get_field_by_name_f64(bag, event_name_ptr);
+    let existing = crate::map::js_map_get(
+        bag.cast(),
+        crate::value::js_nanbox_string(event_name_ptr as i64),
+    );
     if let Some(arr) = value_as_ptr::<ArrayHeader>(existing) {
         return Some(arr);
     }
@@ -711,7 +557,11 @@ unsafe fn event_array(
         return None;
     }
     let arr = js_array_alloc(0);
-    js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(arr));
+    crate::map::js_map_set(
+        bag.cast(),
+        crate::value::js_nanbox_string(event_name_ptr as i64),
+        boxed_ptr(arr),
+    );
     Some(arr)
 }
 
@@ -794,7 +644,11 @@ unsafe fn remove_event_listener_value_with_capture(
         result = js_array_push_f64(result, current);
     }
     if changed {
-        js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(result));
+        crate::map::js_map_set(
+            bag.cast(),
+            crate::value::js_nanbox_string(event_name_ptr as i64),
+            boxed_ptr(result),
+        );
     }
 }
 
@@ -835,21 +689,14 @@ extern "C" fn event_target_abort_remove_listener(
 /// The instance carries `CLASS_ID_EVENT_TARGET` on its header (mirroring
 /// `construct_event`'s `CLASS_ID_EVENT`), so `t instanceof EventTarget` holds
 /// for the base the same way it holds for a subclass through the registered
-/// parent edge (#6301). The `_eventTarget` marker field stays: the Node
-/// `events` helpers' target probe predates the class id, and a subclass
-/// instance is seeded with the same marker on first use.
+/// parent edge. Internal listener state is traced through the instance's symbol properties.
 #[no_mangle]
 pub extern "C" fn js_event_target_new() -> *mut ObjectHeader {
+    let _gc = crate::gc::GcSuppressScope::new();
+    note_constructed();
     let target = js_object_alloc(CLASS_ID_EVENT_TARGET, 0);
-    let bag = js_object_alloc(0, 0);
-    js_object_set_field_by_name(
-        target,
-        key(b"_eventTarget"),
-        f64::from_bits(JSValue::bool(true).bits()),
-    );
-    js_object_set_field_by_name(target, key(b"_eventTargetListeners"), boxed_ptr(bag));
-    js_object_set_field_by_name(target, key(b"_eventTargetMaxListeners"), 10.0);
-    target
+    state::initialize_target(target, false);
+    state::link(target, "EventTarget")
 }
 
 /// `target.addEventListener(type, listener)`.
@@ -878,13 +725,26 @@ pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
     if callback_ptr == 0 {
         return;
     }
-    let capture = listener_capture(options);
-    let once = listener_option_bool(options, b"once");
-    if let Some(signal) = listener_signal(options) {
-        if crate::url::js_abort_signal_is_aborted(signal) != 0 {
-            return;
-        }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_raw_mut_ptr(target);
+    let name_h = scope.root_string_ptr(event_name_ptr);
+    let callback_h = scope.root_raw_mut_ptr(callback_ptr as *mut crate::closure::ClosureHeader);
+    let options_h = scope.root_nanbox_f64(options);
+    let capture = listener_capture(options_h.get_nanbox_f64());
+    let once = listener_option_bool(options_h.get_nanbox_f64(), b"once");
+    let signal = listener_signal(options_h.get_nanbox_f64());
+    let signal_h = signal.map(|signal| scope.root_raw_mut_ptr(signal));
+    if signal_h
+        .as_ref()
+        .is_some_and(|signal| crate::url::js_abort_signal_is_aborted(signal.get_raw_mut_ptr()) != 0)
+    {
+        return;
     }
+    // Only private storage operations follow; option getters have already run.
+    let _gc = crate::gc::GcSuppressScope::new();
+    let target = target_h.get_raw_mut_ptr();
+    let event_name_ptr = name_h.get_raw_const_ptr();
+    let callback_ptr = callback_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64;
     let Some(bag) = listeners_bag(target) else {
         return;
     };
@@ -901,9 +761,14 @@ pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
     }
     let updated = js_array_push_f64(arr, make_listener_record(listener, capture, once));
     if updated != arr {
-        js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(updated));
+        crate::map::js_map_set(
+            bag.cast(),
+            crate::value::js_nanbox_string(event_name_ptr as i64),
+            boxed_ptr(updated),
+        );
     }
-    if let Some(signal) = listener_signal(options) {
+    if let Some(signal) = signal_h {
+        let signal = signal.get_raw_mut_ptr();
         let func = event_target_abort_remove_listener as *const u8;
         crate::closure::js_register_closure_arity(func, 0);
         let abort_listener = crate::closure::js_closure_alloc(func, 4);
@@ -942,18 +807,23 @@ pub unsafe extern "C" fn js_event_target_remove_event_listener_with_options(
     callback_ptr: i64,
     options: f64,
 ) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_raw_mut_ptr(target);
+    let name = scope.root_string_ptr(event_name_ptr);
+    let callback = scope.root_raw_mut_ptr(callback_ptr as *mut crate::closure::ClosureHeader);
+    let capture = listener_capture(options);
+    let _gc = crate::gc::GcSuppressScope::new();
     remove_event_listener_with_capture(
-        target,
-        event_name_ptr,
-        callback_ptr,
-        listener_capture(options),
+        target.get_raw_mut_ptr(),
+        name.get_raw_const_ptr(),
+        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        capture,
     );
 }
 
 fn event_type_ptr(event: f64) -> Option<*const StringHeader> {
     let event_ptr = value_as_ptr::<ObjectHeader>(event)?;
-    let type_value = js_object_get_field_by_name(event_ptr, key(b"type"));
-    let type_box = f64::from_bits(type_value.bits());
+    let type_box = state::get(event_ptr, state::TYPE);
     let ptr = crate::value::js_get_string_pointer_unified(type_box) as *const StringHeader;
     (!ptr.is_null()).then_some(ptr)
 }
@@ -987,55 +857,62 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     if !is_event_instance(event_ptr) {
         throw_invalid_event(event);
     }
-    let Some(event_name_ptr) = event_type_ptr(event) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_raw_mut_ptr(target);
+    let event_h = scope.root_nanbox_f64(event);
+    let target = || target_h.get_raw_mut_ptr::<ObjectHeader>();
+    let event_ptr =
+        || crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let Some(event_name) = event_type_ptr(event_h.get_nanbox_f64()) else {
         return bool_value(true);
     };
-    let target_value = boxed_ptr(target);
-    set_event_field(event_ptr, b"target", target_value);
-    set_event_field(event_ptr, b"currentTarget", target_value);
-    set_event_field(event_ptr, b"eventPhase", number_value(2.0));
-
-    let callbacks = listeners_bag(target)
-        .and_then(|bag| event_array(bag, event_name_ptr, false))
-        .map(|arr| {
-            let len = js_array_length(arr);
-            let mut callbacks = Vec::with_capacity(len as usize);
-            for i in 0..len {
+    let name_h = scope.root_string_ptr(event_name);
+    set_event_field(event_ptr(), state::TARGET, boxed_ptr(target()));
+    set_event_field(event_ptr(), state::DISPATCHED, bool_value(true));
+    let callbacks = {
+        let _gc = crate::gc::GcSuppressScope::new();
+        let mut callbacks = Vec::new();
+        if let Some(arr) = listeners_bag(target())
+            .and_then(|bag| event_array(bag, name_h.get_raw_const_ptr(), false))
+        {
+            for i in 0..js_array_length(arr) {
                 let record = f64::from_bits(js_array_get(arr, i).bits());
                 callbacks.push((
-                    listener_record_callback(record),
+                    scope.root_nanbox_f64(listener_record_callback(record)),
                     listener_record_capture(record),
                     listener_record_once(record),
                 ));
             }
-            callbacks
-        })
-        .unwrap_or_default();
-
-    let args = [event];
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    for (callback, capture, once) in callbacks {
-        let Some(callable) = closure_value_from_listener(callback) else {
-            continue;
-        };
-        if once {
-            remove_event_listener_value_with_capture(target, event_name_ptr, callback, capture);
         }
-        crate::object::js_implicit_this_set(target_value);
-        let _ = crate::closure::js_native_call_value(callable, args.as_ptr(), args.len());
+        callbacks
+    };
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    for (callback, capture, once) in callbacks {
+        if closure_value_from_listener(callback.get_nanbox_f64()).is_none() {
+            continue;
+        }
+        if once {
+            let _gc = crate::gc::GcSuppressScope::new();
+            remove_event_listener_value_with_capture(
+                target(),
+                name_h.get_raw_const_ptr(),
+                callback.get_nanbox_f64(),
+                capture,
+            );
+        }
+        crate::object::js_implicit_this_set(boxed_ptr(target()));
+        let args = [event_h.get_nanbox_f64()];
+        crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), 1);
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-        if event_bool_field(event_ptr, b"_immediateStopped") {
+        if event_bool_field(event_ptr(), state::IMMEDIATE_STOPPED) {
             break;
         }
     }
-
-    set_event_field(event_ptr, b"currentTarget", null_value());
-    set_event_field(event_ptr, b"eventPhase", number_value(0.0));
-    let canceled = event_bool_field(event_ptr, b"cancelable")
-        && event_bool_field(event_ptr, b"defaultPrevented");
-    bool_value(!canceled)
+    set_event_field(event_ptr(), state::DISPATCHED, bool_value(false));
+    bool_value(
+        !(event_bool_field(event_ptr(), state::CANCELABLE)
+            && event_bool_field(event_ptr(), state::DEFAULT_PREVENTED)),
+    )
 }
 
 /// Runtime predicate used by the Node `events` module helpers.
@@ -1054,6 +931,8 @@ pub unsafe extern "C" fn js_event_target_get_event_listeners(
     target: *mut ObjectHeader,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
+    // Only unreachable private records are read; no user callback can run.
+    let _gc = crate::gc::GcSuppressScope::new();
     let out = js_array_alloc(0);
     let Some(bag) = listeners_bag(target) else {
         return out;
@@ -1079,7 +958,7 @@ pub unsafe extern "C" fn js_event_target_get_max_listeners(target: *mut ObjectHe
     if !is_event_target(target) {
         return 10.0;
     }
-    let value = js_object_get_field_by_name_f64(target, key(b"_eventTargetMaxListeners"));
+    let value = state::get(target, state::MAX_LISTENERS);
     if JSValue::from_bits(value.to_bits()).is_number() {
         value
     } else {
@@ -1096,71 +975,27 @@ pub unsafe extern "C" fn js_event_target_set_max_listeners(
     if !is_event_target(target) {
         return 0;
     }
-    js_object_set_field_by_name(target, key(b"_eventTargetMaxListeners"), n);
+    state::set(target, state::MAX_LISTENERS, n);
     1
 }
 
-// ─────────────────────────────────────────────────────────────────
-// #6301 — the EventTarget method surface as real function VALUES.
-//
-// `addEventListener` / `removeEventListener` / `dispatchEvent` used to exist
-// only as compile-time lowerings keyed on a receiver whose static class name
-// was literally `EventTarget` (`lower_call/event_target.rs`). Nothing lived on
-// a prototype, so `typeof t.addEventListener` was `undefined` even on a plain
-// `new EventTarget()`, and a `class Bus extends EventTarget {}` instance —
-// whose static class name is `Bus` — inherited nothing at all and died with
-// `TypeError: value is not a function` (the real root cause of #5931: cac v7's
-// `class CAC extends EventTarget` calls `this.dispatchEvent(...)`).
-//
-// The methods are now resolved off the receiver's *class chain* — the same
-// mechanism `Event` subclasses already use — and materialized as bound-method
-// closures (the AbortSignal `abort_signal_method_bind` shape, and the
-// value-read-materializes-a-bound-method shape of #6281). Both the value-read
-// path (`object/field_get_set/get_field_by_name_tail.rs`) and the dynamic-call
-// path (`object/native_call_method.rs`) consult `event_target_method_bind`, so
-// a subclass instance at any depth reads them as functions AND calls them.
-// ─────────────────────────────────────────────────────────────────
-
-/// The receiver a bound EventTarget method closure captured in slot 0 (stored
-/// as NaN-boxed bits so the GC's closure scan keeps it alive and relocates it).
-unsafe fn bound_event_target(closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
-    let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-    if bits == 0 {
-        let receiver = crate::object::js_implicit_this_get();
-        if let Some(target) = value_as_ptr::<ObjectHeader>(receiver) {
-            let valid = crate::value::addr_class::try_read_gc_header(target as usize)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT);
-            if valid {
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let target_handle = scope.root_raw_mut_ptr(target);
-                // `is_event_target` interns `_eventTarget` through `key()`,
-                // which allocates, so the receiver can move while the
-                // predicate runs. `across_mut` orders the re-read after that
-                // call and hands back the refreshed address, and the nested
-                // `with_const_ptr` scopes the pointer the predicate reads --
-                // neither ever binds the pre-call address.
-                let (is_target, target) = target_handle.across_mut::<ObjectHeader, _>(|| {
-                    target_handle.with_const_ptr::<ObjectHeader, _>(|p| is_event_target(p))
-                });
-                if is_target {
-                    return target;
-                }
-            }
+/// Brand-check the implicit receiver of a shared EventTarget method.
+unsafe fn bound_event_target(_closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
+    let receiver = crate::object::js_implicit_this_get();
+    if let Some(target) = value_as_ptr::<ObjectHeader>(receiver) {
+        if is_event_target(target) {
+            return target;
         }
-        let msg = b"Value of \"this\" must be of type EventTarget";
-        let text = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let error = crate::error::js_typeerror_new(text);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
     }
-    crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut ObjectHeader
+    prototype::throw_receiver("EventTarget")
 }
 
 fn event_proto_receiver() -> *mut ObjectHeader {
     let receiver = crate::object::js_implicit_this_get();
     if let Some(event) = value_as_ptr::<ObjectHeader>(receiver) {
         let valid = unsafe {
-            crate::value::addr_class::try_read_gc_header(event as usize)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+            crate::value::addr_class::try_read_tracked_gc_header(event as usize)
+                .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT)
         };
         if valid && is_event_instance(event) {
             return event;
@@ -1202,33 +1037,29 @@ extern "C" fn event_proto_init_event_thunk(
     let scope = crate::gc::RuntimeHandleScope::new();
     let event = scope.root_raw_mut_ptr(event_proto_receiver());
     let event_type = scope.root_nanbox_f64(event_type);
-    let phase_key = key(b"eventPhase");
-    if event
-        .with_mut_ptr::<ObjectHeader, _>(|event| js_object_get_field_by_name_f64(event, phase_key))
-        != 0.0
-    {
+    if event.with_mut_ptr(|ptr| event_bool_field(ptr, state::DISPATCHED)) {
         return undefined_value();
     }
     let type_string = scope.root_string_ptr(string_from_value(event_type.get_nanbox_f64()));
     let type_value =
         type_string.with_const_ptr::<StringHeader, _>(|p| crate::value::js_nanbox_string(p as i64));
-    event.with_mut_ptr::<ObjectHeader, _>(|event| set_event_field(event, b"type", type_value));
+    event.with_mut_ptr::<ObjectHeader, _>(|event| set_event_field(event, state::TYPE, type_value));
     event.with_mut_ptr::<ObjectHeader, _>(|event| {
         set_event_field(
             event,
-            b"bubbles",
+            state::BUBBLES,
             bool_value(crate::value::js_is_truthy(bubbles) != 0),
         )
     });
     event.with_mut_ptr::<ObjectHeader, _>(|event| {
         set_event_field(
             event,
-            b"cancelable",
+            state::CANCELABLE,
             bool_value(crate::value::js_is_truthy(cancelable) != 0),
         )
     });
     event.with_mut_ptr::<ObjectHeader, _>(|event| {
-        set_event_field(event, b"defaultPrevented", bool_value(false))
+        set_event_field(event, state::DEFAULT_PREVENTED, bool_value(false))
     });
     undefined_value()
 }
@@ -1238,9 +1069,12 @@ extern "C" fn event_proto_composed_path_thunk(
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let event = scope.root_raw_mut_ptr(event_proto_receiver());
-    let current_key = key(b"currentTarget");
-    let current = event.with_mut_ptr::<ObjectHeader, _>(|event| {
-        js_object_get_field_by_name_f64(event, current_key)
+    let current = event.with_mut_ptr(|ptr| {
+        if event_bool_field(ptr, state::DISPATCHED) {
+            state::get(ptr, state::TARGET)
+        } else {
+            null_value()
+        }
     });
     let current = scope.root_nanbox_f64(current);
     let result = js_array_alloc(0);
@@ -1255,87 +1089,7 @@ extern "C" fn event_proto_composed_path_thunk(
 /// Install the WebIDL method values on EventTarget and Event prototypes.
 /// CustomEvent inherits Event's methods through its prototype link.
 pub(crate) fn install_web_event_proto_methods(name: &str, proto_obj: *mut ObjectHeader) {
-    use crate::object::install_proto_method;
-    // Each install allocates a closure, its name string and the key string, so
-    // the prototype can move between them: root it once and re-read the
-    // current address from the rooted slot on every use rather than closing
-    // over the incoming raw `proto_obj`.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto_h = scope.root_nanbox_f64(boxed_ptr(proto_obj));
-    let proto =
-        || crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
-    let install = |method: &str, func: *const u8, call_arity: u32, spec_length: u32| {
-        let value = install_proto_method(proto(), method, func, call_arity);
-        let closure = crate::value::js_nanbox_get_pointer(value) as usize;
-        if closure != 0 {
-            crate::object::native_module::set_builtin_closure_length(closure, spec_length);
-        }
-        // WebIDL operations are ENUMERABLE, unlike ECMAScript builtin methods
-        // (`Array.prototype.map` is enumerable=false). Measured on the pinned
-        // oracle (`.node-version`, v26.5.1): every one of the eight members
-        // installed here reports `enumerable=true`, and
-        // `Object.keys(EventTarget.prototype)` is
-        // `["addEventListener", "removeEventListener", "dispatchEvent"]`.
-        // `install_proto_method` defaults to the ECMAScript shape, so each
-        // needs this override. (`AbortSignal.prototype.throwIfAborted` is the
-        // one member of the #10808 group Node makes non-enumerable; it is
-        // installed in `proto_methods.rs` without this call, on purpose.)
-        crate::object::set_builtin_property_attrs(
-            proto() as usize,
-            method.to_string(),
-            crate::object::PropertyAttrs::new(true, true, true),
-        );
-    };
-    match name {
-        "EventTarget" => {
-            install(
-                "addEventListener",
-                event_target_add_event_listener_thunk as *const u8,
-                3,
-                2,
-            );
-            install(
-                "removeEventListener",
-                event_target_remove_event_listener_thunk as *const u8,
-                3,
-                2,
-            );
-            install(
-                "dispatchEvent",
-                event_target_dispatch_event_thunk as *const u8,
-                1,
-                1,
-            );
-        }
-        "Event" => {
-            install("initEvent", event_proto_init_event_thunk as *const u8, 3, 1);
-            install(
-                "stopImmediatePropagation",
-                event_proto_stop_immediate_propagation_thunk as *const u8,
-                0,
-                0,
-            );
-            install(
-                "preventDefault",
-                event_proto_prevent_default_thunk as *const u8,
-                0,
-                0,
-            );
-            install(
-                "composedPath",
-                event_proto_composed_path_thunk as *const u8,
-                0,
-                0,
-            );
-            install(
-                "stopPropagation",
-                event_proto_stop_propagation_thunk as *const u8,
-                0,
-                0,
-            );
-        }
-        _ => {}
-    }
+    prototype::install(name, proto_obj);
 }
 
 /// Shared body of the add/remove listener thunks. `string_from_value` can
@@ -1348,6 +1102,8 @@ unsafe fn bound_listener_call(
     options: f64,
     add: bool,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_raw_mut_ptr(bound_event_target(closure));
     let listener_value = JSValue::from_bits(listener.to_bits());
     if !listener_value.is_pointer() {
         // Node ignores a nullish listener and rejects a non-object one; a
@@ -1355,8 +1111,6 @@ unsafe fn bound_listener_call(
         // is nothing to register or remove.
         return undefined_value();
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_raw_mut_ptr(bound_event_target(closure));
     let listener_handle = scope.root_nanbox_f64(listener);
     let options_handle = scope.root_nanbox_f64(options);
 
@@ -1399,64 +1153,68 @@ extern "C" fn event_target_dispatch_event_thunk(
     unsafe { js_event_target_dispatch_event(bound_event_target(closure), event) }
 }
 
-/// The EventTarget method names, in the order Node's `EventTarget.prototype`
-/// declares them. Callers gate on this before paying for the receiver probe.
-pub(crate) fn is_event_target_method_name(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"addEventListener" | b"removeEventListener" | b"dispatchEvent"
-    )
+/// Class identity, including declared subclasses; never a property/name probe.
+pub(crate) fn native_class_name(mut class: u32) -> Option<&'static str> {
+    for _ in 0..64 {
+        let name = match class {
+            crate::native_class_ids::ABORT_CONTROLLER => Some("AbortController"),
+            crate::native_class_ids::ABORT_SIGNAL => Some("AbortSignal"),
+            CLASS_ID_EVENT => Some("Event"),
+            CLASS_ID_CUSTOM_EVENT => Some("CustomEvent"),
+            CLASS_ID_DOM_EXCEPTION => Some("DOMException"),
+            CLASS_ID_EVENT_TARGET => Some("EventTarget"),
+            _ => None,
+        };
+        if name.is_some() {
+            return name;
+        }
+        match crate::object::get_parent_class_id(class) {
+            Some(parent) if parent != 0 && parent != class => class = parent,
+            _ => return None,
+        }
+    }
+    None
 }
 
-/// Materialize a bound EventTarget method for `name` when `target` is an event
-/// target (a plain `new EventTarget()` or a subclass instance at any depth).
-/// Returns `None` for any other name or receiver, so an unknown property still
-/// reads as `undefined` and a non-target object keeps its existing dispatch.
-pub(crate) fn event_target_method_bind(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
-    let (func, arity): (*const u8, u32) = match name {
-        b"addEventListener" => (event_target_add_event_listener_thunk as *const u8, 3),
-        b"removeEventListener" => (event_target_remove_event_listener_thunk as *const u8, 3),
-        b"dispatchEvent" => (event_target_dispatch_event_thunk as *const u8, 1),
-        _ => return None,
-    };
-    if !unsafe { is_event_target(target) } {
-        return None;
+pub(crate) fn note_constructed() {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::EventTarget,
+        );
     }
-    crate::closure::js_register_closure_arity(func, arity);
-    // `js_closure_alloc` can GC-move the receiver — root it and re-read.
+}
+
+#[cfg(test)]
+pub(crate) mod honest_tests;
+
+/// Initialize the native base through super(), retaining the derived shape
+/// and prototype. Merely creating a class host does not run this constructor.
+#[no_mangle]
+pub extern "C" fn js_event_target_subclass_init(this: f64, kind: u32) -> f64 {
+    if kind == 2 {
+        prototype::throw_receiver("AbortSignal");
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_raw_mut_ptr(target);
-    let closure = crate::closure::js_closure_alloc(func, 1);
-    let target_bits = boxed_ptr(target_handle.get_raw_mut_ptr::<ObjectHeader>()).to_bits();
-    crate::closure::js_closure_set_capture_ptr(closure, 0, target_bits as i64);
-    Some(boxed_ptr(closure))
+    let owner =
+        scope.root_raw_mut_ptr(value_as_ptr::<ObjectHeader>(this).expect("native super receiver"));
+    let class = owner.with_const_ptr::<ObjectHeader, _>(|ptr| unsafe { (*ptr).class_id });
+    let proto = crate::object::class_decl_prototype_value(class);
+    owner.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            ptr as usize,
+            proto.to_bits(),
+        )
+    });
+    owner.with_mut_ptr(|owner| {
+        if kind == 0 {
+            state::initialize_target(owner, false);
+        } else {
+            state::set(owner, state::CONTROLLER_SIGNAL, undefined_value());
+        }
+    });
+    undefined_value()
 }
 
-/// Value-read entry point for the object field-get tail (#6301): resolve
-/// `addEventListener` / `removeEventListener` / `dispatchEvent` off the
-/// receiver's class chain when nothing earlier in the property walk claimed the
-/// name. Gated on the name first, so a non-EventTarget read pays only a
-/// length+compare, never the receiver probe.
-///
-/// The call site sits AFTER the tail's `keys_array.is_null()` early return, and
-/// that placement is correct: a `class X extends EventTarget` instance never
-/// takes the keyless branch. Every class-instance allocator
-/// (`js_object_alloc_class_inline_keys`, `js_object_alloc_class_with_keys`,
-/// `js_object_alloc_class_dynamic_parent`) installs the shape-cached keys array
-/// unconditionally, and `js_build_class_keys_array` hands back a zero-LENGTH
-/// array — never NULL — for a class that declares no fields. So even the
-/// emptiest subclass (`class Bus extends EventTarget {}`, no fields, no ctor)
-/// lands on the shaped path with an empty keys array and reaches this fallback.
-///
-/// The keyless branch is for `Object.create(proto)` / bare
-/// `js_new_function_construct` receivers, whose inherited methods resolve one
-/// hop earlier through `resolve_proto_chain_field_with_receiver` (the prototype
-/// object is itself a shaped, class-id-stamped receiver) — so they never reach
-/// that branch's dead end either. The empty-shape cases in
-/// `test-files/test_gap_6301_event_target_subclass.ts` pin this.
-pub(crate) fn event_target_value_read(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
-    if !is_event_target_method_name(name) {
-        return None;
-    }
-    event_target_method_bind(target, name)
-}
+#[used(compiler)]
+static KEEP_JS_EVENT_TARGET_SUBCLASS_INIT: extern "C" fn(f64, u32) -> f64 =
+    js_event_target_subclass_init;

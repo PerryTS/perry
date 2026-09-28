@@ -1162,6 +1162,7 @@ js_event_target_new	ptr
 js_event_target_remove_event_listener	void	ptr,ptr,i64
 js_event_target_remove_event_listener_with_options	void	ptr,ptr,i64,f64
 js_event_target_set_max_listeners	i32s	ptr,f64
+js_event_target_subclass_init	f64	f64,i32u
 js_events_add_abort_listener	i64	f64,f64
 js_events_get_event_listeners	ptr	f64,ptr
 js_events_get_max_listeners	f64	f64

@@ -62,7 +62,7 @@ pub(crate) const ASYNC_RESOURCE_LEGACY: u32 = 0xFFFF_0079;
 /// The first id in the native-state range and the last one, inclusive. Every
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
-const NATIVE_BACKED_FIRST: u32 = TEXT_ENCODER;
+const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
 const NATIVE_BACKED_LAST: u32 = ASYNC_HOOK;
 
 /// Class ids whose instances are ordinary objects carrying native state that
@@ -138,6 +138,12 @@ mod tests {
     #[test]
     fn the_transfer_guard_covers_exactly_the_migrated_families() {
         for id in [
+            ABORT_CONTROLLER,
+            ABORT_SIGNAL,
+            EVENT,
+            CUSTOM_EVENT,
+            DOM_EXCEPTION,
+            EVENT_TARGET,
             TEXT_ENCODER,
             TEXT_DECODER,
             TIMEOUT,
@@ -156,17 +162,7 @@ mod tests {
                 "{id:#x} carries native state but crosses a thread boundary"
             );
         }
-        for id in [
-            ABORT_CONTROLLER,
-            ABORT_SIGNAL,
-            EVENT,
-            CUSTOM_EVENT,
-            DOM_EXCEPTION,
-            EVENT_TARGET,
-            0,
-            1,
-            0x8000_0000,
-        ] {
+        for id in [0, 1, 0x8000_0000] {
             assert!(!is_native_backed_class_id(id), "{id:#x} is not migrated");
         }
     }

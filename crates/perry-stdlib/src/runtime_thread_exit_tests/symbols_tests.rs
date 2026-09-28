@@ -419,7 +419,7 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
             perry_runtime::event_target::js_dom_exception_new(undefined(), undefined()) as usize;
         (
             err,
-            perry_runtime::event_target::dom_exception_error_registered_for_test(err),
+            perry_runtime::event_target::dom_exception_has_error_brand_for_test(err),
         )
     })
     .join()
@@ -429,7 +429,7 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
         "new DOMException() must be recorded while its thread lives"
     );
     assert!(
-        !perry_runtime::event_target::dom_exception_error_registered_for_test(err),
+        !perry_runtime::event_target::dom_exception_has_error_brand_for_test(err),
         "a dead thread's DOMException address outlived its heap"
     );
 }

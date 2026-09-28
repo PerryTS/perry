@@ -1,0 +1,1 @@
+EventTarget, Event, CustomEvent, AbortController and AbortSignal use shared prototype methods and accessors, with state in ordinary symbol-keyed shape properties. Reflect exposed symbols like Node and keep private state hidden. Preserve DOMException Error semantics, subclass prototype inheritance and named worker-transfer rejection.

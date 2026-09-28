@@ -28,7 +28,7 @@ handle-floor | crates/perry-ext-http/src/lib.rs | 2
 handle-floor | crates/perry-runtime/src/array/alloc.rs | 2
 handle-floor | crates/perry-runtime/src/array/concat_reverse.rs | 1
 handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 3
-handle-floor | crates/perry-runtime/src/array/generic.rs | 4
+handle-floor | crates/perry-runtime/src/array/generic.rs | 3
 handle-floor | crates/perry-runtime/src/array/header.rs | 3
 handle-floor | crates/perry-runtime/src/array/indexing.rs | 2
 handle-floor | crates/perry-runtime/src/array/indexing_keyed.rs | 1
@@ -180,7 +180,6 @@ handle-floor | crates/perry-runtime/src/typedarray/access.rs | 5
 handle-floor | crates/perry-runtime/src/typedarray/construct.rs | 4
 handle-floor | crates/perry-runtime/src/typedarray/mod.rs | 5
 handle-floor | crates/perry-runtime/src/typedarray_props.rs | 2
-handle-floor | crates/perry-runtime/src/url/abort.rs | 1
 handle-floor | crates/perry-runtime/src/url/search_params.rs | 1
 handle-floor | crates/perry-runtime/src/util_call_sites.rs | 1
 handle-floor | crates/perry-runtime/src/util_inherits.rs | 2

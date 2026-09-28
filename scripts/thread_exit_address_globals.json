@@ -3931,15 +3931,6 @@
    "hook": "release_buffer_own_props_in_freed_ranges"
   },
   {
-   "file": "crates/perry-runtime/src/event_target.rs",
-   "names": [
-    "DOM_EXCEPTION_ERRORS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of DOMException error objects, removed only by the error finalizer; freed addresses are dropped at thread exit.",
-   "hook": "release_dom_exception_errors_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/ios_game_loop.rs",
    "names": [
     "CONNECTED_SCENE"

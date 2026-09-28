@@ -1075,6 +1075,18 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
 /// have their own dedicated instance/prototype modeling and don't reach this
 /// fallback the same way.
 fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+    let web = match parent_id {
+        crate::native_class_ids::EVENT_TARGET => Some("EventTarget"),
+        crate::native_class_ids::EVENT => Some("Event"),
+        crate::native_class_ids::CUSTOM_EVENT => Some("CustomEvent"),
+        crate::native_class_ids::ABORT_CONTROLLER => Some("AbortController"),
+        crate::native_class_ids::ABORT_SIGNAL => Some("AbortSignal"),
+        crate::native_class_ids::DOM_EXCEPTION => Some("DOMException"),
+        _ => None,
+    };
+    if let Some(name) = web {
+        return class_parent_prototype_bits(super::super::builtin_prototype_value(name));
+    }
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
     let (module, symbol) = match parent_id {
@@ -1124,7 +1136,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // read of one is then served by the inherited-read cache (spilled slots
     // never prime there).
     let members = class_prototype_member_names(class_id).len() as u32;
-    let proto = js_object_alloc(class_id, members + 1);
+    let proto = crate::object::js_object_alloc(class_id, members + 1);
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }

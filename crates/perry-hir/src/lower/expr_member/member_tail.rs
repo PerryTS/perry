@@ -481,7 +481,19 @@ pub(crate) fn lower_member_tail(
                         ast::MemberProp::Computed(c)
                             if !matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_)))
                     );
-                    if !outer_is_prototype_or_proto
+                    // Event-family constructors expose ordinary static properties.
+                    // Keep their actual receiver for constants and inherited members.
+                    let receiver_is_event_ctor = matches!(
+                        property.as_str(),
+                        "EventTarget"
+                            | "Event"
+                            | "CustomEvent"
+                            | "AbortController"
+                            | "AbortSignal"
+                            | "DOMException"
+                    );
+                    if !receiver_is_event_ctor
+                        && !outer_is_prototype_or_proto
                         && !outer_is_constructor_property
                         && !receiver_is_namespace_value
                         && !receiver_is_regexp_ctor

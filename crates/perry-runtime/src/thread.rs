@@ -461,10 +461,20 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 // is owned by `native_class_ids`, so a family joins this guard
                 // by taking the next id rather than by editing this file.
                 let class_id = (*(raw_ptr as *const crate::object::ObjectHeader)).class_id;
+                if let Some(name) = crate::event_target::native_class_name(class_id).or_else(|| {
+                    crate::event_target::state::transfer_family(
+                        raw_ptr as *mut crate::object::ObjectHeader,
+                    )
+                }) {
+                    return SerializedValue::Unsupported(name);
+                }
                 if crate::native_class_ids::is_native_backed_class_id(class_id) {
                     return SerializedValue::Unsupported("native handle");
                 }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);
+            }
+            gc::GC_TYPE_ERROR if crate::event_target::is_dom_exception_error(raw_ptr.cast()) => {
+                return SerializedValue::Unsupported("DOMException");
             }
             gc::GC_TYPE_CLOSURE => {
                 return serialize_closure(raw_ptr as *const ClosureHeader);

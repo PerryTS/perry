@@ -1,6 +1,5 @@
-//! AbortController / AbortSignal / EventTarget dispatch + chained Web Fetch
+//! Chained Web Fetch
 //! (`r.headers.get(k)`, `r.clone().status`, `new Response(...).text()`).
-//! Pure code move from `property_get.rs` — no behavior change.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -10,32 +9,15 @@ use crate::expr::FnCtx;
 // Reach the dispatch helpers (`pub(in crate::lower_call)` / `pub(super)`) by
 // their canonical crate-relative paths — they live in sibling modules of the
 // `lower_call` parent.
-use crate::lower_call::event_target::lower_event_target_call;
-use crate::lower_call::options::lower_abort_controller_call;
 use crate::lower_call::options::lower_fetch_native_method;
 
-/// AbortController / AbortSignal / EventTarget method calls, then chained Web
-/// Fetch dispatch. Returns `Ok(Some(_))` when any of these claims the call.
+/// Chained Web Fetch dispatch. Returns `Ok(Some(_))` when it claims the call.
 pub(crate) fn try_lower_fetch_chain(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    // ── AbortController / AbortSignal dispatch ──
-    // `new AbortController()` returns a NaN-boxed pointer
-    // (refined to `Named("AbortController")`). The runtime's
-    // ObjectHeader carries `signal` / `aborted` fields that the
-    // generic property-get path reads. Method calls need explicit
-    // interception because the class isn't in `ctx.classes`.
-    if let Some(val) = lower_abort_controller_call(ctx, object, property, args)? {
-        return Ok(Some(val));
-    }
-
-    if let Some(val) = lower_event_target_call(ctx, object, property, args)? {
-        return Ok(Some(val));
-    }
-
     // ── Chained Web Fetch dispatch ──
     // `r.headers.get(k)` — the inner `r.headers` lowered to a
     // NativeMethodCall that returns an f64 Headers handle; route

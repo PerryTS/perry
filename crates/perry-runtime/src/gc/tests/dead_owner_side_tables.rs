@@ -355,7 +355,7 @@ fn test_dead_symbol_pointer_pruned_live_symbol_survives_full_gc() {
 #[test]
 fn test_dead_owner_symbol_property_entries_pruned_on_full_gc() {
     let _guard = GcTestIsolationGuard::new();
-    let (obj, _) = unsafe { alloc_nursery_test_object(0) };
+    let obj = crate::array::js_array_alloc(0);
     let owner = obj as usize;
     let sym = unsafe { alloc_old_test_symbol() };
     crate::symbol::test_seed_symbol_property_root(owner, sym, crate::value::TAG_TRUE);
@@ -566,24 +566,18 @@ fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
     );
 }
 
-/// `DOM_EXCEPTION_ERRORS` had zero removals; it is now folded into the
-/// `ErrorSideTables` death cleanup that every dead error already runs.
+/// The DOMException brand is carried by the cell, so recycling an address
+/// cannot inherit a stale registry entry.
 #[test]
-fn test_dom_exception_set_cleared_with_error_side_tables() {
+fn dom_exception_brand_is_owned_by_its_error_cell() {
     let _global = global_side_table_test_lock();
-    let addr: usize = 0xD0E0_0000_0000_2026;
-    crate::event_target::test_seed_dom_exception_error(addr);
-    assert!(crate::event_target::test_dom_exception_error_registered(
-        addr
-    ));
-
-    crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(addr);
-
-    assert!(
-        !crate::event_target::test_dom_exception_error_registered(addr),
-        "dead error must be removed from DOM_EXCEPTION_ERRORS by the error \
-         side-table death cleanup"
-    );
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let err = crate::event_target::js_dom_exception_new(undef, undef);
+    assert!(crate::event_target::is_dom_exception_error(err));
+    unsafe {
+        (*err).error_kind = crate::error::ERROR_KIND_ERROR;
+    }
+    assert!(!crate::event_target::is_dom_exception_error(err));
 }
 
 mod meta_and_shape_records;

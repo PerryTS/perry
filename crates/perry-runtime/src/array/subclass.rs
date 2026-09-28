@@ -35,6 +35,9 @@ pub(super) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_lo
 //     bit 1       payload valid
 //     bit 2       compact nonnegative-int entity proof (mode 2)
 //     bit 3       user-origin prototype signal
+//     bit 4       class-evaluation prototype
+//     bit 5       object is a prototype
+//     bit 6       exotic read receiver
 //     bits 8..31  verified prefix bound (24 bits, max 16,000,000)
 //     bits 32..63 exact semantic ShapeId
 const PACKED_NUMERIC_META_VALID: u64 = 1 << 1;
