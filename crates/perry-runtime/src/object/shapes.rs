@@ -1715,9 +1715,10 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 /// inline bound lives at index `position - bound` of the object's spill
 /// buffer, and every carrier of the shape has that storage — the same claim
 /// the emitted `pic.spill.hit` rests on, published under the same conditions
-/// (object-owned spill storage, an index it can address). Such a word sets
-/// [`REGION_LOOP_WORD_SPILL`] and each key's field becomes `slot` (< 32) or
-/// `32 + index`; the region reads it through its spill copy. A spill key is
+/// (object-owned spill storage, an index it can address). Such a word carries
+/// the ShapeId with `PACKED_SPILL_FLIP` flipped into it — the S5 convention —
+/// so the guard's plain compare admits only all-inline words and a second
+/// compare, on its miss side, selects the region's spill copy. A spill key is
 /// served to READS only: a key in `stored_mask` must be inline (a spill store
 /// owes the buffer's own GC bookkeeping, which the bare store does not do).
 #[no_mangle]
@@ -1770,25 +1771,26 @@ pub extern "C" fn js_region_loop_pack(
             any_spill = true;
         }
     }
-    let mut word = u64::from(shape_id);
+    // Every field is `slot` (< 32) or `32 + spill index` (< 63), in BOTH
+    // kinds of word: a region with two receivers may run its spill copy for
+    // one receiver's spill word while the other's word is all-inline, and
+    // that copy reads each field the same way.
+    let id = if any_spill {
+        shape_id ^ crate::object::field_get_set::PACKED_SPILL_FLIP
+    } else {
+        shape_id
+    };
+    let mut word = u64::from(id);
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
-        let field = match (any_spill, spilled) {
-            (false, _) if n_at <= REGION_GUARD_SLOT_MAX as usize => n_at,
-            (true, false) if n_at < 32 => n_at,
-            (true, true) if n_at < 31 => 32 + n_at,
+        let field = match spilled {
+            false if n_at < 32 => n_at,
+            true if n_at < 31 => 32 + n_at,
             _ => return REGION_GUARD_WORD_EMPTY,
         };
         word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
     }
-    if any_spill {
-        word |= REGION_LOOP_WORD_SPILL;
-    }
     word
 }
-
-/// Bit 62 of a loop region's word: some key is spill-located, and every
-/// key's field is `slot` (< 32) or `32 + spill index`.
-pub const REGION_LOOP_WORD_SPILL: u64 = 1 << 62;
 
 /// The word a loop region's site holds once its last bounded prime attempt
 /// was refused: all ones. Its id half is `REGION_GUARD_WORD_EMPTY`'s, which no

@@ -69,10 +69,11 @@ const EMPTY_WORD: &str = "4294967295";
 /// last bounded prime attempt fails, and the guard then skips even the
 /// receiver test (DESIGN §4.3: "the retirement check moves into the word").
 const RETIRED_WORD: &str = "-1";
-/// Bit 62 of a loop region's word: some key is SPILL-located
-/// (`REGION_LOOP_WORD_SPILL`); each key's 6-bit field is then `slot < 32` or
-/// `32 + spill index`.
-const SPILL_BIT_SHIFT: &str = "62";
+/// `PACKED_SPILL_FLIP` as an `i32` operand: a loop word naming a SPILL-located
+/// key carries its ShapeId with these bits flipped (the S5 convention), so the
+/// guard's plain compare admits only all-inline words and a second compare, on
+/// the miss side, recognises a spill word.
+const FLIP_I32: &str = "-1073741824";
 /// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) — DESIGN §6.5a fact F-B.
 const PROOF_FLAG_I16: &str = "128";
 /// `OBJ_FLAG_PLAIN_ORDINARY | OBJ_FLAG_TYPED_ARRAY_PROTO` and its admitted
@@ -119,6 +120,8 @@ pub(crate) struct Receiver {
     pub(crate) has_store: bool,
     /// Bit `i`: the body stores `keys[i]` (the runtime then requires it inline).
     stored_mask: u32,
+    /// `i1`: the guard matched this receiver's SPILL word (flipped id).
+    spill: String,
     sites: Option<(String, String)>,
     /// The region word, an SSA value of the preheader (loop regions) or of
     /// the tail's guard block (body regions).
@@ -1079,7 +1082,7 @@ fn store_admission(ctx: &mut FnCtx<'_>, handle: &str, with_kind: bool) -> String
 /// Emit the full guard for one receiver from the CURRENT block. Returns the
 /// word (EMPTY on every failing edge) and the pass flag, both valid in the
 /// block the function leaves current.
-fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)> {
+fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String, String)> {
     let sites: Sites = region_guard::state_globals(ctx);
     rv.sites = Some((sites.word_g.clone(), sites.tries_g.clone()));
     note(ctx, Route::RloopGuard);
@@ -1089,11 +1092,13 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     let live = ctx.block().icmp_ne(I64, &word, RETIRED_WORD);
     let open = ctx.new_block("rloop.guard.open");
     let chk = ctx.new_block("rloop.guard.chk");
+    let flip = ctx.new_block("rloop.guard.flip");
     let miss = ctx.new_block("rloop.guard.miss");
     let prime = ctx.new_block("rloop.guard.prime");
     let join = ctx.new_block("rloop.guard.join");
     let open_l = ctx.block_label(open);
     let chk_l = ctx.block_label(chk);
+    let flip_l = ctx.block_label(flip);
     let miss_l = ctx.block_label(miss);
     let prime_l = ctx.block_label(prime);
     let join_l = ctx.block_label(join);
@@ -1121,7 +1126,15 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     };
     let pass = ctx.block().and(I1, &eq, &admit);
     let chk_end = ctx.block().label.clone();
-    ctx.block().cond_br(&eq, &join_l, &miss_l);
+    ctx.block().cond_br(&eq, &join_l, &flip_l);
+
+    // Not the all-inline word: is it this shape's SPILL word?
+    ctx.current_block = flip;
+    let exp_f = ctx.block().xor(I32, &expected, FLIP_I32);
+    let eq_f = ctx.block().icmp_eq(I32, &sid, &exp_f);
+    let pass_f = ctx.block().and(I1, &eq_f, &admit);
+    let flip_end = ctx.block().label.clone();
+    ctx.block().cond_br(&eq_f, &join_l, &miss_l);
 
     // The shape did not match: prime (bounded for the process), then compare
     // again against what the runtime published.
@@ -1171,7 +1184,10 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
     let handle2 = handle_of(ctx, &recv_box2);
     let sid2 = field_i32(ctx, &handle2, 4);
     let exp2 = ctx.block().trunc(I64, &primed, I32);
-    let eq2 = ctx.block().icmp_eq(I32, &sid2, &exp2);
+    let eq2i = ctx.block().icmp_eq(I32, &sid2, &exp2);
+    let exp2f = ctx.block().xor(I32, &exp2, FLIP_I32);
+    let spill2 = ctx.block().icmp_eq(I32, &sid2, &exp2f);
+    let eq2 = ctx.block().or(I1, &eq2i, &spill2);
     let admit2 = if rv.has_store {
         store_admission(ctx, &handle2, true)
     } else {
@@ -1188,6 +1204,7 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
             (EMPTY_WORD, retired_l.as_str()),
             (EMPTY_WORD, entry_l.as_str()),
             (word.as_str(), chk_end.as_str()),
+            (word.as_str(), flip_end.as_str()),
             (EMPTY_WORD, miss_l.as_str()),
             (primed.as_str(), prime_end.as_str()),
         ],
@@ -1198,11 +1215,23 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String)
             ("false", retired_l.as_str()),
             ("false", entry_l.as_str()),
             (pass.as_str(), chk_end.as_str()),
+            (pass_f.as_str(), flip_end.as_str()),
             ("false", miss_l.as_str()),
             (pass2.as_str(), prime_end.as_str()),
         ],
     );
-    Ok((word_out, pass_out))
+    let spill_out = ctx.block().phi(
+        I1,
+        &[
+            ("false", retired_l.as_str()),
+            ("false", entry_l.as_str()),
+            ("false", chk_end.as_str()),
+            ("true", flip_end.as_str()),
+            ("false", miss_l.as_str()),
+            (spill2.as_str(), prime_end.as_str()),
+        ],
+    );
+    Ok((word_out, pass_out, spill_out))
 }
 
 fn decode_slots(ctx: &mut FnCtx<'_>, rv: &mut Receiver, word: &str) {
@@ -1280,6 +1309,7 @@ pub(crate) fn begin(
                 keys: k.clone(),
                 has_store: *st,
                 stored_mask: *sm,
+                spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
                 slots: Vec::new(),
@@ -1287,7 +1317,8 @@ pub(crate) fn begin(
             .collect();
         let mut all = "true".to_string();
         for rv in receivers.iter_mut() {
-            let (word, pass) = emit_guard(ctx, rv)?;
+            let (word, pass, spill) = emit_guard(ctx, rv)?;
+            rv.spill = spill;
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
@@ -1356,6 +1387,7 @@ pub(crate) fn begin(
                 keys: k.clone(),
                 has_store: *st,
                 stored_mask: *sm,
+                spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
                 slots: Vec::new(),
@@ -1423,10 +1455,10 @@ pub(crate) fn lower_loop(
     // through the spill buffer; every other word, the all-inline copy (the
     // hot one, whose reads are one load). A region that stores every key it
     // names never gets a spill word, so it needs no spill copy.
-    let words: Vec<String> = ctx.region_loops[pos]
+    let flags: Vec<String> = ctx.region_loops[pos]
         .receivers
         .iter()
-        .map(|r| r.word.clone())
+        .map(|r| r.spill.clone())
         .collect();
     let may_spill = ctx.region_loops[pos]
         .receivers
@@ -1437,7 +1469,7 @@ pub(crate) fn lower_loop(
         let spill_b = ctx.new_block("rloop.version.spill");
         let inline_l = ctx.block_label(inline_b);
         let spill_l = ctx.block_label(spill_b);
-        let any = any_spill_bit(ctx, &words);
+        let any = any_flag(ctx, &flags);
         ctx.block().cond_br(&any, &spill_l, &inline_l);
         for (blk, mode) in [(inline_b, false), (spill_b, true)] {
             ctx.current_block = blk;
@@ -1476,15 +1508,13 @@ pub(crate) fn lower_loop(
     Ok(())
 }
 
-/// `(w0 | w1 | ...) >> 62 & 1` — does any receiver's word name a spill key?
-fn any_spill_bit(ctx: &mut FnCtx<'_>, words: &[String]) -> String {
-    let mut acc = "0".to_string();
-    for w in words {
-        acc = ctx.block().or(I64, &acc, w);
+/// Did the guard match any receiver's SPILL word?
+fn any_flag(ctx: &mut FnCtx<'_>, flags: &[String]) -> String {
+    let mut acc = "false".to_string();
+    for f in flags {
+        acc = ctx.block().or(I1, &acc, f);
     }
-    let s = ctx.block().lshr(I64, &acc, SPILL_BIT_SHIFT);
-    let b = ctx.block().and(I64, &s, "1");
-    ctx.block().icmp_ne(I64, &b, "0")
+    acc
 }
 
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
@@ -1595,6 +1625,12 @@ pub(crate) fn lower_split(
                     let h = handle_of(ctx, &recv_box);
                     let sid = field_i32(ctx, &h, 4);
                     let exp = ctx.block().trunc(I64, &rv.word, I32);
+                    // The spill copy runs only on flipped (spill) words.
+                    let exp = if modes[0] {
+                        ctx.block().xor(I32, &exp, FLIP_I32)
+                    } else {
+                        exp
+                    };
                     let eq = ctx.block().icmp_eq(I32, &sid, &exp);
                     let eq = if rv.has_store {
                         let adm = store_admission(ctx, &h, false);
@@ -1615,7 +1651,8 @@ pub(crate) fn lower_split(
             // Body region: the full guard, every iteration.
             let mut all = "true".to_string();
             for rv in receivers.iter_mut() {
-                let (word, pass) = emit_guard(ctx, rv)?;
+                let (word, pass, spill) = emit_guard(ctx, rv)?;
+                rv.spill = spill;
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }
@@ -1703,8 +1740,8 @@ pub(crate) fn lower_split(
             let mode_l = ctx.block_label(mode_b);
             ctx.block().cond_br(&decide.1, &mode_l, &slow_l);
             ctx.current_block = mode_b;
-            let words: Vec<String> = receivers.iter().map(|r| r.word.clone()).collect();
-            let any = any_spill_bit(ctx, &words);
+            let flags: Vec<String> = receivers.iter().map(|r| r.spill.clone()).collect();
+            let any = any_flag(ctx, &flags);
             ctx.block().cond_br(&any, &spill_t, &inline_t);
         }
     } else if g_dead {
