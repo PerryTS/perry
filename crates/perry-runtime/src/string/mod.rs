@@ -221,6 +221,10 @@ pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
 }
 #[cfg(feature = "regex-engine")]
 pub use crate::regex::{js_string_split_js, js_string_split_n};
+#[cfg(test)]
+pub(crate) use format::{
+    debug_assert_small_string_caches_not_minor_relevant, test_write_small_int_cache_slot,
+};
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     js_number_to_string_box, scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
@@ -236,6 +240,11 @@ pub use intern::js_string_pool_atom;
 #[cfg(test)]
 pub(crate) use intern::{atom_lookup, is_atom_for_test, test_evict_interned};
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
+#[cfg(test)]
+pub(crate) use intern::{
+    test_check_intern_young_logged, test_clear_intern_table, test_init_string_bytes,
+    test_intern_slot_ptr, test_write_intern_slot_without_logging,
+};
 pub use io::{js_string_error, js_string_print, js_string_warn};
 pub(crate) use iter_object::dispatch_string_iterator_method_builtin;
 pub use iter_object::{
