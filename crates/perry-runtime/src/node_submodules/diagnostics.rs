@@ -996,7 +996,9 @@ pub(crate) fn publish_channel_local(id: i64, data: f64) {
         // Match Node's safe subscriber behavior for the happy path; exceptions
         // propagate through Perry's exception mechanism and are catchable.
         let cb = closure_ptr(subscriber);
-        if let Err(err) = catch_js(|| js_closure_call2(cb, data, name)) {
+        if let Err(err) =
+            catch_js(|| js_closure_call2(cb, crate::closure::plain_call_receiver(), data, name))
+        {
             schedule_uncaught(err);
         }
     }
@@ -1118,7 +1120,12 @@ pub(crate) fn run_store_wrapped(
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
     with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(cb as i64, args.as_ptr(), args.len() as i64)
+        js_closure_call_array(
+            cb as i64,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len() as i64,
+        )
     })
 }
 
@@ -1220,7 +1227,7 @@ pub(crate) extern "C" fn diag_channel_unbind_store(
 pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
     fn run_als(handle: i64, context: f64, next: f64) -> f64 {
         crate::async_context::push_store(handle, context);
-        let result = js_closure_call0(closure_ptr(next));
+        let result = js_closure_call0(closure_ptr(next), crate::closure::plain_call_receiver());
         crate::async_context::pop_store(handle);
         result
     }
@@ -1240,7 +1247,12 @@ pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
     }
     let obj = crate::value::js_nanbox_get_pointer(store) as *mut ObjectHeader;
     let run = get_field_value(obj, "run");
-    js_closure_call2(closure_ptr(run), context, next)
+    js_closure_call2(
+        closure_ptr(run),
+        crate::closure::plain_call_receiver(),
+        context,
+        next,
+    )
 }
 
 pub(crate) extern "C" fn store_next_thunk(
@@ -1369,7 +1381,9 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     for (store, transform) in stores.into_iter().rev() {
         let context = match transform {
             StoreTransform::Callable(t) => {
-                match catch_js(|| js_closure_call1(closure_ptr(t), data)) {
+                match catch_js(|| {
+                    js_closure_call1(closure_ptr(t), crate::closure::plain_call_receiver(), data)
+                }) {
                     Ok(context) => context,
                     Err(err) => {
                         schedule_uncaught(err);
@@ -1393,7 +1407,12 @@ pub(crate) extern "C" fn diag_channel_run_stores(
         js_closure_set_capture_ptr(chain, 2, next_value.to_bits() as i64);
         next_value = boxed_ptr(chain);
     }
-    suppress_uncaught_drain(|| js_closure_call0(closure_ptr(next_value)))
+    suppress_uncaught_drain(|| {
+        js_closure_call0(
+            closure_ptr(next_value),
+            crate::closure::plain_call_receiver(),
+        )
+    })
 }
 
 pub(crate) extern "C" fn thunk_diag_channel(
@@ -1546,7 +1565,12 @@ pub(crate) fn call_fn_value(fn_value: f64, this_arg: f64, args: &[f64]) -> f64 {
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
     with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(cb as i64, args.as_ptr(), args.len() as i64)
+        js_closure_call_array(
+            cb as i64,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len() as i64,
+        )
     })
 }
 

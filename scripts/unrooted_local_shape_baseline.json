@@ -2,9 +2,8 @@
   "per_file": {
     "crates/perry-ext-better-sqlite3/src/lib.rs": 13,
     "crates/perry-ext-cheerio/src/lib.rs": 7,
-    "crates/perry-ext-events/src/lib.rs": 12,
+    "crates/perry-ext-events/src/lib.rs": 5,
     "crates/perry-ext-events/src/module_iterators.rs": 2,
-    "crates/perry-ext-events/src/module_on.rs": 3,
     "crates/perry-ext-events/src/tests.rs": 2,
     "crates/perry-ext-http/src/agent.rs": 3,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
@@ -40,7 +39,7 @@
     "crates/perry-stdlib/src/sqlite/dispatch.rs": 6,
     "crates/perry-stdlib/src/sqlite/node_stmt_session.rs": 4,
     "crates/perry-stdlib/src/sqlite/node_tag_store.rs": 3,
-    "crates/perry-stdlib/src/streams.rs": 25,
+    "crates/perry-stdlib/src/streams.rs": 24,
     "crates/perry-stdlib/src/streams/byob.rs": 12,
     "crates/perry-stdlib/src/streams/pipe.rs": 13,
     "crates/perry-stdlib/src/streams/strategy.rs": 9,
@@ -61,5 +60,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 380
+  "total": 369
 }

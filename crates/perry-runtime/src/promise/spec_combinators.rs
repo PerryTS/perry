@@ -302,8 +302,9 @@ fn call_with_this(func: f64, this_arg: f64, args: &[f64]) -> Result<f64, f64> {
     };
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
-    let result =
-        combinator_catch_js(|| unsafe { crate::closure::js_native_call_value(func, ptr, len) });
+    let result = combinator_catch_js(|| unsafe {
+        crate::closure::js_native_call_value(func, crate::closure::plain_call_receiver(), ptr, len)
+    });
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
@@ -1342,7 +1343,12 @@ mod fast_arm_tests {
     ) -> f64 {
         let v = crate::closure::js_closure_get_capture_f64(closure, 0);
         unsafe {
-            crate::closure::js_native_call_value(on_fulfilled, [v].as_ptr(), 1);
+            crate::closure::js_native_call_value(
+                on_fulfilled,
+                crate::closure::plain_call_receiver(),
+                [v].as_ptr(),
+                1,
+            );
         }
         undef()
     }

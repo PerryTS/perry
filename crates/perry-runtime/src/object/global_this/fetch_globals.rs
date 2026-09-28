@@ -439,7 +439,12 @@ pub(crate) unsafe fn temporal_subclass_super(
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
     // #10490: the displaced `new.target` crosses the same call.
     let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
-    let cell = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+    let cell = crate::closure::js_native_call_value(
+        parent_val,
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if crate::temporal::is_temporal_value(cell) {
@@ -473,14 +478,14 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
     let handle = if kind == 1 {
         global_this_request_thunk(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
         )
     } else {
         global_this_response_thunk(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
         )
@@ -497,7 +502,7 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
     let handle = global_this_request_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         input,
         init,
     );
@@ -511,7 +516,7 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
     let handle = global_this_response_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         body,
         init,
     );
@@ -1031,14 +1036,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             let handle = if kind == Some("Request") {
                 global_this_request_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     arg0,
                     arg1,
                 )
             } else {
                 global_this_response_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     arg0,
                     arg1,
                 )
@@ -1158,7 +1163,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             }
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
-            let r = crate::closure::js_native_call_value(callee, args_ptr, args_len);
+            let r = crate::closure::js_native_call_value(
+                callee,
+                crate::closure::plain_call_receiver(),
+                args_ptr,
+                args_len,
+            );
             crate::object::js_implicit_this_set(prev.get_nanbox_f64());
             r
         }

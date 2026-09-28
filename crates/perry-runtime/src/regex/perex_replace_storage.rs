@@ -149,6 +149,7 @@ pub(super) fn call(
         crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
         crate::closure::js_native_call_value(
             method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             slots.as_ptr().cast(),
             slots.len(),
         )
@@ -234,6 +235,7 @@ pub(super) fn call_native(
         crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
         crate::closure::js_native_call_value(
             method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             slots.as_ptr().cast(),
             slots.len(),
         )

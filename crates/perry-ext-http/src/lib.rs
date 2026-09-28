@@ -920,10 +920,10 @@ unsafe fn invoke_create_socket(
     // of reading an uninitialized register for the second parameter.
     static REGISTER_ARITY: Once = Once::new();
     REGISTER_ARITY.call_once(|| {
-        perry_ffi::register_closure_arity(http_create_socket_cb as *const u8, 2);
+        perry_ffi::register_closure_arity(http_create_socket_cb as perry_ffi::JsBody2, 2);
     });
 
-    let cb = perry_ffi::alloc_closure(http_create_socket_cb as *const u8, 1);
+    let cb = perry_ffi::alloc_closure(http_create_socket_cb as perry_ffi::JsBody2, 1);
     if cb.is_null() {
         return;
     }
@@ -945,7 +945,12 @@ unsafe fn invoke_create_socket(
     ));
 
     let closure = JsClosure::from_raw(cs.get() as *const RawClosureHeader);
-    closure.call3(req_val, options.get(), cb_val.get());
+    closure.call3(
+        perry_ffi::JsThis::UNDEFINED,
+        req_val,
+        options.get(),
+        cb_val.get(),
+    );
 }
 
 /// Continuation for a `createSocket` override's `cb(err, socket)` callback.

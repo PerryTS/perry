@@ -164,7 +164,12 @@ fn run_process_finalization_callbacks(kind: ProcessFinalizationKind) {
         }
         let args = [obj_handle.get_nanbox_f64(), event_handle.get_nanbox_f64()];
         unsafe {
-            crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            crate::closure::js_native_call_value(
+                callback,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
 }

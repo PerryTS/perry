@@ -32,6 +32,7 @@ extern "C" fn test_thenable_then_force_minor_gc(
     unsafe {
         crate::closure::js_native_call_value(
             resolve_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );

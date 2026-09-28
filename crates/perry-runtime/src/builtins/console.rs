@@ -567,7 +567,14 @@ extern "C" fn console_task_run(
     if !console_is_callable(callback) {
         throw_plain_console_error("First argument must be a function.");
     }
-    unsafe { crate::closure::js_native_call_value(callback, std::ptr::null(), 0) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    }
 }
 
 /// `console.context([name])` returns an inspector-scoped console object in

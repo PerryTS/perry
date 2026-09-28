@@ -125,6 +125,7 @@ pub(super) unsafe fn dispatch_primitive(
                 );
                 let result = crate::closure::js_native_call_value(
                     prop_handle.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
                     args.as_ptr(),
                     args.len(),
                 );
@@ -357,6 +358,7 @@ pub(super) unsafe fn dispatch_primitive(
                 let args = refreshed_args();
                 return Some(crate::closure::js_native_call_value(
                     f64::from_bits(bound),
+                    crate::closure::plain_call_receiver(),
                     args.as_ptr(),
                     args.len(),
                 ));
@@ -400,6 +402,7 @@ pub(super) unsafe fn dispatch_primitive(
                 let args = refreshed_args();
                 return Some(crate::closure::js_native_call_value(
                     f64::from_bits(bound),
+                    crate::closure::plain_call_receiver(),
                     args.as_ptr(),
                     args.len(),
                 ));
@@ -443,7 +446,12 @@ pub(super) unsafe fn dispatch_primitive(
                 let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                 let prev_this_h = prev_this_scope
                     .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv.to_bits())));
-                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                let result = crate::closure::js_native_call_value(
+                    v,
+                    crate::closure::plain_call_receiver(),
+                    args_ptr,
+                    args_len,
+                );
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return Some(result);
             }
@@ -508,7 +516,12 @@ pub(super) unsafe fn dispatch_primitive(
                 let prev_this_h = prev_this_scope
                     .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(promise_val.to_bits())));
                 let result = unsafe {
-                    crate::closure::js_native_call_value(own_then, args.as_ptr(), args.len())
+                    crate::closure::js_native_call_value(
+                        own_then,
+                        crate::closure::plain_call_receiver(),
+                        args.as_ptr(),
+                        args.len(),
+                    )
                 };
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return Some(result);
@@ -525,7 +538,12 @@ pub(super) unsafe fn dispatch_primitive(
                 let prev_this_h = prev_this_scope
                     .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(promise_val.to_bits())));
                 let result = unsafe {
-                    crate::closure::js_native_call_value(proto_method, args.as_ptr(), args.len())
+                    crate::closure::js_native_call_value(
+                        proto_method,
+                        crate::closure::plain_call_receiver(),
+                        args.as_ptr(),
+                        args.len(),
+                    )
                 };
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return Some(result);
@@ -649,6 +667,7 @@ pub(super) unsafe fn dispatch_primitive(
                     );
                     let result = crate::closure::js_native_call_value(
                         prop_handle.get_nanbox_f64(),
+                        crate::closure::plain_call_receiver(),
                         args.as_ptr(),
                         args.len(),
                     );
@@ -734,7 +753,12 @@ pub(super) unsafe fn dispatch_primitive(
                 let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                 let prev_this_h =
                     prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv_bits)));
-                let result = crate::closure::js_native_call_value(v, args_ptr, args_len);
+                let result = crate::closure::js_native_call_value(
+                    v,
+                    crate::closure::plain_call_receiver(),
+                    args_ptr,
+                    args_len,
+                );
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return Some(result);
             }
@@ -757,8 +781,12 @@ pub(super) unsafe fn dispatch_primitive(
                     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                     let prev_this_h = prev_this_scope
                         .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
-                    let result =
-                        crate::closure::js_native_call_value(value_f64, args_ptr, args_len);
+                    let result = crate::closure::js_native_call_value(
+                        value_f64,
+                        crate::closure::plain_call_receiver(),
+                        args_ptr,
+                        args_len,
+                    );
                     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return Some(result);
                 }

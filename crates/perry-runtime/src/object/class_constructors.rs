@@ -937,7 +937,12 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         let prev_this_scope = crate::gc::RuntimeHandleScope::new();
         let prev_this_h = prev_this_scope
             .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-        let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+        let result = crate::closure::js_native_call_value(
+            method_value,
+            crate::closure::plain_call_receiver(),
+            args_ptr,
+            args_len,
+        );
         super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         return result;
     }
@@ -989,7 +994,12 @@ unsafe fn call_displaced_native_base_method(
     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
     let prev_this_h = prev_this_scope
         .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-    let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        method_value,
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
 }

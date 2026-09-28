@@ -6,7 +6,7 @@
 //! Each test binds a receiver in the cell, calls a probe body through one
 //! dispatch route (exact arity, padded arity, rest bundling, the padded wide
 //! ladder, a hoisted `DirectCallN`), and checks what the probe received.
-//! Sabotage: the funnel passes anything but `JsThis::current()` -> the
+//! Sabotage: the funnel passes anything but `current_this()` -> the
 //! receiver assertions fail; the funnel drops the receiver argument (the
 //! arguments shift one slot) -> the argument assertions fail.
 
@@ -73,7 +73,15 @@ fn receiver() -> f64 {
 fn an_exact_arity_call_passes_the_cell_receiver_then_the_arguments() {
     let closure = js_closure_alloc(probe3 as *const u8, 0);
     js_register_closure_arity(probe3 as *const u8, 3);
-    let r = with_receiver(receiver(), || js_closure_call3(closure, 1.0, 2.0, 3.0));
+    let r = with_receiver(receiver(), || {
+        js_closure_call3(
+            closure,
+            crate::closure::plain_call_receiver(),
+            1.0,
+            2.0,
+            3.0,
+        )
+    });
     assert_eq!(r, 3.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits(), "the body's `this` parameter");
@@ -84,7 +92,9 @@ fn an_exact_arity_call_passes_the_cell_receiver_then_the_arguments() {
 fn a_padded_call_passes_the_receiver_and_pads_after_it() {
     let closure = js_closure_alloc(probe3 as *const u8, 0);
     js_register_closure_arity(probe3 as *const u8, 3);
-    with_receiver(receiver(), || js_closure_call1(closure, 9.0));
+    with_receiver(receiver(), || {
+        js_closure_call1(closure, crate::closure::plain_call_receiver(), 9.0)
+    });
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(args, vec![9f64.to_bits(), UNDEF, UNDEF]);
@@ -94,7 +104,16 @@ fn a_padded_call_passes_the_receiver_and_pads_after_it() {
 fn a_rest_bundled_call_passes_the_receiver_before_the_fixed_arguments() {
     let closure = js_closure_alloc(probe_rest as *const u8, 0);
     js_register_closure_rest(probe_rest as *const u8, 1);
-    with_receiver(receiver(), || js_closure_call4(closure, 5.0, 6.0, 7.0, 8.0));
+    with_receiver(receiver(), || {
+        js_closure_call4(
+            closure,
+            crate::closure::plain_call_receiver(),
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+        )
+    });
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(
@@ -110,7 +129,12 @@ fn a_wide_call_passes_the_receiver_and_every_argument_slot() {
     js_register_closure_arity(probe_wide as *const u8, 36);
     let args: Vec<f64> = (0..36).map(f64::from).collect();
     let r = with_receiver(receiver(), || unsafe {
-        js_closure_call_array(closure as i64, args.as_ptr(), args.len() as i64)
+        js_closure_call_array(
+            closure as i64,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len() as i64,
+        )
     });
     assert_eq!(r, 0.0);
     let (this, seen_args) = seen();
@@ -127,7 +151,15 @@ fn a_hoisted_direct_call_passes_the_cell_receiver() {
     js_register_closure_arity(probe3 as *const u8, 3);
     let site = DirectCall3::resolve(closure);
     assert!(site.is_direct(), "the probe resolves to a direct call");
-    with_receiver(receiver(), || site.call(closure, 1.0, 2.0, 3.0));
+    with_receiver(receiver(), || {
+        site.call(
+            closure,
+            crate::closure::plain_call_receiver(),
+            1.0,
+            2.0,
+            3.0,
+        )
+    });
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(args, vec![1f64.to_bits(), 2f64.to_bits(), 3f64.to_bits()]);

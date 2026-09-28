@@ -319,7 +319,12 @@ fn helper_next_rejects_a_non_helper_iterator_receiver() {
         );
         let rebound_h = scope.root_nanbox_f64(f64::from_bits(rebound));
         let result = crate::exception::js_call_catching(|| {
-            crate::closure::js_native_call_value(rebound_h.get_nanbox_f64(), std::ptr::null(), 0)
+            crate::closure::js_native_call_value(
+                rebound_h.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
         });
         assert!(
             result.is_err(),

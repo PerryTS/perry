@@ -42,7 +42,9 @@ impl ComparatorCall {
     /// `direct` is a static code address and remains valid across relocation.
     #[inline(always)]
     pub(crate) fn less_equal_at(&self, comparator: *const ClosureHeader, a: f64, b: f64) -> bool {
-        let r = self.direct.call(comparator, a, b);
+        let r = self
+            .direct
+            .call(comparator, crate::closure::plain_call_receiver(), a, b);
         if r <= 0.0 {
             return true;
         }

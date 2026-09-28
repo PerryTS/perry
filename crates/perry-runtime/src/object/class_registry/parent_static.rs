@@ -1690,7 +1690,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             if let Some(v) = field_val {
                 let fv = crate::value::JSValue::from_bits(v.to_bits());
                 if !fv.is_undefined() && !fv.is_null() {
-                    return crate::closure::js_native_call_value(v, args_ptr, args_len);
+                    return crate::closure::js_native_call_value(
+                        v,
+                        crate::closure::plain_call_receiver(),
+                        args_ptr,
+                        args_len,
+                    );
                 }
             }
             cid = get_parent_class_id(cid).unwrap_or(0);
@@ -1725,7 +1730,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
                     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                     let prev_this =
                         this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                    let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+                    let result = crate::closure::js_native_call_value(
+                        member,
+                        crate::closure::plain_call_receiver(),
+                        args_ptr,
+                        args_len,
+                    );
                     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     return result;
                 }
@@ -1754,7 +1764,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev_this =
                 this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
+            let result = crate::closure::js_native_call_value(
+                static_val,
+                crate::closure::plain_call_receiver(),
+                args_ptr,
+                args_len,
+            );
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
@@ -1833,7 +1848,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev_this =
                 this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+            let result = crate::closure::js_native_call_value(
+                member,
+                crate::closure::plain_call_receiver(),
+                args_ptr,
+                args_len,
+            );
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
@@ -1851,7 +1871,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev_this =
                 this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+            let result = crate::closure::js_native_call_value(
+                member,
+                crate::closure::plain_call_receiver(),
+                args_ptr,
+                args_len,
+            );
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }

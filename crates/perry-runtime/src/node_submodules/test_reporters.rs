@@ -101,7 +101,10 @@ extern "C" fn reporter_transform_chunk(
         crate::node_stream::js_node_stream_method_push(handle, string_value(&output));
     }
     if is_callable_value(callback) {
-        js_closure_call0(raw_ptr_from_value(callback) as *const ClosureHeader);
+        js_closure_call0(
+            raw_ptr_from_value(callback) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
+        );
     }
     undefined_value()
 }

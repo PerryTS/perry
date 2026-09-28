@@ -80,7 +80,12 @@ unsafe fn register_class() -> (f64, f64) {
 /// `method.call(receiver)`: IMPLICIT_THIS bound to `receiver` for the call.
 unsafe fn call_with_this(method: f64, receiver: f64) -> f64 {
     let prev = crate::object::js_implicit_this_set(receiver);
-    let result = crate::closure::js_native_call_value(method, std::ptr::null(), 0);
+    let result = crate::closure::js_native_call_value(
+        method,
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev);
     result
 }

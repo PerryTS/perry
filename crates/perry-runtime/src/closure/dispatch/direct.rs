@@ -155,16 +155,14 @@ macro_rules! define_direct_call_site {
         $(#[$meta:meta])*
         $site:ident, $arity:literal, $entry:ident, $slow:ident, $($arg:ident),+
     ) => {
-        /// The fallback as a JS body: `$entry` is a call ENTRY (it takes no
-        /// receiver and reads the implicit-`this` cell itself), so the site
-        /// stores this adapter, which drops the receiver it is handed — the
-        /// same one the cell holds (stage 1 of this-as-a-parameter).
+        /// The fallback, a JS body: the full dispatcher with the receiver it
+        /// is handed.
         extern "C" fn $slow(
             closure: *const ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
             $($arg: f64),+
         ) -> f64 {
-            $entry(closure, $($arg),+)
+            $entry(closure, this, $($arg),+)
         }
 
         $(#[$meta])*
@@ -181,12 +179,22 @@ macro_rules! define_direct_call_site {
             }
 
             /// Invoke with the CURRENT closure address (see the module docs on
-            /// rooting). Falls back to the full dispatcher when the closure
-            /// did not resolve. The body receives the receiver the
-            /// implicit-`this` cell holds, read at the call.
+            /// rooting) and receiver `this` (`plain_call_receiver()` for a
+            /// plain call). Falls back to the full dispatcher when the closure
+            /// did not resolve. Stage 1: the implicit-`this` cell holds `this`
+            /// for the call (`calln::with_receiver`), which the body reads.
             #[inline]
-            pub fn call(&self, closure: *const ClosureHeader, $($arg: f64),+) -> f64 {
-                (self.0)(closure, crate::closure::JsThis::current(), $($arg),+)
+            pub fn call(
+                &self,
+                closure: *const ClosureHeader,
+                this: crate::closure::JsThis,
+                $($arg: f64),+
+            ) -> f64 {
+                super::calln::with_receiver(closure, this, || {
+                    // SAFETY: `self.0` is the resolved body of `closure` at
+                    // this arity, or the dispatcher fallback.
+                    unsafe { (self.0)(closure, this, $($arg),+) }
+                })
             }
 
             /// Whether the direct target was resolved. Test-only: a "fast
@@ -454,10 +462,13 @@ mod tests {
             "an unregistered, capture-less, non-bound callback must resolve to \
              a direct target -- otherwise this whole module is inert"
         );
-        assert_eq!(site.call(c, 1.0, 2.0, 3.0), 123.0);
         assert_eq!(
-            site.call(c, 1.0, 2.0, 3.0),
-            js_closure_call3(c, 1.0, 2.0, 3.0)
+            site.call(c, crate::closure::plain_call_receiver(), 1.0, 2.0, 3.0),
+            123.0
+        );
+        assert_eq!(
+            site.call(c, crate::closure::plain_call_receiver(), 1.0, 2.0, 3.0),
+            js_closure_call3(c, crate::closure::plain_call_receiver(), 1.0, 2.0, 3.0)
         );
     }
 

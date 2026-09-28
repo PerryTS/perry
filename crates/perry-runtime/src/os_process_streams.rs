@@ -861,7 +861,12 @@ extern "C" fn process_stdin_add_listener(
         }
         return stdin_this_value();
     }
-    process_stdin_on(closure, crate::closure::JsThis::current(), event, callback)
+    process_stdin_on(
+        closure,
+        crate::closure::body_call::current_this(),
+        event,
+        callback,
+    )
 }
 
 /// `process.stdin.once(event, cb)` reached as an object method.
@@ -879,7 +884,12 @@ extern "C" fn process_stdin_add_listener_once(
         }
         return stdin_this_value();
     }
-    process_stdin_once(closure, crate::closure::JsThis::current(), event, callback)
+    process_stdin_once(
+        closure,
+        crate::closure::body_call::current_this(),
+        event,
+        callback,
+    )
 }
 
 /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
@@ -1452,7 +1462,11 @@ fn pump_stdin_data_chunks() {
             let this = stdin_this_value();
             let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
             cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-                crate::closure::js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                crate::closure::js_closure_call1(
+                    closure,
+                    crate::closure::plain_call_receiver(),
+                    arg_handle.get_nanbox_f64(),
+                );
             });
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
@@ -1474,7 +1488,7 @@ fn pump_stdin_data_chunks() {
         let this = stdin_this_value();
         let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure);
+            crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
         });
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
@@ -1522,7 +1536,11 @@ fn maybe_fire_stdin_end() {
                 let this = stdin_this_value();
                 let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
                 cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-                    crate::closure::js_closure_call1(closure, flush_handle.get_nanbox_f64());
+                    crate::closure::js_closure_call1(
+                        closure,
+                        crate::closure::plain_call_receiver(),
+                        flush_handle.get_nanbox_f64(),
+                    );
                 });
                 crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             }
@@ -1559,7 +1577,7 @@ fn maybe_fire_stdin_end() {
         let this = stdin_this_value();
         let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure);
+            crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
         });
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }

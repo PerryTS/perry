@@ -165,7 +165,11 @@ fn call_enabled_callback_once(scope: &crate::gc::RuntimeHandleScope, closure: *m
 
     let logger_value = nanbox_closure(closure);
     let logger_handle = scope.root_nanbox_f64(logger_value);
-    js_closure_call1(callback_ptr, logger_handle.get_nanbox_f64());
+    js_closure_call1(
+        callback_ptr,
+        crate::closure::plain_call_receiver(),
+        logger_handle.get_nanbox_f64(),
+    );
 }
 
 fn write_stderr_line(line: &str) {
@@ -186,7 +190,11 @@ fn write_stderr_line(line: &str) {
         );
         let write_f64 = f64::from_bits(write_value.bits());
         if let Some(write_ptr) = closure_ptr(write_f64) {
-            js_closure_call1(write_ptr, line_handle.get_nanbox_f64());
+            js_closure_call1(
+                write_ptr,
+                crate::closure::plain_call_receiver(),
+                line_handle.get_nanbox_f64(),
+            );
             return;
         }
     }

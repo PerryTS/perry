@@ -510,7 +510,7 @@ fn call_original(original: *const ClosureHeader, arg: f64) -> f64 {
             TAG_UNDEFINED,
         )));
     }
-    js_closure_call1(original, arg)
+    js_closure_call1(original, crate::closure::plain_call_receiver(), arg)
 }
 
 fn after_initial_result(state_id: usize, result: f64) {

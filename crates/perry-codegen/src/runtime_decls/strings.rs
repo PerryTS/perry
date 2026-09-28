@@ -276,17 +276,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE],
     );
-    // `js_closure_call{N}(callee, a0..aN-1)`, generated from the ABI table so
-    // the declarations cannot drift from `perry_abi::JS_BODY_*`.
+    // `js_closure_call{N}(callee, this, a0..aN-1)`, generated from the ABI
+    // table so the declarations cannot drift from `perry_abi`.
     for (argc, name) in crate::runtime_abi::JS_CLOSURE_CALL_ENTRIES
         .iter()
         .enumerate()
     {
-        let mut params = vec![I64];
+        let mut params = vec![I64, I64];
         params.extend(std::iter::repeat_n(DOUBLE, argc));
         module.declare_function(name, DOUBLE, &params);
     }
-    module.declare_function("js_closure_call1_receiverless", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_resolve_arrow_direct_call", PTR, &[I64, I32]);
 
     // Phase B.16 / D follow-ups: more runtime functions discovered

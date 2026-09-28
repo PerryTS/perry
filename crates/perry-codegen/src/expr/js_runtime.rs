@@ -253,7 +253,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (`crates/perry-runtime/src/closure.rs`) which takes the i64
         // closure pointer and dispatches to the right `js_closure_callN`
         // based on `args_len`. Codegen passes:
-        //   func_ptr     = ptrtoint @js_closure_call_array to i64
+        //   func_ptr     = ptrtoint @js_closure_v8_callback to i64
         //   closure_env  = unbox(closure)  — raw *ClosureHeader as i64
         //   param_count  = static usize from HIR
         // Result is a NaN-boxed JS handle (V8-handle tag 0x7FFB) that JS
@@ -268,11 +268,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let closure_i64 = unbox_to_i64(blk, &closure_dbl);
             // ptrtoint of a function symbol: assigns a fresh SSA register
             // and emits the conversion. The resulting i64 is the address
-            // of `js_closure_call_array`, which we hand to js_create_callback
+            // of `js_closure_v8_callback`, which we hand to js_create_callback
             // as its trampoline target.
             let func_addr = blk.next_reg();
             blk.emit_raw(format!(
-                "{} = ptrtoint ptr @js_closure_call_array to i64",
+                "{} = ptrtoint ptr @js_closure_v8_callback to i64",
                 func_addr
             ));
             let pcount = (*param_count as i64).to_string();

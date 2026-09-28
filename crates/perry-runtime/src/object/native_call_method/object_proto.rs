@@ -35,7 +35,12 @@ pub(super) unsafe fn call_object_to_string_method(object: f64) -> Option<f64> {
     let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    let result = crate::closure::js_native_call_value(
+        f64::from_bits(bound),
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     Some(result)
 }

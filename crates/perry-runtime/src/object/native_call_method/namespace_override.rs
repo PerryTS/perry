@@ -85,6 +85,7 @@ pub(super) unsafe fn call_native_namespace_override(
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args_handles);
     Some(crate::closure::js_native_call_value(
         bound_handle.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
         args.as_ptr(),
         args.len(),
     ))

@@ -33,71 +33,51 @@
 
 /// The receiver a JS body takes as its second native parameter
 /// (`perry_abi::JS_BODY_THIS_PARAM`): the NaN-boxed `this` bits, passed in an
-/// integer register (`repr(transparent)` over `u64`, so the ABI is exactly
-/// that of a `u64`).
+/// integer register. Defined once in perry-abi and shared with perry-ffi.
 ///
 /// Stage 1 of this-as-a-parameter: every caller passes the receiver the
 /// implicit-`this` cell holds for the call (a runtime caller reads it with
-/// [`JsThis::current`]), and bodies still read the cell. A native body
-/// declares the parameter and must not assume anything about it yet.
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct JsThis(pub u64);
+/// [`current_this`]), and bodies still read the cell. A native body declares
+/// the parameter and must not assume anything about it yet.
+pub use crate::codegen_abi::JsThis;
 
-impl JsThis {
-    /// `undefined` as a receiver.
-    pub const UNDEFINED: JsThis = JsThis(crate::value::TAG_UNDEFINED);
+const _: () = assert!(crate::codegen_abi::TAG_UNDEFINED == crate::value::TAG_UNDEFINED);
 
-    /// The receiver bits.
-    #[inline(always)]
-    pub const fn bits(self) -> u64 {
-        self.0
-    }
+/// The receiver the implicit-`this` cell holds right now: what a body called
+/// at this point would read from the cell. Read through the per-agent pointer
+/// block (`agent_ptrs`), the cheapest path to the cell on every target but
+/// Apple aarch64, where `HotTls` is the fast path.
+#[inline(always)]
+pub fn current_this() -> JsThis {
+    #[cfg(not(all(
+        target_vendor = "apple",
+        target_arch = "aarch64",
+        target_pointer_width = "64"
+    )))]
+    return JsThis(crate::agent_ptrs::implicit_this_bits());
+    #[cfg(all(
+        target_vendor = "apple",
+        target_arch = "aarch64",
+        target_pointer_width = "64"
+    ))]
+    return JsThis(crate::object::implicit_this_bits());
+}
 
-    /// The receiver as a NaN-boxed `f64`.
-    #[inline(always)]
-    pub fn as_f64(self) -> f64 {
-        f64::from_bits(self.0)
-    }
-
-    /// A NaN-boxed `f64` receiver.
-    #[inline(always)]
-    pub fn from_f64(value: f64) -> Self {
-        JsThis(value.to_bits())
-    }
-
-    /// The receiver the implicit-`this` cell holds right now: what a body
-    /// called at this point would read from the cell. Read through the
-    /// per-agent pointer block (`agent_ptrs`), the cheapest path to the cell
-    /// on every target but Apple aarch64, where `HotTls` is the fast path.
-    #[inline(always)]
-    pub fn current() -> Self {
-        #[cfg(not(all(
-            target_vendor = "apple",
-            target_arch = "aarch64",
-            target_pointer_width = "64"
-        )))]
-        return JsThis(crate::agent_ptrs::implicit_this_bits());
-        #[cfg(all(
-            target_vendor = "apple",
-            target_arch = "aarch64",
-            target_pointer_width = "64"
-        ))]
-        return JsThis(crate::object::implicit_this_bits());
-    }
+/// The receiver a runtime caller passes for a PLAIN call (a call with no
+/// receiver of its own). Stage 1 keeps the plain-call behavior of the cell:
+/// a plain call runs with whatever the cell holds, so this is
+/// [`current_this`], and the entry it is passed to binds nothing.
+#[inline(always)]
+pub fn plain_call_receiver() -> JsThis {
+    current_this()
 }
 
 /// The native type of a JS body taking the receiver and one `f64` per
-/// token: `js_body_fn_ty!(a, b)` is
-/// `extern "C" fn(*const ClosureHeader, JsThis, f64, f64) -> f64`.
+/// token: `js_body_fn_ty!(a, b)` is perry-abi's
+/// `unsafe extern "C" fn(*const ClosureHeader, JsThis, f64, f64) -> f64`.
 macro_rules! js_body_fn_ty {
-    (@f64 $x:tt) => { f64 };
     ($($x:tt),* $(,)?) => {
-        extern "C" fn(
-            *const $crate::closure::ClosureHeader,
-            $crate::closure::body_call::JsThis
-            $(, $crate::closure::body_call::js_body_fn_ty!(@f64 $x))*
-        ) -> f64
+        ::perry_abi::js_body_fn_ty!($crate::closure::ClosureHeader; $($x),*)
     };
 }
 

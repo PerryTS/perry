@@ -566,7 +566,12 @@ pub(crate) unsafe fn call_overridden_iterator_next(
         let method = scope.root_nanbox_f64(own);
         super::js_implicit_this_set(iter.get_nanbox_f64());
         let result = crate::exception::js_call_catching(|| {
-            crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+            crate::closure::js_native_call_value(
+                method.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
         });
         super::js_implicit_this_set(previous.get_nanbox_f64());
         return match result {
@@ -649,7 +654,12 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     let method = scope.root_nanbox_f64(method);
     super::js_implicit_this_set(iter.get_nanbox_f64());
     let result = crate::exception::js_call_catching(|| {
-        crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::js_native_call_value(
+            method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
     });
     super::js_implicit_this_set(previous.get_nanbox_f64());
     match result {

@@ -106,8 +106,10 @@ pub use jsvalue::{
 mod closure;
 mod transient_roots;
 pub use closure::{
-    alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64, JsClosure,
-    JsThis, RawClosureHeader,
+    alloc_closure, call_value, closure_capture_f64, register_closure_arity, register_closure_rest,
+    set_closure_capture_f64, JsBody, JsBody0, JsBody1, JsBody10, JsBody11, JsBody12, JsBody13,
+    JsBody14, JsBody15, JsBody16, JsBody2, JsBody3, JsBody4, JsBody5, JsBody6, JsBody7, JsBody8,
+    JsBody9, JsClosure, JsThis, RawClosureHeader,
 };
 pub use transient_roots::{TransientRootScope, TransientRootedAddr, TransientRootedNanbox};
 

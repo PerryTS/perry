@@ -718,11 +718,24 @@ fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
     let result = match args.len() {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        0 => js_closure_call0(closure, crate::closure::plain_call_receiver()),
+        1 => js_closure_call1(closure, crate::closure::plain_call_receiver(), a(0)),
+        2 => js_closure_call2(closure, crate::closure::plain_call_receiver(), a(0), a(1)),
+        3 => js_closure_call3(
+            closure,
+            crate::closure::plain_call_receiver(),
+            a(0),
+            a(1),
+            a(2),
+        ),
+        _ => crate::closure::js_closure_call4(
+            closure,
+            crate::closure::plain_call_receiver(),
+            a(0),
+            a(1),
+            a(2),
+            a(3),
+        ),
     };
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
@@ -1044,17 +1057,35 @@ fn dispatch_with_explicit_this(f: f64, this_arg: f64, args: &[f64]) -> f64 {
             .unwrap_or(f64::from_bits(TAG_UNDEFINED))
     };
     let result = match args.len() {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        4 => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        0 => js_closure_call0(closure, crate::closure::plain_call_receiver()),
+        1 => js_closure_call1(closure, crate::closure::plain_call_receiver(), a(0)),
+        2 => js_closure_call2(closure, crate::closure::plain_call_receiver(), a(0), a(1)),
+        3 => js_closure_call3(
+            closure,
+            crate::closure::plain_call_receiver(),
+            a(0),
+            a(1),
+            a(2),
+        ),
+        4 => crate::closure::js_closure_call4(
+            closure,
+            crate::closure::plain_call_receiver(),
+            a(0),
+            a(1),
+            a(2),
+            a(3),
+        ),
         // #10425: this arm was `_ => js_closure_call4(…)`, so every argument
         // after the fourth was dropped. The variadic entry point owns
         // arbitrary-arity dispatch, rest bundling included. (`call_trap`
         // above keeps its catch-all: a proxy trap receives at most four.)
         n => unsafe {
-            crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), n as i64)
+            crate::closure::js_closure_call_array(
+                closure as i64,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                n as i64,
+            )
         },
     };
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
@@ -1704,7 +1735,7 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let _ = js_closure_call1(closure, value);
+    let _ = js_closure_call1(closure, crate::closure::plain_call_receiver(), value);
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     true
 }

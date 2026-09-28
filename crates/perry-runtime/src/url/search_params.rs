@@ -939,7 +939,12 @@ pub extern "C" fn js_url_search_params_for_each(
         ];
         unsafe {
             crate::object::js_implicit_this_set(this_arg);
-            let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                callback,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
     }

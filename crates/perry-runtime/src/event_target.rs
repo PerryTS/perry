@@ -1023,7 +1023,12 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
             remove_event_listener_value_with_capture(target, event_name_ptr, callback, capture);
         }
         crate::object::js_implicit_this_set(target_value);
-        let _ = crate::closure::js_native_call_value(callable, args.as_ptr(), args.len());
+        let _ = crate::closure::js_native_call_value(
+            callable,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         if event_bool_field(event_ptr, b"_immediateStopped") {
             break;
@@ -1176,7 +1181,7 @@ extern "C" fn event_proto_prevent_default_thunk(
     _this: crate::closure::JsThis,
 ) -> f64 {
     event_proto_receiver();
-    event_prevent_default_thunk(closure, crate::closure::JsThis::current())
+    event_prevent_default_thunk(closure, crate::closure::body_call::current_this())
 }
 
 extern "C" fn event_proto_stop_propagation_thunk(
@@ -1184,7 +1189,7 @@ extern "C" fn event_proto_stop_propagation_thunk(
     _this: crate::closure::JsThis,
 ) -> f64 {
     event_proto_receiver();
-    event_stop_propagation_thunk(closure, crate::closure::JsThis::current())
+    event_stop_propagation_thunk(closure, crate::closure::body_call::current_this())
 }
 
 extern "C" fn event_proto_stop_immediate_propagation_thunk(
@@ -1192,7 +1197,7 @@ extern "C" fn event_proto_stop_immediate_propagation_thunk(
     _this: crate::closure::JsThis,
 ) -> f64 {
     event_proto_receiver();
-    event_stop_immediate_propagation_thunk(closure, crate::closure::JsThis::current())
+    event_stop_immediate_propagation_thunk(closure, crate::closure::body_call::current_this())
 }
 
 extern "C" fn event_proto_init_event_thunk(

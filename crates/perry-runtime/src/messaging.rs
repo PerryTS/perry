@@ -326,6 +326,7 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     unsafe {
         let _ = crate::closure::js_native_call_value(
             handler_h.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );

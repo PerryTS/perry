@@ -299,7 +299,12 @@ pub(crate) fn promise_hook_init(promise: *mut Promise, parent: *mut Promise) {
         } else {
             promise_value(parent_ptr)
         };
-        js_closure_call2(callback_handle.get_raw_const_ptr(), promise_arg, parent_arg);
+        js_closure_call2(
+            callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
+            promise_arg,
+            parent_arg,
+        );
     });
 }
 
@@ -316,6 +321,7 @@ pub(crate) fn promise_hook_before(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.before);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });
@@ -334,6 +340,7 @@ pub(crate) fn promise_hook_after(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.after);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });
@@ -352,6 +359,7 @@ pub(crate) fn promise_hook_settled(promise: *mut Promise) {
         let callback_handle = scope.root_raw_const_ptr(callbacks.settled);
         js_closure_call1(
             callback_handle.get_raw_const_ptr(),
+            crate::closure::plain_call_receiver(),
             promise_value(promise_handle.get_raw_mut_ptr::<Promise>()),
         );
     });

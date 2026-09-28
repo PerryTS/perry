@@ -85,6 +85,7 @@ pub(crate) fn js_module_instance_require(specifier: f64) -> f64 {
     crate::closure::js_closure_call1(
         crate::value::js_nanbox_get_pointer(require.get_nanbox_f64())
             as *const crate::closure::ClosureHeader,
+        crate::closure::plain_call_receiver(),
         specifier.get_nanbox_f64(),
     )
 }
@@ -1043,7 +1044,14 @@ extern "C" fn module_loader_hook_chain(
     let callback = js_closure_get_capture_f64(closure, 0);
     let next = js_closure_get_capture_f64(closure, 1);
     let args = [value, context, next];
-    unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn module_loader_hook_chain_function(callback: f64, next: f64, name: &str) -> f64 {
@@ -1130,6 +1138,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let resolved = unsafe {
         crate::closure::js_native_call_value(
             resolve_chain.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             resolve_args.as_ptr(),
             resolve_args.len(),
         )
@@ -1154,6 +1163,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     unsafe {
         crate::closure::js_native_call_value(
             load_chain.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             load_args.as_ptr(),
             load_args.len(),
         );

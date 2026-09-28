@@ -118,6 +118,7 @@ pub extern "C" fn js_array_reduce_right(
                 // Spec callback `(accumulator, currentValue, currentIndex, array)`.
                 let next = cb_site.call(
                     callback,
+                    crate::closure::plain_call_receiver(),
                     acc_rooted.get_nanbox_f64(),
                     element,
                     i as f64,

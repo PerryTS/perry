@@ -12,7 +12,7 @@ extern "C" fn test_closure_func(
 fn test_closure_basic() {
     let closure = js_closure_alloc(test_closure_func as *const u8, 1);
     js_closure_set_capture_f64(closure, 0, 21.0);
-    let result = js_closure_call0(closure);
+    let result = js_closure_call0(closure, crate::closure::plain_call_receiver());
     assert_eq!(result, 42.0);
 }
 

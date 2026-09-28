@@ -656,6 +656,7 @@ fn emit_enabled_trace_warning() {
     unsafe {
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             [warning.get_nanbox_f64()].as_ptr(),
             1,
         );

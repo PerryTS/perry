@@ -1577,7 +1577,12 @@ fn this_method_snapshot_survives_own_property_replacement() {
     });
 
     let result = unsafe {
-        crate::closure::js_native_call_value(captured.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::js_native_call_value(
+            captured.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
     };
     assert_eq!(
         result.to_bits(),
@@ -1643,7 +1648,14 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 
     let class_ref = super::native_module::class_constructor_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound = super::native_module::js_class_method_bind(class_ref, NAME.as_ptr(), NAME.len());
-    let result = unsafe { crate::closure::js_native_call_value(bound, std::ptr::null(), 0) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            bound,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(
         result, 42.0,
         "a method value extracted off the CONSTRUCTOR ref must dispatch the \
@@ -1655,8 +1667,14 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
     let proto_ref = super::native_module::class_prototype_ref_value(LEX_METHOD_TEST_CLASS_ID);
     let bound_proto =
         super::native_module::js_class_method_bind(proto_ref, NAME.as_ptr(), NAME.len());
-    let result_proto =
-        unsafe { crate::closure::js_native_call_value(bound_proto, std::ptr::null(), 0) };
+    let result_proto = unsafe {
+        crate::closure::js_native_call_value(
+            bound_proto,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(
         result_proto, 7.0,
         "a method value extracted off the PROTOTYPE ref must still dispatch \

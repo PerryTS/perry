@@ -666,7 +666,7 @@ macro_rules! rooted_callback {
             fn call(&self, $($arg: f64),+) -> f64 {
                 self.handle
                     .with_const_ptr::<crate::closure::ClosureHeader, _>(|cb| {
-                        self.site.call(cb, $($arg),+)
+                        self.site.call(cb, crate::closure::plain_call_receiver(), $($arg),+)
                     })
             }
         }

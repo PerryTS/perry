@@ -100,6 +100,7 @@ mod platform_impl {
             unsafe {
                 let _ = js_native_call_value(
                     cb.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
                     current_args.as_ptr(),
                     current_args.len(),
                 );
@@ -267,8 +268,12 @@ mod platform_impl {
         closure: *const ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
-        pty_method_resume(closure, crate::closure::JsThis::current());
-        pty_method_kill(closure, crate::closure::JsThis::current(), cp_undefined())
+        pty_method_resume(closure, crate::closure::body_call::current_this());
+        pty_method_kill(
+            closure,
+            crate::closure::body_call::current_this(),
+            cp_undefined(),
+        )
     }
 
     /// `kill([signal])` — node-pty defaults to `SIGHUP` (a hangup is how a

@@ -1030,8 +1030,14 @@ fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result =
-        unsafe { crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len()) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            then_fn,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }
@@ -1224,7 +1230,11 @@ extern "C" fn then_cap_fulfill_fn(
         (value, false)
     } else {
         match crate::exception::catch_js_throw(|| {
-            crate::closure::js_closure_call1(on_ful_cl, value)
+            crate::closure::js_closure_call1(
+                on_ful_cl,
+                crate::closure::plain_call_receiver(),
+                value,
+            )
         }) {
             Ok(ret) => (ret, false),
             Err(exc) => (exc, true),
@@ -1233,7 +1243,14 @@ extern "C" fn then_cap_fulfill_fn(
 
     let func = if threw { cap_reject } else { cap_resolve };
     let args = [result];
-    let _ = unsafe { js_native_call_value(func, args.as_ptr(), 1) };
+    let _ = unsafe {
+        js_native_call_value(
+            func,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     undef
 }
 
@@ -1259,7 +1276,11 @@ extern "C" fn then_cap_reject_fn(
         (reason, true) // passthrough rejection
     } else {
         match crate::exception::catch_js_throw(|| {
-            crate::closure::js_closure_call1(on_rej_cl, reason)
+            crate::closure::js_closure_call1(
+                on_rej_cl,
+                crate::closure::plain_call_receiver(),
+                reason,
+            )
         }) {
             Ok(ret) => (ret, false),
             Err(exc) => (exc, true),
@@ -1268,7 +1289,14 @@ extern "C" fn then_cap_reject_fn(
 
     let func = if threw { cap_reject } else { cap_resolve };
     let args = [result];
-    let _ = unsafe { js_native_call_value(func, args.as_ptr(), 1) };
+    let _ = unsafe {
+        js_native_call_value(
+            func,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     undef
 }
 
@@ -1377,7 +1405,7 @@ extern "C" fn spec_then_finally_fn(
     let result = if on_finally_cl.is_null() {
         undef
     } else {
-        crate::closure::js_closure_call0(on_finally_cl)
+        crate::closure::js_closure_call0(on_finally_cl, crate::closure::plain_call_receiver())
     };
 
     // Build valueThunk = () => value
@@ -1414,7 +1442,7 @@ extern "C" fn spec_catch_finally_fn(
     let result = if on_finally_cl.is_null() {
         undef
     } else {
-        crate::closure::js_closure_call0(on_finally_cl)
+        crate::closure::js_closure_call0(on_finally_cl, crate::closure::plain_call_receiver())
     };
 
     // Build thrower = () => { throw reason; }
@@ -1666,17 +1694,18 @@ fn finally_wrapper_common(
     // report 1, failing every finally test that asserts a zero-arg invocation.
     // (Armed in a C trampoline frame, #9305; the rejection below runs after
     // the trap is popped, as before.)
-    let ret =
-        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call0(on_finally)) {
-            Ok(ret) => ret,
-            Err(exc) => {
-                // onFinally threw — reject `next` with the thrown value.
-                if !next.is_null() {
-                    js_promise_reject(next, exc);
-                }
-                return undef;
+    let ret = match crate::exception::catch_js_throw(|| {
+        crate::closure::js_closure_call0(on_finally, crate::closure::plain_call_receiver())
+    }) {
+        Ok(ret) => ret,
+        Err(exc) => {
+            // onFinally threw — reject `next` with the thrown value.
+            if !next.is_null() {
+                js_promise_reject(next, exc);
             }
-        };
+            return undef;
+        }
+    };
 
     // If onFinally returned a Promise/thenable, adopt it: wait for it before
     // settling `next`. `js_assimilate_thenable` returns a native Promise for

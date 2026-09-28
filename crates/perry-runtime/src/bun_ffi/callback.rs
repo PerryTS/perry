@@ -572,6 +572,7 @@ unsafe fn invoke_record(
     match crate::exception::js_call_catching(|| {
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             arguments.as_ptr(),
             arguments.len(),
         )

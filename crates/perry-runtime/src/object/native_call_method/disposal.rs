@@ -35,7 +35,12 @@ pub(super) unsafe fn try_symbol_dispose_dispatch(
             let prev_scope = crate::gc::RuntimeHandleScope::new();
             let prev_h =
                 prev_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
-            let result = crate::closure::js_native_call_value(method, args_ptr, args_len);
+            let result = crate::closure::js_native_call_value(
+                method,
+                crate::closure::plain_call_receiver(),
+                args_ptr,
+                args_len,
+            );
             IMPLICIT_THIS.with(|c| c.set(prev_h.get_nanbox_u64()));
             return Some(result);
         }

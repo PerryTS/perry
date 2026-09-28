@@ -1198,7 +1198,12 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                write,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     } else {
@@ -1214,7 +1219,12 @@ fn invoke_writable_writev(stream: f64, chunks: f64) {
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(writev, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                writev,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
@@ -1259,7 +1269,12 @@ fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback:
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(transform, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                transform,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return;
@@ -1390,7 +1405,12 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
         };
         let args = [arg];
         unsafe {
-            let _ = crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                callback,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
     if has_error {

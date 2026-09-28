@@ -807,7 +807,14 @@ pub extern "C" fn js_wasi_start(
         invalid_undefined_property("instance.exports._initialize", initialize)
     }
     WASI_EXIT_CODE.with(|slot| slot.set(None));
-    unsafe { crate::closure::js_native_call_value(start.get_nanbox_f64(), std::ptr::null(), 0) };
+    unsafe {
+        crate::closure::js_native_call_value(
+            start.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     if let Some(code) = WASI_EXIT_CODE.with(|slot| slot.take()) {
         return code as f64;
     }
@@ -854,7 +861,12 @@ pub extern "C" fn js_wasi_initialize(
     }
     if !is_undefined(initialize.get_nanbox_f64()) {
         unsafe {
-            crate::closure::js_native_call_value(initialize.get_nanbox_f64(), std::ptr::null(), 0)
+            crate::closure::js_native_call_value(
+                initialize.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
         };
     }
     undefined()

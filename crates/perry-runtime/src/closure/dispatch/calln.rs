@@ -1,6 +1,13 @@
-//! Per-arity `js_closure_callN` FFI entry points (0..=16) and the shared
-//! `dispatch_registered_call` / `dispatch_rest_or_declared_arity` routing
-//! helpers.
+//! Per-arity `js_closure_callN(closure, this, a0..)` FFI entry points
+//! (0..=16) and the shared `dispatch_registered_call` /
+//! `dispatch_rest_or_declared_arity` routing helpers.
+//!
+//! Stage 1 of this-as-a-parameter: bodies still read the implicit-`this`
+//! cell, and the routing below passes the cell's value as every body's
+//! receiver parameter. An entry therefore makes the cell hold the `this` it
+//! is handed for the duration of the call ([`with_receiver`]); a caller that
+//! passes the cell's current value (every runtime plain call,
+//! `plain_call_receiver()`) binds nothing.
 //!
 //! The hot-loop counterpart -- resolve a closure ONCE and call it directly for
 //! the rest of the loop -- lives in the sibling `direct` module (#8180). It
@@ -8,12 +15,34 @@
 //! exactly one consumer.
 
 use super::*;
+use crate::closure::JsThis;
 
-/// Call a closure with 0 arguments, returning f64
+/// Run `call` with the implicit-`this` cell holding `this`. When the cell
+/// already holds it — the common case — nothing is bound. Otherwise the cell
+/// is bound for the call and the displaced value restored after it, rooted
+/// across the call (an `ImplicitThisScope`), except for an arrow callee, whose
+/// `this` is lexical and reads neither the cell nor the parameter.
+#[inline(always)]
+pub(crate) fn with_receiver(
+    closure: *const ClosureHeader,
+    this: JsThis,
+    call: impl FnOnce() -> f64,
+) -> f64 {
+    if this == crate::closure::body_call::current_this()
+        || crate::closure::closure_is_arrow(closure)
+    {
+        return call();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _bound = crate::object::ImplicitThisScope::bind(&scope, this.as_f64());
+    call()
+}
+
+/// Call a closure with receiver `this` and no arguments.
 #[cfg(panic = "abort")]
 #[no_mangle]
-pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
-    js_closure_call0_impl(closure)
+pub extern "C" fn js_closure_call0(closure: *const ClosureHeader, this: JsThis) -> f64 {
+    with_receiver(closure, this, || js_closure_call0_impl(closure))
 }
 
 /// Test/debug builds use Rust unwinding for JS exceptions. Keep this entry
@@ -23,9 +52,39 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
 /// abort-on-unwind guard (#8479).
 #[cfg(not(panic = "abort"))]
 #[no_mangle]
-pub extern "C-unwind" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
-    js_closure_call0_impl(closure)
+pub extern "C-unwind" fn js_closure_call0(closure: *const ClosureHeader, this: JsThis) -> f64 {
+    with_receiver(closure, this, || js_closure_call0_impl(closure))
 }
+
+// #8479: NOT `C-unwind` (below). The runtime is built `panic=abort` and JS
+// throws travel as a raw Itanium `_Unwind_Exception` that must step THROUGH
+// these frames untouched (see `crate::eh`).
+macro_rules! closure_call_entry {
+    ($entry:ident, $cell:ident, $n:literal; $($a:ident),+) => {
+        #[doc = concat!("Call a closure with receiver `this` and ", stringify!($n), " argument(s).")]
+        #[no_mangle]
+        pub extern "C" fn $entry(closure: *const ClosureHeader, this: JsThis, $($a: f64),+) -> f64 {
+            with_receiver(closure, this, || $cell(closure, $($a),+))
+        }
+    };
+}
+
+closure_call_entry!(js_closure_call1, closure_call1_cell, 1; a0);
+closure_call_entry!(js_closure_call2, closure_call2_cell, 2; a0, a1);
+closure_call_entry!(js_closure_call3, closure_call3_cell, 3; a0, a1, a2);
+closure_call_entry!(js_closure_call4, closure_call4_cell, 4; a0, a1, a2, a3);
+closure_call_entry!(js_closure_call5, closure_call5_cell, 5; a0, a1, a2, a3, a4);
+closure_call_entry!(js_closure_call6, closure_call6_cell, 6; a0, a1, a2, a3, a4, a5);
+closure_call_entry!(js_closure_call7, closure_call7_cell, 7; a0, a1, a2, a3, a4, a5, a6);
+closure_call_entry!(js_closure_call8, closure_call8_cell, 8; a0, a1, a2, a3, a4, a5, a6, a7);
+closure_call_entry!(js_closure_call9, closure_call9_cell, 9; a0, a1, a2, a3, a4, a5, a6, a7, a8);
+closure_call_entry!(js_closure_call10, closure_call10_cell, 10; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9);
+closure_call_entry!(js_closure_call11, closure_call11_cell, 11; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+closure_call_entry!(js_closure_call12, closure_call12_cell, 12; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11);
+closure_call_entry!(js_closure_call13, closure_call13_cell, 13; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12);
+closure_call_entry!(js_closure_call14, closure_call14_cell, 14; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13);
+closure_call_entry!(js_closure_call15, closure_call15_cell, 15; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14);
+closure_call_entry!(js_closure_call16, closure_call16_cell, 16; a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15);
 
 #[inline(always)]
 fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
@@ -46,14 +105,13 @@ fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
             crate::closure::body_call::js_body_call!(
                 func_ptr,
                 closure,
-                crate::closure::JsThis::current()
+                crate::closure::body_call::current_this()
             )
         },
     }
 }
 
 /// Call a closure with 1 argument, returning f64
-#[no_mangle]
 // The one-argument value-call path can run arbitrary generated code and must
 // let a JS exception unwind to the generated caller's catch landing pad.
 // #8479: NOT `C-unwind`. The runtime is built `panic=abort` and JS throws
@@ -65,7 +123,8 @@ fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
 // throw trips ("panic in a function that cannot unwind"). #8416 introduced
 // the first two such guards here; #8464 added ~40 more and measurably
 // regressed main (+20 gap crashes, gc-stress) before being reverted.
-pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
+#[inline(always)]
+fn closure_call1_cell(closure: *const ClosureHeader, arg0: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0]);
@@ -75,7 +134,7 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
         func_ptr,
         arg0,
         resolve_strategy(func_ptr),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
     )
 }
 
@@ -102,68 +161,11 @@ fn dispatch_call1_resolved(
     }
 }
 
-/// Receiverless one-argument call. Arrow functions have lexical `this`, so
-/// resetting the dynamic `IMPLICIT_THIS` cell around them is unobservable and
-/// needlessly expensive in callback pipelines. Arrow-ness is already folded
-/// into the unified dispatch cache; non-arrows retain OrdinaryCallBindThis and
-/// root the displaced receiver across arbitrary generated code.
-#[no_mangle]
-// Same unwind contract as `js_closure_call1` above: keep `extern "C"`, not
-// `extern "C-unwind"`, so raw JS exceptions can traverse this bridge.
-#[cfg(panic = "abort")]
-pub extern "C" fn js_closure_call1_receiverless(closure: *const ClosureHeader, arg0: f64) -> f64 {
-    js_closure_call1_receiverless_impl(closure, arg0)
-}
-
-#[no_mangle]
-#[cfg(not(panic = "abort"))]
-pub extern "C-unwind" fn js_closure_call1_receiverless(
-    closure: *const ClosureHeader,
-    arg0: f64,
-) -> f64 {
-    js_closure_call1_receiverless_impl(closure, arg0)
-}
-
-#[inline(always)]
-fn js_closure_call1_receiverless_impl(closure: *const ClosureHeader, arg0: f64) -> f64 {
-    let func_ptr = get_valid_func_ptr(closure);
-    let strategy = (!func_ptr.is_null()).then(|| resolve_strategy(func_ptr));
-    if let Some(arrow_strategy) = strategy.filter(|strategy| strategy.is_arrow()) {
-        // An arrow's `this` is lexical: it reads neither the cell nor the
-        // parameter, so the receiver passed is unobservable.
-        return dispatch_call1_resolved(
-            closure,
-            func_ptr,
-            arg0,
-            arrow_strategy,
-            crate::closure::JsThis::UNDEFINED,
-        );
-    }
-
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let previous_this = crate::object::js_implicit_this_set(undefined);
-    let previous_this_handle = scope.root_nanbox_f64(previous_this);
-    let result = match strategy {
-        // The cell was bound to `undefined` just above.
-        Some(strategy) => dispatch_call1_resolved(
-            closure,
-            func_ptr,
-            arg0,
-            strategy,
-            crate::closure::JsThis::UNDEFINED,
-        ),
-        None => dispatch_proxy_callee_or_throw(closure, &[arg0]),
-    };
-    crate::object::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
-    result
-}
-
 /// Call a closure with 2 arguments, returning f64
-#[no_mangle]
 // A dynamically-dispatched closure can throw into a generated caller's catch
 // landing pad; this bridge is on Next's loadManifest/readFileSync path.
-pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
+#[inline(always)]
+fn closure_call2_cell(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1]);
@@ -181,7 +183,7 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
             crate::closure::body_call::js_body_call!(
                 func_ptr,
                 closure,
-                crate::closure::JsThis::current(),
+                crate::closure::body_call::current_this(),
                 arg0,
                 arg1
             )
@@ -190,13 +192,8 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
 }
 
 /// Call a closure with 3 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call3(
-    closure: *const ClosureHeader,
-    arg0: f64,
-    arg1: f64,
-    arg2: f64,
-) -> f64 {
+#[inline(always)]
+fn closure_call3_cell(closure: *const ClosureHeader, arg0: f64, arg1: f64, arg2: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2]);
@@ -216,7 +213,7 @@ pub extern "C" fn js_closure_call3(
             crate::closure::body_call::js_body_call!(
                 func_ptr,
                 closure,
-                crate::closure::JsThis::current(),
+                crate::closure::body_call::current_this(),
                 arg0,
                 arg1,
                 arg2
@@ -226,8 +223,8 @@ pub extern "C" fn js_closure_call3(
 }
 
 /// Call a closure with 4 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call4(
+#[inline(always)]
+fn closure_call4_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -261,7 +258,7 @@ pub extern "C" fn js_closure_call4(
             crate::closure::body_call::js_body_call!(
                 func_ptr,
                 closure,
-                crate::closure::JsThis::current(),
+                crate::closure::body_call::current_this(),
                 arg0,
                 arg1,
                 arg2,
@@ -272,8 +269,8 @@ pub extern "C" fn js_closure_call4(
 }
 
 /// Call a closure with 5 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call5(
+#[inline(always)]
+fn closure_call5_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -313,7 +310,7 @@ pub extern "C" fn js_closure_call5(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -324,8 +321,8 @@ pub extern "C" fn js_closure_call5(
 }
 
 /// Call a closure with 6 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call6(
+#[inline(always)]
+fn closure_call6_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -371,7 +368,7 @@ pub extern "C" fn js_closure_call6(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -416,8 +413,8 @@ pub(crate) fn dispatch_rest_or_declared_arity(
 }
 
 /// Call a closure with 7 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call7(
+#[inline(always)]
+fn closure_call7_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -446,7 +443,7 @@ pub extern "C" fn js_closure_call7(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -459,8 +456,8 @@ pub extern "C" fn js_closure_call7(
 }
 
 /// Call a closure with 8 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call8(
+#[inline(always)]
+fn closure_call8_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -490,7 +487,7 @@ pub extern "C" fn js_closure_call8(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -504,8 +501,8 @@ pub extern "C" fn js_closure_call8(
 }
 
 /// Call a closure with 9 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call9(
+#[inline(always)]
+fn closure_call9_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -536,7 +533,7 @@ pub extern "C" fn js_closure_call9(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -551,8 +548,8 @@ pub extern "C" fn js_closure_call9(
 }
 
 /// Call a closure with 10 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call10(
+#[inline(always)]
+fn closure_call10_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -584,7 +581,7 @@ pub extern "C" fn js_closure_call10(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -600,8 +597,8 @@ pub extern "C" fn js_closure_call10(
 }
 
 /// Call a closure with 11 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call11(
+#[inline(always)]
+fn closure_call11_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -640,7 +637,7 @@ pub extern "C" fn js_closure_call11(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -657,8 +654,8 @@ pub extern "C" fn js_closure_call11(
 }
 
 /// Call a closure with 12 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call12(
+#[inline(always)]
+fn closure_call12_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -698,7 +695,7 @@ pub extern "C" fn js_closure_call12(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -716,8 +713,8 @@ pub extern "C" fn js_closure_call12(
 }
 
 /// Call a closure with 13 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call13(
+#[inline(always)]
+fn closure_call13_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -758,7 +755,7 @@ pub extern "C" fn js_closure_call13(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -777,8 +774,8 @@ pub extern "C" fn js_closure_call13(
 }
 
 /// Call a closure with 14 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call14(
+#[inline(always)]
+fn closure_call14_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -821,7 +818,7 @@ pub extern "C" fn js_closure_call14(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -841,8 +838,8 @@ pub extern "C" fn js_closure_call14(
 }
 
 /// Call a closure with 15 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call15(
+#[inline(always)]
+fn closure_call15_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -888,7 +885,7 @@ pub extern "C" fn js_closure_call15(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -909,8 +906,8 @@ pub extern "C" fn js_closure_call15(
 }
 
 /// Call a closure with 16 arguments, returning f64
-#[no_mangle]
-pub extern "C" fn js_closure_call16(
+#[inline(always)]
+fn closure_call16_cell(
     closure: *const ClosureHeader,
     arg0: f64,
     arg1: f64,
@@ -957,7 +954,7 @@ pub extern "C" fn js_closure_call16(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             arg0,
             arg1,
             arg2,
@@ -978,38 +975,6 @@ pub extern "C" fn js_closure_call16(
     }
 }
 
-#[cfg(test)]
-mod receiverless_tests {
-    use super::*;
-
-    extern "C" fn observe_dynamic_this(
-        _: *const ClosureHeader,
-        _this: crate::closure::JsThis,
-        _: f64,
-    ) -> f64 {
-        crate::object::js_implicit_this_get()
-    }
-
-    #[test]
-    fn one_arg_receiverless_dispatch_only_resets_this_for_non_arrows() {
-        let body = observe_dynamic_this as *const u8;
-        let closure = crate::closure::js_closure_alloc(body, 0);
-        crate::closure::js_register_closure_arity(body, 1);
-
-        let sentinel = 42.0;
-        let original = crate::object::js_implicit_this_set(sentinel);
-        let regular_result = js_closure_call1_receiverless(closure, 0.0);
-        assert_eq!(regular_result.to_bits(), crate::value::TAG_UNDEFINED);
-        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
-
-        crate::closure::js_register_closure_arrow_function(body);
-        let arrow_result = js_closure_call1_receiverless(closure, 0.0);
-        assert_eq!(arrow_result, sentinel);
-        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
-        crate::object::js_implicit_this_set(original);
-    }
-}
-
 /// `perry_abi::JS_CLOSURE_CALL_ENTRIES` is what codegen DECLARES; these are
 /// the functions it links to. Each entry must name the function taking
 /// exactly its index's JS argument count (the coercion below fails to compile
@@ -1018,12 +983,11 @@ mod receiverless_tests {
 mod abi_table_tests {
     use super::*;
 
-    // An ENTRY takes the callee and the JS arguments; unlike a body it does
-    // not take the receiver (it reads it from the implicit-`this` cell).
+    // An ENTRY takes the callee, the receiver and the JS arguments.
     macro_rules! entry {
         (@f64 $x:tt) => { f64 };
         ($f:ident; $($x:tt),*) => {{
-            let f: extern "C" fn(*const ClosureHeader $(, entry!(@f64 $x))*) -> f64 = $f;
+            let f: extern "C" fn(*const ClosureHeader, JsThis $(, entry!(@f64 $x))*) -> f64 = $f;
             (stringify!($f), f as *const u8)
         }};
     }
@@ -1032,7 +996,7 @@ mod abi_table_tests {
     fn closure_call_entries_match_the_abi_table() {
         // `js_closure_call0` is `extern "C-unwind"` in unwinding (test) builds.
         let call0 = {
-            let f: extern "C-unwind" fn(*const ClosureHeader) -> f64 = js_closure_call0;
+            let f: extern "C-unwind" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
             ("js_closure_call0", f as *const u8)
         };
         let real = [
@@ -1066,5 +1030,38 @@ mod abi_table_tests {
                 "{name} is a JS-call entry but not in JS_CALL_ENTRIES"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod receiver_binding_tests {
+    use super::*;
+
+    extern "C" fn observe(_: *const ClosureHeader, this: JsThis, _: f64) -> f64 {
+        // Stage 1: the body reads the cell; the parameter must agree with it.
+        let cell = crate::object::js_implicit_this_get();
+        assert_eq!(cell.to_bits(), this.bits(), "parameter and cell disagree");
+        cell
+    }
+
+    #[test]
+    fn an_entry_binds_the_cell_to_the_receiver_it_is_handed_and_restores_it() {
+        let body = observe as *const u8;
+        let closure = crate::closure::js_closure_alloc(body, 0);
+        crate::closure::js_register_closure_arity(body, 1);
+
+        let sentinel = 42.0;
+        let original = crate::object::js_implicit_this_set(sentinel);
+        // A plain runtime call passes the cell: the body sees it unchanged.
+        let plain = js_closure_call1(closure, crate::closure::plain_call_receiver(), 0.0);
+        assert_eq!(plain, sentinel);
+        // An explicit receiver is what the body sees, and the cell comes back.
+        let explicit = js_closure_call1(closure, JsThis::from_f64(7.0), 0.0);
+        assert_eq!(explicit, 7.0);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+        let undefined = js_closure_call1(closure, JsThis::UNDEFINED, 0.0);
+        assert_eq!(undefined.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+        crate::object::js_implicit_this_set(original);
     }
 }

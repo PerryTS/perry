@@ -969,9 +969,9 @@ mod fifo_pending_tests {
         js_closure_set_capture_f64(data_cb, 0, iterator);
 
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::current(), 1.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::body_call::current_this(), 1.0);
         assert!(readable_is_flowing(stream));
-        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::current(), 2.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::body_call::current_this(), 2.0);
         assert!(readable_is_paused(stream));
 
         assert_eq!(
@@ -1043,8 +1043,11 @@ mod fifo_pending_tests {
         let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
         js_closure_set_capture_f64(rejected, 0, iterator);
 
-        let result =
-            ns_readable_source_iterator_rejected(rejected, crate::closure::JsThis::current(), 7.0);
+        let result = ns_readable_source_iterator_rejected(
+            rejected,
+            crate::closure::body_call::current_this(),
+            7.0,
+        );
         let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
         assert!(iterator_is_done(iterator));
         assert!(stream_destroyed(stream));

@@ -238,7 +238,7 @@ fn invoke_typed_array_accessor_getter(get_bits: u64, receiver: f64) -> f64 {
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
+    let result = crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
@@ -250,7 +250,7 @@ fn invoke_typed_array_accessor_setter(set_bits: u64, receiver: f64, value: f64) 
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    crate::closure::js_closure_call1(closure, value);
+    crate::closure::js_closure_call1(closure, crate::closure::plain_call_receiver(), value);
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
 }
 
@@ -1139,7 +1139,12 @@ pub(crate) unsafe fn typed_array_own_to_primitive_number(owner: usize, value: f6
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(mbits, value);
-        let r = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+        let r = crate::closure::js_native_call_value(
+            f64::from_bits(bound),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
         let rb = r.to_bits();
         let is_object = (rb >> 48) == 0x7FFD
             && crate::symbol::js_is_symbol(r) == 0

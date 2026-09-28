@@ -155,7 +155,12 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
         let next_h = scope.root_nanbox_f64(f64::from_bits(next_val.bits()));
         let prev_this_h =
             scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_h.get_nanbox_f64()));
-        let r = crate::closure::js_native_call_value(next_h.get_nanbox_f64(), std::ptr::null(), 0);
+        let r = crate::closure::js_native_call_value(
+            next_h.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
         crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
         r
     } else {
@@ -271,7 +276,7 @@ unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
             let mapped = if cb.is_null() {
                 v
             } else {
-                js_closure_call1(cb, v)
+                js_closure_call1(cb, crate::closure::plain_call_receiver(), v)
             };
             make_iter_result(JSValue::from_bits(mapped.to_bits()), false)
         }
@@ -285,7 +290,11 @@ unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
                 let keep = if cb.is_null() {
                     true
                 } else {
-                    crate::value::js_is_truthy(js_closure_call1(cb, v)) != 0
+                    crate::value::js_is_truthy(js_closure_call1(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        v,
+                    )) != 0
                 };
                 if keep {
                     return make_iter_result(JSValue::from_bits(v.to_bits()), false);
@@ -340,7 +349,7 @@ unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
                 let produced = if cb.is_null() {
                     v
                 } else {
-                    js_closure_call1(cb, v)
+                    js_closure_call1(cb, crate::closure::plain_call_receiver(), v)
                 };
                 // Per spec each produced value must itself be iterable; wrap it.
                 let inner_iter = get_iterator(produced);
@@ -528,7 +537,12 @@ pub unsafe fn dispatch_iterator_helper_method(
                     break;
                 }
                 if !cb.is_null() {
-                    js_closure_call2(cb, v, f64::from_bits(JSValue::number(i).bits()));
+                    js_closure_call2(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        v,
+                        f64::from_bits(JSValue::number(i).bits()),
+                    );
                 }
                 i += 1.0;
             }
@@ -550,7 +564,7 @@ pub unsafe fn dispatch_iterator_helper_method(
                     continue;
                 }
                 if !cb.is_null() {
-                    acc = js_closure_call2(cb, acc, v);
+                    acc = js_closure_call2(cb, crate::closure::plain_call_receiver(), acc, v);
                 }
             }
             if !started {
@@ -567,7 +581,13 @@ pub unsafe fn dispatch_iterator_helper_method(
                 if done {
                     return f64::from_bits(crate::value::TAG_FALSE);
                 }
-                if !cb.is_null() && crate::value::js_is_truthy(js_closure_call1(cb, v)) != 0 {
+                if !cb.is_null()
+                    && crate::value::js_is_truthy(js_closure_call1(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        v,
+                    )) != 0
+                {
                     return f64::from_bits(TAG_TRUE);
                 }
             }
@@ -579,7 +599,13 @@ pub unsafe fn dispatch_iterator_helper_method(
                 if done {
                     return f64::from_bits(TAG_TRUE);
                 }
-                if !cb.is_null() && crate::value::js_is_truthy(js_closure_call1(cb, v)) == 0 {
+                if !cb.is_null()
+                    && crate::value::js_is_truthy(js_closure_call1(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        v,
+                    )) == 0
+                {
                     return f64::from_bits(crate::value::TAG_FALSE);
                 }
             }
@@ -591,7 +617,13 @@ pub unsafe fn dispatch_iterator_helper_method(
                 if done {
                     return f64::from_bits(TAG_UNDEFINED);
                 }
-                if !cb.is_null() && crate::value::js_is_truthy(js_closure_call1(cb, v)) != 0 {
+                if !cb.is_null()
+                    && crate::value::js_is_truthy(js_closure_call1(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        v,
+                    )) != 0
+                {
                     return f64::from_bits(v.to_bits());
                 }
             }

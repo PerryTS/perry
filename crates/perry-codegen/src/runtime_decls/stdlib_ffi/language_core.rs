@@ -133,11 +133,13 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
     // to I64 in the integer register class) so call sites can pass an alloca
     // directly. See `try_lower_closure_call_fallthrough` (#3527).
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, PTR, I64]);
+    // V8's callback trampoline (`func(env, args, len)`): its address only.
+    module.declare_function("js_closure_v8_callback", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
-        &[DOUBLE, PTR, I64, I64],
+        &[DOUBLE, I64, PTR, I64, I64],
     );
     module.declare_function("js_create_callback", DOUBLE, &[I64, I64, I64]);
 
@@ -447,7 +449,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, I64, I64, I64],
     );
-    module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64, I64]);
     module.declare_function("js_new_from_handle", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_instance", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_runtime_init", VOID, &[]);

@@ -500,7 +500,11 @@ unsafe fn server_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             if let Some(callback) = args.first().copied().map(unbox_to_i64) {
                 if callback >= 0x1000 {
                     let cb = JsClosure::from_raw(callback as *const RawClosureHeader);
-                    let _ = cb.call2(null(), crate::js_net_server_get_connections(handle));
+                    let _ = cb.call2(
+                        perry_ffi::JsThis::UNDEFINED,
+                        null(),
+                        crate::js_net_server_get_connections(handle),
+                    );
                 }
             }
             undefined()

@@ -167,7 +167,10 @@ fn assert_callable_closure(bits: u64) -> usize {
     assert_eq!(bits & TAG_MASK, POINTER_TAG);
     let ptr = (bits & POINTER_MASK) as usize;
     assert_eq!(
-        crate::closure::js_closure_call0(ptr as *const crate::closure::ClosureHeader),
+        crate::closure::js_closure_call0(
+            ptr as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
+        ),
         0.0
     );
     ptr

@@ -404,7 +404,12 @@ extern "C" fn outer_thunk(
                 };
                 let n = js_array_length(arr) as usize;
                 unsafe {
-                    crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
+                    crate::closure::js_native_call_value(
+                        fn_handle.get_nanbox_f64(),
+                        crate::closure::plain_call_receiver(),
+                        data,
+                        n,
+                    );
                 }
             } else {
                 // #7341: `js_get_exception` can allocate, so pair it with the
@@ -533,7 +538,12 @@ extern "C" fn gkp_outer_thunk(
                 };
                 let n = js_array_length(arr) as usize;
                 unsafe {
-                    crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
+                    crate::closure::js_native_call_value(
+                        fn_handle.get_nanbox_f64(),
+                        crate::closure::plain_call_receiver(),
+                        data,
+                        n,
+                    );
                 }
             } else {
                 // #7341: `js_get_exception` can allocate, so pair it with the
@@ -665,7 +675,14 @@ extern "C" fn deprecate_outer_thunk(
         }
     };
 
-    unsafe { crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), rest_data, rest_len) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            fn_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            rest_data,
+            rest_len,
+        )
+    }
 }
 
 /// Outer callbackify body: `(closure, rest_array_value) -> undefined`.
@@ -724,7 +741,12 @@ extern "C" fn callbackify_outer_thunk(
     let returned = unsafe {
         let arr = original_args_handle.get_raw_const_ptr::<ArrayHeader>();
         let data = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
-        crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
+        crate::closure::js_native_call_value(
+            fn_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            data,
+            original_arg_len,
+        )
     };
     // #9539: `returned` is a heap value that outlives two closure allocations,
     // an interned-key lookup and `js_assimilate_thenable` (which runs the
@@ -800,6 +822,7 @@ extern "C" fn callbackify_outer_thunk(
         unsafe {
             crate::closure::js_native_call_value(
                 then_handle.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
                 args.as_ptr(),
                 args.len(),
             );
@@ -874,7 +897,12 @@ extern "C" fn callbackify_fulfilled_thunk(
     let callback_value = js_closure_get_capture_f64(closure, 0);
     let args = [TAG_NULL_F64, value];
     unsafe {
-        crate::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+        crate::closure::js_native_call_value(
+            callback_value,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
     TAG_UNDEFINED_F64
 }
@@ -900,7 +928,12 @@ fn call_callback_rejected(callback_value: f64, reason: f64) {
     };
     let args = [err];
     unsafe {
-        crate::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+        crate::closure::js_native_call_value(
+            callback_value,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
 }
 

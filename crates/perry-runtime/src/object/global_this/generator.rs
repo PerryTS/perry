@@ -390,7 +390,11 @@ fn generator_proto_method(method: &[u8], arg: f64, is_async: bool) -> f64 {
         return bad_receiver(method);
     }
     match own_method(method) {
-        Some(own_closure) => crate::closure::js_closure_call1(own_closure, arg),
+        Some(own_closure) => crate::closure::js_closure_call1(
+            own_closure,
+            crate::closure::plain_call_receiver(),
+            arg,
+        ),
         None => bad_receiver(method),
     }
 }

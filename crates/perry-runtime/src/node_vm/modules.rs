@@ -80,7 +80,12 @@ fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
             object_value,
         )));
         let outcome = crate::exception::js_call_catching(|| unsafe {
-            crate::closure::js_native_call_value(callback.get_nanbox_f64(), std::ptr::null(), 0)
+            crate::closure::js_native_call_value(
+                callback.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
         });
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         if let Err(error) = outcome {
@@ -443,7 +448,12 @@ pub extern "C" fn js_vm_module_link(module_value: f64, linker: f64) -> f64 {
             module_request_extra(),
         ];
         let dep = unsafe {
-            crate::closure::js_native_call_value(linker.get_nanbox_f64(), args.as_ptr(), args.len())
+            crate::closure::js_native_call_value(
+                linker.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            )
         };
         linked = crate::array::js_array_push_f64(linked, dep);
     }

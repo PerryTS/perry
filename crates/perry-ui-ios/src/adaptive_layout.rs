@@ -25,7 +25,7 @@ extern "C" {
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
 }
@@ -308,7 +308,11 @@ unsafe fn invoke_listener(callback: f64, snapshot: &LayoutSnapshot) {
         return;
     }
     js_run_stdlib_pump();
-    js_closure_call1(closure, js_nanbox_pointer(object));
+    js_closure_call1(
+        closure,
+        perry_ffi::JsThis::UNDEFINED,
+        js_nanbox_pointer(object),
+    );
     js_promise_run_microtasks();
 }
 

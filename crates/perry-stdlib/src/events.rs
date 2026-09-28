@@ -473,6 +473,7 @@ impl EventEmitterHandle {
             let closure_ptr = handle.get_heap_word_u64() as *const ClosureHeader;
             js_closure_call2(
                 closure_ptr,
+                perry_runtime::closure::plain_call_receiver(),
                 event_arg_h.get_nanbox_f64(),
                 listener_arg_h.get_nanbox_f64(),
             );
@@ -853,9 +854,13 @@ unsafe fn dispatch_error_monitor(emitter: &mut EventEmitterHandle, arg: Option<f
     for handle in &callback_handles {
         let closure_ptr = handle.get_heap_word_u64() as *const ClosureHeader;
         if let Some(arg_handle) = &arg_handle {
-            js_closure_call1(closure_ptr, arg_handle.get_nanbox_f64());
+            js_closure_call1(
+                closure_ptr,
+                perry_runtime::closure::plain_call_receiver(),
+                arg_handle.get_nanbox_f64(),
+            );
         } else {
-            js_closure_call0(closure_ptr);
+            js_closure_call0(closure_ptr, perry_runtime::closure::plain_call_receiver());
         }
     }
 }
@@ -1047,8 +1052,12 @@ unsafe fn call_emitter_listener(
     let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
     let previous_this =
         this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(receiver));
-    let result =
-        perry_runtime::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
+    let result = perry_runtime::closure::js_native_call_value(
+        callback_value,
+        perry_runtime::closure::plain_call_receiver(),
+        args.as_ptr(),
+        args.len(),
+    );
     perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     result
 }

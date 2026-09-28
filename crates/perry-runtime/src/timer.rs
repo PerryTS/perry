@@ -470,7 +470,12 @@ fn call_timer_callback(
     let prev_this =
         scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
     with_timer_uncaught_trap(|| unsafe {
-        crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), a.len() as i64);
+        crate::closure::js_closure_call_array(
+            cb as i64,
+            crate::closure::plain_call_receiver(),
+            a.as_ptr(),
+            a.len() as i64,
+        );
     });
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
@@ -507,7 +512,12 @@ fn call_timer_callback_entry(
         let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
         let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
         unsafe {
-            crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), a.len() as i64);
+            crate::closure::js_closure_call_array(
+                cb as i64,
+                crate::closure::plain_call_receiver(),
+                a.as_ptr(),
+                a.len() as i64,
+            );
         }
     });
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());

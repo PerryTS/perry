@@ -821,7 +821,12 @@ fn call_write_value(output: f64, text: &str) {
     if let Some(write) = object_field(output, b"write").filter(|v| is_callable(*v)) {
         let args = [chunk];
         unsafe {
-            let _ = js_native_call_value(write, args.as_ptr(), args.len());
+            let _ = js_native_call_value(
+                write,
+                perry_runtime::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         return;
     }
@@ -906,7 +911,10 @@ fn close_custom_interface(handle: i64) {
     })
     .flatten();
     if let Some(cb_i64) = cb {
-        js_closure_call0(cb_i64 as *const ClosureHeader);
+        js_closure_call0(
+            cb_i64 as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+        );
         // Release the slot once the close notification has an observer. If the
         // custom stream completed before user code could attach `rl.on`
         // listeners, retain the closed state temporarily; `js_readline_on`
@@ -958,7 +966,11 @@ fn append_custom_input(handle: i64, chunk: f64) {
             })
             .flatten();
             if let Some(cb_i64) = cb {
-                js_closure_call1(cb_i64 as *const ClosureHeader, callback_arg(&line));
+                js_closure_call1(
+                    cb_i64 as *const ClosureHeader,
+                    perry_runtime::closure::plain_call_receiver(),
+                    callback_arg(&line),
+                );
             } else {
                 let _ = with_interface_mut(handle, |state| {
                     state.buffered_lines.push_back(line);
@@ -1217,8 +1229,12 @@ fn attach_custom_input(handle: i64, input: f64) {
                 // slice from the handles every iteration.
                 let args = [event.get_nanbox_f64(), cb.get_nanbox_f64()];
                 unsafe {
-                    let _ =
-                        js_native_call_value(on_handle.get_nanbox_f64(), args.as_ptr(), args.len());
+                    let _ = js_native_call_value(
+                        on_handle.get_nanbox_f64(),
+                        perry_runtime::closure::plain_call_receiver(),
+                        args.as_ptr(),
+                        args.len(),
+                    );
                 }
             }
         }
@@ -1460,14 +1476,21 @@ pub extern "C" fn js_readline_on(
                 };
                 let cb = with_interface(handle, |state| state.line_callback).flatten();
                 if let Some(cb_i64) = cb {
-                    js_closure_call1(cb_i64 as *const ClosureHeader, callback_arg(&line));
+                    js_closure_call1(
+                        cb_i64 as *const ClosureHeader,
+                        perry_runtime::closure::plain_call_receiver(),
+                        callback_arg(&line),
+                    );
                 }
             }
         }
         if replay_close {
             let cb = with_interface(handle, |state| state.close_callback).flatten();
             if let Some(cb_i64) = cb {
-                js_closure_call0(cb_i64 as *const ClosureHeader);
+                js_closure_call0(
+                    cb_i64 as *const ClosureHeader,
+                    perry_runtime::closure::plain_call_receiver(),
+                );
             }
             READLINE_INTERFACES.with(|interfaces| {
                 if let Some(slot) = interfaces.borrow_mut().get_mut(handle as usize) {
@@ -1524,7 +1547,7 @@ pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
         let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
         if let Some(cb_i64) = cb {
             let closure = cb_i64 as *const ClosureHeader;
-            js_closure_call0(closure);
+            js_closure_call0(closure, perry_runtime::closure::plain_call_receiver());
         }
     }
     undefined()

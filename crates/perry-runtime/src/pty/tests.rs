@@ -47,7 +47,12 @@ fn callback(f: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
 
 fn call(target: f64, name: &[u8], args: &[f64]) -> f64 {
     unsafe {
-        crate::closure::js_native_call_value(cp_get_field(target, name), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            cp_get_field(target, name),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     }
 }
 
@@ -99,7 +104,12 @@ fn aliases_share_native_spawn_and_paused_output_precedes_exit() {
             opts.get_nanbox_f64(),
         ];
         let term = scope.root_nanbox_f64(unsafe {
-            crate::closure::js_native_call_value(spawn.get_nanbox_f64(), args.as_ptr(), args.len())
+            crate::closure::js_native_call_value(
+                spawn.get_nanbox_f64(),
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            )
         });
         assert!(cp_get_field(term.get_nanbox_f64(), b"pid") > 0.0);
         let handle = pty_handle_of(term.get_nanbox_f64()).unwrap();

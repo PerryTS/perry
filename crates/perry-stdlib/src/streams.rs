@@ -25,6 +25,7 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
+use perry_runtime::closure::JsThis;
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -53,11 +54,16 @@ extern "C" {
     #[link_name = "js_closure_alloc"]
     fn provider_js_closure_alloc(function: *const u8, capture_count: u32) -> *mut ClosureHeader;
     #[link_name = "js_closure_call0"]
-    fn provider_js_closure_call0(closure: *const ClosureHeader) -> f64;
+    fn provider_js_closure_call0(closure: *const ClosureHeader, this: JsThis) -> f64;
     #[link_name = "js_closure_call1"]
-    fn provider_js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64;
+    fn provider_js_closure_call1(closure: *const ClosureHeader, this: JsThis, arg0: f64) -> f64;
     #[link_name = "js_closure_call2"]
-    fn provider_js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64;
+    fn provider_js_closure_call2(
+        closure: *const ClosureHeader,
+        this: JsThis,
+        arg0: f64,
+        arg1: f64,
+    ) -> f64;
     #[link_name = "js_closure_get_capture_ptr"]
     fn provider_js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64;
     #[link_name = "js_closure_set_capture_ptr"]
@@ -86,11 +92,14 @@ extern "C" {
     #[link_name = "js_native_call_value"]
     fn provider_js_native_call_value(
         function: f64,
+        this: JsThis,
         arguments: *const f64,
         argument_count: usize,
     ) -> f64;
     #[link_name = "js_implicit_this_set"]
     fn provider_js_implicit_this_set(value: f64) -> f64;
+    #[link_name = "js_implicit_this_get"]
+    fn provider_js_implicit_this_get() -> f64;
     #[link_name = "js_ffi_root_scope_enter"]
     fn provider_js_ffi_root_scope_enter() -> usize;
     #[link_name = "js_ffi_root_push_nanbox"]
@@ -173,16 +182,27 @@ fn js_closure_alloc(function: *const u8, capture_count: u32) -> *mut ClosureHead
     provider_call!(provider_js_closure_alloc(function, capture_count))
 }
 
+// Stage 1 of this-as-a-parameter: these plain calls run with whatever the
+// implicit-`this` cell holds, which is the receiver they pass.
 fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
-    provider_call!(provider_js_closure_call0(closure))
+    provider_call!(provider_js_closure_call0(closure, plain_call_receiver()))
 }
 
 fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
-    provider_call!(provider_js_closure_call1(closure, arg0))
+    provider_call!(provider_js_closure_call1(
+        closure,
+        plain_call_receiver(),
+        arg0
+    ))
 }
 
 fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
-    provider_call!(provider_js_closure_call2(closure, arg0, arg1))
+    provider_call!(provider_js_closure_call2(
+        closure,
+        plain_call_receiver(),
+        arg0,
+        arg1
+    ))
 }
 
 fn js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64 {
@@ -224,9 +244,17 @@ fn js_promise_mark_internally_handled(promise: *mut Promise) {
 fn js_native_call_value(function: f64, arguments: *const f64, argument_count: usize) -> f64 {
     provider_call!(provider_js_native_call_value(
         function,
+        plain_call_receiver(),
         arguments,
         argument_count
     ))
+}
+
+/// The receiver of a plain call in stage 1 of this-as-a-parameter: the
+/// implicit-`this` cell's current value, read through the provider's C ABI
+/// like every other runtime access in this file.
+fn plain_call_receiver() -> JsThis {
+    JsThis(provider_call!(provider_js_implicit_this_get()).to_bits())
 }
 
 fn js_implicit_this_set(value: f64) -> f64 {

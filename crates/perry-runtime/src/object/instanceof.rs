@@ -576,7 +576,14 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
         throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
     }
     let args = [value];
-    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+    let r = unsafe {
+        crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     HasInstanceOutcome::Result(if crate::value::js_is_truthy(r) != 0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {

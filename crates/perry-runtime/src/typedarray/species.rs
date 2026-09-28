@@ -112,6 +112,7 @@ pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Opti
         let bound = crate::closure::clone_closure_rebind_this(desc.get, owner_value);
         return Some(crate::closure::js_native_call_value(
             f64::from_bits(bound),
+            crate::closure::plain_call_receiver(),
             std::ptr::null(),
             0,
         ));

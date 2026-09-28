@@ -236,7 +236,12 @@ fn perex_dispatch_generic_prototype_test_coerces_before_getting_exec() {
     ));
     let args = [argument.get_nanbox_f64()];
     let result = crate::exception::catch_js_throw(|| unsafe {
-        crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1)
+        crate::closure::js_native_call_value(
+            method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
     });
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     assert_eq!(result.unwrap().to_bits(), crate::value::TAG_TRUE);

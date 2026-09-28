@@ -7,7 +7,7 @@ use jni::JValue;
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 extern "C" {
-    fn js_closure_call1(closure: f64, arg: f64) -> f64;
+    fn js_closure_call1(closure: f64, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_string_from_bytes(ptr: *const u8, len: usize) -> *const u8;
     fn js_nanbox_string(ptr: *const u8) -> f64;
 }
@@ -25,7 +25,7 @@ pub fn save_file_dialog(
         let s = unsafe { js_string_from_bytes(empty.as_ptr(), 0) };
         let val = unsafe { js_nanbox_string(s) };
         unsafe {
-            js_closure_call1(callback, val);
+            js_closure_call1(callback, perry_ffi::JsThis::UNDEFINED, val);
         }
     }
 }

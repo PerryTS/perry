@@ -470,7 +470,7 @@ pub(crate) fn utf8_emit_event0(id: usize, event: &str) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
 }
@@ -480,7 +480,7 @@ fn utf8_emit_event1(id: usize, event: &str, arg: f64) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, arg);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
 }
@@ -504,7 +504,7 @@ fn utf8_add_listener(id: usize, event: &str, cb: f64, once: bool) {
     if let Some((_name, _arg)) = immediate {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
         return;
     }
@@ -802,7 +802,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, err);
+                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
             }
             return undefined_value();
         }
@@ -812,7 +812,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call0(cb);
+                crate::closure::js_closure_call0(cb, crate::closure::plain_call_receiver());
             }
         }
         return undefined_value();
@@ -829,13 +829,13 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, err);
+                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
             }
         }
     } else if is_callable_value(callback) {
         let cb = extract_closure_ptr(callback);
         if !cb.is_null() {
-            crate::closure::js_closure_call0(cb);
+            crate::closure::js_closure_call0(cb, crate::closure::plain_call_receiver());
         }
     }
     undefined_value()

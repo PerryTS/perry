@@ -290,7 +290,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
+                cb_site.call(
+                    current_callback(),
+                    crate::closure::plain_call_receiver(),
+                    element,
+                    i as f64,
+                    self_value(&rooted),
+                );
             }
             return;
         }
@@ -302,7 +308,13 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
             // source array just like Node.
-            cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
+            cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                self_value(&rooted),
+            );
         }
     }
 }
@@ -393,7 +405,13 @@ pub extern "C" fn js_array_map(
             };
             // JS .map() callback receives (element, index, array).
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if is_plain {
                 let result = result_arr(&result_rooted);
                 // The head was just re-derived from `result_rooted` (a GC
@@ -485,7 +503,13 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+                let _ = cb_site.call(
+                    current_callback(),
+                    crate::closure::plain_call_receiver(),
+                    element,
+                    i as f64,
+                    rooted.receiver(),
+                );
             }
             return;
         }
@@ -493,7 +517,13 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let _ = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let _ = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
         }
     }
 }
@@ -568,7 +598,13 @@ pub extern "C" fn js_array_filter(
                 }
             };
             let callback = cb_handle.get_raw_const_ptr::<ClosureHeader>();
-            let keep = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let keep = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
                 if is_plain {
@@ -645,7 +681,13 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -715,7 +757,13 @@ pub extern "C" fn js_array_findIndex(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -769,7 +817,13 @@ pub extern "C" fn js_array_find_last(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -821,7 +875,13 @@ pub extern "C" fn js_array_find_last_index(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -938,7 +998,13 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
                     None => continue,
                 }
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -1014,7 +1080,7 @@ pub extern "C" fn js_array_some_captureless(
             };
             let result = callback(
                 std::ptr::null(),
-                crate::closure::JsThis::current(),
+                crate::closure::body_call::current_this(),
                 element,
                 i as f64,
                 array_receiver_value(arr),
@@ -1101,7 +1167,13 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
                     None => continue,
                 }
             };
-            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let result = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -1160,7 +1232,13 @@ pub extern "C" fn js_array_flatMap(
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let mapped = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(
+                current_callback(),
+                crate::closure::plain_call_receiver(),
+                element,
+                i as f64,
+                rooted.receiver(),
+            );
             // Root first: detecting a lazy array may materialize it, and a
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
@@ -1306,6 +1384,7 @@ pub extern "C" fn js_array_reduce(
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
             let next = cb_site.call(
                 current_callback(),
+                crate::closure::plain_call_receiver(),
                 acc_rooted.get_nanbox_f64(),
                 element,
                 i as f64,

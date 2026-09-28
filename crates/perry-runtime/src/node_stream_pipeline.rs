@@ -490,7 +490,12 @@ pub(super) fn call_pipeline_function_stage(
     }
     let args = [source.get_nanbox_f64()];
     let result = catch_pipeline_throw(|| unsafe {
-        crate::closure::js_native_call_value(stage.get_nanbox_f64(), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            stage.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     })?;
     settle_pipeline_value_with_origin(result)
 }

@@ -17,8 +17,12 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
-    fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32);
-    fn js_closure_call_array(closure: i64, args: *const f64, args_len: i64) -> f64;
+    fn js_closure_call_array(
+        closure: i64,
+        this: perry_ffi::JsThis,
+        args: *const f64,
+        args_len: i64,
+    ) -> f64;
     fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64);
 }
 
@@ -33,15 +37,15 @@ pub(crate) fn create_client_once_wrapper(
     if callback == 0 {
         return 0;
     }
-    CLIENT_ONCE_WRAPPER_REGISTERED.call_once(|| unsafe {
-        js_register_closure_rest(client_once_wrapper as *const u8, 0);
+    CLIENT_ONCE_WRAPPER_REGISTERED.call_once(|| {
+        perry_ffi::register_closure_rest(client_once_wrapper as perry_ffi::JsBody1, 0);
     });
     let scope = perry_ffi::TransientRootScope::enter();
     let callback = scope.root_addr(callback);
     let event = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
     ));
-    let wrapper = perry_ffi::alloc_closure(client_once_wrapper as *const u8, 5);
+    let wrapper = perry_ffi::alloc_closure(client_once_wrapper as perry_ffi::JsBody1, 5);
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
@@ -74,7 +78,7 @@ pub(crate) fn create_client_once_wrapper(
 
 extern "C" fn client_once_wrapper(
     closure: *const RawClosureHeader,
-    _this: perry_ffi::JsThis,
+    this: perry_ffi::JsThis,
     rest: f64,
 ) -> f64 {
     unsafe {
@@ -141,16 +145,16 @@ extern "C" fn client_once_wrapper(
         }
         let value = JsValue::from_bits(rest.to_bits());
         if !value.is_pointer() {
-            return js_closure_call_array(callback, std::ptr::null(), 0);
+            return js_closure_call_array(callback, this, std::ptr::null(), 0);
         }
         let array = value.as_pointer::<ArrayHeader>();
         if array.is_null() {
-            return js_closure_call_array(callback, std::ptr::null(), 0);
+            return js_closure_call_array(callback, this, std::ptr::null(), 0);
         }
         // The rest ABI creates this fresh, unshifted argument array for this
         // invocation; no JS callback has run since it was packed.
         let args = (array as *const u8).add(8) as *const f64;
-        js_closure_call_array(callback, args, (*array).length as i64)
+        js_closure_call_array(callback, this, args, (*array).length as i64)
     }
 }
 

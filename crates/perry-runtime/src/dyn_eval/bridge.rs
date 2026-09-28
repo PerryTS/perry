@@ -255,7 +255,14 @@ pub(crate) fn set_member(base: f64, name: &str, value: f64) {
 pub(crate) fn call_function(callee: f64, this: f64, args: &[f64]) -> f64 {
     let prev = crate::object::js_implicit_this_set(this);
     let prev_idx = root_push(prev);
-    let result = unsafe { crate::closure::js_native_call_value(callee, args.as_ptr(), args.len()) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            callee,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
     let result_idx = root_push(result);
     crate::object::js_implicit_this_set(root_get(prev_idx));
     let result = root_get(result_idx);

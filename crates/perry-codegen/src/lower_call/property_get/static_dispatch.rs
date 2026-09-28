@@ -338,11 +338,14 @@ pub(crate) fn try_lower_static_dispatch(
                     let ptr_i64 = ctx.block().ptrtoint(&ptr_reg, I64);
                     (ptr_i64, n.to_string())
                 };
+                // Stage 1: the call runs with the implicit-`this` cell's value.
+                let this_bits = crate::expr::body_call::current_this_bits(ctx);
                 return Ok(Some(ctx.block().call(
                     DOUBLE,
                     "js_native_call_value",
                     &[
                         (DOUBLE, &callee_val),
+                        (I64, &this_bits),
                         (I64, &args_ptr_i64),
                         (I64, &args_len),
                     ],

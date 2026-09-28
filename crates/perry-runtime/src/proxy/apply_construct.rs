@@ -127,7 +127,12 @@ fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
     // Keep the native argument owner above the trap. A JS longjmp would
     // otherwise bypass Vec::drop on every throwing forwarded proxy call.
     let result = crate::exception::catch_js_throw(|| unsafe {
-        crate::closure::js_native_call_value(target.get_nanbox_f64(), ptr, n)
+        crate::closure::js_native_call_value(
+            target.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            ptr,
+            n,
+        )
     });
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     drop(buf);
@@ -251,6 +256,7 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
     let result = crate::exception::catch_js_throw(|| {
         js_closure_call3(
             closure,
+            crate::closure::plain_call_receiver(),
             target.get_nanbox_f64(),
             this_arg.get_nanbox_f64(),
             args_array.get_nanbox_f64(),
@@ -372,6 +378,7 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         let result = crate::exception::catch_js_throw(|| {
             js_closure_call3(
                 closure,
+                crate::closure::plain_call_receiver(),
                 target.get_nanbox_f64(),
                 args_array.get_nanbox_f64(),
                 nt.get_nanbox_f64(),

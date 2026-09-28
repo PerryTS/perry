@@ -72,7 +72,12 @@ fn call_value(callback: f64, args: &[f64]) -> f64 {
     let args = scope.root_nanbox_f64_slice(args);
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     unsafe {
-        crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            callback.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     }
 }
 
@@ -90,7 +95,12 @@ fn call_method(receiver: f64, name: &[u8], args: &[f64]) -> f64 {
     ));
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     let result = unsafe {
-        crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     };
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     result
@@ -925,7 +935,11 @@ extern "C" fn bun_pty_subprocess_dispose(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = bun_pty_subprocess_kill(closure, crate::closure::JsThis::current(), cp_undefined());
+    let _ = bun_pty_subprocess_kill(
+        closure,
+        crate::closure::body_call::current_this(),
+        cp_undefined(),
+    );
     cp_undefined()
 }
 

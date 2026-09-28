@@ -137,7 +137,9 @@ pub(crate) extern "C" fn diag_channel_with_store_scope(
     for (store, transform) in stores {
         let context = match transform {
             StoreTransform::Callable(t) => {
-                match catch_js(|| js_closure_call1(closure_ptr(t), data)) {
+                match catch_js(|| {
+                    js_closure_call1(closure_ptr(t), crate::closure::plain_call_receiver(), data)
+                }) {
                     Ok(context) => context,
                     Err(err) => {
                         schedule_uncaught(err);

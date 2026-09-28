@@ -350,7 +350,12 @@ pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
         let cb = f64::from_bits(listener.callback_bits);
         js_implicit_this_set(cluster_default_value());
         unsafe {
-            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                cb,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         js_implicit_this_set(prev.get_nanbox_f64());
     }
@@ -820,7 +825,7 @@ extern "C" fn cluster_worker_send(
     }
     crate::child_process::cp_method_send(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         message,
         a2,
         a3,
@@ -839,7 +844,7 @@ extern "C" fn cluster_worker_kill(
     }
     let _ = crate::child_process::cp_method_kill(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         signal,
     );
     TAG_UNDEFINED_F64
@@ -850,7 +855,11 @@ extern "C" fn cluster_worker_destroy(
     _this: crate::closure::JsThis,
     signal: f64,
 ) -> f64 {
-    cluster_worker_kill(std::ptr::null(), crate::closure::JsThis::current(), signal)
+    cluster_worker_kill(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        signal,
+    )
 }
 
 extern "C" fn cluster_worker_disconnect(
@@ -864,7 +873,7 @@ extern "C" fn cluster_worker_disconnect(
     } else {
         let _ = crate::child_process::cp_method_disconnect(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
         );
     }
     worker
@@ -1360,7 +1369,12 @@ extern "C" fn cluster_callback_thunk(
 ) -> f64 {
     let callback = f64::from_bits(crate::closure::js_closure_get_capture_ptr(closure, 0) as u64);
     unsafe {
-        let _ = crate::closure::js_native_call_value(callback, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     TAG_UNDEFINED_F64
 }
@@ -1454,7 +1468,12 @@ fn invoke_disconnect_callbacks_if_idle() {
     for bits in callbacks {
         let callback = f64::from_bits(bits);
         unsafe {
-            let _ = crate::closure::js_native_call_value(callback, std::ptr::null(), 0);
+            let _ = crate::closure::js_native_call_value(
+                callback,
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            );
         }
     }
 }
@@ -1474,7 +1493,12 @@ fn call_worker_disconnect(worker: f64) {
     let disconnect = get_field(worker, b"disconnect");
     if is_closure_value(disconnect) {
         unsafe {
-            let _ = crate::closure::js_native_call_value(disconnect, std::ptr::null(), 0);
+            let _ = crate::closure::js_native_call_value(
+                disconnect,
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            );
         }
     }
 }
@@ -1533,7 +1557,12 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
         let cb = crate::array::js_array_get_f64(arr, i);
         js_implicit_this_set(target);
         unsafe {
-            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                cb,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;

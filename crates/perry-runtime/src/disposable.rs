@@ -108,7 +108,14 @@ extern "C" fn bound_dispose_thunk(
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(js_implicit_this_set(resource));
-    let result = unsafe { js_native_call_value(method, std::ptr::null(), 0) };
+    let result = unsafe {
+        js_native_call_value(
+            method,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
@@ -219,7 +226,7 @@ fn call_disposer(callable: f64) {
     if ptr.is_null() {
         return;
     }
-    js_closure_call0(ptr);
+    js_closure_call0(ptr, crate::closure::plain_call_receiver());
 }
 
 /// Run every registered disposer in LIFO order and clear the array. Marks the
@@ -258,7 +265,7 @@ extern "C" fn adopt_disposer_thunk(
     if cb.is_pointer() {
         let cb_ptr = js_nanbox_get_pointer(on_dispose) as *const ClosureHeader;
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, value);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), value);
         }
     }
     undefined()

@@ -117,17 +117,16 @@ extern "C" {
         on_fulfilled: *mut RawClosureHeader,
         on_rejected: *mut RawClosureHeader,
     ) -> *mut Promise;
-    // #1557: closure allocation hooks needed by events.on's queue-listener.
+    // #1557: closure capture hooks needed by events.on's queue-listener.
     // Mirrors perry-runtime::closure exports; declared here because perry-ffi
-    // doesn't yet expose them and perry-ext-events deliberately avoids a
-    // direct perry-runtime dep.
-    fn js_closure_alloc(fn_ptr: *const u8, capture_count: u32) -> *mut RawClosureHeader;
+    // doesn't expose them and perry-ext-events deliberately avoids a direct
+    // perry-runtime dep. Bodies are allocated through perry-ffi's typed
+    // `alloc_closure`.
     fn js_closure_set_capture_ptr(closure: *mut RawClosureHeader, slot: u32, ptr: i64);
     fn js_closure_get_capture_ptr(closure: *const RawClosureHeader, slot: u32) -> i64;
     fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
     fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64;
     fn js_promise_new() -> *mut Promise;
-    fn js_register_closure_arity(func_ptr: *const u8, arity: u32);
     fn js_closure_get_capture_f64(closure: *const RawClosureHeader, slot: u32) -> f64;
     fn js_closure_set_capture_f64(closure: *mut RawClosureHeader, slot: u32, value: f64);
     // #1557: AbortSignal listener attachment for events.addAbortListener.
@@ -178,9 +177,13 @@ extern "C" {
     fn js_abort_error_value() -> f64;
     fn js_throw(value: f64) -> !;
     fn js_domain_emit_error(handle: Handle, error: f64, emitter: f64, domain_thrown: bool) -> bool;
-    fn js_implicit_this_set(value: f64) -> f64;
     fn js_jsvalue_to_string(value: f64) -> *mut StringHeader;
-    fn js_native_call_value(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64;
+    fn js_native_call_value(
+        func_value: f64,
+        this: perry_ffi::JsThis,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
     fn js_value_is_promise(value: f64) -> i32;
     fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
     fn js_register_event_emitter_async_resource_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
@@ -204,7 +207,6 @@ extern "C" {
     // TypeError [ERR_INVALID_ARG_TYPE]. Centralized in perry-runtime so the
     // stdlib and ext-events EventEmitter implementations stay byte-identical.
     fn js_validate_event_listener(listener_bits: i64, name_ptr: *const u8, name_len: u32) -> i64;
-    fn js_register_closure_rest(fn_ptr: *const u8, fixed_arity: u32);
     fn js_async_resource_new(type_value: f64, options: f64) -> i64;
     fn js_async_resource_async_id(handle: i64) -> f64;
     fn js_async_resource_trigger_async_id(handle: i64) -> f64;
@@ -857,8 +859,8 @@ fn remove_listener_by_callback(emitter: &mut EventEmitterHandle, callback: i64) 
 static RAW_ONCE_WRAPPER_REST_REGISTERED: Once = Once::new();
 
 fn ensure_raw_once_wrapper_rest_registered() {
-    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| unsafe {
-        js_register_closure_rest(event_emitter_once_wrapper as *const u8, 0);
+    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| {
+        perry_ffi::register_closure_rest(event_emitter_once_wrapper as perry_ffi::JsBody1, 0);
     });
 }
 
@@ -873,7 +875,7 @@ unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i6
     }
     ensure_raw_once_wrapper_rest_registered();
 
-    let wrapper = js_closure_alloc(event_emitter_once_wrapper as *const u8, 4);
+    let wrapper = perry_ffi::alloc_closure(event_emitter_once_wrapper as perry_ffi::JsBody1, 4);
     let event_ptr = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
     js_closure_set_capture_ptr(wrapper, 0, handle);
     js_closure_set_capture_ptr(wrapper, 1, event_ptr as i64);
@@ -1150,14 +1152,13 @@ unsafe fn collect_emit_args(args_ptr: *const ArrayHeader) -> Vec<f64> {
 unsafe fn call_emitter_listener(handle: Handle, callback: i64, args: &[f64]) -> f64 {
     let receiver = nanbox_pointer_bits(handle);
     let callback_value = nanbox_pointer_bits(callback);
-    let previous_this = js_implicit_this_set(receiver);
-    let result = if args.is_empty() {
-        js_native_call_value(callback_value, std::ptr::null(), 0)
+    // A listener runs with the emitter as `this`.
+    let this = perry_ffi::JsThis::from_f64(receiver);
+    if args.is_empty() {
+        js_native_call_value(callback_value, this, std::ptr::null(), 0)
     } else {
-        js_native_call_value(callback_value, args.as_ptr(), args.len())
-    };
-    js_implicit_this_set(previous_this);
-    result
+        js_native_call_value(callback_value, this, args.as_ptr(), args.len())
+    }
 }
 
 extern "C" fn events_capture_rejection_handler(
@@ -1186,7 +1187,8 @@ unsafe fn capture_listener_rejection(handle: Handle, result: f64) {
     if promise.is_null() {
         return;
     }
-    let on_rejected = js_closure_alloc(events_capture_rejection_handler as *const u8, 1);
+    let on_rejected =
+        perry_ffi::alloc_closure(events_capture_rejection_handler as perry_ffi::JsBody1, 1);
     js_closure_set_capture_ptr(on_rejected, 0, handle);
     js_promise_then(promise, std::ptr::null_mut(), on_rejected);
 }
@@ -1811,7 +1813,8 @@ pub unsafe extern "C" fn js_events_once(
         };
         if let Some(signal) = signal {
             if let Some(signal_ptr) = object_ptr_from_value(signal) {
-                let abort_listener = js_closure_alloc(events_once_abort_listener as *const u8, 2);
+                let abort_listener =
+                    perry_ffi::alloc_closure(events_once_abort_listener as perry_ffi::JsBody0, 2);
                 js_closure_set_capture_ptr(abort_listener, 0, handle);
                 js_closure_set_capture_ptr(abort_listener, 1, raw as i64);
                 js_abort_signal_add_listener(
@@ -1835,7 +1838,8 @@ pub unsafe extern "C" fn js_events_once(
         if event_name_ptr.is_null() {
             return raw;
         }
-        let listener = js_closure_alloc(events_once_event_target_listener as *const u8, 3);
+        let listener =
+            perry_ffi::alloc_closure(events_once_event_target_listener as perry_ffi::JsBody1, 3);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, target as i64);
         js_closure_set_capture_ptr(listener, 2, event_name_ptr as i64);
@@ -1851,21 +1855,30 @@ pub unsafe extern "C" fn js_events_once(
         let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
             event_name_ptr as *mut StringHeader,
         )));
-        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
-        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        perry_ffi::register_closure_rest(
+            events_once_stream_resolve_listener as perry_ffi::JsBody1,
+            0,
+        );
+        let listener =
+            perry_ffi::alloc_closure(events_once_stream_resolve_listener as perry_ffi::JsBody1, 4);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
         let listener = scope.root_addr(listener as i64);
         if event_name != "error" {
-            js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
+            perry_ffi::register_closure_rest(
+                events_once_stream_reject_listener as perry_ffi::JsBody1,
+                0,
+            );
             let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
             let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
                 error_event_ptr as *mut StringHeader,
             )));
-            let reject_listener =
-                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = perry_ffi::alloc_closure(
+                events_once_stream_reject_listener as perry_ffi::JsBody1,
+                4,
+            );
             let reject_listener = scope.root_addr(reject_listener as i64);
             let event_name_ptr = (event.get().to_bits() & POINTER_MASK) as i64;
             js_closure_set_capture_ptr(
@@ -1913,9 +1926,16 @@ pub unsafe extern "C" fn js_events_once(
         let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
             event_name_ptr as *mut StringHeader,
         )));
-        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
-        js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
-        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        perry_ffi::register_closure_rest(
+            events_once_stream_resolve_listener as perry_ffi::JsBody1,
+            0,
+        );
+        perry_ffi::register_closure_rest(
+            events_once_stream_reject_listener as perry_ffi::JsBody1,
+            0,
+        );
+        let listener =
+            perry_ffi::alloc_closure(events_once_stream_resolve_listener as perry_ffi::JsBody1, 4);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
@@ -1926,8 +1946,10 @@ pub unsafe extern "C" fn js_events_once(
             let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
                 error_event_ptr as *mut StringHeader,
             )));
-            let reject_listener =
-                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = perry_ffi::alloc_closure(
+                events_once_stream_reject_listener as perry_ffi::JsBody1,
+                4,
+            );
             let reject_listener = scope.root_addr(reject_listener as i64);
             js_closure_set_capture_ptr(
                 reject_listener.get() as *mut RawClosureHeader,

@@ -86,7 +86,12 @@ pub(crate) fn call_one(
         } else {
             let args = [argument.get_nanbox_f64()];
             unsafe {
-                crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1)
+                crate::closure::js_native_call_value(
+                    method.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    1,
+                )
             }
         }
     });

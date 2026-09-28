@@ -710,8 +710,12 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
             unsafe {
-                let _ =
-                    crate::closure::js_native_call_value(final_callback, [cb_value].as_ptr(), 1);
+                let _ = crate::closure::js_native_call_value(
+                    final_callback,
+                    crate::closure::plain_call_receiver(),
+                    [cb_value].as_ptr(),
+                    1,
+                );
             }
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return;
@@ -1037,7 +1041,12 @@ pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> boo
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(flush, [cb_value].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            flush,
+            crate::closure::plain_call_receiver(),
+            [cb_value].as_ptr(),
+            1,
+        );
     }
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     true
@@ -1314,7 +1323,12 @@ pub(super) fn invoke_construct_callback(stream: f64, opts: f64) {
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(construct, [cb_value].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            construct,
+            crate::closure::plain_call_receiver(),
+            [cb_value].as_ptr(),
+            1,
+        );
     }
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
@@ -1349,7 +1363,12 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     unsafe {
-        let _ = crate::closure::js_native_call_value(read, [size].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            read,
+            crate::closure::plain_call_receiver(),
+            [size].as_ptr(),
+            1,
+        );
     }
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }

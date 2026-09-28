@@ -68,6 +68,7 @@ unsafe fn emit_warning(warning: f64) {
                 perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             perry_runtime::closure::js_native_call_value(
                 callback_h.get_nanbox_f64(),
+                perry_runtime::closure::plain_call_receiver(),
                 live_args.as_ptr(),
                 live_args.len(),
             );

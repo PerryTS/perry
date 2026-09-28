@@ -12,7 +12,7 @@ use crate::winui::backend::{self, RenderBackend};
 
 extern "C" {
     fn js_callback_timer_tick() -> i32;
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_frame_pump_default() -> i32;
     fn js_gc_step_us(budget_us: u64, out: *mut u8) -> u32;
     fn js_interval_timer_tick() -> i32;
@@ -89,7 +89,7 @@ fn invoke_app_callback(slot: &'static std::thread::LocalKey<RefCell<Option<usize
     let callback = app_callback(slot);
     if callback != 0 {
         unsafe {
-            js_closure_call0(callback as *const u8);
+            js_closure_call0(callback as *const u8, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }
@@ -102,7 +102,7 @@ fn invoke_timer_callback(key: usize) {
     let callback = timer_callback(key);
     if callback != 0 {
         unsafe {
-            js_closure_call0(callback as *const u8);
+            js_closure_call0(callback as *const u8, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }

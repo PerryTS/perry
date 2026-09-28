@@ -311,6 +311,7 @@ unsafe fn emit_domain_event(handle: Handle, event: &str, args: &[f64]) -> bool {
         perry_runtime::object::js_implicit_this_set(receiver);
         let _ = perry_runtime::closure::js_native_call_value(
             listener_handle.get_nanbox_f64(),
+            perry_runtime::closure::plain_call_receiver(),
             live_args.as_ptr(),
             live_args.len(),
         );
@@ -335,7 +336,12 @@ unsafe fn call_with_domain(handle: Handle, callback: f64, args: &[f64]) -> f64 {
     // Armed in a C trampoline frame (#9305); the error emit below runs
     // after the trap is popped, exactly as before.
     let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
-        perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len())
+        perry_runtime::closure::js_native_call_value(
+            callback,
+            perry_runtime::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     });
     exit_domain(handle);
     match outcome {

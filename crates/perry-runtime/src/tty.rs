@@ -1262,7 +1262,7 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
     let cb = RESIZE_CALLBACK.with(|c| *c.borrow());
     if let Some(cb_i64) = cb {
         let closure = cb_i64 as *const ClosureHeader;
-        js_closure_call0(closure);
+        js_closure_call0(closure, crate::closure::plain_call_receiver());
         return 1;
     }
     0

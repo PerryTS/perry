@@ -396,7 +396,7 @@ extern "C" fn events_on_async_iterator(
             packed.len() as u32,
         );
         let object_root = scope.root_nanbox(nanbox_pointer_bits(object as i64));
-        let next = js_closure_alloc(events_on_next as *const u8, 1);
+        let next = perry_ffi::alloc_closure(events_on_next as perry_ffi::JsBody0, 1);
         js_closure_set_capture_ptr(next, 0, (state_root.get().to_bits() & POINTER_MASK) as i64);
         let next_root = scope.root_addr(next as i64);
         js_object_set_field(
@@ -404,7 +404,7 @@ extern "C" fn events_on_async_iterator(
             0,
             JsValue::from_object_ptr(next_root.get() as *mut u8),
         );
-        let return_fn = js_closure_alloc(events_on_return as *const u8, 1);
+        let return_fn = perry_ffi::alloc_closure(events_on_return as perry_ffi::JsBody0, 1);
         js_closure_set_capture_ptr(
             return_fn,
             0,
@@ -420,7 +420,7 @@ extern "C" fn events_on_async_iterator(
         let iterator = object_root.get();
         let iterator_root = scope.root_nanbox(iterator);
         let symbol = js_symbol_well_known_async_iterator();
-        let self_fn = js_closure_alloc(events_on_iterator_self as *const u8, 1);
+        let self_fn = perry_ffi::alloc_closure(events_on_iterator_self as perry_ffi::JsBody0, 1);
         js_closure_set_capture_f64(self_fn, 0, iterator_root.get());
         js_object_set_symbol_property(
             iterator_root.get(),
@@ -438,11 +438,11 @@ pub(super) unsafe fn events_on_install_async_iterator(
     let scope = TransientRootScope::enter();
     let queue_root = scope.root_nanbox(nanbox_pointer_bits(queue as i64));
     let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
-    js_register_closure_arity(events_on_next as *const u8, 0);
-    js_register_closure_arity(events_on_return as *const u8, 0);
-    js_register_closure_arity(events_on_iterator_self as *const u8, 0);
-    js_register_closure_arity(events_on_async_iterator as *const u8, 0);
-    let closure = js_closure_alloc(events_on_async_iterator as *const u8, 1);
+    perry_ffi::register_closure_arity(events_on_next as perry_ffi::JsBody0, 0);
+    perry_ffi::register_closure_arity(events_on_return as perry_ffi::JsBody0, 0);
+    perry_ffi::register_closure_arity(events_on_iterator_self as perry_ffi::JsBody0, 0);
+    perry_ffi::register_closure_arity(events_on_async_iterator as perry_ffi::JsBody0, 0);
+    let closure = perry_ffi::alloc_closure(events_on_async_iterator as perry_ffi::JsBody0, 1);
     js_closure_set_capture_ptr(
         closure,
         0,

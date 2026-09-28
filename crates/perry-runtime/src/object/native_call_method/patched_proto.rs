@@ -118,7 +118,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method_patched_proto(
     // `clone_closure_rebind_this` only covers a closure that captured `this`.
     // Restored on the way out, including when the callee throws (#10490).
     let _this_scope = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
-    crate::closure::js_native_call_value(bound.get_nanbox_f64(), args.as_ptr(), args.len())
+    crate::closure::js_native_call_value(
+        bound.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
+        args.as_ptr(),
+        args.len(),
+    )
 }
 
 /// Spread form of [`js_native_call_method_patched_proto`]: `args_array_handle`

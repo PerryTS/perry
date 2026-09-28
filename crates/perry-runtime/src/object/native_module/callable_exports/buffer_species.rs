@@ -46,7 +46,7 @@ extern "C" fn fast_buffer_constructor_thunk(
     }
     super::buffer_constructor_thunk(
         closure,
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         value,
         byte_offset,
         length,

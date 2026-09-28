@@ -595,6 +595,7 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
         let v = al_get(recv_h.get_nanbox_f64(), k);
         js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -633,6 +634,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
         let (mapped, result) = result_h.across_mut::<ArrayHeader, _>(|| {
             js_closure_call3(
                 callable(cb_h.get_nanbox_f64()),
+                crate::closure::plain_call_receiver(),
                 v,
                 k as f64,
                 recv_h.get_nanbox_f64(),
@@ -674,6 +676,7 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
         let keep = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v_h.get_nanbox_f64(),
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -711,6 +714,7 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
         let v = al_get(recv_h.get_nanbox_f64(), k);
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -740,6 +744,7 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
         let v = al_get(recv_h.get_nanbox_f64(), k);
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -771,6 +776,7 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v_h.get_nanbox_f64(),
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -797,6 +803,7 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
         let v = al_get(recv_h.get_nanbox_f64(), k);
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -826,6 +833,7 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
         v_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v_h.get_nanbox_f64(),
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -854,6 +862,7 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
         let v = al_get(recv_h.get_nanbox_f64(), k);
         let hit = js_closure_call3(
             callable(cb_h.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
@@ -904,6 +913,7 @@ pub extern "C" fn js_arraylike_reduce(recv: f64, cb: f64, has_init: i32, init: f
             let v = al_get(recv_h.get_nanbox_f64(), k);
             acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
                 callable(cb_h.get_nanbox_f64()),
+                crate::closure::plain_call_receiver(),
                 acc_h.get_nanbox_f64(),
                 v,
                 k as f64,
@@ -948,6 +958,7 @@ pub extern "C" fn js_arraylike_reduceRight(recv: f64, cb: f64, has_init: i32, in
             let v = al_get(recv_h.get_nanbox_f64(), k);
             acc_h.set_nanbox_f64(crate::closure::js_closure_call4(
                 callable(cb_h.get_nanbox_f64()),
+                crate::closure::plain_call_receiver(),
                 acc_h.get_nanbox_f64(),
                 v,
                 k as f64,

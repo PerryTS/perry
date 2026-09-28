@@ -323,7 +323,12 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
         .map(|value| crate::object::ImplicitThisScope::bind(&scope, value.get_nanbox_f64()));
     let active = ActiveFactoryGuard::push(site_key, expected_identity);
     let result = unsafe {
-        crate::closure::js_native_call_value(callee.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::js_native_call_value(
+            callee.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
     };
     if !active.handled() {
         let reason = if lookup(site_key).is_some() {
@@ -476,7 +481,14 @@ fn site_test_dispatch_impl(receiver: f64, method: f64, argument: f64) -> f64 {
     let method = scope.root_nanbox_f64(method);
     let _this_guard = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
     let args = [argument.get_nanbox_f64()];
-    unsafe { crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            method.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    }
 }
 
 /// Strong root for every cached header.  The visitor rewrites entries in
@@ -675,7 +687,7 @@ mod tests {
         // Keep this observably distinct from `exact_factory` under release
         // function merging while modeling a non-literal wrapper with effects.
         NESTED_WRAPPER_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        exact_factory(std::ptr::null(), crate::closure::JsThis::current())
+        exact_factory(std::ptr::null(), crate::closure::body_call::current_this())
     }
 
     fn closure(function: *const u8) -> f64 {

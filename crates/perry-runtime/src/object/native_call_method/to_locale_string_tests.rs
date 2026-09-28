@@ -165,7 +165,7 @@ fn object_prototype_builtin_invokes_to_string_without_self_redispatch() {
     let previous = crate::object::js_implicit_this_set(receiver);
     let result = crate::object::global_this::object_prototype_to_locale_string_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
     );
     crate::object::js_implicit_this_set(previous);
 

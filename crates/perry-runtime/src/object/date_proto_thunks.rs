@@ -223,7 +223,7 @@ pub(crate) fn date_to_json_value(this: f64) -> f64 {
         ));
         let closure = crate::value::js_nanbox_get_pointer(func.get_nanbox_f64())
             as *const crate::closure::ClosureHeader;
-        let r = crate::closure::js_closure_call0(closure);
+        let r = crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return r;
     }
@@ -232,7 +232,7 @@ pub(crate) fn date_to_json_value(this: f64) -> f64 {
 
 #[cfg(test)]
 pub(crate) fn test_date_to_json_current_this() -> f64 {
-    date_to_json(std::ptr::null(), crate::closure::JsThis::current())
+    date_to_json(std::ptr::null(), crate::closure::body_call::current_this())
 }
 
 /// True iff `value` is an ECMAScript Object (`Type(O) is Object`). Objects are

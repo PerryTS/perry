@@ -611,7 +611,12 @@ mod tests {
             "target, this, partial args, name snapshot, bound length"
         );
         // The bound call still sees target + partial args + call args.
-        let r = crate::closure::js_closure_call2(b as *const ClosureHeader, 2.0, 3.0);
+        let r = crate::closure::js_closure_call2(
+            b as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
+            2.0,
+            3.0,
+        );
         assert_eq!(r, 6.0);
     }
 

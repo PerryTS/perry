@@ -32,7 +32,12 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
                     &args,
                 )
             } else {
-                crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1)
+                crate::closure::js_native_call_value(
+                    method.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    1,
+                )
             }
         });
         js_implicit_this_set(previous_this.get_nanbox_f64());

@@ -981,7 +981,7 @@ extern "C" fn primitive_number_hint(
     hint: f64,
 ) -> f64 {
     assert_eq!(bytes(hint), b"number");
-    primitive_result(c, crate::closure::JsThis::current())
+    primitive_result(c, crate::closure::body_call::current_this())
 }
 extern "C" fn primitive_string_hint(
     c: *const crate::closure::ClosureHeader,
@@ -989,7 +989,7 @@ extern "C" fn primitive_string_hint(
     hint: f64,
 ) -> f64 {
     assert_eq!(bytes(hint), b"string");
-    primitive_result(c, crate::closure::JsThis::current())
+    primitive_result(c, crate::closure::body_call::current_this())
 }
 
 #[test]

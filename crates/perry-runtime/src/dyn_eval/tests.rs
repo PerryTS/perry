@@ -11,7 +11,14 @@ fn dyn_fn(args: &[&str]) -> f64 {
 }
 
 fn call(f: f64, args: &[f64]) -> f64 {
-    unsafe { crate::closure::js_native_call_value(f, args.as_ptr(), args.len()) }
+    unsafe {
+        crate::closure::js_native_call_value(
+            f,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn num(n: f64) -> f64 {

@@ -363,7 +363,12 @@ unsafe fn call_primitive_closure_value(
     let bound_h = scope.root_nanbox_u64(bound);
     let prev_this = crate::object::js_implicit_this_set(this_h.get_nanbox_f64());
     let prev_this_h = scope.root_nanbox_f64(prev_this);
-    let result = crate::closure::js_native_call_value(bound_h.get_nanbox_f64(), args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        bound_h.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
     Some(result)
 }
@@ -832,7 +837,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                 let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                 let prev_this_h = prev_this_scope
                     .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
-                let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
+                let result = crate::closure::js_native_call_value(
+                    field,
+                    crate::closure::plain_call_receiver(),
+                    args_ptr,
+                    args_len,
+                );
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
@@ -959,7 +969,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
     let prev_this_h =
         prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
-    let result = crate::closure::js_native_call_value(field, args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        field,
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
 }
@@ -1425,6 +1440,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     let _this_scope = crate::object::ImplicitThisScope::bind(&root_scope, object());
                     return crate::closure::js_native_call_value(
                         f64::from_bits(bound),
+                        crate::closure::plain_call_receiver(),
                         args.as_ptr(),
                         args.len(),
                     );
@@ -1801,6 +1817,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 } else {
                     crate::closure::js_native_call_value(
                         f64::from_bits(bound),
+                        crate::closure::plain_call_receiver(),
                         call_args.as_ptr(),
                         call_args.len(),
                     )
@@ -1824,6 +1841,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 let call_args = refreshed_args();
                 return crate::closure::js_native_call_value(
                     ctor.get_nanbox_f64(),
+                    crate::closure::plain_call_receiver(),
                     call_args.as_ptr(),
                     call_args.len(),
                 );
@@ -1865,7 +1883,10 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         let prev_getter_this_scope = crate::gc::RuntimeHandleScope::new();
                         let prev_getter_this_h = prev_getter_this_scope
                             .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object().to_bits())));
-                        let method_fn = crate::closure::js_closure_call0(getter);
+                        let method_fn = crate::closure::js_closure_call0(
+                            getter,
+                            crate::closure::plain_call_receiver(),
+                        );
                         let bound = crate::closure::clone_closure_rebind_this(
                             method_fn.to_bits(),
                             object(),
@@ -1878,6 +1899,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         let call_args = refreshed_args();
                         let result = crate::closure::js_native_call_value(
                             f64::from_bits(bound),
+                            crate::closure::plain_call_receiver(),
                             call_args.as_ptr(),
                             call_args.len(),
                         );
@@ -1979,6 +2001,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         }
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );
@@ -2176,8 +2199,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                 let prev_this_h =
                     prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(recv_bits)));
-                let result =
-                    crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+                let result = crate::closure::js_native_call_value(
+                    f64::from_bits(bound),
+                    crate::closure::plain_call_receiver(),
+                    args_ptr,
+                    args_len,
+                );
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
@@ -2351,6 +2378,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval().bits())));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
+                        crate::closure::plain_call_receiver(),
                         args_ptr,
                         args_len,
                     );
@@ -2409,6 +2437,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                         .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(jsval().bits())));
                     let result = crate::closure::js_native_call_value(
                         f64::from_bits(bound),
+                        crate::closure::plain_call_receiver(),
                         args_ptr,
                         args_len,
                     );
@@ -2668,7 +2697,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 let args = refreshed_args();
                 let prev_this =
                     root_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object()));
-                let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
+                let result = crate::closure::js_native_call_value(
+                    m,
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    args.len(),
+                );
                 crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 return result;
             }
@@ -2737,8 +2771,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
                     let prev_this_h = prev_this_scope
                         .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object().to_bits())));
-                    let result =
-                        crate::closure::js_native_call_value(candidate, args_ptr, args_len);
+                    let result = crate::closure::js_native_call_value(
+                        candidate,
+                        crate::closure::plain_call_receiver(),
+                        args_ptr,
+                        args_len,
+                    );
                     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }
@@ -2768,7 +2806,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 crate::event_target::event_target_method_bind(recv, method_name.as_bytes())
             {
                 let args = refreshed_args();
-                return crate::closure::js_native_call_value(bound, args.as_ptr(), args.len());
+                return crate::closure::js_native_call_value(
+                    bound,
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    args.len(),
+                );
             }
         }
     }
@@ -2820,8 +2863,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     let prev_this_h = prev_this_scope
                         .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(receiver.to_bits())));
                     let args = refreshed_args();
-                    let result =
-                        crate::closure::js_native_call_value(candidate, args.as_ptr(), args.len());
+                    let result = crate::closure::js_native_call_value(
+                        candidate,
+                        crate::closure::plain_call_receiver(),
+                        args.as_ptr(),
+                        args.len(),
+                    );
                     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                     return result;
                 }

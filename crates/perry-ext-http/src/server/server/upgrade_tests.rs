@@ -51,8 +51,8 @@ fn queue(server_handle: i64, request_handle: i64, raw_socket_id: i64) {
 
 fn delivery(https: bool) {
     let scope = perry_ffi::TransientRootScope::enter();
-    perry_ffi::register_closure_arity(observe as *const u8, 3);
-    let callback = scope.root_addr(alloc_closure(observe as *const u8, 3) as i64);
+    perry_ffi::register_closure_arity(observe as perry_ffi::JsBody3, 3);
+    let callback = scope.root_addr(alloc_closure(observe as perry_ffi::JsBody3, 3) as i64);
     unsafe {
         set_closure_capture_f64(callback.get() as *mut _, 0, 0.0);
     }

@@ -22,7 +22,7 @@ use objc2_foundation::{NSObject, NSString};
 use std::cell::{Cell, RefCell};
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -185,7 +185,7 @@ unsafe fn invoke_row(row: i64) {
     let on_run = COMMANDS.with(|c| c.borrow().get(cmd_idx).map(|cmd| cmd.on_run).unwrap_or(0.0));
     if on_run != 0.0 {
         let closure_ptr = js_nanbox_get_pointer(on_run) as *const u8;
-        js_closure_call0(closure_ptr);
+        js_closure_call0(closure_ptr, perry_ffi::JsThis::UNDEFINED);
     }
     hide();
 }

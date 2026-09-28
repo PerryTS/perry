@@ -754,14 +754,21 @@ mod tests {
         ]);
         let f = global_this_function_call_thunk(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             rest,
         );
         let args = [
             f64::from_bits(crate::value::JSValue::number(2.0).bits()),
             f64::from_bits(crate::value::JSValue::number(3.0).bits()),
         ];
-        let result = unsafe { crate::closure::js_native_call_value(f, args.as_ptr(), args.len()) };
+        let result = unsafe {
+            crate::closure::js_native_call_value(
+                f,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            )
+        };
         assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }

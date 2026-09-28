@@ -85,8 +85,12 @@ pub(crate) unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToSt
     let bound_handle = scope.root_nanbox_u64(bound);
     let prev_this = crate::object::js_implicit_this_set(receiver);
     let prev_this_handle = scope.root_nanbox_f64(prev_this);
-    let ret =
-        crate::closure::js_native_call_value(bound_handle.get_nanbox_f64(), std::ptr::null(), 0);
+    let ret = crate::closure::js_native_call_value(
+        bound_handle.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
     if is_primitive_value(ret) {
         ArrayToStringOutcome::Primitive(ret)
@@ -151,6 +155,7 @@ pub(crate) fn call_array_prototype_to_string_method(
         let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
         let result = crate::closure::js_native_call_value(
             rebound_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );
@@ -189,7 +194,12 @@ pub(crate) fn array_prototype_to_string(value: f64) -> f64 {
     let previous = crate::object::js_implicit_this_set(receiver);
     let previous_handle = scope.root_nanbox_f64(previous);
     let result = unsafe {
-        crate::closure::js_native_call_value(rebound_handle.get_nanbox_f64(), std::ptr::null(), 0)
+        crate::closure::js_native_call_value(
+            rebound_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
     };
     crate::object::js_implicit_this_set(previous_handle.get_nanbox_f64());
     result

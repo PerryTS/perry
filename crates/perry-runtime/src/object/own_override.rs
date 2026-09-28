@@ -398,6 +398,7 @@ unsafe fn invoke_own_user_method(own: f64, recv: f64, args: &[f64]) -> f64 {
     );
     let result = crate::closure::js_native_call_value(
         method_handle.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
         refreshed.as_ptr(),
         refreshed.len(),
     );

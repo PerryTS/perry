@@ -113,7 +113,12 @@ extern "C" fn perf_timerify_wrapper(
             if crate::object::class_ref_id(target).is_some() {
                 throw_type_error("Class constructor cannot be invoked without 'new'");
             }
-            crate::closure::js_native_call_value(target, call_args.as_ptr(), call_args.len())
+            crate::closure::js_native_call_value(
+                target,
+                crate::closure::plain_call_receiver(),
+                call_args.as_ptr(),
+                call_args.len(),
+            )
         };
         let result_handle = scope.root_nanbox_f64(result);
 

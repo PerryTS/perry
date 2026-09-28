@@ -655,6 +655,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                         // above allocate.
                         let result = crate::closure::js_closure_call1(
                             rooted_closure(&callback_handle),
+                            crate::closure::plain_call_receiver(),
                             value_handle.get_nanbox_f64(),
                         );
                         // Keep the callback result rooted across `after()` (which
@@ -810,8 +811,11 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     };
                     crate::v8::promise_hook_before(rooted_promise(&next_handle));
                     let callback = rooted_closure(&callback_handle);
-                    let result =
-                        crate::closure::js_closure_call1(callback, value_handle.get_nanbox_f64());
+                    let result = crate::closure::js_closure_call1(
+                        callback,
+                        crate::closure::plain_call_receiver(),
+                        value_handle.get_nanbox_f64(),
+                    );
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
@@ -875,7 +879,10 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
                     CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                     crate::async_hooks::before(async_id, trigger_async_id);
-                    crate::closure::js_closure_call0(rooted_closure(&callback_handle));
+                    crate::closure::js_closure_call0(
+                        rooted_closure(&callback_handle),
+                        crate::closure::plain_call_receiver(),
+                    );
                     crate::async_hooks::after(async_id);
                     crate::async_hooks::destroy(async_id);
                     CURRENT_MICROTASK_PROMISE
@@ -1192,7 +1199,7 @@ fn call_async_step_direct(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             step_closure,
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             value,
             is_error_bits
         )

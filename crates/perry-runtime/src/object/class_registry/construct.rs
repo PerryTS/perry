@@ -601,7 +601,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_blob_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     parts,
                     options,
                 );
@@ -622,7 +622,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_file_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     parts,
                     name,
                     options,
@@ -654,7 +654,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_headers_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     init,
                 );
             }
@@ -670,7 +670,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_request_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     input,
                     init,
                 );
@@ -687,7 +687,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_response_thunk(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                     body,
                     init,
                 );
@@ -871,7 +871,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             "Storage" => {
                 return crate::web_storage::storage_constructor_illegal(
                     std::ptr::null(),
-                    crate::closure::JsThis::current(),
+                    crate::closure::body_call::current_this(),
                 );
             }
             "BroadcastChannel" => {
@@ -1225,7 +1225,12 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
         let prev_current_new_target =
             CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
         let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-        let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+        let result = crate::closure::js_native_call_value(
+            func_value,
+            crate::closure::plain_call_receiver(),
+            args_ptr,
+            args_len,
+        );
         CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
         crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
         crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
@@ -1904,7 +1909,12 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     crate::object::js_new_target_set(nt);
     let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-    let result = crate::closure::js_native_call_value(func_value, args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        func_value,
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
     crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
     crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());

@@ -590,6 +590,7 @@ mod dispatch_recent_tests {
                 unsafe {
                     crate::closure::js_closure_call_array(
                         closure as i64,
+                        crate::closure::plain_call_receiver(),
                         args.as_ptr(),
                         args.len() as i64,
                     )
@@ -624,6 +625,7 @@ mod dispatch_recent_tests {
             unsafe {
                 crate::closure::js_closure_call_array(
                     closure as i64,
+                    crate::closure::plain_call_receiver(),
                     direct_arg.as_ptr(),
                     direct_arg.len() as i64,
                 )
@@ -641,6 +643,7 @@ mod dispatch_recent_tests {
                 unsafe {
                     crate::closure::js_closure_call_array(
                         closure as i64,
+                        crate::closure::plain_call_receiver(),
                         rest_args.as_ptr(),
                         rest_args.len() as i64,
                     )
@@ -1195,11 +1198,11 @@ pub unsafe fn dispatch_rest_bundled(
         ($($i:tt),* $(,)?) => {{
             if let Some(arguments_double) = all_arguments_double {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*, rest_double, arguments_double
+                    func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*, rest_double, arguments_double
                 )
             } else {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*, rest_double
+                    func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*, rest_double
                 )
             }
         }};
@@ -1282,7 +1285,7 @@ pub unsafe fn dispatch_with_arity(
     // `arm!` macro builds the (padded) call args from the arg-index token list.
     macro_rules! arm {
         ($($i:tt),* $(,)?) => {
-            crate::closure::body_call::js_body_call!(func_ptr, closure, crate::closure::JsThis::current() $(, a!($i))*)
+            crate::closure::body_call::js_body_call!(func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*)
         };
     }
     match k {

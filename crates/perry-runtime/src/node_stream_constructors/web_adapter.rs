@@ -210,7 +210,12 @@ fn call_stream_callback(callback: f64, err: f64) {
         err
     };
     unsafe {
-        let _ = crate::closure::js_native_call_value(callback, [arg].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            [arg].as_ptr(),
+            1,
+        );
     }
 }
 
@@ -501,7 +506,7 @@ extern "C" fn fallback_foreign_reader_cancel(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    foreign_readable_to_web_cancel(closure, crate::closure::JsThis::current(), reason)
+    foreign_readable_to_web_cancel(closure, crate::closure::body_call::current_this(), reason)
 }
 
 extern "C" fn fallback_foreign_get_reader(

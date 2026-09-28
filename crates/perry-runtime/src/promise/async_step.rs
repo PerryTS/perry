@@ -1088,7 +1088,12 @@ fn call_async_step_body(
 
     // `step` is needed only by this call and is never used afterward. Any
     // future post-call use must root it and re-read its relocated address.
-    let result = crate::closure::js_closure_call2(step, value, is_error);
+    let result = crate::closure::js_closure_call2(
+        step,
+        crate::closure::plain_call_receiver(),
+        value,
+        is_error,
+    );
     let result_h = scope.root_nanbox_f64(result);
     INLINE_TRAP.with(|c| {
         c.set(InlineTrap {
@@ -1376,7 +1381,7 @@ fn array_from_async_call_next(
     // result so the iteration loop continues without going through .then.
     array_from_async_step(
         chain_closure as *const _,
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         next_result,
     );
 }
@@ -1713,7 +1718,7 @@ mod tests {
                 ])
             });
 
-            async_step_fulfill_thunk(thunk, crate::closure::JsThis::current(), 41.0);
+            async_step_fulfill_thunk(thunk, crate::closure::body_call::current_this(), 41.0);
 
             assert_eq!(
                 (*captured_to).state,

@@ -516,7 +516,7 @@ perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
-perry-abi = { path = "crates/perry-abi" }
+perry-abi = { path = "crates/perry-abi", version = "0.5.1654" }
 # #1112: `perry-ffi` is published for external native wrappers. Its optional
 # `runtime-link` edge supplies runtime symbols to in-tree adapter tests.
 # The dependency-free registration core sits below both crates so future
@@ -532,7 +532,7 @@ perry-abi = { path = "crates/perry-abi" }
 # applies — tests and the shipped prebuilt keep every engine. This mirrors why
 # `wasm-host` must stay out of `default`, generalized to all heavy features.
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
-perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+perry-ffi = { path = "crates/perry-ffi", version = "0.6.0" }
 # turnloop P7 (docs/turnloop/p7-report.md): the loop-driven transport the four
 # database bindings share. rlib only — it is linked *into* each binding's
 # staticlib, never alongside it, so it exports no symbol of its own.

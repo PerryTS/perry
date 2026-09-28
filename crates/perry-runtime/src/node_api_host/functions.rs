@@ -299,6 +299,7 @@ pub unsafe extern "C" fn napi_call_function(
     let call_result = catch_value_call(env, || {
         crate::closure::js_native_call_value(
             f64::from_bits(function_bits),
+            crate::closure::plain_call_receiver(),
             arguments.as_ptr(),
             arguments.len(),
         )

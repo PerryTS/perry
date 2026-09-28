@@ -214,7 +214,8 @@ fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
     assert_eq!(stored & TAG_MASK, POINTER_TAG);
     assert_eq!(
         crate::closure::js_closure_call0(
-            (stored & POINTER_MASK) as *const crate::closure::ClosureHeader
+            (stored & POINTER_MASK) as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
         ),
         0.0
     );
@@ -1262,7 +1263,10 @@ impl Drop for RuntimeCallbackRootGuard {
 fn assert_moved_callable_closure(bits: u64, original: usize) {
     let rewritten = assert_moved_closure_ptr(bits, original);
     assert_eq!(
-        crate::closure::js_closure_call0(rewritten as *const crate::closure::ClosureHeader),
+        crate::closure::js_closure_call0(
+            rewritten as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
+        ),
         0.0
     );
 }

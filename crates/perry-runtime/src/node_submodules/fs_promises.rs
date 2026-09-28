@@ -78,7 +78,7 @@ fn promise_from_result_value(call: impl FnOnce() -> Result<f64, f64>) -> f64 {
 pub extern "C" fn js_fs_promises_read_file(path: f64, options: f64) -> f64 {
     thunk_fs_promises_readFile(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         path,
         options,
     )
@@ -88,7 +88,7 @@ pub extern "C" fn js_fs_promises_read_file(path: f64, options: f64) -> f64 {
 pub extern "C" fn js_fs_promises_write_file(path: f64, data: f64, options: f64) -> f64 {
     thunk_fs_promises_writeFile(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         path,
         data,
         options,
@@ -99,7 +99,7 @@ pub extern "C" fn js_fs_promises_write_file(path: f64, data: f64, options: f64) 
 pub extern "C" fn js_fs_promises_append_file(path: f64, data: f64, options: f64) -> f64 {
     thunk_fs_promises_appendFile(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         path,
         data,
         options,
@@ -110,7 +110,7 @@ pub extern "C" fn js_fs_promises_append_file(path: f64, data: f64, options: f64)
 pub extern "C" fn js_fs_promises_mkdir(path: f64, options: f64) -> f64 {
     thunk_fs_promises_mkdir(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         path,
         options,
     )
@@ -120,7 +120,7 @@ pub extern "C" fn js_fs_promises_mkdir(path: f64, options: f64) -> f64 {
 pub extern "C" fn js_fs_promises_rmdir(path: f64, options: f64) -> f64 {
     thunk_fs_promises_rmdir(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         path,
         options,
     )
@@ -648,7 +648,12 @@ fn call_write_value(output: f64, text: &str) {
     if let Some(write) = object_field(output, b"write").filter(|v| is_callable(*v)) {
         let args = [chunk];
         unsafe {
-            let _ = js_native_call_value(write, args.as_ptr(), args.len());
+            let _ = js_native_call_value(
+                write,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
     }
 }

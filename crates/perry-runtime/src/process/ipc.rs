@@ -587,7 +587,14 @@ extern "C" fn process_ipc_send_callback_thunk(
         channel_closed_error()
     };
     let args = [arg];
-    unsafe { js_native_call_value(cb, args.as_ptr(), args.len()) };
+    unsafe {
+        js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
     undefined_value()
 }
 

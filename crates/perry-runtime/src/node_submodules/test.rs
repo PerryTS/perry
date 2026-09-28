@@ -844,6 +844,7 @@ extern "C" fn mock_function_invoke(
     let call_result = catch_js(|| unsafe {
         crate::closure::js_native_call_value(
             implementation_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             call_args.as_ptr(),
             call_args.len(),
         )
@@ -1599,7 +1600,7 @@ pub extern "C" fn js_node_test_mock_fn(
 ) -> f64 {
     mock_fn_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         original,
         implementation_or_options,
         options,
@@ -1615,7 +1616,7 @@ pub extern "C" fn js_node_test_mock_method(
 ) -> f64 {
     mock_method_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         target,
         property,
         implementation,
@@ -1632,7 +1633,7 @@ pub extern "C" fn js_node_test_mock_getter(
 ) -> f64 {
     mock_getter_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         target,
         property,
         implementation,
@@ -1649,7 +1650,7 @@ pub extern "C" fn js_node_test_mock_setter(
 ) -> f64 {
     mock_setter_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         target,
         property,
         implementation,
@@ -1674,19 +1675,19 @@ pub extern "C" fn js_node_test_mock_property_with_presence(
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_reset() -> f64 {
-    mock_reset_thunk(std::ptr::null(), crate::closure::JsThis::current())
+    mock_reset_thunk(std::ptr::null(), crate::closure::body_call::current_this())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_restore_all() -> f64 {
-    mock_restore_all_thunk(std::ptr::null(), crate::closure::JsThis::current())
+    mock_restore_all_thunk(std::ptr::null(), crate::closure::body_call::current_this())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64) -> f64 {
     snapshot_set_default_serializers(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         serializers,
     )
 }
@@ -1695,34 +1696,46 @@ pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64
 pub extern "C" fn js_node_test_snapshot_set_resolve_snapshot_path(resolver: f64) -> f64 {
     snapshot_set_resolve_snapshot_path(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         resolver,
     )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_enable(options: f64) -> f64 {
-    mock_timers_enable(std::ptr::null(), crate::closure::JsThis::current(), options)
+    mock_timers_enable(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        options,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_tick(ms: f64) -> f64 {
-    mock_timers_tick(std::ptr::null(), crate::closure::JsThis::current(), ms)
+    mock_timers_tick(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        ms,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_run_all() -> f64 {
-    mock_timers_run_all(std::ptr::null(), crate::closure::JsThis::current())
+    mock_timers_run_all(std::ptr::null(), crate::closure::body_call::current_this())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_set_time(ms: f64) -> f64 {
-    mock_timers_set_time(std::ptr::null(), crate::closure::JsThis::current(), ms)
+    mock_timers_set_time(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        ms,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
-    mock_timers_reset(std::ptr::null(), crate::closure::JsThis::current())
+    mock_timers_reset(std::ptr::null(), crate::closure::body_call::current_this())
 }
 
 pub(crate) fn decorate_test_export(

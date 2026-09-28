@@ -660,7 +660,7 @@ pub extern "C" fn js_worker_threads_locks_request(
 ) -> f64 {
     worker_threads_locks_request(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         name_value,
         options_or_callback,
         maybe_callback,
@@ -677,5 +677,5 @@ extern "C" fn worker_threads_locks_query(
 
 #[no_mangle]
 pub extern "C" fn js_worker_threads_locks_query() -> f64 {
-    worker_threads_locks_query(std::ptr::null(), crate::closure::JsThis::current())
+    worker_threads_locks_query(std::ptr::null(), crate::closure::body_call::current_this())
 }

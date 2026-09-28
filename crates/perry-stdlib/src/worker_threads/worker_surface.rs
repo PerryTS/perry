@@ -415,8 +415,12 @@ fn stream_emit_event(event: f64, arg: f64) -> f64 {
         perry_runtime::object::js_implicit_this_set(this_h.get_nanbox_f64());
         unsafe {
             let args = [arg_h.get_nanbox_f64()];
-            let _ =
-                perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len());
+            let _ = perry_runtime::closure::js_native_call_value(
+                callback,
+                perry_runtime::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }

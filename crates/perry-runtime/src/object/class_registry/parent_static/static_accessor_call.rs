@@ -101,7 +101,7 @@ pub(crate) unsafe fn try_static_accessor_value_call(
     let receiver = receiver_handle.get_nanbox_f64();
     let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let result = crate::closure::js_native_call_value(
-        callee_handle.get_nanbox_f64(),
+        callee_handle.get_nanbox_f64(), crate::closure::plain_call_receiver(),
         args.as_ptr(),
         args.len(),
     );

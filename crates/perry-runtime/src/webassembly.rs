@@ -961,8 +961,12 @@ unsafe extern "C" fn call_wasm_import(
             _ => f64::from_bits(TAG_UNDEFINED),
         })
         .collect();
-    let result =
-        crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), args.len());
+    let result = crate::closure::js_native_call_value(
+        callback.get_nanbox_f64(),
+        crate::closure::plain_call_receiver(),
+        args.as_ptr(),
+        args.len(),
+    );
 
     let result_kinds = if result_count == 0 {
         &[]

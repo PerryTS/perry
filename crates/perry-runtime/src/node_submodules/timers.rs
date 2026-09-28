@@ -160,7 +160,7 @@ pub(crate) extern "C" fn timers_promises_scheduler_wait(
 ) -> f64 {
     timers_promises_set_timeout(
         _closure,
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         delay_ms,
         f64::from_bits(TAG_UNDEFINED),
         options,

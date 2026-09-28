@@ -91,7 +91,14 @@ fn test_closure_rest_dispatch_roots_args_during_rest_array_alloc_gc() {
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
-    let result = unsafe { crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), 1) };
+    let result = unsafe {
+        crate::closure::js_closure_call_array(
+            closure as i64,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     let result_scope = RuntimeHandleScope::new();
     let result_root = result_scope.root_nanbox_f64(result);
     drain_scheduled_minor_gc(before, "rest-array creation");
@@ -127,6 +134,7 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
 
     let timer_value = crate::closure::js_closure_call3(
         bound,
+        crate::closure::plain_call_receiver(),
         f64::from_bits(ptr_bits(timer_callback as usize)),
         0.0,
         arg,

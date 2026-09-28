@@ -936,7 +936,11 @@ fn call_callback1(callback_bits: u64, this_bits: u64, arg: f64) {
     let prev_this = this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(
         f64::from_bits(this_bits),
     ));
-    perry_runtime::closure::js_closure_call1(closure, arg);
+    perry_runtime::closure::js_closure_call1(
+        closure,
+        perry_runtime::closure::plain_call_receiver(),
+        arg,
+    );
     perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
@@ -1068,7 +1072,7 @@ extern "C" fn worker_remove_event_listener(
 ) -> f64 {
     worker_off(
         closure,
-        perry_runtime::closure::JsThis::current(),
+        perry_runtime::closure::current_this(),
         event,
         callback,
     )

@@ -765,6 +765,7 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
                 let exports = crate::closure::js_closure_call0(
                     crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
                         as *const ClosureHeader,
+                    crate::closure::plain_call_receiver(),
                 );
                 if let Some((record, cached)) =
                     cached_record(cache_handle.get_nanbox_f64(), &filename)
@@ -877,6 +878,7 @@ fn run_custom_extension(path: &std::path::Path, record: f64, filename: &str) {
                 let filename_value = string_value(&filename);
                 crate::closure::js_closure_call2(
                     handler_ptr as *mut ClosureHeader,
+                    crate::closure::plain_call_receiver(),
                     record_handle.get_nanbox_f64(),
                     filename_value,
                 );
@@ -1525,7 +1527,11 @@ static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambien
 /// Returns the required value directly (no Promise).
 #[no_mangle]
 pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
-    require_thunk(std::ptr::null(), crate::closure::JsThis::current(), spec)
+    require_thunk(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        spec,
+    )
 }
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code-only

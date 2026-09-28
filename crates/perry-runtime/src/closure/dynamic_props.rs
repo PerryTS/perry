@@ -362,7 +362,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         let receiver = crate::value::js_nanbox_pointer(ptr as i64);
         let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-        let result = crate::closure::js_closure_call0(closure);
+        let result =
+            crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return result;
     }
@@ -444,7 +445,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                 let prev =
                     this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let result = crate::closure::js_closure_call0(getter);
+                let result =
+                    crate::closure::js_closure_call0(getter, crate::closure::plain_call_receiver());
                 crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return result;
             }
@@ -474,7 +476,8 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
             let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
             let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_closure_call0(getter);
+            let result =
+                crate::closure::js_closure_call0(getter, crate::closure::plain_call_receiver());
             crate::object::js_implicit_this_set(prev.get_nanbox_f64());
             return result;
         }
@@ -539,7 +542,8 @@ pub(crate) fn function_prototype_inherited_get(
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                 let prev =
                     this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                let result = crate::closure::js_closure_call0(getter);
+                let result =
+                    crate::closure::js_closure_call0(getter, crate::closure::plain_call_receiver());
                 crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return Some(result);
             }

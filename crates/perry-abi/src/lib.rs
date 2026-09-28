@@ -39,24 +39,27 @@ pub const GC_HEADER_SIZE: usize = 8;
 
 /// The JS BODY calling convention. Every native body a function object runs —
 /// a compiled closure body, a value wrapper, a native builtin installed as a
-/// function object — is
+/// function object, a body an addon registers through perry-ffi — is
 ///
 /// ```text
 /// double body(i64 callee, i64 this, double a0, double a1, ...)
 /// ```
 ///
 /// where `callee` is the function object (its captures follow the header) and
-/// `this` is the NaN-boxed receiver bits, passed in an INTEGER register so
-/// every floating-point argument register stays free for JS arguments (SysV
-/// x86-64 / AAPCS64; Win64 assigns positionally, which is equally correct).
-/// Passing more JS arguments than a body declares is safe (the caller owns
-/// the stack argument area); fewer is padded with `undefined` by the caller.
-/// The runtime calls bodies only through `closure/body_call.rs`; emitted code
-/// only through `expr::body_call::emit_js_body_call`.
+/// `this` is the NaN-boxed receiver bits ([`JsThis`]), passed in an INTEGER
+/// register so every floating-point argument register stays free for JS
+/// arguments (SysV x86-64 / AAPCS64; Win64 assigns positionally, which is
+/// equally correct). Passing more JS arguments than a body declares is safe
+/// (the caller owns the stack argument area); fewer is padded with
+/// `undefined` by the caller. Its Rust type is [`js_body_fn_ty!`], defined
+/// here and nowhere else. The runtime calls bodies only through
+/// `closure/body_call.rs`; emitted code only through
+/// `expr::body_call::emit_js_body_call`.
 ///
 /// While the implicit-`this` cell still exists (this-as-a-parameter stage 1),
-/// a caller passes exactly the receiver the cell holds for the call, so the
-/// parameter and the cell never disagree; bodies still read the cell.
+/// bodies read the cell: every call entry passes its `this` argument as the
+/// body's receiver parameter AND binds the cell to it for the call when the
+/// cell holds anything else, so the parameter and the cell never disagree.
 pub const JS_BODY_CALLEE_PARAM: usize = 0;
 /// Native parameter index of the receiver (`this`) bits.
 pub const JS_BODY_THIS_PARAM: usize = 1;
@@ -64,8 +67,111 @@ pub const JS_BODY_THIS_PARAM: usize = 1;
 pub const JS_BODY_FIRST_ARG_PARAM: usize = 2;
 /// Native parameters every JS body declares before its JS arguments.
 pub const JS_BODY_FIXED_PARAMS: usize = 2;
-/// `js_closure_call{N}(callee, a0..aN-1)` exists for `N <= JS_CLOSURE_CALL_MAX_ARGS`;
-/// wider calls use `js_closure_call_array`.
+
+/// NaN-boxed `undefined` (`value::TAG_UNDEFINED` in the runtime, which
+/// asserts it equals this).
+pub const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+/// The receiver a JS body takes as its second native parameter
+/// ([`JS_BODY_THIS_PARAM`]): the NaN-boxed `this` bits, in an integer
+/// register (`repr(transparent)` over `u64`, so its ABI is exactly a `u64`'s).
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct JsThis(pub u64);
+
+impl JsThis {
+    /// `undefined`: the receiver of a plain (non-method) call.
+    pub const UNDEFINED: JsThis = JsThis(TAG_UNDEFINED);
+
+    /// The receiver bits.
+    #[inline(always)]
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    /// The receiver as a NaN-boxed value.
+    #[inline(always)]
+    pub fn as_f64(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+
+    /// A NaN-boxed value as a receiver.
+    #[inline(always)]
+    pub fn from_f64(value: f64) -> Self {
+        JsThis(value.to_bits())
+    }
+}
+
+/// THE Rust type of a JS body: `js_body_fn_ty!(Callee; a, b)` is
+/// `unsafe extern "C" fn(*const Callee, JsThis, f64, f64) -> f64` — the
+/// callee header type, then one `f64` per token. A safe `extern "C" fn` body
+/// coerces to it.
+#[macro_export]
+macro_rules! js_body_fn_ty {
+    (@f64 $x:tt) => { f64 };
+    ($callee:ty; $($x:tt),* $(,)?) => {
+        unsafe extern "C" fn(
+            *const $callee,
+            $crate::JsThis
+            $(, $crate::js_body_fn_ty!(@f64 $x))*
+        ) -> f64
+    };
+}
+
+/// A JS body with a statically known JS arity: implemented for exactly the
+/// [`js_body_fn_ty!`] pointer types (`JsBody0<C>` .. `JsBody16<C>`), so an API
+/// taking `impl JsBody<C>` refuses any other signature — a bare `*const u8`,
+/// a body without the receiver, a wrong argument type — at compile time.
+///
+/// # Safety
+/// Implemented only here, for the body pointer types; `code` is the body's
+/// entry address.
+pub unsafe trait JsBody<C>: Copy {
+    /// The JS parameters the body declares.
+    const ARITY: u32;
+    /// The body's code address, for the runtime's registries.
+    fn code(self) -> *const u8;
+}
+
+macro_rules! js_body_types {
+    ($($alias:ident = $n:literal [$($x:tt),*];)*) => {$(
+        #[doc = concat!("A JS body declaring ", stringify!($n), " JS parameters.")]
+        pub type $alias<C> = js_body_fn_ty!(C; $($x),*);
+        // SAFETY: the pointer type is a JS body type by construction.
+        unsafe impl<C> JsBody<C> for $alias<C> {
+            const ARITY: u32 = $n;
+            #[inline(always)]
+            fn code(self) -> *const u8 {
+                self as *const u8
+            }
+        }
+    )*};
+}
+
+js_body_types! {
+    JsBody0 = 0 [];
+    JsBody1 = 1 [a];
+    JsBody2 = 2 [a, a];
+    JsBody3 = 3 [a, a, a];
+    JsBody4 = 4 [a, a, a, a];
+    JsBody5 = 5 [a, a, a, a, a];
+    JsBody6 = 6 [a, a, a, a, a, a];
+    JsBody7 = 7 [a, a, a, a, a, a, a];
+    JsBody8 = 8 [a, a, a, a, a, a, a, a];
+    JsBody9 = 9 [a, a, a, a, a, a, a, a, a];
+    JsBody10 = 10 [a, a, a, a, a, a, a, a, a, a];
+    JsBody11 = 11 [a, a, a, a, a, a, a, a, a, a, a];
+    JsBody12 = 12 [a, a, a, a, a, a, a, a, a, a, a, a];
+    JsBody13 = 13 [a, a, a, a, a, a, a, a, a, a, a, a, a];
+    JsBody14 = 14 [a, a, a, a, a, a, a, a, a, a, a, a, a, a];
+    JsBody15 = 15 [a, a, a, a, a, a, a, a, a, a, a, a, a, a, a];
+    JsBody16 = 16 [a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a];
+}
+
+/// `js_closure_call{N}(callee, this, a0..aN-1)` calls a function object with
+/// receiver `this` ([`JsThis::UNDEFINED`] for a plain call); it exists for
+/// `N <= JS_CLOSURE_CALL_MAX_ARGS`, and wider calls use
+/// `js_closure_call_array(callee, this, args, len)`.
 pub const JS_CLOSURE_CALL_MAX_ARGS: usize = 16;
 /// The fixed-arity entries, indexed by JS argument count.
 pub const JS_CLOSURE_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 1] = [
@@ -87,10 +193,11 @@ pub const JS_CLOSURE_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 1] = [
     "js_closure_call15",
     "js_closure_call16",
 ];
-/// Every runtime entry point emitted code calls to run a JS function. Each can
-/// run arbitrary JS and therefore collect: `scripts/gc_root_dominance_check.py`
-/// reads its poll-capable set from THIS list.
-pub const JS_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 5] = [
+/// Every runtime entry point native code (emitted or Rust) calls to run a JS
+/// function. Each takes the receiver after the function, can run arbitrary JS
+/// and therefore collect: `scripts/gc_root_dominance_check.py` reads its
+/// poll-capable set from THIS list.
+pub const JS_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 1 + 4] = [
     "js_closure_call0",
     "js_closure_call1",
     "js_closure_call2",
@@ -108,10 +215,12 @@ pub const JS_CALL_ENTRIES: [&str; JS_CLOSURE_CALL_MAX_ARGS + 5] = [
     "js_closure_call14",
     "js_closure_call15",
     "js_closure_call16",
-    "js_closure_call1_receiverless",
     "js_closure_call_array",
     "js_closure_call_apply_with_spread",
     "js_native_call_value",
+    // V8's callback trampoline contract (`func(env, args, len)`, no
+    // receiver): a plain call.
+    "js_closure_v8_callback",
 ];
 /// `object::method_site::MethodEntry` — the words the emitted method-call site
 /// reads (`perry-codegen/src/expr/method_site.rs`).

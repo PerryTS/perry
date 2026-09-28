@@ -46,7 +46,14 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
     let prev_this_scope = crate::gc::RuntimeHandleScope::new();
     let prev_this_h =
         prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits())));
-    let result = unsafe { crate::closure::js_native_call_value(target, args_ptr, args_len) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            target,
+            crate::closure::plain_call_receiver(),
+            args_ptr,
+            args_len,
+        )
+    };
     IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     result
 }
@@ -611,7 +618,12 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
         let prev_this_scope = crate::gc::RuntimeHandleScope::new();
         let prev_this_h =
             prev_this_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits())));
-        let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
+        let result = crate::closure::js_native_call_value(
+            target,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
         IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         result
     }

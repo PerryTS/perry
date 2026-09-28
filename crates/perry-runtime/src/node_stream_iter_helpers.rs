@@ -245,7 +245,11 @@ pub(super) fn settle_result(value: f64) -> Result<f64, f64> {
 /// Invoke a single-argument stream callback and settle an async result.
 #[inline]
 pub(super) fn call_settled_result(cb: *const ClosureHeader, arg: f64) -> Result<f64, f64> {
-    settle_result(crate::closure::js_closure_call1(cb, arg))
+    settle_result(crate::closure::js_closure_call1(
+        cb,
+        crate::closure::plain_call_receiver(),
+        arg,
+    ))
 }
 
 /// Coerce a `take(n)` / `drop(n)` count argument to a clamped element
@@ -584,9 +588,13 @@ extern "C" fn consume_on_next(
             return f64::from_bits(TAG_UNDEFINED);
         }
         let acc = js_closure_get_capture_f64(state, SC_ACC);
-        catch_pipeline_throw(|| crate::closure::js_closure_call2(cb, acc, value))
+        catch_pipeline_throw(|| {
+            crate::closure::js_closure_call2(cb, crate::closure::plain_call_receiver(), acc, value)
+        })
     } else {
-        catch_pipeline_throw(|| crate::closure::js_closure_call1(cb, value))
+        catch_pipeline_throw(|| {
+            crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), value)
+        })
     };
 
     match cb_result {
@@ -1323,7 +1331,7 @@ mod take_tests {
         let take = js_closure_alloc(ns_iter_take as *const u8, 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, crate::closure::JsThis::current(), 2.0);
+        let result = ns_iter_take(take, crate::closure::body_call::current_this(), 2.0);
         let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
 
         assert!(!has_truthy_hidden(source, hidden_key(b"returned")));
@@ -1351,7 +1359,7 @@ mod take_tests {
         let take = js_closure_alloc(ns_iter_take as *const u8, 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, crate::closure::JsThis::current(), 2.0);
+        let result = ns_iter_take(take, crate::closure::body_call::current_this(), 2.0);
         let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
 
         assert!(!stream_destroyed(stream));
@@ -1379,7 +1387,7 @@ mod take_tests {
         let take = js_closure_alloc(ns_iter_take as *const u8, 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, crate::closure::JsThis::current(), 2.0);
+        let result = ns_iter_take(take, crate::closure::body_call::current_this(), 2.0);
 
         assert_eq!(readable_hidden_error(result), Some(7.0));
         assert_eq!(get_hidden_value(result, hidden_signal_key()), Some(8.0));

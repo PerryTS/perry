@@ -694,9 +694,9 @@ fn ensure_build_runtime_registered() {
         );
     });
     NATIVE_CLOSURE_ARITIES_REGISTERED.call_once(|| {
-        register_closure_arity(bun_on_resolve as *const u8, 2);
-        register_closure_arity(bun_on_load as *const u8, 2);
-        register_closure_arity(bun_build_output_text as *const u8, 0);
+        register_closure_arity(bun_on_resolve as perry_ffi::JsBody2, 2);
+        register_closure_arity(bun_on_load as perry_ffi::JsBody2, 2);
+        register_closure_arity(bun_build_output_text as perry_ffi::JsBody0, 0);
     });
 }
 
@@ -797,7 +797,7 @@ extern "C" fn bun_on_load(
     register_plugin_hook(closure, options, callback, false)
 }
 
-fn native_closure_value(function: *const u8, session: Handle) -> JsValue {
+fn native_closure_value(function: perry_ffi::JsBody2, session: Handle) -> JsValue {
     let closure = alloc_closure(function, 1);
     if closure.is_null() {
         return JsValue::UNDEFINED;
@@ -832,10 +832,10 @@ fn configure_plugins(options: f64) -> Handle {
         return session;
     }
     let on_resolve = scope.root_nanbox(f64::from_bits(
-        native_closure_value(bun_on_resolve as *const u8, session).bits(),
+        native_closure_value(bun_on_resolve as perry_ffi::JsBody2, session).bits(),
     ));
     let on_load = scope.root_nanbox(f64::from_bits(
-        native_closure_value(bun_on_load as *const u8, session).bits(),
+        native_closure_value(bun_on_load as perry_ffi::JsBody2, session).bits(),
     ));
     let builder = scope.root_nanbox(f64::from_bits(
         alloc_null_proto_object(&[
@@ -846,7 +846,7 @@ fn configure_plugins(options: f64) -> Handle {
     ));
     for callback in callbacks {
         let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
-        unsafe { closure.call1(builder.get()) };
+        unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, builder.get()) };
     }
     session
 }
@@ -894,7 +894,7 @@ fn invoke_hook(hook: &PluginHook, args: f64) -> JsValue {
     let callback = scope.root_addr(hook.callback);
     let args = scope.root_nanbox(args);
     let closure = unsafe { JsClosure::from_raw(callback.get() as *const RawClosureHeader) };
-    JsValue::from_bits(unsafe { closure.call1(args.get()) }.to_bits())
+    JsValue::from_bits(unsafe { closure.call1(perry_ffi::JsThis::UNDEFINED, args.get()) }.to_bits())
 }
 
 fn file_parts(file: &FileName) -> (String, String) {
@@ -1312,7 +1312,7 @@ fn build_output_value(output: BuildOutput) -> JsValue {
     let contents = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(&output.contents).as_raw()).bits(),
     ));
-    let text = alloc_closure(bun_build_output_text as *const u8, 1);
+    let text = perry_ffi::alloc_closure(bun_build_output_text as perry_ffi::JsBody0, 1);
     unsafe { set_closure_capture_f64(text, 0, contents.get()) };
     let text = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(text).bits()));
     let path = JsValue::from_string_ptr(alloc_string(&output.path).as_raw());

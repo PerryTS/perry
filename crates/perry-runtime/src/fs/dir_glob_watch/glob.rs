@@ -749,6 +749,7 @@ fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions<'_>) -> Res
         let arg = scope.root_nanbox_f64(arg);
         crate::closure::js_closure_call1(
             extract_closure_ptr(callback.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             arg.get_nanbox_f64(),
         )
     });

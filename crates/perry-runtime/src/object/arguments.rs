@@ -697,7 +697,7 @@ pub(crate) unsafe fn arguments_object_get_field(
     });
 
     if name == "callee" && state.restricted_callee() {
-        arguments_throw_type_error(std::ptr::null(), crate::closure::JsThis::current());
+        arguments_throw_type_error(std::ptr::null(), crate::closure::body_call::current_this());
     }
     if let Some(box_ptr) = mapped_box {
         let value = crate::r#box::js_box_get(box_ptr);
@@ -709,7 +709,10 @@ pub(crate) unsafe fn arguments_object_get_field(
                 let closure =
                     (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
                 if !closure.is_null() {
-                    let value = crate::closure::js_closure_call0(closure);
+                    let value = crate::closure::js_closure_call0(
+                        closure,
+                        crate::closure::plain_call_receiver(),
+                    );
                     return Some(JSValue::from_bits(value.to_bits()));
                 }
             }
@@ -740,7 +743,7 @@ pub(crate) unsafe fn arguments_object_set_field(
     });
 
     if name == "callee" && state.restricted_callee() {
-        arguments_throw_type_error(std::ptr::null(), crate::closure::JsThis::current());
+        arguments_throw_type_error(std::ptr::null(), crate::closure::body_call::current_this());
     }
     if !super::own_key_present(obj, key) {
         return false;
@@ -750,7 +753,11 @@ pub(crate) unsafe fn arguments_object_set_field(
             let closure =
                 (acc.set & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
             if !closure.is_null() {
-                crate::closure::js_closure_call1(closure, value);
+                crate::closure::js_closure_call1(
+                    closure,
+                    crate::closure::plain_call_receiver(),
+                    value,
+                );
             }
         }
         return true;

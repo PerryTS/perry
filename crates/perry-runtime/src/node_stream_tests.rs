@@ -232,7 +232,12 @@ pub(super) extern "C" fn write_capture(
     let bytes = js_node_stream_collect_bytes(readable);
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().push(bytes));
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -268,7 +273,12 @@ extern "C" fn write_capture_encoding(
             .push(JSValue::from_bits(chunk.to_bits()).is_any_string())
     });
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -282,7 +292,12 @@ extern "C" fn write_callback_error(
 ) -> f64 {
     let err = crate::closure::js_closure_get_capture_f64(closure, 0);
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, [err].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            [err].as_ptr(),
+            1,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -314,7 +329,12 @@ extern "C" fn writev_capture(
         });
     }
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -563,7 +583,12 @@ extern "C" fn transform_upper_callback(
     let upper = String::from_utf8(bytes).unwrap().to_uppercase();
     let args = [f64::from_bits(TAG_UNDEFINED), string_value(&upper)];
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -577,7 +602,12 @@ extern "C" fn transform_identity_callback(
 ) -> f64 {
     let args = [f64::from_bits(TAG_UNDEFINED), chunk];
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -591,7 +621,12 @@ extern "C" fn transform_error_callback(
 ) -> f64 {
     let err = crate::closure::js_closure_get_capture_f64(closure, 0);
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, [err].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            [err].as_ptr(),
+            1,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -609,10 +644,24 @@ extern "C" fn transform_push_pair_callback(
         hidden_key(b"push"),
     );
     unsafe {
-        let _ = crate::closure::js_native_call_value(push, [string_value("a")].as_ptr(), 1);
-        let _ = crate::closure::js_native_call_value(push, [string_value("b")].as_ptr(), 1);
-        let _ =
-            crate::closure::js_native_call_value(cb, [f64::from_bits(TAG_UNDEFINED)].as_ptr(), 1);
+        let _ = crate::closure::js_native_call_value(
+            push,
+            crate::closure::plain_call_receiver(),
+            [string_value("a")].as_ptr(),
+            1,
+        );
+        let _ = crate::closure::js_native_call_value(
+            push,
+            crate::closure::plain_call_receiver(),
+            [string_value("b")].as_ptr(),
+            1,
+        );
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            [f64::from_bits(TAG_UNDEFINED)].as_ptr(),
+            1,
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -632,7 +681,12 @@ extern "C" fn transform_flush_tail_callback(
     TRANSFORM_FLUSH_COUNT.with(|count| *count.borrow_mut() += 1);
     let args = [f64::from_bits(TAG_UNDEFINED), string_value("!")];
     unsafe {
-        let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+        let _ = crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -766,7 +820,12 @@ fn writable_options_write_callback_is_invoked_by_stub_write() {
     );
     let args = [string_value("chunk"), f64::from_bits(TAG_UNDEFINED)];
     unsafe {
-        let _ = crate::closure::js_native_call_value(write, args.as_ptr(), args.len());
+        let _ = crate::closure::js_native_call_value(
+            write,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
 
     WRITE_CAPTURED.with(|captured| {
@@ -853,8 +912,22 @@ fn transform_pipe_chain_applies_callback_output() {
         raw_ptr_from_value(upper) as *const ObjectHeader,
         hidden_key(b"pipe"),
     );
-    let _ = unsafe { crate::closure::js_native_call_value(src_pipe, [upper].as_ptr(), 1) };
-    let _ = unsafe { crate::closure::js_native_call_value(upper_pipe, [sink].as_ptr(), 1) };
+    let _ = unsafe {
+        crate::closure::js_native_call_value(
+            src_pipe,
+            crate::closure::plain_call_receiver(),
+            [upper].as_ptr(),
+            1,
+        )
+    };
+    let _ = unsafe {
+        crate::closure::js_native_call_value(
+            upper_pipe,
+            crate::closure::plain_call_receiver(),
+            [sink].as_ptr(),
+            1,
+        )
+    };
     let _ = crate::promise::js_promise_run_microtasks();
 
     READABLE_DATA_CAPTURED.with(|captured| {
@@ -1253,7 +1326,7 @@ fn stream_methods_use_implicit_this_without_closure_capture() {
     let prev_this = crate::object::js_implicit_this_set(stream);
     let _ = ns_end3(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(TAG_UNDEFINED),
@@ -1274,7 +1347,12 @@ fn stream_method_closure_capture_wins_over_stale_implicit_this() {
 
     let prev_this = crate::object::js_implicit_this_set(other);
     unsafe {
-        let _ = crate::closure::js_native_call_value(end, std::ptr::null(), 0);
+        let _ = crate::closure::js_native_call_value(
+            end,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     crate::object::js_implicit_this_set(prev_this);
 
@@ -1301,7 +1379,14 @@ fn stream_methods_dispatch_through_dynamic_method_call() {
 #[test]
 fn callable_stream_constructor_autoinstantiates_passthrough() {
     let ctor = crate::object::bound_native_callable_export_value("stream", "PassThrough");
-    let stream = unsafe { crate::closure::js_native_call_value(ctor, std::ptr::null(), 0) };
+    let stream = unsafe {
+        crate::closure::js_native_call_value(
+            ctor,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
 
     assert!(raw_ptr_from_value(stream) >= 0x10000);
     assert!(get_hidden_value(stream, hidden_readable_flag_key()).is_some());
@@ -1324,7 +1409,7 @@ fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
     assert_eq!(
         ns_pipe2(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             dest,
             f64::from_bits(TAG_UNDEFINED)
         )
@@ -1345,7 +1430,14 @@ fn readable_wrap_method_is_present_and_chainable() {
 
     let wrapped = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let args = [wrapped];
-    let result = unsafe { crate::closure::js_native_call_value(wrap, args.as_ptr(), args.len()) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            wrap,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
     assert_eq!(result.to_bits(), stream.to_bits());
 }
 
@@ -1359,7 +1451,14 @@ fn writable_cork_and_uncork_update_counter_and_return_undefined() {
 
     assert_eq!(writable_corked_count(stream), 0.0);
 
-    let ret = unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) };
+    let ret = unsafe {
+        crate::closure::js_native_call_value(
+            cork,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(writable_corked_count(stream), 1.0);
     assert_eq!(
@@ -1367,15 +1466,36 @@ fn writable_cork_and_uncork_update_counter_and_return_undefined() {
         1.0
     );
 
-    let ret = unsafe { crate::closure::js_native_call_value(cork, std::ptr::null(), 0) };
+    let ret = unsafe {
+        crate::closure::js_native_call_value(
+            cork,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(writable_corked_count(stream), 2.0);
 
-    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    let ret = unsafe {
+        crate::closure::js_native_call_value(
+            uncork,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(writable_corked_count(stream), 1.0);
 
-    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    let ret = unsafe {
+        crate::closure::js_native_call_value(
+            uncork,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(writable_corked_count(stream), 0.0);
 
@@ -1386,7 +1506,14 @@ fn writable_cork_and_uncork_update_counter_and_return_undefined() {
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
 
-    let ret = unsafe { crate::closure::js_native_call_value(uncork, std::ptr::null(), 0) };
+    let ret = unsafe {
+        crate::closure::js_native_call_value(
+            uncork,
+            crate::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        )
+    };
     assert_eq!(ret.to_bits(), TAG_UNDEFINED);
     assert_eq!(writable_corked_count(stream), 0.0);
 }

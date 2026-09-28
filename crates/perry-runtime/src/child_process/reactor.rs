@@ -1321,7 +1321,13 @@ fn cp_exec_fire_close(exec: Box<CpExecPending>, code: Option<i32>, signal: Optio
         super::cp_exec_callback_args(&run, &exec.run_options, &exec.cmd, &exec.file, &exec.mode);
     let cb = crate::fs::extract_closure_ptr(f64::from_bits(exec.cb_bits));
     if !cb.is_null() {
-        crate::closure::js_closure_call3(cb, err, out, errout);
+        crate::closure::js_closure_call3(
+            cb,
+            crate::closure::plain_call_receiver(),
+            err,
+            out,
+            errout,
+        );
     }
 }
 
@@ -1351,7 +1357,13 @@ extern "C" fn cp_exec_cb_thunk(
     let errout = f64::from_bits(js_closure_get_capture_ptr(closure, 3) as u64);
     let cbptr = crate::fs::extract_closure_ptr(cb);
     if !cbptr.is_null() {
-        crate::closure::js_closure_call3(cbptr, err, out, errout);
+        crate::closure::js_closure_call3(
+            cbptr,
+            crate::closure::plain_call_receiver(),
+            err,
+            out,
+            errout,
+        );
     }
     cp_undefined()
 }

@@ -778,7 +778,12 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                     callee_h.get_nanbox_f64(),
                     this_h.get_nanbox_f64(),
                 );
-                let result = crate::closure::js_native_call_value(call_target, rest_ptr, rest_len);
+                let result = crate::closure::js_native_call_value(
+                    call_target,
+                    crate::closure::plain_call_receiver(),
+                    rest_ptr,
+                    rest_len,
+                );
                 if static_target {
                     super::static_this_disarm();
                 }
@@ -920,6 +925,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 );
                 let result = crate::closure::js_native_call_value(
                     apply_target,
+                    crate::closure::plain_call_receiver(),
                     call_args_ptr,
                     call_args_len,
                 );

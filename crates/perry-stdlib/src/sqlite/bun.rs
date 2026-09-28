@@ -234,6 +234,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
     match perry_runtime::exception::js_call_catching(|| {
         js_closure_call_array(
             callback as i64,
+            perry_runtime::closure::plain_call_receiver(),
             if args.is_empty() {
                 std::ptr::null()
             } else {

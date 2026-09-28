@@ -387,7 +387,7 @@ extern "C" fn mock_property_implementation(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    mock_property_set(closure, crate::closure::JsThis::current(), value)
+    mock_property_set(closure, crate::closure::body_call::current_this(), value)
 }
 
 extern "C" fn mock_property_implementation_once(
@@ -613,7 +613,10 @@ mod tests {
         let context = proxy_context(proxy);
         let count = object_property(context, b"accessCount").expect("accessCount");
         assert_eq!(
-            js_closure_call0(raw_ptr_from_value(count) as *const ClosureHeader),
+            js_closure_call0(
+                raw_ptr_from_value(count) as *const ClosureHeader,
+                crate::closure::plain_call_receiver()
+            ),
             1.0
         );
         restore_all();
@@ -635,12 +638,14 @@ mod tests {
             object_property(context, b"mockImplementation").expect("mockImplementation");
         js_closure_call1(
             raw_ptr_from_value(implementation) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
             9.0,
         );
         let once =
             object_property(context, b"mockImplementationOnce").expect("mockImplementationOnce");
         crate::closure::js_closure_call2(
             raw_ptr_from_value(once) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
             4.0,
             1.0,
         );
@@ -649,7 +654,10 @@ mod tests {
         assert_eq!(get_property_value(target, "value"), 9.0);
         let count = object_property(context, b"accessCount").expect("accessCount");
         assert_eq!(
-            js_closure_call0(raw_ptr_from_value(count) as *const ClosureHeader),
+            js_closure_call0(
+                raw_ptr_from_value(count) as *const ClosureHeader,
+                crate::closure::plain_call_receiver()
+            ),
             3.0
         );
         let accesses = object_property(context, b"accesses").expect("accesses");

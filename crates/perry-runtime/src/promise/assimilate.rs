@@ -393,7 +393,12 @@ extern "C" fn promise_resolve_thenable_job(
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(thenable));
     let result = combinator_catch_js(|| unsafe {
-        crate::closure::js_native_call_value(then_action, args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            then_action,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     });
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if let Err(reason) = result {
@@ -495,6 +500,7 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     unsafe {
         crate::closure::js_native_call_value(
             then_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         );

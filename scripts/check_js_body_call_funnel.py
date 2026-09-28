@@ -26,8 +26,20 @@ signature to the ABI it is called with. Two definition rules close that:
   call ENTRY (`perry_abi::JS_CALL_ENTRIES`: it takes a closure as an ordinary
   argument) or says `NOT-A-JS-BODY: <why>` on one of the three lines above;
 * a function whose address is handed straight to a closure allocator
-  (`js_closure_alloc*`, `js_register_closure_*`, perry-ffi's `alloc_closure` /
-  `register_closure_arity`) declares the receiver.
+  (`js_closure_alloc*`, `js_register_closure_*`) declares the receiver.
+
+Every call ENTRY (`perry_abi::JS_CALL_ENTRIES`) takes the receiver after the
+function, and three rules keep native code outside the runtime on that ABI:
+
+* every definition AND every `extern` declaration of an entry, in any crate
+  (a `#[link_name]` alias included), declares `JsThis` as its second
+  parameter — a stale declaration is otherwise invisible to the compiler;
+* outside the runtime, stdlib and perry-ffi no crate declares a closure
+  allocator or registrar (`js_closure_alloc*`, `js_register_closure_*`):
+  addons register bodies through perry-ffi, whose API is typed;
+* perry-ffi's registration functions (`alloc_closure`, `register_closure_*`)
+  take no `*const u8`: a body is a `JsBody` pointer type, so a wrong
+  signature does not compile.
 """
 
 from __future__ import annotations
@@ -138,7 +150,8 @@ ALLOC_RE = re.compile(
 
 def call_entries(root: Path) -> set[str]:
     """`perry_abi::JS_CALL_ENTRIES`: runtime entry points that take a closure
-    as an ordinary argument (and read the receiver from the cell)."""
+    as an ordinary argument (and take the receiver as a parameter or bind
+    `undefined`)."""
     text = (root / "crates/perry-abi/src/lib.rs").read_text(encoding="utf-8")
     m = re.search(r"pub const JS_CALL_ENTRIES:[^=]*=\s*\[(.*?)\];", text, re.S)
     if not m:
@@ -203,6 +216,75 @@ def definition_violations(root: Path):
                 f"{rel}:{line}: `{name}` is installed as a JS body but does not declare "
                 "the callee and the receiver (perry_abi::JS_BODY_*)"
             )
+    return out
+
+
+# The V8 callback trampoline adapter keeps V8's receiverless contract.
+ENTRY_WITHOUT_RECEIVER = {"js_closure_v8_callback"}
+# `fn NAME(params) -> ret;` inside an extern block (no body), with an optional
+# `#[link_name = "..."]` a few lines above.
+DECL_RE = re.compile(r"\bfn\s+(\w+)\s*\(")
+LINK_NAME_RE = re.compile(r'#\[link_name\s*=\s*"(\w+)"\]')
+REGISTRAR_RE = re.compile(r"^(?:js_closure_alloc\w*|js_register_closure_\w+)$")
+REGISTRAR_CRATES_ALLOWED = ("crates/perry-runtime/", "crates/perry-stdlib/", "crates/perry-ffi/")
+FFI_CLOSURE = "crates/perry-ffi/src"
+
+
+def fn_items(text: str):
+    """Yield (name, params_text, is_declaration, start) for every `fn` item;
+    a declaration ends in `;` after its signature (an extern-block item)."""
+    for m in DECL_RE.finditer(text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        if depth:
+            continue
+        j = i
+        while j < len(text) and text[j] not in "{;":
+            j += 1
+        yield m.group(1), text[m.end() : i - 1], j < len(text) and text[j] == ";", m.start()
+
+
+def entry_abi_violations(root: Path):
+    entries = call_entries(root) - ENTRY_WITHOUT_RECEIVER
+    out = []
+    for path in sorted((root / "crates").glob("*/src/**/*.rs")):
+        rel = path.relative_to(root).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for name, params, is_decl, start in fn_items(text):
+            # This item's own attributes: back to the previous item's end.
+            head = text[max(text.rfind(";", 0, start), text.rfind("{", 0, start), text.rfind("}", 0, start)) + 1 : start]
+            ln = LINK_NAME_RE.search(head) if is_decl else None
+            symbol = ln.group(1) if ln else name
+            line = text.count("\n", 0, start) + 1
+            if symbol in entries and (is_decl or "extern" in text[max(0, start - 40) : start]):
+                types = param_types(params)
+                if len(types) < 2 or not JS_THIS_RE.match(types[1]):
+                    what = "declares" if is_decl else "defines"
+                    out.append(
+                        f"{rel}:{line}: `{name}` {what} the call entry `{symbol}` without the "
+                        "receiver (`this: JsThis` after the function; perry_abi::JS_CALL_ENTRIES)"
+                    )
+            if (
+                is_decl
+                and REGISTRAR_RE.match(symbol)
+                and not rel.startswith(REGISTRAR_CRATES_ALLOWED)
+            ):
+                out.append(
+                    f"{rel}:{line}: declares the closure registrar `{symbol}`; register a body "
+                    "through perry-ffi (`alloc_closure` / `register_closure_*`, typed `JsBody`)"
+                )
+            if (
+                rel.startswith(FFI_CLOSURE)
+                and not is_decl
+                and re.match(r"^(?:alloc_closure|register_closure_\w+)$", name)
+                and "*const u8" in params
+            ):
+                out.append(
+                    f"{rel}:{line}: perry-ffi's `{name}` takes an untyped `*const u8` body; "
+                    "take `F: JsBody<ClosureHeader>`"
+                )
     return out
 
 
@@ -276,7 +358,7 @@ def self_test() -> int:
         "def_macro_no_this": ("crates/perry-runtime/src/x.rs",
                               'macro_rules! m { ($n:ident) => { extern "C" fn $n(_c: *const ClosureHeader, $($a: f64),*) -> f64 { 0.0 } }; }', True),
         "def_entry_ok": ("crates/perry-runtime/src/x.rs",
-                         'pub extern "C" fn js_closure_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64 { a }', False),
+                         'pub extern "C" fn js_closure_call2(c: *const ClosureHeader, this: JsThis, a: f64, b: f64) -> f64 { a }', False),
         "def_exempt_ok": ("crates/perry-runtime/src/x.rs",
                           '// NOT-A-JS-BODY: a helper taking a closure argument.\nextern "C" fn helper(c: *const ClosureHeader, a: f64) -> f64 { a }', False),
         "def_macro_rep_no_this": ("crates/perry-runtime/src/x.rs",
@@ -290,6 +372,20 @@ def self_test() -> int:
         "alloc_ok": ("crates/perry-runtime/src/x.rs",
                      'extern "C" fn b(_c: *const ClosureHeader, _this: JsThis) -> f64 { 0.0 }\nfn f() { js_closure_alloc(b as *const u8, 0); }', False),
         "cg_funnel_ok": ("crates/perry-codegen/src/expr/body_call.rs", "fn f() { blk.call_indirect(DOUBLE, &p, &a); }", False),
+        "entry_def_no_this": ("crates/perry-runtime/src/x.rs",
+                              'pub extern "C" fn js_closure_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64 { a }', True),
+        "entry_decl_no_this": ("crates/perry-ui-zz/src/x.rs",
+                               'extern "C" {\n    fn js_closure_call2(c: *const u8, a: f64, b: f64) -> f64;\n}', True),
+        "entry_decl_ok": ("crates/perry-ui-zz/src/x.rs",
+                          'extern "C" {\n    fn js_closure_call2(c: *const u8, this: perry_ffi::JsThis, a: f64, b: f64) -> f64;\n}', False),
+        "entry_link_name_no_this": ("crates/perry-stdlib/src/x.rs",
+                                    'extern "C" {\n    #[link_name = "js_closure_call2"]\n    fn provider_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64;\n}', True),
+        "ext_registrar_decl": ("crates/perry-ext-zz/src/x.rs",
+                               'extern "C" {\n    fn js_closure_alloc(f: *const u8, n: u32) -> *mut u8;\n}', True),
+        "ffi_untyped_alloc": ("crates/perry-ffi/src/closure.rs",
+                              'pub fn alloc_closure(func: *const u8, capture_count: u32) -> *mut ClosureHeader { todo!() }', True),
+        "ffi_typed_alloc_ok": ("crates/perry-ffi/src/closure.rs",
+                               'pub fn alloc_closure<F: JsBody<ClosureHeader>>(func: F, capture_count: u32) -> *mut ClosureHeader { todo!() }', False),
     }
     failed = 0
     for name, (rel, text, expect_red) in cases.items():
@@ -304,7 +400,10 @@ def self_test() -> int:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(text, encoding="utf-8")
             red = bool(
-                runtime_violations(root) or codegen_violations(root) or definition_violations(root)
+                runtime_violations(root)
+                or codegen_violations(root)
+                or definition_violations(root)
+                or entry_abi_violations(root)
             )
             if red != expect_red:
                 print(f"self-test {name}: expected {'red' if expect_red else 'green'}, got {'red' if red else 'green'}")
@@ -321,12 +420,17 @@ def main() -> int:
     args = ap.parse_args()
     if args.self_test:
         return self_test()
-    violations = runtime_violations(REPO) + codegen_violations(REPO) + definition_violations(REPO)
+    violations = (
+        runtime_violations(REPO)
+        + codegen_violations(REPO)
+        + definition_violations(REPO)
+        + entry_abi_violations(REPO)
+    )
     if violations:
         print("\n".join(violations))
         print(f"\n{len(violations)} violation(s): JS body calls outside the funnels "
               "(runtime: closure/body_call.rs macros; codegen: expr::body_call::emit_js_body_call) "
-              "or JS body definitions without the receiver")
+              "or JS body / call-entry signatures without the receiver")
         return 1
     print(
         "check_js_body_call_funnel: every JS body call goes through its funnel "

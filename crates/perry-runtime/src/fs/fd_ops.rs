@@ -1002,17 +1002,28 @@ extern "C" fn dir_finish_read_callback_impl(
     let kind = crate::closure::js_closure_get_capture_f64(closure, 3) as i32;
     match kind {
         0 => {
-            crate::closure::js_closure_call2(callback, f64::from_bits(TAG_NULL), value);
+            crate::closure::js_closure_call2(
+                callback,
+                crate::closure::plain_call_receiver(),
+                f64::from_bits(TAG_NULL),
+                value,
+            );
         }
         1 => {
             crate::closure::js_closure_call2(
                 callback,
+                crate::closure::plain_call_receiver(),
                 f64::from_bits(TAG_NULL),
                 f64::from_bits(TAG_NULL),
             );
         }
         _ => {
-            crate::closure::js_closure_call2(callback, value, f64::from_bits(TAG_NULL));
+            crate::closure::js_closure_call2(
+                callback,
+                crate::closure::plain_call_receiver(),
+                value,
+                f64::from_bits(TAG_NULL),
+            );
         }
     }
     dir_clear_operation_pending(id);
@@ -1058,17 +1069,28 @@ pub(crate) extern "C" fn dir_read_impl(
         } else {
             match entry {
                 Ok(Some(value)) => {
-                    crate::closure::js_closure_call2(cb, f64::from_bits(TAG_NULL), value);
+                    crate::closure::js_closure_call2(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        f64::from_bits(TAG_NULL),
+                        value,
+                    );
                 }
                 Ok(None) => {
                     crate::closure::js_closure_call2(
                         cb,
+                        crate::closure::plain_call_receiver(),
                         f64::from_bits(TAG_NULL),
                         f64::from_bits(TAG_NULL),
                     );
                 }
                 Err(err) => {
-                    crate::closure::js_closure_call2(cb, err, f64::from_bits(TAG_NULL));
+                    crate::closure::js_closure_call2(
+                        cb,
+                        crate::closure::plain_call_receiver(),
+                        err,
+                        f64::from_bits(TAG_NULL),
+                    );
                 }
             }
         }
@@ -1097,7 +1119,7 @@ pub(crate) extern "C" fn dir_close_impl(
             Ok(()) => f64::from_bits(TAG_NULL),
             Err(err) => err,
         };
-        crate::closure::js_closure_call1(cb, err);
+        crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     match closed {

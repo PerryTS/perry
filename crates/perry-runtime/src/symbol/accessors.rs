@@ -282,7 +282,11 @@ pub(super) unsafe fn invoke_symbol_accessor_setter(
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
+    crate::closure::js_closure_call1(
+        closure,
+        crate::closure::plain_call_receiver(),
+        value_h.get_nanbox_f64(),
+    );
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     value_h.get_nanbox_f64()
 }
@@ -297,7 +301,7 @@ pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64)
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
+    let result = crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }

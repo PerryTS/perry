@@ -135,7 +135,12 @@ unsafe fn dictionary_function_proto_method_call(
     );
     let callee =
         crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
-    let result = crate::closure::js_native_call_value(callee, args_ptr, args_len);
+    let result = crate::closure::js_native_call_value(
+        callee,
+        crate::closure::plain_call_receiver(),
+        args_ptr,
+        args_len,
+    );
     super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
     Some(result)
 }
@@ -197,7 +202,10 @@ mod tests {
                 (*bound_ptr).func_ptr,
                 crate::closure::BOUND_FUNCTION_FUNC_PTR
             );
-            assert_eq!(crate::closure::js_closure_call0(bound_ptr), 42.0);
+            assert_eq!(
+                crate::closure::js_closure_call0(bound_ptr, crate::closure::plain_call_receiver()),
+                42.0
+            );
             crate::closure::shape::FUNCTION_PROTOTYPE_PTR.store(saved, Ordering::Release);
         }
     }

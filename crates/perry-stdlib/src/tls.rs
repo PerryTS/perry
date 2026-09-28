@@ -1256,6 +1256,7 @@ pub unsafe extern "C" fn js_tls_client_preflight(
         perry_runtime::closure::js_closure_set_capture_f64(completion, 1, nanbox_str(&servername));
         js_closure_call2(
             sni_callback as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
             nanbox_str(&servername),
             js_nanbox_pointer(completion as i64),
         );
@@ -1303,6 +1304,7 @@ pub unsafe extern "C" fn js_tls_client_preflight(
             .root_nanbox_f64(perry_runtime::object::js_implicit_this_set(callback_socket));
         let selected = js_closure_call1(
             rebound_callback as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
             js_nanbox_pointer(argument as i64),
         );
         perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());

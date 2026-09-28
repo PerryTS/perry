@@ -203,6 +203,7 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
         crate::object::js_implicit_this_set(recv);
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             std::ptr::null(),
             0,
         );
@@ -461,7 +462,12 @@ pub(crate) unsafe fn call_own_method(method: f64, receiver: f64) -> Option<f64> 
     let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    let ret = crate::closure::js_native_call_value(
+        f64::from_bits(bound),
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     Some(ret)
 }
@@ -634,7 +640,12 @@ unsafe fn call_method_for_primitive(
     let recv = value_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
     let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    let ret = crate::closure::js_native_call_value(
+        f64::from_bits(bound),
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     let ret_jsv = JSValue::from_bits(ret.to_bits());
     let is_primitive = ret_jsv.is_any_string()
@@ -689,7 +700,12 @@ unsafe fn call_function_method(
     let method_handle = scope.root_nanbox_f64(method);
     let bound = crate::closure::clone_closure_rebind_this(method_handle.get_nanbox_u64(), recv);
     let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
+    let ret = crate::closure::js_native_call_value(
+        f64::from_bits(bound),
+        crate::closure::plain_call_receiver(),
+        std::ptr::null(),
+        0,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 
     FunctionMethodOutcome::Value(ret)

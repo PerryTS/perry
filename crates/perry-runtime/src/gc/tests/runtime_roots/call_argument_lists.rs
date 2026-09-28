@@ -303,7 +303,12 @@ fn rest_bundling_roots_the_rest_array_across_the_arguments_array() {
     // under test here, so the closure pointer is a scoped argument to it —
     // `with_mut_ptr` is the blessed shape for that instead of a bare read.
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| unsafe {
-        crate::closure::js_closure_call_array(ptr as i64, args.as_ptr(), args.len() as i64);
+        crate::closure::js_closure_call_array(
+            ptr as i64,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len() as i64,
+        );
     });
 
     assert!(

@@ -585,7 +585,12 @@ extern "C" fn ordered_factory(
     flags: f64,
 ) -> f64 {
     ordered(5);
-    factory(closure, crate::closure::JsThis::current(), receiver, flags)
+    factory(
+        closure,
+        crate::closure::body_call::current_this(),
+        receiver,
+        flags,
+    )
 }
 extern "C" fn ordered_index(
     _: *const crate::closure::ClosureHeader,

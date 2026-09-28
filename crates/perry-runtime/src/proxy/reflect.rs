@@ -85,7 +85,7 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
                     receiver_handle.get_nanbox_f64()
                 };
                 let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-                let result = js_closure_call0(closure);
+                let result = js_closure_call0(closure, crate::closure::plain_call_receiver());
                 crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return result;
             }
@@ -450,6 +450,7 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
     ));
     let result = js_closure_call2(
         closure,
+        crate::closure::plain_call_receiver(),
         inner_handle.get_nanbox_f64(),
         property_key_handle.get_nanbox_f64(),
     );

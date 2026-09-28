@@ -714,7 +714,7 @@ pub(crate) extern "C" fn number_parse_float_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    global_this_parse_float_thunk(closure, crate::closure::JsThis::current(), value)
+    global_this_parse_float_thunk(closure, crate::closure::body_call::current_this(), value)
 }
 
 pub(crate) extern "C" fn number_parse_int_thunk(
@@ -723,7 +723,12 @@ pub(crate) extern "C" fn number_parse_int_thunk(
     value: f64,
     radix: f64,
 ) -> f64 {
-    global_this_parse_int_thunk(closure, crate::closure::JsThis::current(), value, radix)
+    global_this_parse_int_thunk(
+        closure,
+        crate::closure::body_call::current_this(),
+        value,
+        radix,
+    )
 }
 
 pub(crate) extern "C" fn typed_array_from_thunk(
@@ -767,7 +772,12 @@ pub(crate) extern "C" fn typed_array_from_thunk(
             return v;
         }
         crate::object::js_implicit_this_set(this_arg);
-        let r = crate::closure::js_closure_call2(map_closure, v, k as f64);
+        let r = crate::closure::js_closure_call2(
+            map_closure,
+            crate::closure::plain_call_receiver(),
+            v,
+            k as f64,
+        );
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         r
     };

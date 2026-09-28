@@ -267,7 +267,10 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
                 let rebound_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(rebound))
                     as *const crate::closure::ClosureHeader;
-                let iter = crate::closure::js_closure_call0(rebound_ptr);
+                let iter = crate::closure::js_closure_call0(
+                    rebound_ptr,
+                    crate::closure::plain_call_receiver(),
+                );
                 crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 if !is_object_value(iter) {
                     throw_iterator_result_not_object();
@@ -458,7 +461,8 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                 let prev_this =
                     this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(val_f64));
-                let iter = crate::closure::js_closure_call0(fn_ptr);
+                let iter =
+                    crate::closure::js_closure_call0(fn_ptr, crate::closure::plain_call_receiver());
                 crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 // Several Perry host-backed collections expose iterator
                 // helpers as eager arrays for direct `.entries()` parity. When
@@ -660,7 +664,11 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // Spec says the return value must be a primitive; if it's still an
     // object pointer, that's a TypeError in JS, but we just return it
     // as-is and let the caller fall back.
-    let result = crate::closure::js_closure_call1(closure_ptr, hint_f64);
+    let result = crate::closure::js_closure_call1(
+        closure_ptr,
+        crate::closure::plain_call_receiver(),
+        hint_f64,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }

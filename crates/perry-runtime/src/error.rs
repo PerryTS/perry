@@ -1306,7 +1306,12 @@ unsafe fn compute_stack_value(receiver: f64) -> f64 {
         let structured = build_structured_stack(10);
         let prep_ptr =
             crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
-        return crate::closure::js_closure_call2(prep_ptr, receiver, structured);
+        return crate::closure::js_closure_call2(
+            prep_ptr,
+            crate::closure::plain_call_receiver(),
+            receiver,
+            structured,
+        );
     }
     let s = make_stack("Error", "");
     crate::value::js_nanbox_string(s as i64)

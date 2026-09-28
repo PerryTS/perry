@@ -64,7 +64,7 @@ pub(crate) unsafe fn dispatch_wide_abi(
             padded!($slots, [$($i,)+ $($i + $step),+], $step * 2, $($more)*)
         };
         ($slots:ident, [$($i:expr),+], $step:expr,) => {{
-            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure, crate::closure::JsThis::current() $(, $slots[$i])+)
+            crate::closure::body_call::js_body_call_unwind!(func_ptr, closure, crate::closure::body_call::current_this() $(, $slots[$i])+)
         }};
     }
         macro_rules! fill {

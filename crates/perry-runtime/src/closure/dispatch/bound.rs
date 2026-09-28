@@ -333,7 +333,12 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     let target = rebind_explicit_this(target, bound_this);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(bound_this));
-    let result = js_native_call_value(target, call_ptr, call_len);
+    let result = js_native_call_value(
+        target,
+        crate::closure::plain_call_receiver(),
+        call_ptr,
+        call_len,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }

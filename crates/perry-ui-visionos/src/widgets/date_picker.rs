@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -64,7 +64,7 @@ define_class!(
                 let header = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
                 let arg = js_nanbox_string(header as i64);
                 let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
-                js_closure_call1(closure_ptr, arg);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, arg);
             }
         }
     }

@@ -68,7 +68,12 @@ pub(crate) unsafe fn call_replacer(
 ) -> f64 {
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(holder_f64));
-    let result = crate::js_closure_call2(replacer, key_f64, value_f64);
+    let result = crate::js_closure_call2(
+        replacer,
+        crate::closure::plain_call_receiver(),
+        key_f64,
+        value_f64,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // The user callback may have installed/removed `Object.prototype.toJSON`
     // (#6009 fast-probe cache).

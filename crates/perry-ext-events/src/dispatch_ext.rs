@@ -198,7 +198,7 @@ mod tests {
     }
 
     fn listener_value() -> f64 {
-        let closure = unsafe { js_closure_alloc(noop_listener as *const u8, 0) };
+        let closure = perry_ffi::alloc_closure(noop_listener as perry_ffi::JsBody0, 0);
         nanbox_pointer_bits(closure as i64)
     }
 

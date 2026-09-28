@@ -2141,7 +2141,12 @@ fn js_set_foreach_impl(
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
             crate::object::js_implicit_this_set(this_v);
-            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
+            let _ = crate::closure::js_native_call_value(
+                cb,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
     }

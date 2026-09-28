@@ -77,7 +77,11 @@ pub(super) extern "C" fn assert_snapshot(
         );
     }
     let resolver_ptr = raw_ptr_from_value(resolver) as *const ClosureHeader;
-    let path_value = js_closure_call1(resolver_ptr, string_value(""));
+    let path_value = js_closure_call1(
+        resolver_ptr,
+        crate::closure::plain_call_receiver(),
+        string_value(""),
+    );
     let Some(path) = value_to_string(path_value) else {
         throw_invalid_arg_type("snapshot path", "string", path_value);
     };

@@ -649,7 +649,7 @@ fn emit_event0(id: usize, event: &str) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            js_closure_call0(cb_ptr);
+            js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
     bridge_to_stream_listeners(id, event, &[], handled_locally);
@@ -662,7 +662,7 @@ fn emit_event1(id: usize, event: &str, arg: f64) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            js_closure_call1(cb_ptr, arg);
+            js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
     bridge_to_stream_listeners(id, event, &[arg], handled_locally);
@@ -835,7 +835,7 @@ fn call_stream_callback0(callback: f64) {
     if is_callable_value(callback) {
         let cb_ptr = extract_closure_ptr(callback);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
 }
@@ -844,7 +844,7 @@ fn call_stream_callback1(callback: f64, arg: f64) {
     if is_callable_value(callback) {
         let cb_ptr = extract_closure_ptr(callback);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, arg);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
 }
@@ -1644,9 +1644,13 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
                 if name == "open" || name == "error" {
-                    crate::closure::js_closure_call1(cb_ptr, arg);
+                    crate::closure::js_closure_call1(
+                        cb_ptr,
+                        crate::closure::plain_call_receiver(),
+                        arg,
+                    );
                 } else {
-                    crate::closure::js_closure_call0(cb_ptr);
+                    crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
                 }
             }
         }

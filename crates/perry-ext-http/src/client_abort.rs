@@ -40,7 +40,7 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
         return;
     }
 
-    let listener = perry_ffi::alloc_closure(request_signal_listener as *const u8, 1);
+    let listener = perry_ffi::alloc_closure(request_signal_listener as perry_ffi::JsBody0, 1);
     if listener.is_null() {
         return;
     }

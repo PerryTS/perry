@@ -517,11 +517,14 @@ pub(crate) fn try_lower_instance_method_call(
             let recv_for_this_probe = recv_box.clone();
             // #7211: rooted save/restore across the user-code dispatch.
             let prev_this_probe = crate::rooting::implicit_this_save(ctx, &recv_for_this_probe);
+            // Stage 1: the call runs with the implicit-`this` cell's value.
+            let this_bits = crate::expr::body_call::current_this_bits(ctx);
             let v_override_probe = ctx.block().call(
                 DOUBLE,
                 "js_native_call_value",
                 &[
                     (DOUBLE, &own_method_probe),
+                    (I64, &this_bits),
                     (crate::types::PTR, &probe_args_ptr),
                     (I64, &probe_args_len_str),
                 ],
@@ -1929,11 +1932,14 @@ fn emit_collapsed_instance_dispatch(
     ctx.current_block = override_idx;
     // #7211: rooted save/restore across the user-code dispatch.
     let prev_this = crate::rooting::implicit_this_save(ctx, recv_box);
+    // Stage 1: the call runs with the implicit-`this` cell's value.
+    let this_bits = crate::expr::body_call::current_this_bits(ctx);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
         &[
             (DOUBLE, &own_method),
+            (I64, &this_bits),
             (crate::types::PTR, &args_ptr),
             (I64, &args_len),
         ],

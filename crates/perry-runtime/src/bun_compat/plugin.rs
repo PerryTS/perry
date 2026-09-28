@@ -107,7 +107,12 @@ fn register(plugin: f64) -> f64 {
     }));
     let result = crate::exception::catch_js_throw(|| unsafe {
         let args = [build.get_nanbox_f64()];
-        crate::closure::js_native_call_value(setup.get_nanbox_f64(), args.as_ptr(), 1)
+        crate::closure::js_native_call_value(
+            setup.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
     });
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     let result = match result {
@@ -165,7 +170,14 @@ mod tests {
         ] {
             let hook = object_field(build.get_nanbox_f64(), name).expect("builder hook");
             let args = [undefined(), callback.get_nanbox_f64()];
-            let result = unsafe { crate::closure::js_native_call_value(hook, args.as_ptr(), 2) };
+            let result = unsafe {
+                crate::closure::js_native_call_value(
+                    hook,
+                    crate::closure::plain_call_receiver(),
+                    args.as_ptr(),
+                    2,
+                )
+            };
             assert_eq!(result.to_bits(), undefined().to_bits());
         }
         assert!(object_field(build.get_nanbox_f64(), b"config").is_some());
@@ -235,7 +247,14 @@ mod tests {
         let raw = JSValue::from_bits(value.get_nanbox_f64().to_bits()).as_pointer::<u8>();
         let clear = crate::closure::closure_get_dynamic_prop(raw as usize, "clearAll");
         assert!(!crate::fs::extract_closure_ptr(clear).is_null());
-        let result = unsafe { crate::closure::js_native_call_value(clear, std::ptr::null(), 0) };
+        let result = unsafe {
+            crate::closure::js_native_call_value(
+                clear,
+                crate::closure::plain_call_receiver(),
+                std::ptr::null(),
+                0,
+            )
+        };
         assert_eq!(result.to_bits(), undefined().to_bits());
     }
 }

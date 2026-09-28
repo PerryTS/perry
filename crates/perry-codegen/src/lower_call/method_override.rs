@@ -812,11 +812,14 @@ pub(super) fn emit_own_method_override_check(
     // #7211: rooted save/restore — the displaced implicit `this` is live
     // across `js_native_call_value`, which runs arbitrary user code.
     let prev_this = crate::rooting::implicit_this_save(ctx, &recv_for_this);
+    // Stage 1: the call runs with the implicit-`this` cell's value.
+    let this_bits = crate::expr::body_call::current_this_bits(ctx);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
         &[
             (DOUBLE, &own_method),
+            (I64, &this_bits),
             (crate::types::PTR, &args_ptr),
             (I64, &args_len),
         ],

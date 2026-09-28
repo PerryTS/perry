@@ -392,6 +392,7 @@ fn test_array_exotic_descriptors_and_global_prototype_identity() {
         let args = [0.0, 1.0, 0.0, 1.0];
         crate::closure::js_native_call_value(
             f64::from_bits(array_ctor.bits()),
+            crate::closure::plain_call_receiver(),
             args.as_ptr(),
             args.len(),
         )

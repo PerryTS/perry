@@ -1578,10 +1578,10 @@ fn lower_closure_call_rooted<'a>(
         None => None,
     };
     let recv_box = group.reread(ctx, callee_slot)?;
-    // One-argument receiverless calls have a runtime arrow-aware dispatcher.
-    // It folds arrow-ness into the existing closure-strategy cache and only
-    // performs OrdinaryCallBindThis for non-arrows. Other arities retain the
-    // generated save/restore path below.
+    // One-argument receiverless calls pass `undefined` to the call entry,
+    // which binds the implicit-`this` cell to it only for a non-arrow callee
+    // (arrow-ness comes from the existing closure-strategy cache). Other
+    // arities retain the generated save/restore path below.
     let receiverless_one_arg =
         method_recv.is_none() && !matches!(callee, Expr::PropertyGet { .. }) && args.len() == 1;
 
@@ -1690,10 +1690,13 @@ fn lower_closure_call_rooted<'a>(
     }
 
     let result = if receiverless_one_arg {
-        ctx.block().call(
-            DOUBLE,
-            "js_closure_call1_receiverless",
-            &[(I64, &closure_handle), (DOUBLE, &lowered_args[0])],
+        // A plain call binds `undefined` (OrdinaryCallBindThis); the entry
+        // binds the implicit-`this` cell to it unless the callee is an arrow.
+        super::emit_closure_handle_call_this(
+            ctx,
+            &closure_handle,
+            crate::expr::body_call::JS_THIS_UNDEFINED,
+            &lowered_args,
         )
     } else {
         // #3527: > 16 args marshal into an entry-block `[N x double]` buffer and

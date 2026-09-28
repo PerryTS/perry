@@ -69,7 +69,12 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
         js_implicit_this_set(target.get_nanbox_f64());
         let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
         unsafe {
-            let _ = js_native_call_value(cb, current_args.as_ptr(), current_args.len());
+            let _ = js_native_call_value(
+                cb,
+                crate::closure::plain_call_receiver(),
+                current_args.as_ptr(),
+                current_args.len(),
+            );
         }
         js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
@@ -226,7 +231,11 @@ pub(crate) extern "C" fn cp_method_dispose(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = cp_method_kill(closure, crate::closure::JsThis::current(), cp_undefined());
+    let _ = cp_method_kill(
+        closure,
+        crate::closure::body_call::current_this(),
+        cp_undefined(),
+    );
     cp_undefined()
 }
 pub(crate) fn js_fork_child(args_len: usize) -> f64 {
@@ -350,7 +359,12 @@ pub(crate) extern "C" fn cp_pipe_data_thunk(
         let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [chunk];
         unsafe {
-            let _ = js_native_call_value(write, args.as_ptr(), args.len());
+            let _ = js_native_call_value(
+                write,
+                crate::closure::plain_call_receiver(),
+                args.as_ptr(),
+                args.len(),
+            );
         }
         js_implicit_this_set(prev.get_nanbox_f64());
     }
@@ -371,7 +385,8 @@ pub(crate) extern "C" fn cp_pipe_end_thunk(
         let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [cp_undefined()];
         unsafe {
-            let _ = js_native_call_value(end, args.as_ptr(), 0);
+            let _ =
+                js_native_call_value(end, crate::closure::plain_call_receiver(), args.as_ptr(), 0);
         }
         js_implicit_this_set(prev.get_nanbox_f64());
     }
@@ -410,7 +425,12 @@ pub(crate) extern "C" fn cp_stream_callback_thunk(
     let callback = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let args: [f64; 0] = [];
     unsafe {
-        let _ = js_native_call_value(callback, args.as_ptr(), 0);
+        let _ = js_native_call_value(
+            callback,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            0,
+        );
     }
     cp_undefined()
 }
@@ -571,7 +591,14 @@ pub(crate) extern "C" fn cp_send_callback_thunk(
         cp_channel_closed_error()
     };
     let args = [arg];
-    unsafe { js_native_call_value(cb, args.as_ptr(), args.len()) };
+    unsafe {
+        js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
+    };
     cp_undefined()
 }
 

@@ -520,7 +520,7 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
         as *const crate::closure::ClosureHeader;
     let result_f64 = {
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
-        crate::closure::js_closure_call0(closure)
+        crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver())
     };
     super::super::js_implicit_this_set(prev_h.get_nanbox_f64());
     JSValue::from_bits(result_f64.to_bits())
@@ -555,7 +555,11 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
     let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
-    let _ = crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
+    let _ = crate::closure::js_closure_call1(
+        closure,
+        crate::closure::plain_call_receiver(),
+        value_h.get_nanbox_f64(),
+    );
     super::super::js_implicit_this_set(prev_h.get_nanbox_f64());
 }
 

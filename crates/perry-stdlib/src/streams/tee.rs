@@ -235,9 +235,12 @@ pub(super) unsafe fn tee_source_enqueue(
         g.get(&id).map(|s| s.strategy_size_cb).unwrap_or(0)
     };
     let size = if size_cb != 0 {
-        let size = super::readable_strategy_size_to_number(
-            perry_runtime::closure::js_closure_call1(size_cb as *const ClosureHeader, chunk),
-        );
+        let size =
+            super::readable_strategy_size_to_number(perry_runtime::closure::js_closure_call1(
+                size_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
+                chunk,
+            ));
         if size.is_nan() || size < 0.0 || size.is_infinite() {
             super::throw_invalid_readable_strategy_size(id, size);
         }

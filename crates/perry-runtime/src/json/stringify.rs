@@ -315,7 +315,12 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
 
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let result = crate::closure::js_native_call_value(f64::from_bits(bound), &key_f64_arg, 1);
+    let result = crate::closure::js_native_call_value(
+        f64::from_bits(bound),
+        crate::closure::plain_call_receiver(),
+        &key_f64_arg,
+        1,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // The user callback may have installed/removed `Object.prototype.toJSON`.
     invalidate_object_proto_tojson_state();
@@ -368,7 +373,12 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
     let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         recv_handle.get_nanbox_f64(),
     ));
-    let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);
+    let result = crate::closure::js_native_call_value(
+        f64::from_bits(method_bits),
+        crate::closure::plain_call_receiver(),
+        &key_f64_arg,
+        1,
+    );
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // The user callback may have installed/removed `Object.prototype.toJSON`.
     invalidate_object_proto_tojson_state();

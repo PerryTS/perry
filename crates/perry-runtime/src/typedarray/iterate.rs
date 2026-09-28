@@ -43,7 +43,13 @@ pub extern "C" fn js_typed_array_map(
         };
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             crate::typedarray_props::species_result_store(result_addr, i, r);
         }
         species::result_as_ptr(result)
@@ -75,7 +81,13 @@ pub extern "C" fn js_typed_array_filter(
         let mut kept: Vec<f64> = Vec::new();
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 kept.push(v);
             }
@@ -111,7 +123,13 @@ pub extern "C" fn js_typed_array_every(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) == 0 {
                 return f64::from_bits(crate::value::TAG_FALSE);
             }
@@ -139,7 +157,13 @@ pub extern "C" fn js_typed_array_some(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 return f64::from_bits(crate::value::TAG_TRUE);
             }
@@ -165,7 +189,13 @@ pub extern "C" fn js_typed_array_for_each(
             let cb_site = crate::closure::DirectCall3::resolve(callback);
             for i in 0..len {
                 let v = load_at(ta, i);
-                let _ = cb_site.call(callback, v, i as f64, recv);
+                let _ = cb_site.call(
+                    callback,
+                    crate::closure::plain_call_receiver(),
+                    v,
+                    i as f64,
+                    recv,
+                );
             }
         }
     }
@@ -191,7 +221,13 @@ pub extern "C" fn js_typed_array_find(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 return v;
             }
@@ -219,7 +255,13 @@ pub extern "C" fn js_typed_array_find_index(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         for i in 0..len {
             let v = load_at(ta, i);
-            let r = cb_site.call(callback, v, i as f64, recv);
+            let r = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                v,
+                i as f64,
+                recv,
+            );
             if crate::value::js_is_truthy(r) != 0 {
                 return i as f64;
             }
@@ -284,7 +326,14 @@ pub extern "C" fn js_typed_array_reduce(
         let acc = scope.root_nanbox_f64(accumulator);
         for i in start_idx..len {
             let v = load_at(ta, i);
-            let next = cb_site.call(callback, acc.get_nanbox_f64(), v, i as f64, recv);
+            let next = cb_site.call(
+                callback,
+                crate::closure::plain_call_receiver(),
+                acc.get_nanbox_f64(),
+                v,
+                i as f64,
+                recv,
+            );
             acc.set_nanbox_f64(next);
         }
         acc.get_nanbox_f64()
@@ -345,7 +394,14 @@ pub extern "C" fn js_typed_array_reduce_right(
         if start_idx > 0 {
             for i in (0..start_idx).rev() {
                 let v = load_at(ta, i);
-                let next = cb_site.call(callback, acc.get_nanbox_f64(), v, i as f64, recv);
+                let next = cb_site.call(
+                    callback,
+                    crate::closure::plain_call_receiver(),
+                    acc.get_nanbox_f64(),
+                    v,
+                    i as f64,
+                    recv,
+                );
                 acc.set_nanbox_f64(next);
             }
         }

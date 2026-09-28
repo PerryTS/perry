@@ -22,7 +22,7 @@ fn reflective_map_mutators_keep_subclass_identity() {
     assert_eq!(
         map_proto_set_thunk(
             std::ptr::null(),
-            crate::closure::JsThis::current(),
+            crate::closure::body_call::current_this(),
             1.0,
             10.0
         )
@@ -30,30 +30,48 @@ fn reflective_map_mutators_keep_subclass_identity() {
         receiver.get_nanbox_f64().to_bits()
     );
     assert_eq!(
-        map_proto_get_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0),
+        map_proto_get_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        ),
         10.0
     );
     assert_eq!(
-        map_proto_size_getter_thunk(std::ptr::null(), crate::closure::JsThis::current()),
+        map_proto_size_getter_thunk(std::ptr::null(), crate::closure::body_call::current_this()),
         1.0
     );
     assert_eq!(
-        map_proto_delete_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        map_proto_delete_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
     assert_eq!(
-        map_proto_has_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        map_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_FALSE
     );
     map_proto_set_thunk(
         std::ptr::null(),
-        crate::closure::JsThis::current(),
+        crate::closure::body_call::current_this(),
         2.0,
         20.0,
     );
-    map_proto_clear_thunk(std::ptr::null(), crate::closure::JsThis::current(), 0.0);
+    map_proto_clear_thunk(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        0.0,
+    );
     assert_eq!(
-        map_proto_size_getter_thunk(std::ptr::null(), crate::closure::JsThis::current()),
+        map_proto_size_getter_thunk(std::ptr::null(), crate::closure::body_call::current_this()),
         0.0
     );
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());
@@ -68,29 +86,57 @@ fn reflective_set_mutators_keep_subclass_identity() {
         receiver.get_nanbox_f64(),
     ));
     assert_eq!(
-        set_proto_add_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        set_proto_add_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         receiver.get_nanbox_f64().to_bits()
     );
     assert_eq!(
-        set_proto_has_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        set_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
     assert_eq!(
-        set_proto_size_getter_thunk(std::ptr::null(), crate::closure::JsThis::current()),
+        set_proto_size_getter_thunk(std::ptr::null(), crate::closure::body_call::current_this()),
         1.0
     );
     assert_eq!(
-        set_proto_delete_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        set_proto_delete_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
     assert_eq!(
-        set_proto_has_thunk(std::ptr::null(), crate::closure::JsThis::current(), 1.0).to_bits(),
+        set_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::body_call::current_this(),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_FALSE
     );
-    set_proto_add_thunk(std::ptr::null(), crate::closure::JsThis::current(), 2.0);
-    set_proto_clear_thunk(std::ptr::null(), crate::closure::JsThis::current(), 0.0);
+    set_proto_add_thunk(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        2.0,
+    );
+    set_proto_clear_thunk(
+        std::ptr::null(),
+        crate::closure::body_call::current_this(),
+        0.0,
+    );
     assert_eq!(
-        set_proto_size_getter_thunk(std::ptr::null(), crate::closure::JsThis::current()),
+        set_proto_size_getter_thunk(std::ptr::null(), crate::closure::body_call::current_this()),
         0.0
     );
     crate::object::js_implicit_this_set(previous.get_nanbox_f64());

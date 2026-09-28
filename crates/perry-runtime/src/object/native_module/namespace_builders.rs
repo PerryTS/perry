@@ -673,8 +673,12 @@ pub unsafe extern "C" fn js_https_global_agent_emit(
         let ptr =
             (callback_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if crate::closure::is_closure_ptr(ptr as usize) {
-            let _ =
-                crate::closure::js_closure_call2(ptr, arg0.get_nanbox_f64(), arg1.get_nanbox_f64());
+            let _ = crate::closure::js_closure_call2(
+                ptr,
+                crate::closure::plain_call_receiver(),
+                arg0.get_nanbox_f64(),
+                arg1.get_nanbox_f64(),
+            );
         }
     }
 }
