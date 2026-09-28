@@ -72,7 +72,10 @@ use self::guard::{
     decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i16, field_i32,
     handle_of, lower_recv, store_admission,
 };
-use self::plan::{accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Recheck};
+use self::plan::{
+    accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible,
+    Recheck,
+};
 use self::verify::{successors, verify};
 
 const SLOT_BITS: u32 = 6;
