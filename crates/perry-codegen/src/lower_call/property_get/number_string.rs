@@ -208,9 +208,25 @@ pub(crate) fn try_lower_number_string_methods(
             })
             .unwrap_or(false);
         if !has_user_to_string {
+            let numeric = args.is_empty() && crate::type_analysis::is_numeric_expr(ctx, object);
             let v = lower_expr(ctx, object)?;
             for a in args {
                 let _ = lower_expr(ctx, a)?;
+            }
+            // A number receiver's small-integer text is built inline (#10762).
+            if numeric {
+                return crate::expr::number_to_string_inline::emit_number_to_string_inline(
+                    ctx,
+                    &v,
+                    |ctx| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_jsvalue_to_string_method_box",
+                            &[(DOUBLE, &v)],
+                        ))
+                    },
+                )
+                .map(Some);
             }
             let blk = ctx.block();
             // #3146: an explicit `.toString()` member call must throw a

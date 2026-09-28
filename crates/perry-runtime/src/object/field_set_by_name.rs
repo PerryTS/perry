@@ -320,7 +320,7 @@ pub extern "C" fn js_object_set_field_by_name(
         // it over-approximates, and the only cost of that is the guard's slow
         // side. Named keys only: an index write is not a method shadow.
         if !key.is_null() {
-            crate::object::own_override::note_exotic_named_prop_install();
+            crate::object::own_override::note_exotic_named_prop_install(obj as usize);
         }
         // A Buffer is an ordinary object in Node (a Uint8Array), so `buf.foo = v`
         // stores an own property — and an own key SHADOWS the same-named prototype

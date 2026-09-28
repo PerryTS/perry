@@ -133,7 +133,7 @@ fn copying_minor_feeds_the_object_denomination_census() {
 }
 
 /// #8122: BEFORE any copying minor has run, once the young generation is
-/// half-way to the base cap, one header walk seeds the object denomination
+/// half-way to the power-on cap, one header walk seeds the object denomination
 /// with the mean size of what was actually allocated — so the FIRST minor is
 /// object-denominated too, and a smaller representation stops buying the
 /// collector a bigger first trace.
@@ -159,11 +159,17 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
     );
     assert!(!crate::gc::tenuring::object_census_seeded_for_test());
 
-    // Fill Eden past half the base cap with two-field object literals — the
-    // representation whose shrink motivated this. Unrooted is fine: nothing
-    // collects here, and an allocation census counts dead objects too.
+    // Fill Eden past the seed point (half the power-on cap, #11549) with
+    // two-field object literals — the representation whose shrink motivated
+    // this. Unrooted is fine: nothing collects here, and an allocation census
+    // counts dead objects too.
+    let seed_point = crate::gc::tenuring::object_census_seed_point_bytes();
+    assert!(
+        seed_point < base / 4,
+        "the census must run before the first (power-on) cap is reached"
+    );
     let (mut allocated_bytes, mut allocated_objects) = (0usize, 0usize);
-    while crate::arena::copying_from_space_in_use_bytes() < base / 2 + 64 * 1024 {
+    while crate::arena::copying_from_space_in_use_bytes() < seed_point + 64 * 1024 {
         for _ in 0..1024 {
             let obj = crate::object::js_object_alloc(0, 2);
             let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
@@ -182,7 +188,7 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
     let _ = crate::gc::policy::young_scavenge_cap_due();
     assert!(
         crate::gc::tenuring::object_census_seeded_for_test(),
-        "half-way to the base cap the allocation census must have run"
+        "half-way to the power-on cap the allocation census must have run"
     );
     let seeded = crate::gc::tenuring::mean_surviving_object_bytes();
     // The nursery may hold a few pre-existing objects from the guard's own
@@ -196,10 +202,11 @@ fn allocation_census_seeds_the_first_cap_before_any_minor() {
         seeded,
         crate::gc::tenuring::NURSERY_CAP_REFERENCE_OBJECT_BYTES
     );
-    // ...and the first cap already reflects it — before any collection.
+    // ...and the first cap already reflects it — before any collection. The
+    // first cap is the ÷4 power-on floor (#11549).
     assert_eq!(
         crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
-        base * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded) / 1000
+        base / 4 * crate::gc::tenuring::nursery_cap_object_scale_permille(seeded) / 1000
     );
 
     // One-shot: a different population allocated afterwards does not move

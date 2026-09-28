@@ -134,8 +134,10 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
     } else {
         perry_uuid::v4()
     };
-    let uuid_str = uuid.as_str();
-    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+    // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+    // UTF-8 on every UUID only for the string constructor to copy them.
+    let uuid_bytes = uuid.as_bytes();
+    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
 }
 
 /// Generate an RFC 9562 version 7 UUID — a 48-bit millisecond Unix
@@ -147,8 +149,8 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
     let uuid = perry_uuid::v7();
-    let uuid_str = uuid.as_str();
-    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+    let uuid_bytes = uuid.as_bytes();
+    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
 }
 
 /// Validates `randomUUID`'s options bag and returns `disableEntropyCache`.

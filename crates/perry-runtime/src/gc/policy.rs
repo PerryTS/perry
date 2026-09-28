@@ -145,7 +145,7 @@ fn young_scavenge_cap_probe(old_reclaimable: impl FnOnce() -> usize) -> YoungSca
     };
     // #8122: before the first copying minor has measured survivors, denominate
     // the FIRST cap in this program's objects too (one header walk, once per
-    // process, halfway to the base cap). Not while a collection is in
+    // process, halfway to the power-on cap). Not while a collection is in
     // progress or a budgeted cycle is active — the young generation is being
     // rewritten then and the walk would read forwarding stubs.
     //
@@ -784,6 +784,27 @@ pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
 pub(crate) fn gc_note_external_side_free(bytes: usize) {
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
     GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(|c| c.set(c.get().saturating_add(bytes)));
+}
+
+/// Record `bytes` of operation-scoped native scratch that its own operation
+/// frees before returning (#11549), such as regex match and compile buffers.
+///
+/// Only the live term moves. The collector can never reclaim this memory, so
+/// it does not count toward the allocation-churn step and its release does not
+/// add to [`external_side_old_reclaim_pressure_bytes`]. Through
+/// [`gc_note_external_side_alloc`]/[`gc_note_external_side_free`], a 42-register
+/// regex in a loop (dotenv's line pattern) fed 336+ bytes per call into that
+/// released-bytes term. The term never matched any garbage on the heap, and it
+/// alone drove the loop into repeated full collections.
+///
+/// Never collects, so callers may hold raw heap views across it.
+pub(crate) fn gc_note_external_transient_alloc(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
+}
+
+/// Release bytes recorded by [`gc_note_external_transient_alloc`].
+pub(crate) fn gc_note_external_transient_free(bytes: usize) {
+    GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_sub(bytes)));
 }
 
 /// The external side-buffer term of OLD-RECLAIM pressure.

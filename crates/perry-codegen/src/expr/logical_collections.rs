@@ -1175,13 +1175,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // and `${i}` allocate nothing for it. The result is therefore
         // SSO-or-heap, not heap — see `proven_heap_string_operand`.
         Expr::StringCoerce(operand) => {
+            let numeric = crate::type_analysis::is_numeric_expr(ctx, operand);
             let v = lower_expr(ctx, operand)?;
+            // A number operand's small-integer text is built inline (#10762).
+            if numeric {
+                return crate::expr::number_to_string_inline::emit_number_to_string_inline(
+                    ctx,
+                    &v,
+                    |ctx| {
+                        Ok(ctx
+                            .block()
+                            .call(DOUBLE, "js_string_coerce_box", &[(DOUBLE, &v)]))
+                    },
+                );
+            }
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_string_coerce_box", &[(DOUBLE, &v)]))
         }
         Expr::TemplateStringCoerce(operand) => {
+            let numeric = crate::type_analysis::is_numeric_expr(ctx, operand);
             let v = lower_expr(ctx, operand)?;
+            if numeric {
+                return crate::expr::number_to_string_inline::emit_number_to_string_inline(
+                    ctx,
+                    &v,
+                    |ctx| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_template_string_coerce_box",
+                            &[(DOUBLE, &v)],
+                        ))
+                    },
+                );
+            }
             // S2: a string operand is answered inline; see `ic_fast_split.rs`.
             Ok(crate::expr::ic_fast_split::emit_template_string_coerce(
                 ctx, &v,

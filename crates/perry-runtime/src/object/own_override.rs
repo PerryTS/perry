@@ -55,7 +55,8 @@
 
 use std::sync::atomic::Ordering;
 
-/// Has any non-`ObjectHeader` cell ever taken a named property?
+/// Has any non-`ObjectHeader` cell ever taken a named property that could
+/// shadow a builtin on a guarded receiver?
 ///
 /// Set-only. See the module docs for why it is armed early and never cleared.
 /// Exported so EMITTED CODE can test it inline. The guard's common case is
@@ -66,15 +67,107 @@ use std::sync::atomic::Ordering;
 /// emitted guard reads with one monotonic load and a not-taken branch, with
 /// the call left behind it for the case that is almost never taken.
 ///
+/// The runtime's own builtin definitions do not arm it unless their owner is
+/// a Map, Set or Date cell (#10697; see [`as_builtin_definition`]). [`OWN_NAMED_PROP_EVER`]
+/// is armed by every install, builtin or not, for the dispatcher.
+///
 /// A `u32` rather than a bool so the emitted load matches the barrier gate's
 /// alignment and width; only zero / non-zero is meaningful.
 #[no_mangle]
 pub static PERRY_OWN_NAMED_PROP_INSTALLED: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
-/// Armed from the top of `field_set_by_name`'s exotic-store gauntlet.
+/// Has any non-`ObjectHeader` cell ever taken a named property at all,
+/// including the runtime's own builtin definitions? Set-only, like
+/// [`PERRY_OWN_NAMED_PROP_INSTALLED`], and armed wherever that flag was armed
+/// before #10697, so [`own_user_method_value`] answers exactly as it did.
+static OWN_NAMED_PROP_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+crate::perry_thread_local! {
+    /// Set while the runtime runs its own builtin definitions (#10697). A
+    /// flag, never an address.
+    static BUILTIN_INTRINSIC_INSTALL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Test-only: installs on this thread that armed the guard's flag. The
+    /// flag itself is process-global and set-only, so another test has
+    /// usually armed it already and it cannot be observed changing (#10697).
+    pub(crate) static ARMS_NOTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Run `install`, one of the runtime's own builtin definitions, so that the
+/// named-property installs it makes arm [`PERRY_OWN_NAMED_PROP_INSTALLED`]
+/// only when their owner is a Map, Set or Date cell (#10697).
+///
+/// Populating `globalThis` installs statics on constructor intrinsics such as
+/// `%TypedArray%` (closure cells), `constructor` on `Array.prototype` (an
+/// array cell), and aliases such as `Number.parseFloat`. Each of those stores
+/// passes the exotic gauntlet that arms the flag. One lazy population anywhere
+/// in a program then sent every guarded `Map`/`Set`/`Date` builtin call
+/// through the authoritative `hasOwn` predicate: about 600 instructions on
+/// each `m.get(k)`, 4.2x node in #10697's count-by-category shape.
+///
+/// The flag answers for the emitted guard and its predicate only, and those
+/// protect proven Map, Set, Array and Date receivers. An array answers from
+/// its own header and named-property storage, never from this flag, and a
+/// declared-`Map` receiver of any other kind is brand-checked into generic
+/// dispatch. So only an install onto a Map, Set or Date cell can matter to
+/// it, and [`note_exotic_named_prop_install`] still arms for those, and for an
+/// owner whose header cannot be read, inside this scope too. A builtin
+/// definition installs the builtin itself in any case, never a user override
+/// of it. [`OWN_NAMED_PROP_EVER`] is armed exactly as before.
+///
+/// Thread-local rather than save-and-restore of the global flag, so an arm by
+/// another thread in the same window is never undone. Nests.
+pub(crate) fn as_builtin_definition<R>(install: impl FnOnce() -> R) -> R {
+    let outer = BUILTIN_INTRINSIC_INSTALL.with(|flag| flag.replace(true));
+    // Restored on unwind too: a leaked `true` would stop user installs from
+    // arming, which is the silent wrong value the flag exists to prevent.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BUILTIN_INTRINSIC_INSTALL.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(outer);
+    install()
+}
+
+/// Can a named property on `owner` shadow a builtin that the emitted guard
+/// answers from [`PERRY_OWN_NAMED_PROP_INSTALLED`]? `owner` is an address or
+/// NaN-boxed pointer bits. Unreadable owners answer yes.
+fn owner_is_flag_guarded(owner: usize) -> bool {
+    let bits = owner as u64;
+    let addr = if bits >> 48 == 0x7FFD {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else {
+        owner
+    };
+    // SAFETY: `try_read_gc_header` validates the address before reading.
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(header) => matches!(
+            header.obj_type,
+            crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_DATE_CELL
+        ),
+        None => true,
+    }
+}
+
+/// Armed where a non-ordinary `owner` takes a named property: the top of
+/// `field_set_by_name`'s exotic-store gauntlet and the exotic expando store.
 #[inline]
-pub(crate) fn note_exotic_named_prop_install() {
+pub(crate) fn note_exotic_named_prop_install(owner: usize) {
+    if !OWN_NAMED_PROP_EVER.load(Ordering::Relaxed) {
+        OWN_NAMED_PROP_EVER.store(true, Ordering::Relaxed);
+    }
+    if BUILTIN_INTRINSIC_INSTALL.with(std::cell::Cell::get) && !owner_is_flag_guarded(owner) {
+        return;
+    }
+    #[cfg(test)]
+    ARMS_NOTED.with(|n| n.set(n.get() + 1));
     // Relaxed is enough: a stale `false` can only be read by a thread that has
     // not yet observed the store, and that thread's own receivers cannot be
     // the one just written (the write happens-before any publication of the
@@ -258,9 +351,11 @@ unsafe fn authoritative_has_own_key(recv: f64, key: *mut crate::StringHeader) ->
 /// # Safety
 /// `recv` is any NaN-boxed value; `name` is this call's method name.
 pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64> {
-    // The same relaxed arm the emitted guard consults: nothing anywhere has
-    // ever put a named property on a non-object cell, so nothing can shadow.
-    if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
+    // Nothing anywhere has ever put a named property on a non-object cell, so
+    // nothing can shadow. The flag the runtime's own builtin installs also arm
+    // (#10697), so this reads exactly as it did before they stopped arming the
+    // emitted guard's.
+    if !OWN_NAMED_PROP_EVER.load(Ordering::Relaxed) {
         return None;
     }
     resolve_own_user_method(recv, name)

@@ -199,6 +199,8 @@ mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;
 #[cfg(test)]
+mod own_override_builtin_install_tests;
+#[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;

@@ -209,7 +209,7 @@ pub(crate) fn value_store(kind: ExoticKind, addr: usize, key: &str, bits: u64) {
     // that gauntlet, so the guard's predicate answered "no own override" and
     // the builtin still won. Arming at the store itself is the funnel the
     // gauntlet was chosen to approximate.
-    crate::object::own_override::note_exotic_named_prop_install();
+    crate::object::own_override::note_exotic_named_prop_install(addr);
     match kind {
         ExoticKind::Error => {
             crate::node_submodules::set_error_user_prop(addr, key, f64::from_bits(bits))

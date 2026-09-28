@@ -185,6 +185,50 @@ mod tests {
         f64::from_bits(JSValue::try_short_string(s.as_bytes()).unwrap().bits())
     }
 
+    /// A small map answers a lookup made with the very key value it stored,
+    /// SSO or heap, from the inlined hot lane without the out-of-line cold
+    /// call; a content-equal but distinct heap key, and every miss, still
+    /// reach the cold path and get the same answers (#10697).
+    ///
+    /// Sabotage: restoring the hot lane's plain-number-only admission sends
+    /// all eight identical lookups to the cold path, and `cold` reads 8.
+    #[test]
+    fn a_small_map_answers_an_identical_key_without_the_cold_path() {
+        let mut map = js_map_alloc(4);
+        let keys = [
+            sso("alpha"),
+            sso("beta"),
+            heap("category-gamma"),
+            heap("category-delta"),
+        ];
+        for (i, &k) in keys.iter().enumerate() {
+            map = js_map_set(map, k, i as f64);
+        }
+        let cold = || super::super::COLD_LOOKUPS.with(std::cell::Cell::get);
+        let before = cold();
+        for _ in 0..2 {
+            for (i, &k) in keys.iter().enumerate() {
+                assert_eq!(js_map_get(map, k), i as f64);
+            }
+        }
+        assert_eq!(
+            cold() - before,
+            0,
+            "identical keys must not leave the hot lane"
+        );
+
+        let before = cold();
+        assert_eq!(js_map_get(map, heap("category-gamma")), 2.0);
+        assert_eq!(js_map_get(map, heap("alpha")), 0.0);
+        assert_eq!(js_map_get(map, sso("gamma")).to_bits(), TAG_UNDEFINED);
+        assert_eq!(js_map_get(map, 7.5).to_bits(), TAG_UNDEFINED);
+        assert_eq!(
+            cold() - before,
+            3,
+            "content matches and non-number misses go cold"
+        );
+    }
+
     /// Every (key, entry) pairing the lane decides agrees with the generic
     /// comparison it replaces: same content across SSO / heap / distinct heap
     /// allocations, and every flavour of mismatch.

@@ -1880,7 +1880,9 @@ pub(crate) fn define_builtin_data_property(
             }
             super::object_ops::define_property_force_store_value(obj, key, value);
         } else {
-            js_object_set_field_by_name(obj, key, value);
+            super::own_override::as_builtin_definition(|| {
+                js_object_set_field_by_name(obj, key, value);
+            });
         }
     }
     set_builtin_property_attrs(obj as usize, name, attrs);

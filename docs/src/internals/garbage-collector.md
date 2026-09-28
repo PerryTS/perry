@@ -136,7 +136,13 @@ direct minor. `PERRY_GC_SCAVENGE_NURSERY_MB` tunes its base high-water cap,
 tenuring feedback may grow the effective cap by up to 4×
 <!-- gc-fact: NURSERY_CAP_SCALE_MAX = 4 in crates/perry-runtime/src/gc/tenuring.rs -->
 on live-set-bound workloads, where a fixed cap would multiply the per-collection
-fixed cost by an enormous collection count. Generated write barriers are also on
+fixed cost by an enormous collection count. In the other direction, the cap
+powers on at a quarter of the base, a right shift of 2
+<!-- gc-fact: NURSERY_CAP_SHRINK_SHIFT_MAX = 2 in crates/perry-runtime/src/gc/tenuring.rs -->,
+and returns there while survivor influx stays under 1% of it. A copying minor
+costs O(survivors), so a small Eden is cheap where little survives, and peak
+resident memory is set by the first nurseries. Influx above 4% walks
+the cap back up to the base within four minors. Generated write barriers are also on
 by default. Turning them off makes generational minors unsound, so the runtime
 deliberately falls back to full mark-sweep.
 

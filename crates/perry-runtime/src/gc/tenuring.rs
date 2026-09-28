@@ -198,6 +198,17 @@ const RAISE_DEBOUNCE_CYCLES: u8 = 2;
 /// adaptive threshold has eliminated the re-copying).
 const NURSERY_CAP_SCALE_MAX: u8 = 4;
 
+/// How far below the base the cap may shrink, as a right shift: 2 = ÷4, a
+/// 4 MB nursery at the default 16 MB base (#11549).
+///
+/// A copying minor is O(survivors), so on a workload whose survivor influx is
+/// a sliver of the cap, a smaller Eden costs a few more cheap collections and
+/// saves the rest of the Eden in resident memory. Measured on dotenv/parse
+/// (1-2 KB of influx per 12-16 MB minor): the ÷4 nursery took peak RSS from
+/// 68.5 MB to 52.1 MB for +0.4% instructions. The floor stops the collection
+/// count from running away where the fixed per-minor cost is what matters.
+const NURSERY_CAP_SHRINK_SHIFT_MAX: u8 = 2;
+
 crate::perry_thread_local! {
     /// Power-on threshold. This is `OCCUPANCY_MIN_SURVIVALS`, not the ceiling:
     /// see `SURVIVOR_ROUND_MEASURED`. Starting at the ceiling is a claim that
@@ -220,6 +231,20 @@ crate::perry_thread_local! {
     /// Influx-driven multiplier (1, 2, or 4) applied to the scavenge nursery
     /// cap. Power of two; grows/shrinks one step at a time, debounced.
     static NURSERY_CAP_SCALE: super::TriggerInput<u8> = const { super::TriggerInput::new(1) };
+    /// Shift below the base cap, `0..=NURSERY_CAP_SHRINK_SHIFT_MAX`, taken only
+    /// while `NURSERY_CAP_SCALE` is 1 (#11549). Grows and shrinks one step at
+    /// a time, debounced like the scale.
+    ///
+    /// Power-on is the floor, for the reason `TENURING_SURVIVALS` powers on at
+    /// its floor: a full-size first nursery is a claim that young objects live
+    /// long, made before any have had the chance to die, and it is the
+    /// expensive direction of that claim. For resident memory it is also
+    /// irreversible, because peak RSS is set by the first nurseries and a
+    /// later shrink cannot lower a high-water mark. Survivor influx above 4%
+    /// of the cap walks it back up in two cycles per step, so a workload that
+    /// retains reaches the base within four minors.
+    static NURSERY_CAP_SHRINK_SHIFT: super::TriggerInput<u8> =
+        const { super::TriggerInput::new(NURSERY_CAP_SHRINK_SHIFT_MAX) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
     static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
@@ -357,7 +382,8 @@ pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
 /// as the two-term policy it is.
 pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
     let constant_band = gc_scavenge_nursery_cap_bytes()
-        .saturating_mul(NURSERY_CAP_SCALE.with(TriggerInput::get) as usize);
+        .saturating_mul(NURSERY_CAP_SCALE.with(TriggerInput::get) as usize)
+        >> NURSERY_CAP_SHRINK_SHIFT.with(TriggerInput::get);
     // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
     // ILP32 target (watchOS/visionOS are 32-bit) would saturate a 64 MB band
     // against a 1000-per-mille factor at `u32::MAX` and the following divide
@@ -477,10 +503,11 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
 ///
 /// # What it does
 ///
-/// Halfway to the configured base cap (8 MB of from-space by default) — a
-/// point every program that will ever reach the cap passes exactly once — hop
-/// the young generation's headers (`arena::young_allocation_census`, ~1M
-/// instructions for 8 MB of small objects, paid ONCE per process) and install
+/// Halfway to the power-on cap (2 MB of from-space by default: the 16 MB base
+/// at its ÷4 power-on floor, #11549) — a point every program that will ever
+/// reach the cap passes exactly once — hop the young generation's headers
+/// (`arena::young_allocation_census`, ~1M instructions per 8 MB of small
+/// objects, paid ONCE per process) and install
 /// `bytes / objects` as the mean. The first minor is then object-denominated
 /// like every later one, and a smaller representation no longer buys the
 /// collector a bigger first trace. The one-sided clamp still applies: a mean
@@ -488,7 +515,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
 /// allocation stream cannot raise the cap. The collector's survivor census
 /// overwrites this seed at the first minor, so steady state is unchanged.
 ///
-/// Returns without walking when the base cap is not yet half full, when a
+/// Returns without walking when the power-on cap is not yet half full, when a
 /// census (either kind) already exists, or when the nursery is empty.
 /// Has the object denomination been seeded, by an allocation census or by a
 /// copying minor's survivor census? Once true it stays true for the process
@@ -499,10 +526,13 @@ pub(super) fn object_census_seeded() -> bool {
 }
 
 /// The young-generation occupancy at which the one-time allocation census is
-/// taken: halfway to the base cap. Shared with the trigger watermark (#10698),
+/// taken: halfway to the power-on cap. Shared with the trigger watermark (#10698),
 /// which must not let a fast-path answer carry past the reading that seeds.
 pub(super) fn object_census_seed_point_bytes() -> usize {
-    super::policy::gc_scavenge_nursery_cap_bytes() / 2
+    // Half the POWER-ON cap, not the base: the nursery starts at the shrink
+    // floor (#11549), and a seed point past the first cap would let the first
+    // minor run before the census it exists to precede.
+    (super::policy::gc_scavenge_nursery_cap_bytes() >> NURSERY_CAP_SHRINK_SHIFT_MAX) / 2
 }
 
 pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: usize) {
@@ -711,29 +741,55 @@ pub(super) fn retune_after_scavenge(
 /// Shrink one step when influx falls below 1% for two consecutive cycles.
 /// The 4%/1% band is wide enough that the scale cannot oscillate on a
 /// steady workload (growing halves the observed ratio, 4%/2 = 2% > 1%).
+///
+/// #11549: the shrink continues below the base, to `base >> 2`, while the
+/// influx stays under 1% (see [`NURSERY_CAP_SHRINK_SHIFT_MAX`]), and a grow
+/// undoes that shift, one debounced step at a time, before it raises the
+/// scale. Each shrink step at most doubles the observed ratio, 1% to 2%, still
+/// under the 4% that grows it back, so the same band keeps the extension from
+/// oscillating.
+///
+/// The climb is debounced like every other step, not a jump back to the base
+/// on the first retaining minor: a program's first minor sees its start-up
+/// data survive (dotenv/parse: ~10% of a 4 MB nursery), and a jump on that one
+/// reading put its peak RSS straight back at the 16 MB nursery's (52 → 62 MB).
+/// A genuinely retaining program pays a few extra early minors on the climb,
+/// which measured within ±1.5% of main in total instructions from 2M
+/// iterations of a keep-one-in-ten loop and 22–27% below it at 0.5–1M.
 fn retune_nursery_cap_scale(eden_live_bytes: usize) {
     let cap = scavenge_nursery_cap_effective_bytes();
     let scale = NURSERY_CAP_SCALE.with(TriggerInput::get);
+    let shift = NURSERY_CAP_SHRINK_SHIFT.with(TriggerInput::get);
     if eden_live_bytes > cap / 25 {
         CAP_SHRINK_STREAK.with(|s| s.set(0));
-        if scale < NURSERY_CAP_SCALE_MAX {
+        if shift > 0 || scale < NURSERY_CAP_SCALE_MAX {
             let streak = CAP_GROW_STREAK.with(|s| s.get()).saturating_add(1);
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 CAP_GROW_STREAK.with(|s| s.set(0));
-                NURSERY_CAP_SCALE.with(|s| s.set(scale * 2));
-                diag_cap_scale(scale, scale * 2, eden_live_bytes);
+                if shift > 0 {
+                    NURSERY_CAP_SHRINK_SHIFT.with(|s| s.set(shift - 1));
+                    diag_cap_shift(shift, shift - 1, eden_live_bytes);
+                } else {
+                    NURSERY_CAP_SCALE.with(|s| s.set(scale * 2));
+                    diag_cap_scale(scale, scale * 2, eden_live_bytes);
+                }
             } else {
                 CAP_GROW_STREAK.with(|s| s.set(streak));
             }
         }
     } else if eden_live_bytes < cap / 100 {
         CAP_GROW_STREAK.with(|s| s.set(0));
-        if scale > 1 {
+        if scale > 1 || shift < NURSERY_CAP_SHRINK_SHIFT_MAX {
             let streak = CAP_SHRINK_STREAK.with(|s| s.get()).saturating_add(1);
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 CAP_SHRINK_STREAK.with(|s| s.set(0));
-                NURSERY_CAP_SCALE.with(|s| s.set(scale / 2));
-                diag_cap_scale(scale, scale / 2, eden_live_bytes);
+                if scale > 1 {
+                    NURSERY_CAP_SCALE.with(|s| s.set(scale / 2));
+                    diag_cap_scale(scale, scale / 2, eden_live_bytes);
+                } else {
+                    NURSERY_CAP_SHRINK_SHIFT.with(|s| s.set(shift + 1));
+                    diag_cap_shift(shift, shift + 1, eden_live_bytes);
+                }
             } else {
                 CAP_SHRINK_STREAK.with(|s| s.set(streak));
             }
@@ -741,6 +797,16 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
     } else {
         CAP_GROW_STREAK.with(|s| s.set(0));
         CAP_SHRINK_STREAK.with(|s| s.set(0));
+    }
+}
+
+fn diag_cap_shift(from: u8, to: u8, eden_live_bytes: usize) {
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-tenuring] nursery cap shrink 1/{} -> 1/{} (eden_live_bytes={eden_live_bytes})",
+            1u32 << from,
+            1u32 << to
+        );
     }
 }
 
@@ -857,6 +923,7 @@ pub(super) fn reset_for_test() {
     UNLOCK_STREAK.with(|s| s.set(0));
     PREV_COPIED_BYTES.with(|c| c.set(0));
     NURSERY_CAP_SCALE.with(|s| s.set(1));
+    NURSERY_CAP_SHRINK_SHIFT.with(|s| s.set(NURSERY_CAP_SHRINK_SHIFT_MAX));
     CAP_GROW_STREAK.with(|s| s.set(0));
     CAP_SHRINK_STREAK.with(|s| s.set(0));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
@@ -947,11 +1014,12 @@ mod tests {
     #[test]
     fn census_carries_forward_across_a_cycle_that_moved_nothing() {
         reset_for_test();
-        let base = gc_scavenge_nursery_cap_bytes();
+        // The power-on floor (#11549) is the band this test scales.
+        let base = gc_scavenge_nursery_cap_bytes() / 4;
         assert_eq!(
             influx_driven_nursery_cap_bytes(),
             base,
-            "unmeasured process must pace exactly as the pre-#7929 collector did"
+            "an unmeasured process paces on the unscaled power-on band"
         );
 
         note_surviving_object_census(56 * 1000, 1000);
@@ -970,7 +1038,7 @@ mod tests {
     }
 
     /// #8122: the allocation census seeds the mean ONCE, only past half the
-    /// base cap, and never after a census of either kind exists.
+    /// power-on cap, and never after a census of either kind exists.
     ///
     /// Pure-policy half. The walk itself (a real nursery, real headers) is
     /// driven in `gc::tests::copying::adaptive_tenuring`; this pins the gate
@@ -979,13 +1047,17 @@ mod tests {
     fn allocation_census_seed_is_gated_and_one_shot() {
         reset_for_test();
         let base = gc_scavenge_nursery_cap_bytes();
+        // Half the ÷4 power-on cap (#11549), as a literal so a drifted seed
+        // point fails here rather than moving with the code.
+        let seed_point = base / 8;
+        assert_eq!(object_census_seed_point_bytes(), seed_point);
         assert!(!object_census_seeded_for_test());
 
-        // Below half the base cap: nothing happens, the seed stays armed.
-        maybe_seed_object_census_from_allocation(base / 2 - 1);
+        // Below half the power-on cap: nothing happens, the seed stays armed.
+        maybe_seed_object_census_from_allocation(seed_point - 1);
         assert!(
             !object_census_seeded_for_test(),
-            "the probe must not fire below half the base cap"
+            "the probe must not fire below half the power-on cap"
         );
         assert_eq!(
             mean_surviving_object_bytes(),
@@ -1043,6 +1115,8 @@ mod tests {
     #[test]
     fn drops_immediately_and_rises_debounced() {
         reset_for_test();
+        // A threshold test, not a cap test: hold `desired` still (#11549).
+        start_at_base_for_test();
         let desired = desired_survivor_bytes();
         // Power-on is the FLOOR now, not the ceiling (startup follow-up): the
         // ladder may not claim a lifetime in either direction without evidence.
@@ -1106,6 +1180,54 @@ mod tests {
         reset_for_test();
     }
 
+    /// #11549: the nursery powers on at the `base / 4` floor; a heavy influx
+    /// walks it up, one debounced step at a time, undoing the shrink before the
+    /// scale may grow past the base; a sustained sliver of influx walks it back
+    /// down to the floor and no further.
+    ///
+    /// The expected caps are literals, not `base >> NURSERY_CAP_SHRINK_SHIFT_MAX`,
+    /// which would pass with the floor set to 0 and the rule doing nothing.
+    /// Sabotage: power-on at the base fails the first assertion (16 MB); an
+    /// undebounced climb fails "one heavy cycle alone does not move it" (a
+    /// program's first minor sees its start-up data survive); dropping the
+    /// shrink leaves the cap at the base after the quiet phase.
+    #[test]
+    fn the_nursery_starts_at_a_floor_and_follows_survivor_influx() {
+        reset_for_test();
+        let base = gc_scavenge_nursery_cap_bytes();
+        let cap = influx_driven_nursery_cap_bytes;
+        assert_eq!(cap(), base / 4, "power-on is the floor");
+        for _ in 0..8 {
+            retune_nursery_cap_scale(1024);
+        }
+        assert_eq!(cap(), base / 4, "a tiny influx never goes below the floor");
+
+        let heavy = base;
+        retune_nursery_cap_scale(heavy);
+        assert_eq!(cap(), base / 4, "one heavy cycle alone does not move it");
+        retune_nursery_cap_scale(heavy);
+        assert_eq!(cap(), base / 2);
+        retune_nursery_cap_scale(heavy);
+        retune_nursery_cap_scale(heavy);
+        assert_eq!(cap(), base);
+        retune_nursery_cap_scale(heavy);
+        retune_nursery_cap_scale(heavy);
+        assert_eq!(cap(), base * 2, "past the base, the scale grows as before");
+
+        // Quiet again: the scale comes down first, then the shrink.
+        retune_nursery_cap_scale(1024);
+        retune_nursery_cap_scale(1024);
+        assert_eq!(cap(), base);
+        retune_nursery_cap_scale(1024);
+        retune_nursery_cap_scale(1024);
+        assert_eq!(cap(), base / 2);
+        for _ in 0..8 {
+            retune_nursery_cap_scale(1024);
+        }
+        assert_eq!(cap(), base / 4);
+        reset_for_test();
+    }
+
     /// #9851, both halves of the rule in one test, in the #7909 two-phase shape
     /// so the decline is ATTRIBUTED rather than merely absent.
     ///
@@ -1126,6 +1248,8 @@ mod tests {
     #[test]
     fn occupancy_alone_never_claims_promote_on_first_copy_but_the_lock_still_can() {
         reset_for_test();
+        // A threshold test, not a cap test: hold `desired` still (#11549).
+        start_at_base_for_test();
         let d = desired_survivor_bytes();
 
         // Phase 1: influx 16x the desired survivor size — the occupancy formula
@@ -1286,6 +1410,8 @@ mod tests {
     #[test]
     fn survival_rate_lock_breaks_a_saturated_pipeline() {
         reset_for_test();
+        // A threshold test, not a cap test: hold `desired` still (#11549).
+        start_at_base_for_test();
         let d = desired_survivor_bytes();
         // tree.ts steady state: influx sits JUST under desired (occupancy
         // alone settles at S=2), the survivor space holds 3 cohorts, and
@@ -1321,9 +1447,17 @@ mod tests {
         reset_for_test();
     }
 
+    /// Put the cap at the base, as a workload whose influx has walked it up
+    /// from the power-on floor would have (#11549). For tests of the ladder
+    /// ABOVE the base; the floor has its own test.
+    fn start_at_base_for_test() {
+        NURSERY_CAP_SHRINK_SHIFT.with(|s| s.set(0));
+    }
+
     #[test]
     fn cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet() {
         reset_for_test();
+        start_at_base_for_test();
         let base = gc_scavenge_nursery_cap_bytes();
         assert_eq!(scavenge_nursery_cap_effective_bytes(), base);
         // Influx above 4% of the cap: one debounce cycle, then a ×2 step.
@@ -1572,14 +1706,16 @@ mod tests {
         // Honest about its limits: on a quiescent test thread old-gen is
         // ~empty, so this cannot distinguish the two terms by value — it only
         // proves the accessor and the policy agree on the live inputs, and
-        // that the #7377 floor survives whatever old-gen happens to be.
+        // that the #7377 floor survives whatever old-gen happens to be. That
+        // floor is the influx term's own, now the ÷4 power-on floor (#11549):
+        // bounded well away from the near-zero cap #7377 fixed.
         reset_for_test();
         let expected = scavenge_nursery_cap_from(
             influx_driven_nursery_cap_bytes(),
             old_gen_reclaimable_pressure_bytes(),
         );
         assert_eq!(scavenge_nursery_cap_effective_bytes(), expected);
-        assert!(scavenge_nursery_cap_effective_bytes() >= gc_scavenge_nursery_cap_bytes());
+        assert!(scavenge_nursery_cap_effective_bytes() >= gc_scavenge_nursery_cap_bytes() / 4);
         reset_for_test();
     }
 }

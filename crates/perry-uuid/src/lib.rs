@@ -66,21 +66,26 @@ pub struct Hyphenated([u8; 36]);
 impl Hyphenated {
     fn new(bytes: [u8; 16]) -> Self {
         const HEX: &[u8; 16] = b"0123456789abcdef";
+        // Where each byte's two digits start, hyphens skipped. A constant
+        // table instead of a running index with a per-byte hyphen test: the
+        // loop unrolls to straight-line stores with no bounds checks, which was
+        // a third of `randomUUID()`'s instructions (#10523).
+        const AT: [usize; 16] = [0, 2, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 28, 30, 32, 34];
         let mut out = [b'-'; 36];
-        let mut at = 0;
-        for (i, b) in bytes.into_iter().enumerate() {
-            if matches!(i, 4 | 6 | 8 | 10) {
-                at += 1;
-            }
-            out[at] = HEX[(b >> 4) as usize];
-            out[at + 1] = HEX[(b & 15) as usize];
-            at += 2;
+        for i in 0..16 {
+            out[AT[i]] = HEX[(bytes[i] >> 4) as usize];
+            out[AT[i] + 1] = HEX[(bytes[i] & 15) as usize];
         }
         Hyphenated(out)
     }
     pub fn as_str(&self) -> &str {
         // Only ASCII hex digits and hyphens are ever written.
         std::str::from_utf8(&self.0).unwrap()
+    }
+    /// The 36 ASCII bytes, without `as_str`'s UTF-8 validation, for a caller
+    /// that copies them into a string of its own.
+    pub fn as_bytes(&self) -> &[u8; 36] {
+        &self.0
     }
 }
 #[cfg(any(feature = "v4", feature = "v7"))]
@@ -172,6 +177,19 @@ mod tests {
                 assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
             }
         }
+    }
+    // #10523: the table-driven formatter writes every byte's digits in RFC
+    // 9562 order around the four hyphens; `as_bytes` is `as_str`'s bytes.
+    #[cfg(any(feature = "v4", feature = "v7"))]
+    #[test]
+    fn hyphenated_layout_is_exact() {
+        let bytes: [u8; 16] = std::array::from_fn(|i| (i as u8) * 17);
+        let h = super::Hyphenated::new(bytes);
+        assert_eq!(h.as_str(), "00112233-4455-6677-8899-aabbccddeeff");
+        assert_eq!(h.as_bytes(), h.as_str().as_bytes());
+        let h =
+            super::Hyphenated::new([0xf0, 0x0f, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0xff]);
+        assert_eq!(h.as_str(), "f00f0102-0304-0506-0708-090a0b0c0dff");
     }
     #[cfg(feature = "v4")]
     #[test]
