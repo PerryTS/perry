@@ -95,10 +95,21 @@ fn assists_park_at_both_root_phases_and_the_poll_serves_them() {
     }
     assert_eq!(cycle_phase(), Some(GcCyclePhase::RootScan.ffi_code()));
 
-    assert!(
-        gc_safepoint_moving_minor(),
-        "the poll must handle the parked phase"
-    );
+    // The poll serves the phase one host-sized slice at a time and stays
+    // armed until it is done.
+    let mut polls = 0;
+    while cycle_phase() == Some(GcCyclePhase::RootScan.ffi_code()) {
+        assert!(
+            GC_SAFEPOINT_PENDING.with(std::cell::Cell::get),
+            "a partly served root phase must keep the poll armed"
+        );
+        assert!(
+            gc_safepoint_moving_minor(),
+            "the poll must handle the parked phase"
+        );
+        polls += 1;
+        assert!(polls < 10_000, "the poll never finished the root scan");
+    }
     let served = alloc_point::alloc_point_counters().root_phases_served_at_poll;
     assert_eq!(served, 1, "the poll served exactly the parked root scan");
     assert_ne!(cycle_phase(), Some(GcCyclePhase::RootScan.ffi_code()));
@@ -112,6 +123,7 @@ fn assists_park_at_both_root_phases_and_the_poll_serves_them() {
         GcCyclePhase::AtomicFinalize.ffi_code(),
         "the second frame-root phase is the final remark"
     );
+    // The final remark is atomic: one poll serves it.
     assert!(gc_safepoint_moving_minor());
     assert_eq!(
         alloc_point::alloc_point_counters().root_phases_served_at_poll,

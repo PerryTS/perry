@@ -3814,11 +3814,17 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
         && !gc_budgeted_resume_blocked()
     {
         let _declared = DeclaredSafepointGuard::enter();
-        serve_budgeted_root_phase();
-        super::alloc_point::note_root_phase_served_at_poll();
+        // One host-sized slice per poll, exactly as a host step slices the root
+        // scan; the poll stays armed until the phase is done, so the next poll
+        // continues it. Serving the whole scan in one step made the worst
+        // budgeted pause ~20% longer on the server fixture.
+        let done = serve_budgeted_root_phase_slice();
+        if done {
+            super::alloc_point::note_root_phase_served_at_poll();
+        }
         // An owed collection the in-alloc guard above held back (a budgeted
         // minor holds `GC_FLAG_IN_ALLOC`) keeps the poll armed for later.
-        if !owed_request_pending() {
+        if done && !owed_request_pending() {
             note_pending_poll_wait();
             set_safepoint_pending(false);
         }
@@ -4891,12 +4897,27 @@ fn budgeted_cycle_next_step_reads_frame_roots() -> bool {
     })
 }
 
-/// Advance the active budgeted cycle through its frame-root phase. Called at a
-/// declared poll, or by the counted parked-cycle valve. Unbounded work for the
+/// Advance the active budgeted cycle through its frame-root phase in one go.
+/// Only the counted parked-cycle valve uses this; a declared poll serves one
+/// slice at a time (`serve_budgeted_root_phase_slice`). Unbounded work for the
 /// phase itself: `RootScan` is bounded by the root set, and `FinalRootRemark`
 /// is atomic by design (`gc-step-bounds.md`). Stops as soon as the next step
 /// no longer reads frame roots, so the heap-only work that follows stays with
 /// the assists and host steps.
+/// One normal-incremental slice of the active cycle's frame-root phase, at a
+/// declared poll. Returns whether the cycle has left its frame-root phase. The
+/// final remark is atomic by design and completes in its slice.
+fn serve_budgeted_root_phase_slice() -> bool {
+    if gc_budgeted_cycle_active() && budgeted_cycle_next_step_reads_frame_roots() {
+        let _ = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+    }
+    let done = !gc_budgeted_cycle_active() || !budgeted_cycle_next_step_reads_frame_roots();
+    if done {
+        super::alloc_point::clear_park();
+    }
+    done
+}
+
 fn serve_budgeted_root_phase() {
     // A handful of steps: the build of the valid-pointer set may precede the
     // root scan, and the barrier-seed drain precedes the remark.
