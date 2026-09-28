@@ -125,9 +125,12 @@ pub(crate) struct Pending {
     split_at: usize,
     /// Loop region: the i1 slot the preheader guard and the re-check write.
     valid_slot: Option<String>,
-    recheck: bool,
+    /// Loop region: set by a fact tree's generic arm.
+    dirty_slot: Option<String>,
+    recheck: Recheck,
     receivers: Vec<Receiver>,
     bare: HashSet<usize>,
+    trees: HashSet<usize>,
     token: u64,
 }
 
@@ -135,6 +138,8 @@ pub(crate) struct Pending {
 pub(crate) struct Active {
     receivers: Vec<Receiver>,
     bare: HashSet<usize>,
+    trees: HashSet<usize>,
+    dirty_slot: Option<String>,
     /// Emitted bare accesses: (block index, instruction index) — what
     /// [`verify`] checks.
     emitted: Vec<(usize, usize)>,
@@ -157,7 +162,12 @@ pub(crate) fn take_stats() -> [u64; 6] {
 
 // ---------------------------------------------------------------- planning
 
-const FRESH: u8 = 1;
+/// Facts hold on every path.
+const FRESH: u8 = 2;
+/// Facts hold on every path except the generic arm of a fact tree, which
+/// sets the region's dirty flag: the next iteration re-checks only if it was
+/// taken. Not enough for a bare access.
+const DIRTY: u8 = 1;
 
 /// `None` = unreachable. Absent receiver = stale.
 type St = Option<BTreeMap<Recv, u8>>;
@@ -167,10 +177,73 @@ fn meet(a: St, b: St) -> St {
         (None, x) | (x, None) => x,
         (Some(a), Some(b)) => Some(
             a.into_iter()
-                .filter(|(k, v)| *v == FRESH && b.get(k) == Some(&FRESH))
+                .filter_map(|(k, v)| b.get(&k).map(|w| (k, v.min(*w))))
                 .collect(),
         ),
     }
+}
+
+fn dirty(st: &mut St) {
+    if let Some(m) = st {
+        for v in m.values_mut() {
+            *v = (*v).min(DIRTY);
+        }
+    }
+}
+
+/// A `+` tree over reads of ONE receiver's region keys, locals and numeric
+/// literals (at least one read): lowered as a FACT TREE — the reads are bare
+/// loads, every leaf is verified a Number, the tree folds to `fadd`s, and a
+/// failed check runs the tree through today's lowering in source order (with
+/// the facts masked) and sets the dirty flag. Slice 1's rule (§L7.3) with the
+/// region's facts in place of its own guard.
+fn fact_tree_leaves<'e>(
+    e: &'e Expr,
+    covered: &dyn Fn(Recv, &str) -> bool,
+) -> Option<(Recv, Vec<&'e Expr>)> {
+    fn leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        if let Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } = e
+        {
+            leaves(left, out);
+            leaves(right, out);
+        } else {
+            out.push(e);
+        }
+    }
+    if !matches!(
+        e,
+        Expr::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let mut all = Vec::new();
+    leaves(e, &mut all);
+    let mut recv: Option<Recv> = None;
+    let mut reads = Vec::new();
+    for l in all {
+        match l {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                let r = Recv::of(object)?;
+                if recv.is_some_and(|x| x != r) || !covered(r, property) {
+                    return None;
+                }
+                recv = Some(r);
+                reads.push(l);
+            }
+            Expr::LocalGet(_) | Expr::Number(_) | Expr::Integer(_) => {}
+            _ => return None,
+        }
+    }
+    Some((recv?, reads))
 }
 
 fn kill(st: &mut St) {
@@ -204,6 +277,7 @@ struct Planner<'p, 'a> {
     cands: &'p HashSet<Recv>,
     keys: &'p HashMap<Recv, Vec<String>>,
     bare: HashSet<usize>,
+    trees: HashSet<usize>,
     bare_stores: HashSet<Recv>,
     continues: Vec<St>,
     record: bool,
@@ -282,6 +356,23 @@ impl Planner<'_, '_> {
             }
             Expr::LocalSet(_, v) => self.expr(v, st),
             Expr::Binary { left, right, .. } => {
+                let keys = self.keys;
+                let cands = self.cands;
+                let covered = |r: Recv, k: &str| {
+                    cands.contains(&r) && keys.get(&r).is_some_and(|l| l.iter().any(|x| x == k))
+                };
+                if let Some((r, reads)) = fact_tree_leaves(e, &covered) {
+                    if st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH)) {
+                        if self.record {
+                            self.trees.insert(e as *const Expr as usize);
+                            for l in reads {
+                                self.bare.insert(l as *const Expr as usize);
+                            }
+                        }
+                        dirty(&mut st);
+                        return st;
+                    }
+                }
                 st = self.expr(left, st);
                 st = self.expr(right, st);
                 if !(prim(left) && prim(right)) {
@@ -729,7 +820,19 @@ fn receiver_eligible(ctx: &FnCtx<'_>, r: Recv) -> bool {
 struct Plan {
     receivers: Vec<(Recv, Vec<String>, bool)>,
     bare: HashSet<usize>,
-    recheck: bool,
+    trees: HashSet<usize>,
+    recheck: Recheck,
+}
+
+/// What the top of an iteration must do before F-body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Recheck {
+    /// Nothing between iterations can run JS.
+    None,
+    /// Only fact trees' generic arms can: re-check when the flag is set.
+    Dirty,
+    /// Every iteration.
+    Always,
 }
 
 /// Plan the split of `tail` (the whole body for a loop region). `cands` are
@@ -773,13 +876,14 @@ fn plan(
         cands: &cands,
         keys: &keys,
         bare: HashSet::new(),
+        trees: HashSet::new(),
         bare_stores: HashSet::new(),
         continues: Vec::new(),
         record: true,
     };
     let end = p.stmts(tail, Some(fresh.clone()));
     let conts = std::mem::take(&mut p.continues);
-    let mut recheck = false;
+    let mut recheck = Recheck::None;
     if let Some((cond, update)) = loop_ctl {
         p.record = false;
         let mut back = end;
@@ -796,11 +900,25 @@ fn plan(
             head = p.expr(c, head);
         }
         recheck = match &head {
-            None => false,
-            Some(m) => cands.iter().any(|r| m.get(r) != Some(&FRESH)),
+            None => Recheck::None,
+            Some(m) => {
+                let worst = cands
+                    .iter()
+                    .map(|r| m.get(r).copied().unwrap_or(0))
+                    .min()
+                    .unwrap_or(FRESH);
+                if worst == FRESH {
+                    Recheck::None
+                } else if worst == DIRTY {
+                    Recheck::Dirty
+                } else {
+                    Recheck::Always
+                }
+            }
         };
     }
     let bare = std::mem::take(&mut p.bare);
+    let trees = std::mem::take(&mut p.trees);
     let bare_stores = std::mem::take(&mut p.bare_stores);
     if bare.is_empty() {
         return None;
@@ -823,6 +941,7 @@ fn plan(
     Some(Plan {
         receivers,
         bare,
+        trees,
         recheck,
     })
 }
@@ -1071,15 +1190,19 @@ pub(crate) fn begin(
             decode_slots(ctx, rv, &word);
         }
         ctx.block().store(I1, &all, &valid_slot);
+        let dirty_slot = ctx.func.alloca_entry(I1);
+        ctx.block().store(I1, "false", &dirty_slot);
         stat(0, 1);
         ctx.region_loops.push(Pending {
             body_ptr: body.as_ptr() as usize,
             body_len: body.len(),
             split_at: 0,
             valid_slot: Some(valid_slot),
+            dirty_slot: Some(dirty_slot),
             recheck: p.recheck,
             receivers,
             bare: p.bare,
+            trees: p.trees,
             token,
         });
         return Ok(Some(token));
@@ -1139,9 +1262,11 @@ pub(crate) fn begin(
             body_len: body.len(),
             split_at: i + 1,
             valid_slot: None,
-            recheck: false,
+            dirty_slot: None,
+            recheck: Recheck::None,
             receivers,
             bare: p.bare,
+            trees: p.trees,
             token,
         });
         return Ok(Some(token));
@@ -1205,6 +1330,8 @@ pub(crate) fn lower_split(
     let valid_slot = ctx.region_loops[idx].valid_slot.clone();
     let recheck = ctx.region_loops[idx].recheck;
     let bare = ctx.region_loops[idx].bare.clone();
+    let trees = ctx.region_loops[idx].trees.clone();
+    let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
 
     let fast = ctx.new_block("rloop.fast");
     let slow = ctx.new_block("rloop.slow");
@@ -1216,13 +1343,28 @@ pub(crate) fn lower_split(
     // Where the entry decision is emitted; its terminator is written LAST,
     // once `verify` has judged F-body.
     let decide;
+    let mut decide_top: Option<(usize, String, String)> = None;
     match &valid_slot {
         Some(slot) => {
             let v = ctx.block().load(I1, slot);
-            if recheck {
+            if recheck == Recheck::None {
+                decide = (ctx.current_block, v);
+            } else {
                 let rc = ctx.new_block("rloop.recheck");
                 let rc_l = ctx.block_label(rc);
-                ctx.block().cond_br(&v, &rc_l, &slow_l);
+                let top = ctx.new_block("rloop.top");
+                let top_l = ctx.block_label(top);
+                ctx.block().cond_br(&v, &top_l, &slow_l);
+                ctx.current_block = top;
+                let d_slot = dirty_slot.clone().expect("loop regions carry a dirty slot");
+                let need = if recheck == Recheck::Dirty {
+                    ctx.block().load(I1, &d_slot)
+                } else {
+                    "true".to_string()
+                };
+                // Fresh without a re-check: straight into F-body. The
+                // terminator of `top` is written at the end, like `decide`.
+                let top_idx = ctx.current_block;
                 ctx.current_block = rc;
                 let mut ok = "true".to_string();
                 for rv in &receivers {
@@ -1240,9 +1382,10 @@ pub(crate) fn lower_split(
                     ok = ctx.block().and(I1, &ok, &eq);
                 }
                 ctx.block().store(I1, &ok, slot);
-                decide = (ctx.current_block, ok);
-            } else {
-                decide = (ctx.current_block, v);
+                ctx.block().store(I1, "false", &d_slot);
+                let rc_idx = ctx.current_block;
+                decide_top = Some((top_idx, need, rc_l));
+                decide = (rc_idx, ok);
             }
         }
         None => {
@@ -1265,6 +1408,8 @@ pub(crate) fn lower_split(
     ctx.region_loop_facts.push(Active {
         receivers: receivers.clone(),
         bare,
+        trees,
+        dirty_slot: dirty_slot.clone(),
         emitted: Vec::new(),
     });
     let r = lower_list(ctx, tail);
@@ -1286,6 +1431,14 @@ pub(crate) fn lower_split(
         ctx.block().br(&join_l);
     }
 
+    if let Some((top_idx, need, rc_l)) = decide_top {
+        ctx.current_block = top_idx;
+        if ok {
+            ctx.block().cond_br(&need, &rc_l, &fast_l);
+        } else {
+            ctx.block().br(&slow_l);
+        }
+    }
     ctx.current_block = decide.0;
     if ok {
         ctx.block().cond_br(&decide.1, &fast_l, &slow_l);
@@ -1391,6 +1544,126 @@ pub(crate) fn try_lower_bare_put(
     );
     stat(3, 1);
     Ok(Some(val_double))
+}
+
+/// `region_read_run`'s hook inside an F-body: a planned fact tree.
+pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
+    let Some(a) = ctx.region_loop_facts.last() else {
+        return Ok(None);
+    };
+    if !a.trees.contains(&(e as *const Expr as usize)) {
+        return Ok(None);
+    }
+    let covered = |_: Recv, _: &str| true;
+    let Some((r, _)) = fact_tree_leaves(e, &covered) else {
+        return Ok(None);
+    };
+    let dirty_slot = a.dirty_slot.clone();
+    fn leaves<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        if let Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } = e
+        {
+            leaves(left, out);
+            leaves(right, out);
+        } else {
+            out.push(e);
+        }
+    }
+    let mut all = Vec::new();
+    leaves(e, &mut all);
+    // Effect-free leaves first, then the receiver's handle and the loads, so
+    // nothing that could allocate sits between the handle and its loads.
+    let mut values: Vec<Option<String>> = Vec::with_capacity(all.len());
+    let mut needs: Vec<bool> = Vec::with_capacity(all.len());
+    for l in &all {
+        if matches!(l, Expr::PropertyGet { .. }) {
+            values.push(None);
+            needs.push(true);
+        } else {
+            values.push(Some(lower_expr(ctx, l)?));
+            needs.push(!crate::type_analysis::expr_produces_canonical_raw_f64(
+                ctx, l,
+            ));
+        }
+    }
+    let recv_box = lower_recv(ctx, r)?;
+    let h = handle_of(ctx, &recv_box);
+    for (i, l) in all.iter().enumerate() {
+        if let Expr::PropertyGet { property, .. } = l {
+            let slot = active_slot(ctx, l, r, property).expect("planned with its tree");
+            let p = slot_ptr(ctx, &h, &slot);
+            note_emitted(ctx);
+            values[i] = Some(ctx.block().load(DOUBLE, &p));
+            stat(2, 1);
+        }
+    }
+    let values: Vec<String> = values.into_iter().map(|v| v.expect("lowered")).collect();
+    let fold_i = ctx.new_block("rloop.tree.fold");
+    let gen_i = ctx.new_block("rloop.tree.generic");
+    let merge_i = ctx.new_block("rloop.tree.merge");
+    let fold_l = ctx.block_label(fold_i);
+    let gen_l = ctx.block_label(gen_i);
+    let merge_l = ctx.block_label(merge_i);
+    let mut all_num: Option<String> = None;
+    for (v, n) in values.iter().zip(needs.iter()) {
+        if !n {
+            continue;
+        }
+        let is_num = crate::stmt::emit_js_value_is_number(ctx, v);
+        all_num = Some(match all_num {
+            Some(prev) => ctx.block().and(I1, &prev, &is_num),
+            None => is_num,
+        });
+    }
+    match all_num {
+        Some(c) => ctx.block().cond_br(&c, &fold_l, &gen_l),
+        None => ctx.block().br(&fold_l),
+    }
+    ctx.current_block = fold_i;
+    fn fold(ctx: &mut FnCtx<'_>, e: &Expr, values: &[String], next: &mut usize) -> String {
+        if let Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } = e
+        {
+            let l = fold(ctx, left, values, next);
+            let r = fold(ctx, right, values, next);
+            return ctx.block().fadd(&l, &r);
+        }
+        let v = values[*next].clone();
+        *next += 1;
+        v
+    }
+    let fast = fold(ctx, e, &values, &mut 0);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    // The generic arm: the tree in source order through today's lowering,
+    // with the facts masked (it may run JS between its reads), then the flag.
+    ctx.current_block = gen_i;
+    ctx.region_loop_facts.push(Active {
+        receivers: Vec::new(),
+        bare: HashSet::new(),
+        trees: HashSet::new(),
+        dirty_slot: None,
+        emitted: Vec::new(),
+    });
+    let slow = lower_expr(ctx, e);
+    ctx.region_loop_facts.pop();
+    let slow = slow?;
+    if let Some(d) = &dirty_slot {
+        ctx.block().store(I1, "true", d);
+    }
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge_i;
+    Ok(Some(
+        ctx.block()
+            .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]),
+    ))
 }
 
 // ---------------------------------------------------------------- verify
