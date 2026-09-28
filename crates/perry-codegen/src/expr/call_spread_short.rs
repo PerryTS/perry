@@ -142,7 +142,7 @@ fn load_candidate_shape(ctx: &mut FnCtx<'_>, candidate: &DirectCandidate) -> Str
         CandidateShape::Local {
             class_name,
             keys_global,
-        } => crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global),
+        } => crate::typed_shape::class_shape_id_operand(ctx, class_name, keys_global),
         CandidateShape::Foreign {
             cache_key,
             shape_id_global,

@@ -246,6 +246,7 @@ mod spec_return_proof;
 mod spec_self_recursion_tests;
 pub(crate) mod static_fields;
 mod static_shape_ids;
+pub(crate) use static_shape_ids::static_shape_id_for_keys_global;
 pub use static_shape_ids::{assign_static_shape_ids, BirthProto, BirthShape, TypedMasks};
 mod string_pool;
 #[cfg(test)]
