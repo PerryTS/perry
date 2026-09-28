@@ -102,6 +102,15 @@ pub(super) struct Entry {
     pub(super) value: f64,
     /// Closure pointer for the callback classes; 0 for `Class::Promise`.
     pub(super) callback: i64,
+    /// The NaN-boxed JS handle object (`Timeout`/`Immediate`) this entry's
+    /// callback runs with as `this`, matching Node. `TAG_UNDEFINED` when
+    /// there is none — a promise timer, or a native completion callback,
+    /// which install `timer_handle_value(id)` instead (see
+    /// `call_timer_callback_entry`'s fallback). A GC root exactly like
+    /// `callback`/`args`, scanned mutably so evacuation rewrites it; an
+    /// interval's re-armed copy (`duplicate_for_rearm`) carries the SAME
+    /// handle forward, matching Node's `this` staying stable across ticks.
+    pub(super) js_handle: f64,
     pub(super) args: Vec<f64>,
     pub(super) context: crate::async_context::AsyncContextSnapshot,
     pub(super) async_id: u64,
@@ -126,6 +135,7 @@ impl Entry {
         deadline: Instant,
         delay_ms: u64,
         callback: i64,
+        js_handle: f64,
         args: Vec<f64>,
         context: crate::async_context::AsyncContextSnapshot,
         async_id: u64,
@@ -143,6 +153,7 @@ impl Entry {
             promise: std::ptr::null_mut(),
             value: 0.0,
             callback,
+            js_handle,
             args,
             context,
             async_id,
@@ -174,6 +185,7 @@ impl Entry {
             promise: self.promise,
             value: self.value,
             callback: self.callback,
+            js_handle: self.js_handle,
             args: self.args.clone(),
             context: self.context.clone(),
             async_id: self.async_id,
@@ -201,6 +213,7 @@ impl Entry {
             promise,
             value,
             callback: 0,
+            js_handle: f64::from_bits(crate::value::TAG_UNDEFINED),
             args: Vec::new(),
             context: crate::async_context::AsyncContextSnapshot::default(),
             async_id: 0,

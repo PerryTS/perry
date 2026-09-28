@@ -194,6 +194,7 @@ fn run_callback_entry(entry: Entry) {
         id,
         class,
         callback,
+        js_handle,
         args,
         mut context,
         async_id,
@@ -203,7 +204,11 @@ fn run_callback_entry(entry: Entry) {
 
     // The entry left the store, so the collector no longer scans its slots:
     // everything the dispatch touches is rooted here for the whole dispatch.
+    // `js_handle` is rooted FIRST, before any of the allocating calls below
+    // (context roots, `enter_context`), or a collection in between could move
+    // it out from under an unrooted local (the root-store dominance rule).
     let scope = crate::gc::RuntimeHandleScope::new();
+    let js_handle = scope.root_nanbox_f64(js_handle);
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
     let previous = crate::async_context::enter_context(&context);
@@ -212,7 +217,7 @@ fn run_callback_entry(entry: Entry) {
     crate::async_hooks::before(async_id, trigger_async_id);
 
     enter_timer_callback_dispatch();
-    call_timer_callback_entry(&scope, id, callback, &args);
+    call_timer_callback_entry(&scope, id, callback, &args, &js_handle);
     // Node runs a microtask checkpoint after EACH macrotask callback, so a
     // `queueMicrotask`/`Promise.then` queued inside this callback runs before
     // the next timer fires.

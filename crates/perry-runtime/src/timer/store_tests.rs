@@ -15,6 +15,7 @@ fn entry_at(id: i64, class: Class, base: Instant, delay_ms: u64) -> Entry {
         base + Duration::from_millis(delay_ms),
         delay_ms,
         0,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
         Vec::new(),
         crate::async_context::AsyncContextSnapshot::default(),
         0,

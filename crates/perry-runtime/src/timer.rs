@@ -492,17 +492,31 @@ fn next_timer_id() -> i64 {
 /// nothing of this entry's: both the closure and the arguments are rooted here,
 /// and re-read immediately before the call, because installing the receiver is
 /// itself a collecting boundary.
+///
+/// `js_handle` is the entry's rooted `js_handle` field (already kept fresh by
+/// the caller since the entry left the store): the real `Timeout`/`Immediate`
+/// object when there is one, or `TAG_UNDEFINED` for an entry with none (a
+/// native completion callback), which falls back to the pre-#10821
+/// pointer-tagged id — there is no JS handle object for it to be.
 fn call_timer_callback_entry(
     scope: &crate::gc::RuntimeHandleScope,
     id: i64,
     callback: i64,
     args: &[f64],
+    js_handle: &crate::gc::RuntimeHandle<'_>,
 ) {
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(args);
-    let prev_this =
-        scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
+    let receiver = {
+        let handle = js_handle.get_nanbox_f64();
+        if crate::value::JSValue::from_bits(handle.to_bits()).is_undefined() {
+            timer_handle_value(id)
+        } else {
+            handle
+        }
+    };
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     with_timer_uncaught_trap(|| {
         let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
         let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
@@ -869,12 +883,22 @@ fn schedule_callback_timer_inner(
         );
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
+    // Re-read the handle root fresh, right before it is copied into the
+    // entry: the allocating calls above (`init_resource*`) can move it.
+    // Entries with no JS handle (native completions) fall back to
+    // `call_timer_callback_entry`'s `timer_handle_value(id)`.
+    let js_handle_value = handle
+        .as_ref()
+        .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |h| {
+            h.get_nanbox_f64()
+        });
     let entry = Entry::callback(
         id,
         class,
         deadline,
         delay_ms,
         callback as i64,
+        js_handle_value,
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         context,
         ids.async_id,

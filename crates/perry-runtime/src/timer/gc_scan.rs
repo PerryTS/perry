@@ -127,6 +127,17 @@ fn scan_store_step(
                 }
                 state.slot = 3;
             }
+            if state.slot == 3 {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                // The JS handle installed as `this` (#340/#341's Timeout/
+                // Immediate object) — a GC root exactly like `callback`, so
+                // evacuation rewrites it in place and a still-queued
+                // interval's `this` stays valid across every tick.
+                visitor.visit_nanbox_f64_slot(&mut entry.js_handle);
+                state.slot = 4;
+            }
             state.index += 1;
             state.finish_timer();
         }
