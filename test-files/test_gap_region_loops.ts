@@ -606,23 +606,24 @@ out("spillThenReshape", spillThenReshape(mkSpill(40), 6, (o: any) => { delete o.
 
 // 38. Receivers that genuinely SPILL: 20 keys added to an Object.create
 // object and 10 to a `{}`, so the last keys live in the spill buffer. Reads
-// of spill keys in a loop region, in a body region, mixed with an inline
+// of spill keys (key names no earlier case uses, so no earlier object
+// has taught these key lists a wider inline birth) in a loop region, in a body region, mixed with an inline
 // store, and under allocation pressure (the buffer moves).
 function mkWide(base: number): any {
   const t: any = Object.create(SPROTO);
-  for (let i = 0; i < 20; i++) t["k" + i] = base + i;
+  for (let i = 0; i < 20; i++) t["sp" + i] = base + i;
   return t;
 }
 function mkWide2(base: number): any {
   const t: any = {};
-  t.a = base; t.b = base + 1; t.c = base + 2; t.d = base + 3; t.e = base + 4;
-  t.f = base + 5; t.g = base + 6; t.h = base + 7; t.i = base + 8; t.j = base + 9;
+  t.qa = base; t.qb = base + 1; t.qc = base + 2; t.qd = base + 3; t.qe = base + 4;
+  t.qf = base + 5; t.qg = base + 6; t.qh = base + 7; t.qi = base + 8; t.qj = base + 9;
   return t;
 }
 function wideRead(o: any, n: number): number {
   let h = 0;
   for (let i = 0; i < n; i++) {
-    h += o.k1 + o.k17 + o.k18 + o.k19;
+    h += o.sp1 + o.sp17 + o.sp18 + o.sp19;
   }
   return h;
 }
@@ -630,7 +631,7 @@ out("wideRead", wideRead(mkWide(10), 50));
 function wide2Read(o: any, n: number): number {
   let h = 0;
   for (let i = 0; i < n; i++) {
-    h += o.a + o.h + o.i + o.j;
+    h += o.qa + o.qh + o.qi + o.qj;
   }
   return h;
 }
@@ -638,22 +639,31 @@ out("wide2Read", wide2Read(mkWide2(10), 50));
 function wideStoreInlineReadSpill(o: any, n: number): number {
   let h = 0;
   for (let i = 0; i < n; i++) {
-    o.k0 = i;
-    const x = o.k19;
-    h += o.k0 + x;
+    o.sp0 = i;
+    const x = o.sp19;
+    h += o.sp0 + x;
   }
   return h;
 }
 out("wideStoreInlineReadSpill", wideStoreInlineReadSpill(mkWide(5), 30));
+// A stored spill key. Its own prototype and key names: a birth learns its
+// inline width from earlier objects of the same kind, so a receiver that must
+// spill needs a lineage no earlier case has widened.
+const SPROTO_S: any = { p: 200 };
+function mkWideS(base: number): any {
+  const t: any = Object.create(SPROTO_S);
+  for (let i = 0; i < 20; i++) t["ss" + i] = base + i;
+  return t;
+}
 function wideStoreSpill(o: any, n: number): number {
   let h = 0;
   for (let i = 0; i < n; i++) {
-    o.k19 = i;
-    h += o.k19 + o.k1;
+    o.ss19 = i;
+    h += o.ss19 + o.ss1;
   }
-  return h;
+  return h + o.ss18;
 }
-out("wideStoreSpill", wideStoreSpill(mkWide(7), 30));
+out("wideStoreSpill", wideStoreSpill(mkWideS(7), 30));
 function wideBody(n: number): number {
   const objs: any[] = [];
   for (let i = 0; i < 4; i++) objs.push(mkWide(i * 100));
@@ -661,8 +671,8 @@ function wideBody(n: number): number {
   let h = 0;
   for (let k = 0; k < n; k++) {
     const o = objs[k % 5];
-    const x = o.k18;
-    h += (x === undefined ? o.j : x) + o.k1;
+    const x = o.sp18;
+    h += (x === undefined ? o.qj : x) + o.sp1;
   }
   return h;
 }
@@ -681,9 +691,9 @@ out("wideMoving", wideMoving(2000));
 function wideReshape(o: any, n: number, f: (o: any) => void): number {
   let h = 0;
   for (let i = 0; i < n; i++) {
-    h += o.k18 + o.k19;
+    h += o.sp18 + o.sp19;
     if (i === 2) f(o);
   }
   return h;
 }
-out("wideReshape", wideReshape(mkWide(3), 6, (o: any) => { delete o.k18; o.k18 = 1000; o.k25 = 1; }));
+out("wideReshape", wideReshape(mkWide(3), 6, (o: any) => { delete o.sp18; o.sp18 = 1000; o.sp25 = 1; }));
