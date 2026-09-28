@@ -1093,12 +1093,16 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String,
     let open = ctx.new_block("rloop.guard.open");
     let chk = ctx.new_block("rloop.guard.chk");
     let flip = ctx.new_block("rloop.guard.flip");
+    let ok_i = ctx.new_block("rloop.guard.inline");
+    let ok_s = ctx.new_block("rloop.guard.spill");
     let miss = ctx.new_block("rloop.guard.miss");
     let prime = ctx.new_block("rloop.guard.prime");
     let join = ctx.new_block("rloop.guard.join");
     let open_l = ctx.block_label(open);
     let chk_l = ctx.block_label(chk);
     let flip_l = ctx.block_label(flip);
+    let ok_i_l = ctx.block_label(ok_i);
+    let ok_s_l = ctx.block_label(ok_s);
     let miss_l = ctx.block_label(miss);
     let prime_l = ctx.block_label(prime);
     let join_l = ctx.block_label(join);
@@ -1120,21 +1124,48 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String,
     let sid = field_i32(ctx, &handle, 4);
     let eq = ctx.block().icmp_eq(I32, &sid, &expected);
     let admit = if rv.has_store {
-        store_admission(ctx, &handle, true)
+        Some(store_admission(ctx, &handle, true))
     } else {
-        "true".to_string()
+        None
     };
-    let pass = ctx.block().and(I1, &eq, &admit);
+    // Every edge into the join carries a CONSTANT state (0 refused, 1 the
+    // all-inline word, 2 the spill word) except the cold prime's, so the
+    // per-iteration decision a body region makes on it threads straight from
+    // the compare to its F copy.
     let chk_end = ctx.block().label.clone();
-    ctx.block().cond_br(&eq, &join_l, &flip_l);
+    let mut refused_edges: Vec<String> = Vec::new();
+    match &admit {
+        Some(a) => {
+            let adm = ctx.new_block("rloop.guard.admit");
+            let adm_l = ctx.block_label(adm);
+            ctx.block().cond_br(&eq, &adm_l, &flip_l);
+            ctx.current_block = adm;
+            ctx.block().cond_br(a, &ok_i_l, &join_l);
+            refused_edges.push(adm_l);
+        }
+        None => ctx.block().cond_br(&eq, &ok_i_l, &flip_l),
+    }
+    let _ = chk_end;
 
     // Not the all-inline word: is it this shape's SPILL word?
     ctx.current_block = flip;
     let exp_f = ctx.block().xor(I32, &expected, FLIP_I32);
     let eq_f = ctx.block().icmp_eq(I32, &sid, &exp_f);
-    let pass_f = ctx.block().and(I1, &eq_f, &admit);
-    let flip_end = ctx.block().label.clone();
-    ctx.block().cond_br(&eq_f, &join_l, &miss_l);
+    match &admit {
+        Some(a) => {
+            let adm = ctx.new_block("rloop.guard.admit");
+            let adm_l = ctx.block_label(adm);
+            ctx.block().cond_br(&eq_f, &adm_l, &miss_l);
+            ctx.current_block = adm;
+            ctx.block().cond_br(a, &ok_s_l, &join_l);
+            refused_edges.push(adm_l);
+        }
+        None => ctx.block().cond_br(&eq_f, &ok_s_l, &miss_l),
+    }
+    ctx.current_block = ok_i;
+    ctx.block().br(&join_l);
+    ctx.current_block = ok_s;
+    ctx.block().br(&join_l);
 
     // The shape did not match: prime (bounded for the process), then compare
     // again against what the runtime published.
@@ -1194,43 +1225,44 @@ fn emit_guard(ctx: &mut FnCtx<'_>, rv: &mut Receiver) -> Result<(String, String,
         "true".to_string()
     };
     let pass2 = ctx.block().and(I1, &eq2, &admit2);
+    let two_or_one = ctx.block().select(I1, &spill2, I8, "2", "1");
+    let state2 = ctx.block().select(I1, &pass2, I8, &two_or_one, "0");
     let prime_end = ctx.block().label.clone();
     ctx.block().br(&join_l);
 
     ctx.current_block = join;
-    let word_out = ctx.block().phi(
-        I64,
-        &[
-            (EMPTY_WORD, retired_l.as_str()),
-            (EMPTY_WORD, entry_l.as_str()),
-            (word.as_str(), chk_end.as_str()),
-            (word.as_str(), flip_end.as_str()),
-            (EMPTY_WORD, miss_l.as_str()),
-            (primed.as_str(), prime_end.as_str()),
-        ],
-    );
-    let pass_out = ctx.block().phi(
-        I1,
-        &[
-            ("false", retired_l.as_str()),
-            ("false", entry_l.as_str()),
-            (pass.as_str(), chk_end.as_str()),
-            (pass_f.as_str(), flip_end.as_str()),
-            ("false", miss_l.as_str()),
-            (pass2.as_str(), prime_end.as_str()),
-        ],
-    );
-    let spill_out = ctx.block().phi(
-        I1,
-        &[
-            ("false", retired_l.as_str()),
-            ("false", entry_l.as_str()),
-            ("false", chk_end.as_str()),
-            ("true", flip_end.as_str()),
-            ("false", miss_l.as_str()),
-            (spill2.as_str(), prime_end.as_str()),
-        ],
-    );
+    let mut words: Vec<(String, String)> = vec![
+        (EMPTY_WORD.to_string(), retired_l.clone()),
+        (EMPTY_WORD.to_string(), entry_l.clone()),
+        (word.clone(), ok_i_l.clone()),
+        (word.clone(), ok_s_l.clone()),
+        (EMPTY_WORD.to_string(), miss_l.clone()),
+        (primed.clone(), prime_end.clone()),
+    ];
+    let mut states: Vec<(String, String)> = vec![
+        ("0".to_string(), retired_l.clone()),
+        ("0".to_string(), entry_l.clone()),
+        ("1".to_string(), ok_i_l.clone()),
+        ("2".to_string(), ok_s_l.clone()),
+        ("0".to_string(), miss_l.clone()),
+        (state2.clone(), prime_end.clone()),
+    ];
+    for e in &refused_edges {
+        words.push((EMPTY_WORD.to_string(), e.clone()));
+        states.push(("0".to_string(), e.clone()));
+    }
+    let w: Vec<(&str, &str)> = words
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let word_out = ctx.block().phi(I64, &w);
+    let st: Vec<(&str, &str)> = states
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let state = ctx.block().phi(I8, &st);
+    let pass_out = ctx.block().icmp_ne(I8, &state, "0");
+    let spill_out = ctx.block().icmp_eq(I8, &state, "2");
     Ok((word_out, pass_out, spill_out))
 }
 
