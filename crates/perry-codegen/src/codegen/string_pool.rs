@@ -625,7 +625,7 @@ pub(super) fn emit_string_pool(
             class_ids,
         );
         let class_id = birth.class_id;
-        let requested = super::static_shape_ids::static_shape_id_for_keys_global(global_name)
+        let requested = super::static_shape_ids::static_mint_id_for_keys_global(global_name)
             .unwrap_or(0)
             .to_string();
         let cid_str = class_id.to_string();

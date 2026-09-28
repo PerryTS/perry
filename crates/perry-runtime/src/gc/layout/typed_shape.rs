@@ -69,12 +69,14 @@ unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
 /// globals and init guards are per-thread), so every agent installs its own.
 ///
 /// `requested` is the driver's static id for this layout (design step 4, 0 =
-/// none). Its content includes the masks, so it names exactly one typed layout
-/// in the program. It is adopted when this agent's facts accept it — absent,
-/// or present with these exact facts because an importing module's structural
-/// mint adopted it first — and the hot table holds no other descriptor for it.
-/// Otherwise a fresh counter id is minted: every instance still gets an exact
-/// descriptor, and code that compares against the static id only misses.
+/// none: a fresh counter id). Its content includes the masks, and no other
+/// content shares it (decision 16: a structural view of the class has its own
+/// id), so only this layout's own install ever requests it: it is absent from
+/// this agent, or present with these exact facts and this exact descriptor
+/// (a second module deriving the same typed layout). A refusal is therefore
+/// an invariant violation, and it ABORTS: the defining module's guards compare
+/// against `requested` as an immediate, so a fallback id would leave them
+/// naming whatever else held it.
 ///
 /// There is no registry: the typed identity is the id the driver derived from
 /// the layout, and the descriptor lives in the agent's ordinary hot table.
@@ -113,13 +115,22 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
         pointer_mask: LayoutSlotMask::from_words(pointer_slice),
     };
     let keys = keys as usize as *const crate::array::ArrayHeader;
-    let adopted = Some(requested)
-        .filter(|&id| id != 0 && hot_layout_accepts(id, &descriptor))
-        .filter(|&id| {
-            crate::object::shapes::install_static_typed_shape_id(id, keys, slot_count, proto_id)
-        });
-    let shape_id = adopted
-        .unwrap_or_else(|| crate::object::shapes::mint_typed_shape_id(keys, slot_count, proto_id));
+    let shape_id = if requested == 0 {
+        crate::object::shapes::mint_typed_shape_id(keys, slot_count, proto_id)
+    } else if hot_layout_accepts(requested, &descriptor)
+        && crate::object::shapes::install_static_typed_shape_id(
+            requested, keys, slot_count, proto_id,
+        )
+    {
+        requested
+    } else {
+        eprintln!(
+            "Perry internal error: the static ShapeId {requested:#x} of class {class_id} \
+             was refused by its typed layout install (it already names other facts or \
+             another layout in this agent); a static id must name one layout"
+        );
+        std::process::abort();
+    };
     hot_shape_layouts()
         .borrow_mut()
         .entry(shape_id)

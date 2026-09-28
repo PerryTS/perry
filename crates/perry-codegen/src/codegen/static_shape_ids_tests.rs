@@ -74,33 +74,56 @@ fn masks_and_prototype_are_part_of_the_content() {
 }
 
 #[test]
-fn a_structural_birth_takes_its_one_typed_layouts_id() {
+fn a_structural_birth_never_shares_a_typed_id() {
     let importer = class("next\0value\0", 2, 11);
     let definer = typed("next\0value\0", 2, 11, 0b10, 0b01);
     let ids = assign_static_shape_ids([&importer, &definer]);
-    assert_eq!(ids[&importer], ids[&definer]);
+    assert_ne!(
+        ids[&importer], ids[&definer],
+        "one id would name two layouts"
+    );
+}
+
+fn birth(global: &str, cid: u32, defined: bool, shape: &BirthShape) -> ModuleBirth {
+    ModuleBirth {
+        keys_global: global.to_string(),
+        class_id: cid,
+        defined,
+        shape: shape.clone(),
+    }
 }
 
 #[test]
-fn a_structural_birth_with_two_typed_matches_keeps_its_own_id() {
-    let importer = class("next\0value\0", 2, 12);
-    let t1 = typed("next\0value\0", 2, 12, 0b10, 0b01);
-    let t2 = typed("next\0value\0", 2, 12, 0, 0b11);
-    let ids = assign_static_shape_ids([&importer, &t1, &t2]);
-    assert_ne!(ids[&importer], ids[&t1]);
-    assert_ne!(ids[&importer], ids[&t2]);
-    assert_ne!(ids[&t1], ids[&t2]);
+fn a_structural_stub_guards_with_the_definers_typed_id() {
+    let stub = class("next\0value\0", 2, 21);
+    let def = typed("next\0value\0", 2, 21, 0b10, 0b01);
+    let births = [
+        birth("k_def__C", 21, true, &def),
+        birth("k_imp__C", 21, false, &stub),
+    ];
+    let ids = assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    let program = ProgramClassShapeIds::from_births(&births, &ids);
+    assert_eq!(
+        program.guard_id("k_imp__C", 21, &stub, ids[&stub]),
+        ids[&def]
+    );
+    assert_eq!(program.guard_id("k_def__C", 21, &def, ids[&def]), ids[&def]);
+    // A stub with other facts (#5094), or a typed stub, keeps its own id.
+    let other = class("next\0", 1, 21);
+    assert_eq!(program.guard_id("k_imp__C", 21, &other, 7), 7);
+    let typed_stub = typed("next\0value\0", 2, 21, 0, 0b11);
+    assert_eq!(program.guard_id("k_imp__C", 21, &typed_stub, 9), 9);
 }
 
 #[test]
-fn a_wide_birth_never_takes_a_typed_id() {
-    let wide = BirthShape {
-        live: 4,
-        ..class("next\0value\0", 2, 13)
-    };
-    let definer = typed("next\0value\0", 2, 13, 0b10, 0b01);
-    let ids = assign_static_shape_ids([&wide, &definer]);
-    assert_ne!(ids[&wide], ids[&definer]);
+fn a_class_id_defined_twice_has_no_program_entry() {
+    let a = class("a\0", 1, 31);
+    let b = class("b\0", 1, 31);
+    let births = [birth("k_1__A", 31, true, &a), birth("k_2__A", 31, true, &b)];
+    let ids = assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    let program = ProgramClassShapeIds::from_births(&births, &ids);
+    assert!(program.0.is_empty());
+    assert!(program.restricted_to([31]).0.is_empty());
 }
 
 #[test]

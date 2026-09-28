@@ -39,6 +39,7 @@ use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitK
 fn ir_opts(is_entry: bool) -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: is_entry,
         non_entry_module_prefixes: Vec::new(),

@@ -113,6 +113,7 @@ fn side_mask_baked_header_word() -> String {
 fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
@@ -674,9 +675,10 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     opts.imported_classes.push(imported_remote());
     let births = crate::module_birth_shapes(&module(), opts.clone()).unwrap();
     assert_eq!(births.len(), 1, "the stub is this module's one class birth");
-    let ids = crate::assign_static_shape_ids(&births);
-    let id = ids[&births[0]];
-    opts.static_shape_ids = vec![(births[0].clone(), id)];
+    assert!(!births[0].defined, "an imported stub is not a definition");
+    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    let id = ids[&births[0].shape];
+    opts.static_shape_ids = vec![(births[0].shape.clone(), id)];
     let ir = String::from_utf8(compile_module(&module(), opts).unwrap())
         .expect("LLVM IR should be UTF-8");
     let mint = ir

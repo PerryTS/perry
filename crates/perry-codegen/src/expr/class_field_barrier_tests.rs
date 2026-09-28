@@ -61,6 +61,7 @@ pub(super) fn assert_default_barrier_env_not_disabled() {
 pub(super) fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),

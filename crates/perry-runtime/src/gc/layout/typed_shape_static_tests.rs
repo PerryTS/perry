@@ -1,7 +1,7 @@
 //! Typed class layouts under link-time ShapeIds (design step 4): the driver's
 //! static id carries the masks, is adopted in whichever order the defining
-//! and an importing module initialize, and a refusal falls back to a fresh id
-//! that still describes the layout. No registry is consulted.
+//! and an importing module initialize, and a refusal — impossible by
+//! construction since decision 16 — aborts. No registry is consulted.
 use super::*;
 use crate::object::shapes::{is_shape_id, is_static_shape_id, SHAPE_ID_BASE};
 
@@ -58,24 +58,57 @@ fn the_definer_adopts_the_static_id_and_an_importer_resolves_to_it() {
 }
 
 /// An importing module initializes first (the entry module, or an import
-/// cycle): its structural mint adopts the static id as a plain record, and the
-/// definer's typed install then finds matching facts and adds the layout.
+/// cycle): its structural mint adopts ITS OWN static id (decision 16: a plain
+/// view never shares the typed id), the definer's typed install then adopts
+/// the typed id, and every later birth of those facts reaches the typed id.
 #[test]
-fn an_importer_first_leaves_the_static_id_for_the_definer_to_type() {
+fn an_importer_first_keeps_its_own_id_and_the_definer_adopts_the_typed_id() {
     let class_id = 0x0B1_2002;
-    let s = SHAPE_ID_BASE + 0x5102;
+    let (s_plain, s_typed) = (SHAPE_ID_BASE + 0x5102, SHAPE_ID_BASE + 0x5103);
     let keys = keys_for(class_id, b"lt4u_next\0lt4u_value\0");
     let importer = crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
-        keys, 2, 2, class_id, s,
+        keys, 2, 2, class_id, s_plain,
     );
-    assert_eq!(importer, s);
+    assert_eq!(importer, s_plain);
     assert!(
-        hot(s).is_none(),
+        hot(s_plain).is_none(),
         "a structural mint installs no typed layout"
     );
-    assert_eq!(typed(class_id, keys, &RAW, &POINTERS, s), s);
-    assert!(hot(s) == Some(Some(descriptor(&RAW, &POINTERS))));
+    assert_eq!(typed(class_id, keys, &RAW, &POINTERS, s_typed), s_typed);
+    assert!(hot(s_typed) == Some(Some(descriptor(&RAW, &POINTERS))));
+    assert!(
+        hot(s_plain).is_none(),
+        "the plain id never carries the typed layout"
+    );
+    assert_eq!(
+        crate::object::static_shapes::js_object_shape_id_for_class_keys_static(
+            keys, 2, 2, class_id, s_plain,
+        ),
+        s_typed,
+        "the typed install is canonical for later births of those facts"
+    );
 }
+
+/// Run `name` in a child test process with `SABOTAGE_ENV` set and require it
+/// to abort with the refusal message.
+fn child_aborts_with_refusal(name: &str) {
+    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .arg(name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .arg("--test-threads=1")
+        .env(SABOTAGE_ENV, "1")
+        .output()
+        .expect("launch the sabotaged child");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "the sabotaged install did not abort");
+    assert!(
+        stderr.contains("was refused by its typed layout install"),
+        "the child died without the refusal message: {stderr}"
+    );
+}
+
+const SABOTAGE_ENV: &str = "PERRY_TEST_TYPED_STATIC_REFUSAL_CHILD";
 
 /// Without a static id (a build the driver did not assign) the layout still
 /// gets its own counter id and descriptor.
@@ -88,26 +121,22 @@ fn no_static_id_mints_a_fresh_typed_id() {
     assert!(hot(id) == Some(Some(descriptor(&RAW, &POINTERS))));
 }
 
-/// A hot-table entry that disagrees with the typed layout (learned from an
-/// object, or poisoned) keeps the static id: the typed layout takes a fresh
-/// id, so no image-born object is ever described by the wrong masks.
+/// Sabotage: a hot-table entry that disagrees with the typed layout (learned
+/// from an object, or poisoned) under the static id. The install must ABORT,
+/// never fall back to a fresh id the definer's immediates do not name.
 #[test]
-fn a_conflicting_hot_entry_sends_the_typed_layout_to_a_fresh_id() {
+fn a_conflicting_hot_entry_aborts_the_typed_install() {
+    if std::env::var_os(SABOTAGE_ENV).is_none() {
+        child_aborts_with_refusal(
+            "gc::layout::typed_shape::static_id_tests::a_conflicting_hot_entry_aborts_the_typed_install",
+        );
+        return;
+    }
     let class_id = 0x0B1_2004;
     let s = SHAPE_ID_BASE + 0x5104;
     let keys = keys_for(class_id, b"lt4w_next\0lt4w_value\0");
     hot_shape_layouts().borrow_mut().insert(s, None);
-    let id = typed(class_id, keys, &RAW, &POINTERS, s);
-    assert_ne!(
-        id, s,
-        "a poisoned static id must not carry the typed layout"
-    );
-    assert!(!is_static_shape_id(id));
-    assert!(hot(id) == Some(Some(descriptor(&RAW, &POINTERS))));
-    assert!(
-        matches!(hot(s), Some(None)),
-        "the poisoned entry is untouched"
-    );
+    typed(class_id, keys, &RAW, &POINTERS, s);
 }
 
 /// Two typed layouts with identical facts (colliding class ids, same keys) but
@@ -124,13 +153,18 @@ fn equal_facts_with_different_masks_keep_two_ids() {
     assert!(hot(s2) == Some(Some(descriptor(&[], &[0b11]))));
 }
 
-/// A static id already naming OTHER facts in this agent is declined.
+/// Sabotage: a static id already naming OTHER facts in this agent (another
+/// class's mint took it) makes the typed install abort.
 #[test]
-fn a_static_id_naming_other_facts_is_declined() {
+fn a_static_id_naming_other_facts_aborts_the_typed_install() {
+    if std::env::var_os(SABOTAGE_ENV).is_none() {
+        child_aborts_with_refusal(
+            "gc::layout::typed_shape::static_id_tests::a_static_id_naming_other_facts_aborts_the_typed_install",
+        );
+        return;
+    }
     let class_id = 0x0B1_2006;
     let s = SHAPE_ID_BASE + 0x5107;
-    // Another class (its own id: a class keys array is built once per class
-    // id) whose mint took the static id first.
     let other_class = class_id + 0x100;
     let other = keys_for(other_class, b"lt4y_a\0lt4y_b\0");
     assert_eq!(
@@ -144,7 +178,5 @@ fn a_static_id_naming_other_facts_is_declined() {
         s
     );
     let keys = keys_for(class_id, b"lt4y_next\0lt4y_value\0");
-    let id = typed(class_id, keys, &RAW, &POINTERS, s);
-    assert_ne!(id, s);
-    assert!(hot(s).is_none(), "the other facts' id gets no typed layout");
+    typed(class_id, keys, &RAW, &POINTERS, s);
 }

@@ -329,6 +329,10 @@ fn compute_object_cache_key_with_env(
     // embeds as immediates. A cached object is reused exactly when every id
     // it embeds is unchanged.
     h.field("static_shape_ids", &format!("{:?}", opts.static_shape_ids));
+    h.field(
+        "program_class_shape_ids",
+        &format!("{:?}", opts.program_class_shape_ids),
+    );
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.
     h.field(

@@ -91,7 +91,7 @@ impl BirthShape {
 
     /// The facts the runtime mints for this content, without the masks: a
     /// typed layout and a structural mint of the same class share them.
-    fn structure(&self) -> (&[u8], u32, u32, &BirthProto) {
+    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto) {
         (&self.keys, self.key_count, self.live, &self.proto)
     }
 }
@@ -101,12 +101,10 @@ impl BirthShape {
 /// result depends on the SET only). Hash collisions in the 2^20 band are
 /// certain at program scale, which is why this is a whole-program pass.
 ///
-/// A structural content (no masks) whose facts equal exactly ONE typed
-/// content's is the same class seen by a module that cannot prove the typed
-/// layout (an importer's stub): it gets the typed id, so its mint adopts or
-/// finds the id the definer's typed install uses, in either init order. With
-/// two or more typed matches (colliding class ids) it keeps its own id — its
-/// guards then only miss.
+/// Every distinct content gets its OWN id (decision 16): a structural view of
+/// a class and its typed layout are different content, so they never share an
+/// id and a guard immediate never names two layouts. An importer's guards
+/// reach the definer's id through [`ProgramClassShapeIds`] instead.
 ///
 /// Contents beyond the band's capacity get no id (their guards load the
 /// mint's id, as before step 4).
@@ -114,24 +112,10 @@ pub fn assign_static_shape_ids<'a>(
     contents: impl IntoIterator<Item = &'a BirthShape>,
 ) -> HashMap<BirthShape, u32> {
     let contents: BTreeSet<&BirthShape> = contents.into_iter().collect();
-    let mut typed_by_structure: BTreeMap<(&[u8], u32, u32, &BirthProto), Vec<&BirthShape>> =
-        BTreeMap::new();
-    for c in contents.iter().filter(|c| c.typed.is_some()) {
-        typed_by_structure.entry(c.structure()).or_default().push(c);
-    }
-    let alias_of = |c: &BirthShape| -> Option<&BirthShape> {
-        if c.typed.is_some() || c.live != c.key_count {
-            return None;
-        }
-        match typed_by_structure.get(&c.structure()).map(Vec::as_slice) {
-            Some([only]) if only.live == only.key_count => Some(*only),
-            _ => None,
-        }
-    };
     let mask = STATIC_SHAPE_ID_COUNT - 1;
     let mut used = vec![false; STATIC_SHAPE_ID_COUNT as usize];
     let mut ids: HashMap<BirthShape, u32> = HashMap::with_capacity(contents.len());
-    for c in contents.iter().filter(|c| alias_of(c).is_none()) {
+    for c in contents {
         if ids.len() as u32 >= STATIC_SHAPE_ID_COUNT {
             break;
         }
@@ -140,16 +124,93 @@ pub fn assign_static_shape_ids<'a>(
             slot = (slot + 1) & mask;
         }
         used[slot as usize] = true;
-        ids.insert((*c).clone(), SHAPE_ID_BASE + slot);
-    }
-    for c in contents.iter() {
-        if let Some(typed) = alias_of(c) {
-            if let Some(&id) = ids.get(typed) {
-                ids.insert((*c).clone(), id);
-            }
-        }
+        ids.insert(c.clone(), SHAPE_ID_BASE + slot);
     }
     ids
+}
+
+/// One class keys global's birth as the driver's pre-pass collects it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleBirth {
+    /// The module's keys global (`perry_class_keys_<prefix>__<class>`).
+    pub keys_global: String,
+    pub class_id: u32,
+    /// The module DEFINES the class (false: an imported class's stub).
+    pub defined: bool,
+    pub shape: BirthShape,
+}
+
+/// A class's static id as its DEFINING module assigns it (typed or plain).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DefinedClassShape {
+    pub keys_global: String,
+    pub shape: BirthShape,
+    pub id: u32,
+}
+
+/// Decision 16: the program-wide map of each class's static id, by class id,
+/// as the defining module assigns it. The driver hands each module the
+/// entries it can name (its classes and imported stubs, and the producer
+/// classes of its short-spread candidates), and those entries are part of the
+/// module's object-cache key. A class id defined by two modules (colliding
+/// ids) has no entry: its importers' guards keep their own ids.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgramClassShapeIds(pub BTreeMap<u32, DefinedClassShape>);
+
+impl ProgramClassShapeIds {
+    pub fn from_births<'a>(
+        births: impl IntoIterator<Item = &'a ModuleBirth>,
+        ids: &HashMap<BirthShape, u32>,
+    ) -> Self {
+        let mut by_class: BTreeMap<u32, Vec<DefinedClassShape>> = BTreeMap::new();
+        for b in births.into_iter().filter(|b| b.defined && b.class_id != 0) {
+            if let Some(&id) = ids.get(&b.shape) {
+                by_class
+                    .entry(b.class_id)
+                    .or_default()
+                    .push(DefinedClassShape {
+                        keys_global: b.keys_global.clone(),
+                        shape: b.shape.clone(),
+                        id,
+                    });
+            }
+        }
+        Self(
+            by_class
+                .into_iter()
+                .filter_map(|(cid, mut v)| (v.len() == 1).then(|| (cid, v.pop().unwrap())))
+                .collect(),
+        )
+    }
+
+    /// The entries for `class_ids` only (one module's slice).
+    pub fn restricted_to(&self, class_ids: impl IntoIterator<Item = u32>) -> Self {
+        Self(
+            class_ids
+                .into_iter()
+                .filter_map(|cid| self.0.get(&cid).map(|d| (cid, d.clone())))
+                .collect(),
+        )
+    }
+
+    /// The guard immediate for a keys global of THIS module holding `shape`
+    /// (minted as `own`): the defining module's id when this is a structural
+    /// stub of exactly the definer's facts — the definer's typed install goes
+    /// to the front of the by-facts bucket, so this module's births reach it
+    /// too — else `own`. A typed stub keeps its own id: its code may rely on
+    /// its own masks, which the definer's layout need not share.
+    fn guard_id(&self, keys_global: &str, class_id: u32, shape: &BirthShape, own: u32) -> u32 {
+        match self.0.get(&class_id) {
+            Some(d)
+                if d.keys_global != keys_global
+                    && shape.typed.is_none()
+                    && d.shape.structure() == shape.structure() =>
+            {
+                d.id
+            }
+            _ => own,
+        }
+    }
 }
 
 /// One class keys global's birth, as the string pool mints it.
@@ -225,54 +286,96 @@ pub(crate) fn class_birth(
 }
 
 thread_local! {
-    /// This module's static id per class keys global. Set by `compile_module`
-    /// for every module (empty when the driver assigned none), read by the
-    /// string pool's mint and by the shape guards.
-    static MODULE_STATIC_IDS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+    /// This module's static ids per class keys global: `(mint id, guard id)`.
+    /// The mint id is the one its own content was assigned (the string pool
+    /// requests it); the guard id is what a guard compares as an immediate
+    /// (the definer's id for a structural stub, see
+    /// [`ProgramClassShapeIds::guard_id`]). Set by `compile_module` for every
+    /// module (empty when the driver assigned none).
+    static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, u32)>> = RefCell::new(HashMap::new());
+    /// This module's slice of the program-wide map (foreign shape globals).
+    static MODULE_PROGRAM_IDS: RefCell<ProgramClassShapeIds> = RefCell::new(ProgramClassShapeIds::default());
 }
 
-/// Install this module's `keys global -> static id` map: for each class keys
-/// global whose content the driver assigned an id.
+/// Install this module's static id maps: for each class keys global whose
+/// content the driver assigned an id.
 pub(crate) fn set_module_static_ids(
     module_prefix: &str,
     class_keys_init_data: &[ClassKeysInit],
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     assigned: &[(BirthShape, u32)],
+    program: &ProgramClassShapeIds,
 ) {
     let by_content: HashMap<&BirthShape, u32> = assigned.iter().map(|(c, id)| (c, *id)).collect();
-    let map: HashMap<String, u32> = if by_content.is_empty() {
+    let map: HashMap<String, (u32, u32)> = if by_content.is_empty() {
         HashMap::new()
     } else {
         class_keys_init_data
             .iter()
             .filter_map(|entry| {
                 let birth = class_birth(module_prefix, entry, class_header_image_inits, class_ids);
-                let id = *by_content.get(birth.shape.as_ref()?)?;
-                Some((entry.0.clone(), id))
+                let shape = birth.shape.as_ref()?;
+                let own = *by_content.get(shape)?;
+                let guard = program.guard_id(&entry.0, birth.class_id, shape, own);
+                Some((entry.0.clone(), (own, guard)))
             })
             .collect()
     };
     MODULE_STATIC_IDS.with(|m| *m.borrow_mut() = map);
+    MODULE_PROGRAM_IDS.with(|m| *m.borrow_mut() = program.clone());
 }
 
-/// The static id of the class whose keys global is `keys_global`, when the
-/// driver assigned one and the global belongs to this module.
+/// The static id a GUARD compares against for the class whose keys global is
+/// `keys_global`, when the driver assigned one and the global belongs to this
+/// module.
 pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).copied())
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(_, guard)| guard))
 }
 
-/// The contents of one module's class births (the driver's pre-pass).
+/// The static id this module's mint of `keys_global` requests (its own
+/// content's id).
+pub(crate) fn static_mint_id_for_keys_global(keys_global: &str) -> Option<u32> {
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(own, _)| own))
+}
+
+/// The static id behind ANOTHER module's shape-id global `shape_id_global`
+/// for class `class_id`: the defining module's id, when the program map names
+/// that class and the global is the definer's.
+pub(crate) fn static_shape_id_for_foreign_global(
+    class_id: u32,
+    shape_id_global: &str,
+) -> Option<u32> {
+    MODULE_PROGRAM_IDS.with(|m| {
+        let program = m.borrow();
+        let d = program.0.get(&class_id)?;
+        (crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
+            == shape_id_global)
+            .then_some(d.id)
+    })
+}
+
+/// The class births of one module (the driver's pre-pass). The first
+/// `defined_len` entries of `class_keys_init_data` are the module's own
+/// classes; the rest are imported stubs.
 pub(crate) fn module_births(
     module_prefix: &str,
     class_keys_init_data: &[ClassKeysInit],
+    defined_len: usize,
     class_header_image_inits: &HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
-) -> Vec<BirthShape> {
+) -> Vec<ModuleBirth> {
     class_keys_init_data
         .iter()
-        .filter_map(|entry| {
-            class_birth(module_prefix, entry, class_header_image_inits, class_ids).shape
+        .enumerate()
+        .filter_map(|(i, entry)| {
+            let birth = class_birth(module_prefix, entry, class_header_image_inits, class_ids);
+            Some(ModuleBirth {
+                keys_global: entry.0.clone(),
+                class_id: birth.class_id,
+                defined: i < defined_len,
+                shape: birth.shape?,
+            })
         })
         .collect()
 }

@@ -5540,6 +5540,7 @@ pub fn run_with_parse_cache(
             constructor_param_counts: Default::default(),
             // Filled per module after the static-shape pre-pass.
             static_shape_ids: Vec::new(),
+            program_class_shape_ids: Default::default(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
@@ -5674,7 +5675,7 @@ pub fn run_with_parse_cache(
     // collision. A module then embeds the ids of its own contents; nothing
     // is keyed by class name.
     let static_shape_started = Instant::now();
-    let module_births: Vec<(&PathBuf, Vec<perry_codegen::BirthShape>)> = module_pool
+    let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
         .install(|| {
             ctx.native_modules
                 .par_iter()
@@ -5699,21 +5700,36 @@ pub fn run_with_parse_cache(
                 .collect::<Result<Vec<_>, String>>()
         })
         .map_err(|error| anyhow!(error))?;
-    let static_shape_ids =
-        perry_codegen::assign_static_shape_ids(module_births.iter().flat_map(|(_, b)| b));
-    let static_shape_ids_by_module: HashMap<&PathBuf, Vec<(perry_codegen::BirthShape, u32)>> =
+    let static_shape_ids = perry_codegen::assign_static_shape_ids(
         module_births
-            .into_iter()
-            .map(|(path, births)| {
-                let mut ids: Vec<(perry_codegen::BirthShape, u32)> = births
-                    .into_iter()
-                    .filter_map(|b| static_shape_ids.get(&b).map(|&id| (b, id)))
-                    .collect();
-                ids.sort();
-                ids.dedup();
-                (path, ids)
-            })
-            .collect();
+            .iter()
+            .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
+    );
+    // Decision 16: each class's id as its DEFINING module assigns it. Every
+    // module gets the slice it can name (its classes and stubs, plus the
+    // producer classes of its short-spread candidates); the slice is in its
+    // object-cache key.
+    let program_class_shape_ids = perry_codegen::ProgramClassShapeIds::from_births(
+        module_births.iter().flat_map(|(_, b)| b),
+        &static_shape_ids,
+    );
+    #[allow(clippy::type_complexity)]
+    let static_shape_ids_by_module: HashMap<
+        &PathBuf,
+        (Vec<(perry_codegen::BirthShape, u32)>, BTreeSet<u32>),
+    > = module_births
+        .into_iter()
+        .map(|(path, births)| {
+            let class_ids: BTreeSet<u32> = births.iter().map(|b| b.class_id).collect();
+            let mut ids: Vec<(perry_codegen::BirthShape, u32)> = births
+                .into_iter()
+                .filter_map(|b| static_shape_ids.get(&b.shape).map(|&id| (b.shape, id)))
+                .collect();
+            ids.sort();
+            ids.dedup();
+            (path, (ids, class_ids))
+        })
+        .collect();
     if std::env::var_os("PERRY_STATIC_SHAPE_IDS_REPORT").is_some() {
         let literal = static_shape_ids
             .keys()
@@ -5763,10 +5779,16 @@ pub fn run_with_parse_cache(
                 hir_module,
                 &mut opts,
             );
-            opts.static_shape_ids = static_shape_ids_by_module
-                .get(path)
-                .cloned()
-                .unwrap_or_default();
+            if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+                opts.static_shape_ids = ids.clone();
+                let foreign = opts
+                    .short_spread_method_candidates
+                    .values()
+                    .flatten()
+                    .map(|c| c.class_id);
+                opts.program_class_shape_ids = program_class_shape_ids
+                    .restricted_to(class_ids.iter().copied().chain(foreign));
+            }
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
             // module's post-transform HIR fingerprint and the perry

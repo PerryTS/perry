@@ -246,8 +246,13 @@ mod spec_return_proof;
 mod spec_self_recursion_tests;
 pub(crate) mod static_fields;
 mod static_shape_ids;
-pub(crate) use static_shape_ids::static_shape_id_for_keys_global;
-pub use static_shape_ids::{assign_static_shape_ids, BirthProto, BirthShape, TypedMasks};
+pub use static_shape_ids::{
+    assign_static_shape_ids, BirthProto, BirthShape, DefinedClassShape, ModuleBirth,
+    ProgramClassShapeIds, TypedMasks,
+};
+pub(crate) use static_shape_ids::{
+    static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
+};
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;
@@ -439,7 +444,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
 /// string pool mints (local classes and imported stubs), from the SAME code
 /// codegen runs — `compile_module` up to the header-image table, then an early
 /// return. `opts` must be the options the module's codegen will get.
-pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<BirthShape>> {
+pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<ModuleBirth>> {
     let mut births = Vec::new();
     compile_module_impl(hir, opts, Some(&mut births))?;
     Ok(births)
@@ -450,7 +455,7 @@ pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<
 fn compile_module_impl(
     hir: &HirModule,
     opts: CompileOptions,
-    births: Option<&mut Vec<BirthShape>>,
+    births: Option<&mut Vec<ModuleBirth>>,
 ) -> Result<Vec<u8>> {
     let collect_births = births.is_some();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
@@ -1413,6 +1418,7 @@ fn compile_module_impl(
             typed_layout.pointer_mask_words,
         ));
     }
+    let defined_class_keys_len = class_keys_init_data.len();
     // Same naming convention for IMPORTED class stubs. Pack the field
     // names so the importing module allocates the right inline slot count
     // and the slot index for each field matches what the source module's
@@ -2439,6 +2445,7 @@ fn compile_module_impl(
         *births = static_shape_ids::module_births(
             &module_prefix,
             &class_keys_init_data,
+            defined_class_keys_len,
             &class_header_image_inits,
             &class_ids,
         );
@@ -2450,6 +2457,7 @@ fn compile_module_impl(
         &class_header_image_inits,
         &class_ids,
         &opts.static_shape_ids,
+        &opts.program_class_shape_ids,
     );
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
         class_keys_globals_map

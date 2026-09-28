@@ -90,10 +90,10 @@ pub use codegen::{
     module_birth_shapes, namespace_member_class_key, namespace_member_func_key,
     namespace_member_var_key, resolve_target_triple, short_spread_method_capabilities,
     user_function_symbol, AppMetadata, BirthProto, BirthShape, CompileOptions,
-    ConstructorContracts, CtorAbi, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ResolvedConstructorContracts, ShortSpreadMethodCandidate,
-    TypedMasks,
+    ConstructorContracts, CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability,
+    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth,
+    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
+    ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
 pub use codegen::{program_has_worker, set_program_has_worker};
