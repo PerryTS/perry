@@ -148,3 +148,33 @@ fn array_tail_tables_are_skipped_only_while_unarmed() {
     assert!(crate::object::array_tail_transition::test_tables_may_hold_entries());
     crate::object::array_tail_transition::test_clear();
 }
+
+/// The small-int / ASCII-char caches are skipped by a minor outright. Their
+/// real entries (longlived, pinned) satisfy the skip's precondition.
+#[test]
+fn small_string_caches_hold_only_pinned_non_young_strings() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    // Fill a few entries through the production writers.
+    let _ = crate::string::js_number_to_string(7.0);
+    let _ = crate::string::js_number_to_string(200.0);
+    let _ = gc_collect_minor();
+    crate::string::debug_assert_small_string_caches_not_minor_relevant();
+}
+
+/// SABOTAGE: a writer that publishes a young string into the cache breaks
+/// the precondition of the minor skip, and the check says so.
+#[test]
+#[should_panic(expected = "not a pinned non-young string")]
+fn small_int_cache_writer_publishing_a_young_string_is_caught() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::string::test_write_small_int_cache_slot(255, std::ptr::null_mut());
+        }
+    }
+    let _restore = Restore;
+    let young = young_leaf() as *mut crate::StringHeader;
+    crate::string::test_write_small_int_cache_slot(255, young);
+    crate::string::debug_assert_small_string_caches_not_minor_relevant();
+}
