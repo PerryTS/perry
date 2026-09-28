@@ -44,11 +44,7 @@
 //! stamp in debug builds and — with the `shape-fact-audit` feature — at every
 //! stamp and over the whole heap at every full collection in release builds.
 
-use super::{
-    object_shape_stamp, shape_descriptor_by_id, shape_descriptor_ensure_with_holes,
-    shape_record_by_id, ShapeObjectKind,
-};
-use crate::array::ArrayHeader;
+use super::{object_shape_stamp, shape_descriptor_by_id, shape_record_by_id, ShapeObjectKind};
 use crate::object::ObjectHeader;
 
 #[inline(always)]
@@ -204,27 +200,14 @@ unsafe fn stamp_twin(obj: *mut ObjectHeader, id: u32) {
     }
 }
 
-/// Mint (or find) the twin of `shape_id` with `kind`. Allocation-free on the
-/// GC heap: a shape mint touches only the table's own Rust storage.
+/// Mint (or find) the twin of `shape_id` with `kind`. Never reads the keys
+/// array (see [`super::shape_descriptor_kind_twin`]), so it is safe on the
+/// proof-retire path inside `layout_note_slot`.
 fn twin_of(shape_id: u32, kind: ShapeObjectKind) -> Option<u32> {
-    let d = shape_descriptor_by_id(shape_id)?;
-    if d.object_kind == kind {
-        return Some(shape_id);
+    if super::shape_object_kind_by_id(shape_id)? != kind {
+        audit::note_twin_mint();
     }
-    audit::note_twin_mint();
-    shape_descriptor_ensure_with_holes(
-        d.keys as usize as *const ArrayHeader,
-        d.logical_key_count,
-        d.live_inline_slot_count,
-        d.semantic_generation,
-        kind,
-        d.hole_count,
-        d.proto_id,
-        // The keys-derived half re-derives to the same bits; passing the
-        // whole summary keeps a dictionary receiver's private-list half.
-        d.summary,
-    )
-    .ok()
+    super::shape_descriptor_kind_twin(shape_id, kind)
 }
 
 /// R4: after a write to an F-A input (`class_id`, `OBJ_FLAG_PLAIN_ORDINARY`,

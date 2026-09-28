@@ -1025,6 +1025,64 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         } else {
             unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
         };
+    shape_descriptor_mint_with_summary(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+    )
+}
+
+/// The twin of an existing shape that differs only in `object_kind` (charter
+/// step 3: the store facts are kinds). Every other fact, the attribute summary
+/// included, is copied from `source`'s record, whose summary was derived from
+/// the same keys prefix when it was minted, so the twin cannot under-report.
+///
+/// Unlike [`shape_descriptor_ensure_with_holes`] this never reads the keys
+/// array: re-deriving the summary goes through `keys_attrs`, and the static
+/// GC call-effects analysis proves that edge can reach a lazy materializer
+/// that re-enters JS. A proof retire runs this path from inside
+/// `layout_note_slot`, which the runtime ABI promises is a `Leaf`, so the
+/// twin mint must touch only the shape table's own Rust storage.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKind) -> Option<u32> {
+    let d = shape_descriptor_by_id(source)?;
+    if d.object_kind == object_kind {
+        return Some(source);
+    }
+    shape_descriptor_mint_with_summary(
+        d.keys as usize as *const ArrayHeader,
+        d.logical_key_count,
+        d.live_inline_slot_count,
+        d.semantic_generation,
+        object_kind,
+        d.hole_count,
+        d.proto_id,
+        d.summary,
+    )
+    .ok()
+}
+
+/// The mint itself, given the complete attribute summary. Only reachable
+/// through a caller that derived `summary` from the keys (or copied it from a
+/// record of the same keys prefix): see the two functions above.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+fn shape_descriptor_mint_with_summary(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+) -> Result<u32, ShapeDescriptorError> {
+    let keys_id = keys as usize as u64;
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
