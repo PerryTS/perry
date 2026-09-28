@@ -1,6 +1,22 @@
-//! Operation-owned native scratch, charged to Perry's external-byte budget.
-//! No GC pointer may be stored in these buffers. Allocation/accounting can
-//! collect, so callers must release all program/subject views first.
+//! Operation-owned native scratch, bounded by the operation's `MemoryBudget`.
+//! No GC pointer may be stored in these buffers.
+//!
+//! This scratch is NOT reported to the collector as external side bytes
+//! (#11549). Everything here is freed by the operation that allocated it,
+//! when that operation returns or unwinds; no collection can ever reclaim a
+//! byte of it, and no collection is needed for it to be released. Reporting it
+//! told the old-reclaim pacing the opposite: every per-call buffer's release
+//! landed in `GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL`, which is held as pressure
+//! until the next FULL collection, so a regex loop that took the owned search
+//! path (a program with more registers than the lent cell holds) was paced by
+//! phantom bytes into a budgeted full mark-sweep every few hundred calls.
+//!
+//! What bounds it instead is the budget: every buffer, inline charge and
+//! reservation is checked against the operation's hard limit
+//! (`perex_api::SCRATCH_BYTES`) before it exists, so one operation can never
+//! hold more than that. Storage whose size follows the SUBJECT rather than
+//! that limit (`perex_replace_direct::Spans`, `perex_replace_storage`'s
+//! native piece records) is not scratch in this sense and is still reported.
 
 use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
@@ -9,7 +25,6 @@ use std::ops::{Deref, DerefMut};
 pub(crate) enum StorageError {
     Limit,
     Allocation,
-    Abrupt(u64),
 }
 
 /// One operation's hard scratch/result-metadata limit. Simultaneous old/new
@@ -69,8 +84,11 @@ impl Drop for Charge<'_> {
     }
 }
 
-/// Account a stable native allocation whose GC-bearing slots are separately
-/// registered with the host's mutable root scanner before this can collect.
+/// Charge a stable native allocation the caller owns, such as a replacer
+/// call's argument slots, to the operation's limit. Its GC-bearing slots are
+/// registered with the shadow stack separately; like every other buffer here
+/// it is released by the operation, not by a collection, so the collector is
+/// not told about it.
 pub(super) struct Reservation<'a> {
     budget: &'a MemoryBudget,
     bytes: usize,
@@ -78,28 +96,19 @@ pub(super) struct Reservation<'a> {
 impl<'a> Reservation<'a> {
     pub(super) fn new(budget: &'a MemoryBudget, bytes: usize) -> Result<Self, StorageError> {
         let live = budget.check(bytes)?;
-        let owned = Self { budget, bytes };
         budget.live.set(live);
         budget.peak.set(budget.peak.get().max(live));
-        if bytes != 0 {
-            crate::exception::catch_js_throw(|| crate::gc::gc_note_external_side_alloc(bytes))
-                .map_err(|value| StorageError::Abrupt(value.to_bits()))?;
-        }
-        Ok(owned)
+        Ok(Self { budget, bytes })
     }
 }
 impl Drop for Reservation<'_> {
     fn drop(&mut self) {
         self.budget.live.set(self.budget.live.get() - self.bytes);
-        if self.bytes != 0 {
-            crate::gc::gc_note_external_side_free(self.bytes);
-        }
     }
 }
 
-/// Stable initialized native allocation. Its accounting owner is established
-/// before notifying the collector, so a collecting/unwinding notification
-/// cannot strand a buffer or leave its bytes charged.
+/// Stable initialized native allocation, charged to the operation's limit for
+/// as long as it lives. Creating one never collects.
 pub(crate) struct Buffer<'a, T: Copy + Default> {
     data: Vec<T>,
     budget: &'a MemoryBudget,
@@ -121,18 +130,13 @@ impl<'a, T: Copy + Default> Buffer<'a, T> {
             .ok_or(StorageError::Limit)?;
         let live = budget.check(bytes)?;
         data.resize(count, T::default());
-        let owned = Self {
+        budget.live.set(live);
+        budget.peak.set(budget.peak.get().max(live));
+        Ok(Self {
             data,
             budget,
             bytes,
-        };
-        budget.live.set(live);
-        budget.peak.set(budget.peak.get().max(live));
-        if bytes != 0 {
-            crate::exception::catch_js_throw(|| crate::gc::gc_note_external_side_alloc(bytes))
-                .map_err(|value| StorageError::Abrupt(value.to_bits()))?;
-        }
-        Ok(owned)
+        })
     }
 }
 
@@ -152,8 +156,5 @@ impl<T: Copy + Default> DerefMut for Buffer<'_, T> {
 impl<T: Copy + Default> Drop for Buffer<'_, T> {
     fn drop(&mut self) {
         self.budget.live.set(self.budget.live.get() - self.bytes);
-        if self.bytes != 0 {
-            crate::gc::gc_note_external_side_free(self.bytes);
-        }
     }
 }
