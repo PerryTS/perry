@@ -1779,7 +1779,25 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((p as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
     };
+    // #11617: stream factories return a handle id, boxed as the static
+    // lowering boxes it (`NR_HANDLE_ID`).
+    let handle = |h: i64| -> f64 { crate::common::dispatch::nanbox_handle_value(h) };
     match name {
+        "createGzip" => handle(js_zlib_create_gzip(arg(0))),
+        "createGunzip" => handle(js_zlib_create_gunzip(arg(0))),
+        "createDeflate" => handle(js_zlib_create_deflate(arg(0))),
+        "createInflate" => handle(js_zlib_create_inflate(arg(0))),
+        "createDeflateRaw" => handle(js_zlib_create_deflate_raw(arg(0))),
+        "createInflateRaw" => handle(js_zlib_create_inflate_raw(arg(0))),
+        "createUnzip" => handle(js_zlib_create_unzip(arg(0))),
+        #[cfg(feature = "compression-brotli")]
+        "createBrotliCompress" => handle(js_zlib_create_brotli_compress(arg(0))),
+        #[cfg(feature = "compression-brotli")]
+        "createBrotliDecompress" => handle(js_zlib_create_brotli_decompress(arg(0))),
+        #[cfg(feature = "compression-zstd")]
+        "createZstdCompress" => handle(js_zlib_create_zstd_compress(arg(0))),
+        #[cfg(feature = "compression-zstd")]
+        "createZstdDecompress" => handle(js_zlib_create_zstd_decompress(arg(0))),
         // Sync codecs — all take 1 string/buffer-like JS value, return Buffer pointer.
         "gzipSync" => ptr_to_f64(js_zlib_gzip_sync(arg(0).to_bits() as i64, arg(1)) as *const u8),
         "gunzipSync" => ptr_to_f64(js_zlib_gunzip_sync(arg(0).to_bits() as i64) as *const u8),
