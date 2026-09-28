@@ -448,3 +448,95 @@ fn ready_state_reports_npm_ws_lifecycle() {
     WS_CONNECTIONS.lock().unwrap().remove(&ws_id);
     assert_eq!(js_ws_ready_state(ws_id as i64), 3.0);
 }
+
+static FORWARD_TARGET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static FORWARDED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn record_forwarded_method(
+    handle: i64,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if handle == 0 || handle != FORWARD_TARGET.load(std::sync::atomic::Ordering::SeqCst) {
+        return 0;
+    }
+    let method = std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len))
+        .unwrap()
+        .to_string();
+    let args = std::slice::from_raw_parts(args_ptr, args_len);
+    let event = read_str((args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader)
+        .unwrap_or_default();
+    FORWARDED.lock().unwrap().push((method, event));
+    *out = f64::from_bits(JsValue::UNDEFINED.bits());
+    1
+}
+
+extern "C" fn noop_listener(_closure: *const RawClosureHeader, _arg: f64) -> f64 {
+    0.0
+}
+
+/// #10470 / #10471: HIR types the second `'upgrade'` argument as a ws Client,
+/// so `socket.on('data', cb)` compiles to `js_ws_on_client_i64` — but a server
+/// with no attached `WebSocketServer` passes a raw `net.Socket`. The listener
+/// used to be filed in the ws table under the socket's id, where nothing ever
+/// fires it. It must reach the handle's owner instead, while a real ws id
+/// keeps its own listeners.
+#[test]
+fn client_on_forwards_a_foreign_handle_and_keeps_its_own() {
+    let _gc = GcTestGuard::new();
+    extern "C" {
+        fn js_register_handle_method_dispatch_extension(
+            f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
+        );
+    }
+    unsafe { js_register_handle_method_dispatch_extension(record_forwarded_method) };
+    let scope = perry_ffi::TransientRootScope::enter();
+    perry_ffi::register_closure_arity(noop_listener as *const u8, 1);
+    let callback = scope.root_addr(perry_ffi::alloc_closure(noop_listener as *const u8, 1) as i64);
+    let event = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string("data").as_raw()).bits(),
+    ));
+    let event_ptr = || (event.get().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
+
+    let socket = perry_ffi::reserve_handle_id();
+    FORWARD_TARGET.store(socket, std::sync::atomic::Ordering::SeqCst);
+    let returned = unsafe { js_ws_on_client_i64(socket, event_ptr(), callback.get()) };
+    assert_eq!(returned, socket);
+    assert_eq!(
+        FORWARDED.lock().unwrap().as_slice(),
+        &[("on".to_string(), "data".to_string())],
+        "`socket.on('data', cb)` must reach the socket's owner"
+    );
+    assert!(
+        !WS_CLIENT_LISTENERS
+            .lock()
+            .unwrap()
+            .contains_key(&(socket as usize)),
+        "a foreign handle's listener must not be filed as a ws listener"
+    );
+
+    let client = register_handle(WsClientHandle);
+    FORWARD_TARGET.store(client, std::sync::atomic::Ordering::SeqCst);
+    unsafe { js_ws_on_client_i64(client, event_ptr(), callback.get()) };
+    assert_eq!(
+        FORWARDED.lock().unwrap().len(),
+        1,
+        "a ws connection's own listener must not be forwarded"
+    );
+    assert!(WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&(client as usize))
+        .is_some_and(|l| l.listeners.get("data").is_some_and(|cbs| cbs.len() == 1)));
+
+    FORWARD_TARGET.store(0, std::sync::atomic::Ordering::SeqCst);
+    WS_CLIENT_LISTENERS
+        .lock()
+        .unwrap()
+        .remove(&(client as usize));
+    drop_handle(client);
+    perry_ffi::free_handle_id(socket);
+}

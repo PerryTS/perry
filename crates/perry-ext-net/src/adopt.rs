@@ -135,6 +135,15 @@ pub fn adopt_turnloop_upgrade(id: i64) -> bool {
     if id == perry_ffi::INVALID_HANDLE {
         return false;
     }
+    // The transfer has already pointed this id's completions at our slot, and
+    // the runtime silently drops a completion for a slot with no sink. Ours is
+    // installed lazily by `enabled()`, which neither this path nor a socket
+    // write reaches — so in a program that only runs an HTTP server, the
+    // listener's `101` went out while every byte the peer sent afterwards,
+    // and its EOF, was dropped (#10470, #10471). This runs on the loop thread
+    // inside the completion that decoded the upgrade, so no read can be
+    // dispatched between the transfer and this registration.
+    let _ = crate::turnloop_io::enabled();
     let local = crate::turnloop_io::local_endpoint(id)
         .as_ref()
         .and_then(endpoint_to_addr);

@@ -899,6 +899,38 @@ pub extern "C" fn js_ws_close_with_client_i64(handle: i64, code: f64, reason: f6
     close_on(handle as usize, code, &reason);
 }
 
+/// `handle.on(event, callback)` through the runtime's dynamic method call,
+/// which reaches the handle's owning crate (`perry-ext-net` for a socket).
+unsafe fn forward_on(handle: i64, event_name_ptr: *const StringHeader, callback_ptr: i64) {
+    extern "C" {
+        fn js_native_call_method_str_key(
+            object: f64,
+            name_handle: i64,
+            args_ptr: *const f64,
+            args_len: usize,
+        ) -> f64;
+    }
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+    const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    // Allocating the method name can collect and move both arguments.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let event = scope.root_nanbox(f64::from_bits(
+        STRING_TAG | (event_name_ptr as u64 & PTR_MASK),
+    ));
+    let callback = scope.root_nanbox(f64::from_bits(
+        POINTER_TAG | (callback_ptr as u64 & PTR_MASK),
+    ));
+    let name = alloc_string("on");
+    let args = [event.get(), callback.get()];
+    let _ = js_native_call_method_str_key(
+        f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK)),
+        name.as_raw() as i64,
+        args.as_ptr(),
+        args.len(),
+    );
+}
+
 /// Issue #577 Phase 4 — `wsId.on(event, cb)` on an upgrade-path Client.
 ///
 /// # Safety
@@ -910,6 +942,15 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
     callback_ptr: i64,
 ) -> i64 {
     ensure_runtime_hooks_registered();
+    if callback_ptr != 0 && perry_ffi::get_handle::<WsClientHandle>(handle).is_none() {
+        // Not ours. HIR types the second `'upgrade'` argument as a ws Client
+        // (the Perry-native `wsId` surface), but a server with no attached
+        // `WebSocketServer` hands it a raw `net.Socket`, as Node does. Filing
+        // the listener here left `socket.on('data')` on that socket silent
+        // (#10470, #10471), so route it to whoever owns the handle instead.
+        forward_on(handle, event_name_ptr, callback_ptr);
+        return handle;
+    }
     let Some(event_name) = read_str(event_name_ptr) else {
         return handle;
     };

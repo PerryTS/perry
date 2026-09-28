@@ -139,16 +139,24 @@ pub(super) unsafe fn dispatch_client_request_property(
     })
 }
 
+/// The methods [`dispatch_client_incoming_method`] answers; a property read of
+/// one yields a bound function that dispatches back to it (#10670). Keep in
+/// sync with perry-ext-http's `client_dispatch_ext::is_incoming_message_method`.
+#[cfg(feature = "external-http-client-pump")]
+fn is_client_incoming_method(name: &str) -> bool {
+    matches!(
+        name,
+        "setEncoding" | "on" | "once" | "addListener" | "pipe" | "pause" | "resume"
+    )
+}
+
 #[cfg(feature = "external-http-client-pump")]
 pub(super) unsafe fn dispatch_client_incoming_method(
     handle: i64,
     method_name: &str,
     args: &[f64],
 ) -> Option<f64> {
-    if !matches!(
-        method_name,
-        "setEncoding" | "on" | "once" | "addListener" | "pipe"
-    ) {
+    if !is_client_incoming_method(method_name) {
         return None;
     }
 
@@ -177,6 +185,8 @@ pub(super) unsafe fn dispatch_client_incoming_method(
 
     let self_ref = f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & PTR_MASK));
     let value = match method_name {
+        // Node's `Readable.pause()/resume()` return `this`.
+        "pause" | "resume" => self_ref,
         "setEncoding" if !args.is_empty() => {
             let ptr = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
             unsafe {
@@ -214,13 +224,13 @@ pub(super) unsafe fn dispatch_client_incoming_property(
     handle: i64,
     property_name: &str,
 ) -> Option<f64> {
-    if !matches!(
-        property_name,
-        "statusCode"
+    if !is_client_incoming_method(property_name)
+        && !matches!(
+            property_name,
+            "statusCode"
             | "statusMessage"
             | "headers"
             | "trailers"
-            | "setEncoding"
             | "socket"
             | "connection"
             | "req"
@@ -230,7 +240,8 @@ pub(super) unsafe fn dispatch_client_incoming_property(
             | "httpVersionMajor"
             | "httpVersionMinor"
             | "complete"
-    ) {
+        )
+    {
         return None;
     }
 
@@ -258,9 +269,13 @@ pub(super) unsafe fn dispatch_client_incoming_property(
         return None;
     }
 
-    if property_name == "setEncoding" {
-        let name = b"setEncoding";
-        return Some(unsafe { js_class_method_bind(handle as f64, name.as_ptr(), name.len()) });
+    if is_client_incoming_method(property_name) {
+        // The NaN-boxed handle, not `handle as f64` (a numeric conversion,
+        // which made the bound method's receiver a number).
+        let receiver = f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & PTR_MASK));
+        return Some(unsafe {
+            js_class_method_bind(receiver, property_name.as_ptr(), property_name.len())
+        });
     }
 
     use perry_runtime::JSValue;
