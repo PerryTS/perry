@@ -1851,9 +1851,9 @@ fn region_loop_prime_census(shape_id: u32, packed: u64) {
         note(RT_ROUTE_RLOOP_REFUSE_BAND);
     } else if shape_record_by_id(shape_id).is_some_and(|r| r.summary() != 0) {
         note(RT_ROUTE_RLOOP_REFUSE_SUMMARY);
-    } else if shape_descriptor_by_id(shape_id).is_some_and(|d| {
-        d.live_inline_slot_count != d.logical_key_count
-    }) {
+    } else if shape_descriptor_by_id(shape_id)
+        .is_some_and(|d| d.live_inline_slot_count != d.logical_key_count)
+    {
         note(RT_ROUTE_RLOOP_REFUSE_SPILLED);
     } else {
         note(RT_ROUTE_RLOOP_REFUSE_OTHER);

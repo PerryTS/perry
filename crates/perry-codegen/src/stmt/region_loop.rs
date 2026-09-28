@@ -1423,7 +1423,11 @@ pub(crate) fn lower_loop(
     // through the spill buffer; every other word, the all-inline copy (the
     // hot one, whose reads are one load). A region that stores every key it
     // names never gets a spill word, so it needs no spill copy.
-    let words: Vec<String> = ctx.region_loops[pos].receivers.iter().map(|r| r.word.clone()).collect();
+    let words: Vec<String> = ctx.region_loops[pos]
+        .receivers
+        .iter()
+        .map(|r| r.word.clone())
+        .collect();
     let may_spill = ctx.region_loops[pos]
         .receivers
         .iter()
@@ -1623,7 +1627,11 @@ pub(crate) fn lower_split(
     // F-body, once per layout; each copy is verified on its own IR.
     let mut copies: Vec<(String, bool)> = Vec::with_capacity(modes.len());
     for (ci, &mode) in modes.iter().enumerate() {
-        let fb = if ci == 0 { fast } else { ctx.new_block("rloop.fast") };
+        let fb = if ci == 0 {
+            fast
+        } else {
+            ctx.new_block("rloop.fast")
+        };
         let fl = ctx.block_label(fb);
         ctx.current_block = fb;
         note(ctx, Route::RloopF);
@@ -1930,7 +1938,10 @@ fn bare_read_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> String {
     ctx.current_block = jn_b;
     ctx.block().phi(
         crate::types::PTR,
-        &[(p_in.as_str(), in_end.as_str()), (p_sp.as_str(), sp_end.as_str())],
+        &[
+            (p_in.as_str(), in_end.as_str()),
+            (p_sp.as_str(), sp_end.as_str()),
+        ],
     )
 }
 
