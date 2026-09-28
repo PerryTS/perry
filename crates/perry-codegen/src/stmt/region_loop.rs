@@ -284,6 +284,13 @@ struct Planner<'p, 'a> {
 }
 
 impl Planner<'_, '_> {
+    /// A primitive by construction, or a value the compiler proves a raw
+    /// double (`expr_produces_canonical_raw_f64` is the predicate that already
+    /// licenses an unguarded `fadd`).
+    fn prim(&self, e: &Expr) -> bool {
+        prim(e) || crate::type_analysis::is_numeric_expr(self.ctx, e)
+    }
+
     fn covered(&self, r: Recv, key: &str) -> bool {
         self.keys
             .get(&r)
@@ -375,14 +382,14 @@ impl Planner<'_, '_> {
                 }
                 st = self.expr(left, st);
                 st = self.expr(right, st);
-                if !(prim(left) && prim(right)) {
+                if !(self.prim(left) && self.prim(right)) {
                     kill(&mut st);
                 }
                 st
             }
             Expr::Unary { op, operand } => {
                 st = self.expr(operand, st);
-                if !matches!(op, UnaryOp::Not) && !prim(operand) {
+                if !matches!(op, UnaryOp::Not) && !self.prim(operand) {
                     kill(&mut st);
                 }
                 st
@@ -390,7 +397,9 @@ impl Planner<'_, '_> {
             Expr::Compare { op, left, right } => {
                 st = self.expr(left, st);
                 st = self.expr(right, st);
-                if !matches!(op, CompareOp::Eq | CompareOp::Ne) && !(prim(left) && prim(right)) {
+                if !matches!(op, CompareOp::Eq | CompareOp::Ne)
+                    && !(self.prim(left) && self.prim(right))
+                {
                     kill(&mut st);
                 }
                 st
@@ -1523,13 +1532,23 @@ pub(crate) fn try_lower_bare_put(
     let Some(slot) = active_slot(ctx, e, r, k) else {
         return Ok(None);
     };
+    // A value the compiler proves a canonical raw double is pointer-free and
+    // raw-f64-compatible with every slot: the store owes the GC nothing (the
+    // store IC's own "plain double: nothing" case, decided statically).
+    let raw_double = crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
     let val_double = lower_expr(ctx, value)?;
     let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
     let recv_box = lower_recv(ctx, r)?;
     let h = handle_of(ctx, &recv_box);
     let p = slot_ptr(ctx, &h, &slot);
-    let reserved = field_i16(ctx, &h, -6);
     note_emitted(ctx);
+    if raw_double {
+        // GC_STORE_AUDIT(BARRIERED): a proven raw double carries no pointer.
+        ctx.block().store(DOUBLE, &val_double, &p);
+        stat(3, 1);
+        return Ok(Some(val_double));
+    }
+    let reserved = field_i16(ctx, &h, -6);
     // GC_STORE_AUDIT(BARRIERED): the obligations follow, from the stored bits.
     ctx.block().store(DOUBLE, &val_double, &p);
     crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
