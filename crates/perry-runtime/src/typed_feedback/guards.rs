@@ -866,6 +866,23 @@ fn class_field_get_one_path(
     probe_mru: bool,
 ) -> f64 {
     let bits = receiver.to_bits();
+    // `key` is always the class field's literal name, loaded from a
+    // string-literal handle global (perry-codegen's property_get.rs), and a
+    // literal handle is always heap-allocated regardless of length
+    // (perry-codegen's strings.rs), so this can never be a SHORT_STRING_TAG
+    // value in practice; checked explicitly so a short string here declines
+    // to the generic ladder (which is SSO-aware) instead of being masked
+    // into a garbage pointer.
+    if crate::value::JSValue::from_bits(key as u64).is_short_string() {
+        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_LADDER);
+        return crate::object::field_get_set::get_field_ic_dispatch(
+            bits as i64,
+            key,
+            site_id,
+            cache_slot,
+            false,
+        );
+    }
     let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
     if probe_mru {
         if let Some(value) = unsafe { class_field_get_from_shape(bits, key, cache_slot, false) } {
@@ -1053,7 +1070,18 @@ pub extern "C" fn js_class_field_get_ic_fast(
         // The receiver's shape (GC leaves, as in
         // `js_object_get_field_ic_fast`): the One Path hit for a receiver
         // the contract does not describe. Feedback on asks nothing here.
-        if !typed_feedback_enabled() {
+        //
+        // `key` is always the class field's literal name, loaded from a
+        // string-literal handle global (perry-codegen's property_get.rs),
+        // and a literal handle is always heap-allocated regardless of
+        // length (perry-codegen's strings.rs), so this can never be a
+        // SHORT_STRING_TAG value in practice; checked explicitly so a short
+        // string declines here (falls through to `TAG_HOLE`, and the miss
+        // continuation's ladder) instead of being masked into a garbage
+        // pointer.
+        if !typed_feedback_enabled()
+            && !crate::value::JSValue::from_bits(key as u64).is_short_string()
+        {
             let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
             if let Some(value) =
                 unsafe { class_field_get_from_shape(receiver.to_bits(), key, cache_slot, true) }
