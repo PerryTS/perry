@@ -96,9 +96,9 @@ fn polls_by_clone(functions: &[(String, String)], suffix: &str) -> Vec<(String, 
         .iter()
         .filter(|(name, _)| {
             !name.starts_with("__perry_wrap_")
-                && name
-                    .split_once(&tag)
-                    .is_some_and(|(_, rest)| rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+                && name.split_once(&tag).is_some_and(|(_, rest)| {
+                    rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                })
         })
         .map(|(name, body)| (name.clone(), body.matches(ENTRY_POLL).count()))
         .collect();
@@ -107,7 +107,10 @@ fn polls_by_clone(functions: &[(String, String)], suffix: &str) -> Vec<(String, 
 }
 
 fn total_polls(functions: &[(String, String)], suffix: &str) -> usize {
-    polls_by_clone(functions, suffix).iter().map(|(_, n)| n).sum()
+    polls_by_clone(functions, suffix)
+        .iter()
+        .map(|(_, n)| n)
+        .sum()
 }
 
 fn wrapper_of<'a>(functions: &'a [(String, String)], suffix: &str) -> &'a str {
@@ -172,7 +175,10 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
     );
     for (name, polls) in &even {
         let partner = name.replace("__isEven", "__isOdd");
-        let partner_polls = odd.iter().find(|(n, _)| *n == partner).map_or(0, |(_, p)| *p);
+        let partner_polls = odd
+            .iter()
+            .find(|(n, _)| *n == partner)
+            .map_or(0, |(_, p)| *p);
         assert!(
             polls + partner_polls <= 1,
             "one poll per recursive SCC: {name}={polls}, {partner}={partner_polls}"
