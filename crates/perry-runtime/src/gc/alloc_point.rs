@@ -321,8 +321,9 @@ pub(super) fn write_valve_ledger_line() {
         return;
     }
     let c = alloc_point_counters();
-    let valve =
-        super::scan_fallback::scan_fallback_count_any_thread(super::ConservativeScanSite::NurseryChurnSlackValve);
+    let valve = super::scan_fallback::scan_fallback_count_any_thread(
+        super::ConservativeScanSite::NurseryChurnSlackValve,
+    );
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))

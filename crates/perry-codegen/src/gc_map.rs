@@ -1233,9 +1233,8 @@ pub(crate) fn list_unrecorded_functions() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        let set = |value: Result<String, std::env::VarError>| {
-            value.is_ok_and(|v| !v.trim().is_empty())
-        };
+        let set =
+            |value: Result<String, std::env::VarError>| value.is_ok_and(|v| !v.trim().is_empty());
         std::env::var("PERRY_GC_INSTRUMENTS")
             .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
             || set(std::env::var("PERRY_GC_VERIFY_FRAMES"))
@@ -1249,7 +1248,9 @@ pub(crate) fn note_statepoint_functions(functions: &[&crate::function::LlFunctio
     if !list_unrecorded_functions() {
         return;
     }
-    let mut guard = STATEPOINT_FUNCTIONS.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = STATEPOINT_FUNCTIONS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let set = guard.get_or_insert_with(Default::default);
     for function in functions {
         // The latest render is authoritative: the RS4GC budget retry can move a
@@ -1274,7 +1275,9 @@ fn append_unrecorded_functions(
     if !list_unrecorded_functions() {
         return;
     }
-    let guard = STATEPOINT_FUNCTIONS.lock().unwrap_or_else(|p| p.into_inner());
+    let guard = STATEPOINT_FUNCTIONS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let Some(names) = guard.as_ref() else {
         return;
     };
@@ -1292,7 +1295,9 @@ fn append_unrecorded_functions(
         let Some((label, rest)) = line.split_once(':') else {
             continue;
         };
-        if !(rest.is_empty() || rest.starts_with([' ', '\t'])) || label.starts_with(['\t', ' ', '.', '"']) {
+        if !(rest.is_empty() || rest.starts_with([' ', '\t']))
+            || label.starts_with(['\t', ' ', '.', '"'])
+        {
             continue;
         }
         let Some(name) = label.strip_prefix(prefix) else {

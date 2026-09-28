@@ -142,7 +142,10 @@ impl StackMapIndex {
         self.functions
             .binary_search_by_key(&function_start, |entry| entry.address)
             .is_ok()
-            || self.unrecorded_functions.binary_search(&function_start).is_ok()
+            || self
+                .unrecorded_functions
+                .binary_search(&function_start)
+                .is_ok()
     }
 }
 
@@ -163,8 +166,9 @@ mod tests {
 
         // A runtime frame: ignored.
         unmatched_frame(&index, 0x3010, 0x3000);
-        let prev =
-            crate::gc::set_conservative_stack_scan_override(Some(crate::gc::ConservativeStackScanMode::Disabled));
+        let prev = crate::gc::set_conservative_stack_scan_override(Some(
+            crate::gc::ConservativeStackScanMode::Disabled,
+        ));
         let result = std::panic::catch_unwind(|| unmatched_frame(&index, 0x2010, 0x2000));
         crate::gc::set_conservative_stack_scan_override(prev);
         let message = result.expect_err("an unmapped generated frame must panic");
@@ -181,8 +185,9 @@ mod tests {
     fn a_conservative_collection_tolerates_unmapped_generated_frames() {
         let mut index = StackMapIndex::default();
         index.unrecorded_functions = vec![0x4000];
-        let prev =
-            crate::gc::set_conservative_stack_scan_override(Some(crate::gc::ConservativeStackScanMode::Full));
+        let prev = crate::gc::set_conservative_stack_scan_override(Some(
+            crate::gc::ConservativeStackScanMode::Full,
+        ));
         unmatched_frame(&index, 0x4010, 0x4000);
         crate::gc::set_conservative_stack_scan_override(prev);
     }

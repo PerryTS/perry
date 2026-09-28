@@ -95,7 +95,10 @@ fn assists_park_at_both_root_phases_and_the_poll_serves_them() {
     }
     assert_eq!(cycle_phase(), Some(GcCyclePhase::RootScan.ffi_code()));
 
-    assert!(gc_safepoint_moving_minor(), "the poll must handle the parked phase");
+    assert!(
+        gc_safepoint_moving_minor(),
+        "the poll must handle the parked phase"
+    );
     let served = alloc_point::alloc_point_counters().root_phases_served_at_poll;
     assert_eq!(served, 1, "the poll served exactly the parked root scan");
     assert_ne!(cycle_phase(), Some(GcCyclePhase::RootScan.ffi_code()));
@@ -123,7 +126,10 @@ fn assists_park_at_both_root_phases_and_the_poll_serves_them() {
             break;
         }
     }
-    assert!(!gc_budgeted_cycle_active(), "the heap-only tail completes from assists");
+    assert!(
+        !gc_budgeted_cycle_active(),
+        "the heap-only tail completes from assists"
+    );
     assert!(gc_collection_count() > before);
     assert_eq!(alloc_point::alloc_point_counters().parked_valve_fires, 0);
     let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
@@ -204,7 +210,10 @@ fn parked_cycle_valve_fires_after_the_slack_and_is_counted() {
     alloc_point::reset_alloc_point_counters();
     set_safepoint_pending(false);
     let _trigger = start_assist_cycle(b"d2_parked_valve_live");
-    assert_eq!(assist_until_parked(10_000), GcCyclePhase::RootScan.ffi_code());
+    assert_eq!(
+        assist_until_parked(10_000),
+        GcCyclePhase::RootScan.ffi_code()
+    );
 
     // Pretend the program allocated the whole slack since parking.
     alloc_point::test_make_parked_valve_due();
@@ -233,12 +242,17 @@ fn block_growth_inside_an_unsafe_zone_is_counted() {
     let before = alloc_point::alloc_point_counters();
     assert_eq!(before.unsafe_zone_growth_events, 0);
     let previous =
-        super::super::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test(Some(true));
+        super::super::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test(Some(
+            true,
+        ));
     crate::gc::note_block_if_unsafe_zone(1 << 20);
     super::super::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test(Some(false));
     crate::gc::note_block_if_unsafe_zone(1 << 20);
     super::super::policy::unsafe_zone_test_override::set_unsafe_zone_blocked_for_test(previous);
     let after = alloc_point::alloc_point_counters();
-    assert_eq!(after.unsafe_zone_growth_events, 1, "only the in-zone block counts");
+    assert_eq!(
+        after.unsafe_zone_growth_events, 1,
+        "only the in-zone block counts"
+    );
     assert_eq!(after.unsafe_zone_growth_bytes, 1 << 20);
 }

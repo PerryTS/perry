@@ -130,9 +130,9 @@ impl ConservativeScanSite {
     /// collections a program pays for without asking for them.
     pub(crate) const fn is_automatic(self) -> bool {
         match self {
-            Self::OldReclaimAllocPoint
-            | Self::NurseryChurnSlackValve
-            | Self::EmergencyReclaim => true,
+            Self::OldReclaimAllocPoint | Self::NurseryChurnSlackValve | Self::EmergencyReclaim => {
+                true
+            }
             Self::ManualMinor => false,
         }
     }

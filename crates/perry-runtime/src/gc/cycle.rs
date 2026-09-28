@@ -739,9 +739,10 @@ impl GcCycleState {
     pub(super) fn next_step_reads_frame_roots(&self) -> bool {
         match self.phase {
             GcCyclePhase::RootScan => true,
-            GcCyclePhase::AtomicFinalize => self.atomic_finalize.as_ref().is_some_and(|state| {
-                state.subphase == AtomicFinalizeSubphase::FinalRootRemark
-            }),
+            GcCyclePhase::AtomicFinalize => self
+                .atomic_finalize
+                .as_ref()
+                .is_some_and(|state| state.subphase == AtomicFinalizeSubphase::FinalRootRemark),
             _ => false,
         }
     }

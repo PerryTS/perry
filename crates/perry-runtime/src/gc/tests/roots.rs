@@ -197,8 +197,15 @@ fn lock_safe_runtime_scanners_tui_hooks_defers_direct_minor_gc() {
 
     // RFC deferred collection S5 ("D stops collecting"): the lock exit hands
     // the owed collection to the next declared poll instead of running it.
-    assert_eq!(gc_collection_count(), before, "the lock exit must not collect (S5)");
-    assert!(gc_safepoint_moving_minor(), "the poll must serve the owed collection");
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "the lock exit must not collect (S5)"
+    );
+    assert!(
+        gc_safepoint_moving_minor(),
+        "the poll must serve the owed collection"
+    );
     assert!(
         gc_collection_count() > before,
         "deferred direct minor GC should run after the hook root lock is released"
@@ -237,8 +244,15 @@ fn lock_safe_runtime_scanners_tui_state_defers_manual_gc() {
 
     // RFC deferred collection S5 ("D stops collecting"): the lock exit hands
     // the owed collection to the next declared poll instead of running it.
-    assert_eq!(gc_collection_count(), before, "the lock exit must not collect (S5)");
-    assert!(gc_safepoint_moving_minor(), "the poll must serve the owed collection");
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "the lock exit must not collect (S5)"
+    );
+    assert!(
+        gc_safepoint_moving_minor(),
+        "the poll must serve the owed collection"
+    );
     assert!(
         gc_collection_count() > before,
         "deferred manual GC should run after the state root lock is released"
@@ -407,8 +421,15 @@ fn lock_safe_runtime_scanners_tui_hooks_defers_direct_full_gc() {
 
     // RFC deferred collection S5 ("D stops collecting"): the lock exit hands
     // the owed collection to the next declared poll instead of running it.
-    assert_eq!(gc_collection_count(), before, "the lock exit must not collect (S5)");
-    assert!(gc_safepoint_moving_minor(), "the poll must serve the owed collection");
+    assert_eq!(
+        gc_collection_count(),
+        before,
+        "the lock exit must not collect (S5)"
+    );
+    assert!(
+        gc_safepoint_moving_minor(),
+        "the poll must serve the owed collection"
+    );
     assert!(
         gc_collection_count() > before,
         "deferred direct full GC should run after the hook root lock is released"
