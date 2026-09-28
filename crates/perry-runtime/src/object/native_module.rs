@@ -53,7 +53,7 @@ pub(crate) use callable_exports::{
     timers_promises_parent_namespace, tls_constructor_prototype_is_instance_of,
     util_inspect_default_options_value, zlib_codes_object,
 };
-pub(crate) use constants::get_native_module_constant;
+pub(crate) use constants::{get_native_module_constant, native_module_constant_is_live};
 pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
@@ -1056,8 +1056,12 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             return value;
         }
     }
+    let live = native_module_constant_is_live(&module, &property);
     let key = format!("{module}\0{property}");
-    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
+    let cached = (!live)
+        .then(|| NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()))
+        .flatten();
+    if let Some(bits) = cached {
         return f64::from_bits(bits);
     }
     let value = unsafe {
@@ -1069,7 +1073,7 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             false,
         )
     };
-    if value.to_bits() == crate::value::TAG_UNDEFINED {
+    if live || value.to_bits() == crate::value::TAG_UNDEFINED {
         return value;
     }
     NATIVE_ESM_EXPORT_VALUES.with(|values| {

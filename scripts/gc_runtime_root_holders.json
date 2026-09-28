@@ -65,6 +65,12 @@
       "why": "Per-thread cache of five diagnostics_channel ids (i64 keys into the thread-local DIAG_CHANNELS table, minted by NEXT_DIAG_ID) for console.log/info/debug/error/warn; integers, never a NaN-boxed value. #11471 made these per-thread."
     },
     {
+      "file": "crates/perry-runtime/src/object/native_this_alias.rs",
+      "name": "IN_SERVER_RESPONSE_FORWARD",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Cell<bool> re-entrancy latch for the ServerResponse.prototype method thunk (#10454). Only false/true are stored; the receiver and the aliased handle live in the traced alias table and the caller's frame."
+    },
+    {
       "file": "crates/perry-runtime/src/value/nanbox.rs",
       "name": "FFI_SSO_RING",
       "verdict": "not_a_gc_pointer",

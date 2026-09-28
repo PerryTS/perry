@@ -103,19 +103,6 @@ extern "C" fn process_stream_on_once_stub(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-/// `setEncoding` impl for `process.stdin`. A Readable's `setEncoding(enc)`
-/// returns the stream itself so callers can chain
-/// (`process.stdin.setEncoding("utf8").on("data", …)`). The receiver is the
-/// `IMPLICIT_THIS` bound by the method-dispatch path, so returning it mirrors
-/// Node's `this`-returning contract. Encoding-aware reads remain future work.
-extern "C" fn process_stream_set_encoding_stub(
-    _closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    _arg: f64,
-) -> f64 {
-    this.as_f64()
-}
-
 /// #3962: set when a TUI tears down stdin via `process.stdin.destroy()` or
 /// `.pause()`. `perry-stdlib`'s readline `has_active` consults
 /// `stdin_is_detached()` so the runtime stops holding the event loop open for
@@ -1652,6 +1639,10 @@ fn build_stream_object_with_write(
         b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0setEncoding\0";
     const GENERIC_TEARDOWN_KEYS: &[u8] =
         b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0destroy\0";
+    // #11418: Writable buffer state, appended last on stdout/stderr (fields
+    // field_count-3..). `write` is synchronous, so nothing is ever queued.
+    const WRITABLE_STATE_KEYS: &[u8] =
+        b"writableLength\0writableHighWaterMark\0writableNeedDrain\0";
     let is_stdin = fd_i == 0;
     let (class_id, packed, field_count, teardown_start): (u32, Vec<u8>, u32, Option<u32>) =
         if is_stdin {
@@ -1672,14 +1663,15 @@ fn build_stream_object_with_write(
         } else if is_tty {
             (
                 crate::tty::CLASS_ID_TTY_WRITE_STREAM,
-                b"write\0fd\0emit\0on\0once\0writable\0addListener\0removeListener\0off\0removeAllListeners\0".to_vec(),
-                10,
+                [&b"write\0fd\0emit\0on\0once\0writable\0addListener\0removeListener\0off\0removeAllListeners\0"[..], WRITABLE_STATE_KEYS].concat(),
+                13,
                 None,
             )
         } else {
             let mut keys = b"write\0fd\0emit\0on\0once\0writable\0".to_vec();
             keys.extend_from_slice(GENERIC_TEARDOWN_KEYS);
-            (0, keys, 14, Some(6))
+            keys.extend_from_slice(WRITABLE_STATE_KEYS);
+            (0, keys, 17, Some(6))
         };
     let obj = if class_id == 0 {
         // Shape ids must stay clear of NAVIGATOR_CLASS_ID (0x7FFF_FF22) — the
@@ -1736,6 +1728,15 @@ fn build_stream_object_with_write(
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
     }
     js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
+    if !is_stdin {
+        js_object_set_field(obj, field_count - 3, JSValue::number(0.0));
+        js_object_set_field(obj, field_count - 2, JSValue::number(65536.0));
+        js_object_set_field(
+            obj,
+            field_count - 1,
+            JSValue::from_bits(crate::value::TAG_FALSE),
+        );
+    }
     if fd_i == 0 {
         js_object_set_field(obj, 6, JSValue::from_bits(crate::value::TAG_TRUE));
         js_object_set_field(obj, 7, JSValue::from_bits(crate::value::TAG_FALSE));
@@ -1840,14 +1841,8 @@ fn build_stream_object_with_write(
         if is_stdin {
             set_field_with_stub(start + 7, process_stdin_ref_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
-            if is_stdin {
-                let se =
-                    stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
-                js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
-            } else {
-                set_field_with_stub(start + 9, process_stream_set_encoding_stub);
-                // setEncoding
-            }
+            let se = stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
+            js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
             // field 22: Readable.read() returns buffered keyboard input.
             let read = stdin_native_method(process_stdin_read as *const u8, "read", 1);
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));

@@ -802,30 +802,31 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            let handled = match method.as_str() {
-                "Readable" => Some(crate::node_stream::js_node_stream_readable_subclass_init(
-                    this_box, opts,
-                )),
-                "Writable" => Some(crate::node_stream::js_node_stream_writable_subclass_init(
-                    this_box, opts,
-                )),
-                "Duplex" => Some(crate::node_stream::js_node_stream_duplex_subclass_init(
-                    this_box, opts,
-                )),
-                "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
-                    this_box, opts,
-                )),
-                "PassThrough" => Some(
-                    crate::node_stream::js_node_stream_passthrough_subclass_init(this_box, opts),
-                ),
-                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(
-                    this_box,
-                )),
-                _ => None,
-            };
-            if handled.is_some() {
+            if crate::object::native_this_alias::run_node_stream_subclass_init(
+                method.as_str(),
+                this_box,
+                opts,
+            ) {
                 return undef;
             }
+        }
+    }
+    // #10454: `class X extends http.ServerResponse` — `ServerResponse` is a
+    // handle factory, not an initializer of `this`, so the ordinary dispatch
+    // below built a handle and dropped it. Construct it and alias `this` to
+    // the handle, exactly as `ServerResponse.call(this, req)` does.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(args_ptr, args_len)
+        };
+        if crate::object::native_this_alias::construct_aliased_native_class(
+            module, method, this_box, args,
+        )
+        .is_some()
+        {
+            return undef;
         }
     }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal

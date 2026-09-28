@@ -41,6 +41,12 @@ struct AliasEntry {
     obj_addr: usize,
     /// NaN-boxed handle value the object forwards to.
     handle_bits: u64,
+    /// Forward through the composite handle dispatcher (extensions first)
+    /// rather than the primary one. The server aliases stay primary-only (see
+    /// `handle_method_dispatch_primary`); a `ServerResponse` handle is served
+    /// by perry-ext-http's dispatch extension when that crate owns `http`, so
+    /// the primary dispatcher does not know it (#10454).
+    composite: bool,
 }
 
 /// Extract a plausible ObjectHeader address from a value that may be
@@ -61,6 +67,16 @@ fn object_addr_of(value: f64) -> usize {
     } else {
         0
     }
+}
+
+/// `object_addr_of`, narrowed to a real heap object that is not a closure —
+/// the only receivers an explicit-`this` construction can alias.
+fn plain_object_addr_of(value: f64) -> Option<usize> {
+    let addr = object_addr_of(value);
+    (addr != 0
+        && super::is_valid_obj_ptr(addr as *const u8)
+        && !crate::closure::is_closure_ptr(addr))
+    .then_some(addr)
 }
 
 crate::perry_thread_local! {
@@ -100,8 +116,9 @@ pub(crate) fn alias_active() -> bool {
 }
 
 /// Look up the forwarding handle for an object receiver (NaN-boxed or raw
-/// pointer value).
-pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<f64> {
+/// pointer value), and whether to dispatch it through the composite
+/// dispatcher (`AliasEntry::composite`).
+pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<(f64, bool)> {
     let addr = object_addr_of(receiver);
     if addr == 0 {
         return None;
@@ -110,7 +127,7 @@ pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<f64> {
         a.borrow()
             .iter()
             .find(|e| e.obj_addr == addr)
-            .map(|e| f64::from_bits(e.handle_bits))
+            .map(|e| (f64::from_bits(e.handle_bits), e.composite))
     })
 }
 
@@ -120,6 +137,49 @@ pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<f64> {
 /// classes; widen deliberately, with tests, if more show up.
 fn is_aliasable_native_class(module: &str, method: &str) -> bool {
     matches!(module, "http" | "https") && matches!(method, "Server" | "createServer")
+}
+
+/// #10454: native classes whose explicit-`this` construction
+/// (`Base.call(this, …)`, `super(…)`) must run the constructor through the
+/// http dispatcher up front instead of the ordinary call of the bound
+/// export. `https` has no distinct `ServerResponse` in Node.
+fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
+    module == "http" && method == "ServerResponse"
+}
+
+/// Register `this_arg → result` in the alias table when `result` is a
+/// NaN-boxed small native handle and `this_arg` is a real heap object (not a
+/// closure, not another handle).
+fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
+    let result_jv = JSValue::from_bits(result.to_bits());
+    if !result_jv.is_pointer() {
+        return;
+    }
+    let handle_addr = (result.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_small_handle(handle_addr) {
+        return;
+    }
+    // `this` must be a real heap object (not a closure, not another handle).
+    // Accept both the NaN-boxed and the raw-i64-pointer object shapes.
+    let Some(obj_addr) = plain_object_addr_of(this_arg) else {
+        return;
+    };
+
+    ensure_scanner_registered();
+    ALIASES.with(|a| {
+        let mut aliases = a.borrow_mut();
+        if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {
+            existing.handle_bits = result.to_bits();
+            existing.composite = composite;
+        } else {
+            aliases.push(AliasEntry {
+                obj_addr,
+                handle_bits: result.to_bits(),
+                composite,
+            });
+        }
+    });
+    ALIAS_ACTIVE.with(|c| c.set(true));
 }
 
 /// Called from the `Function.prototype.call` / `.apply` arms after the callee
@@ -136,38 +196,109 @@ pub(crate) fn maybe_alias_explicit_this_construction(callee: f64, this_arg: f64,
     if !is_aliasable_native_class(&module, &method) {
         return;
     }
-    // Result must be a NaN-boxed small handle.
-    let result_jv = JSValue::from_bits(result.to_bits());
-    if !result_jv.is_pointer() {
-        return;
-    }
-    let handle_addr = (result.to_bits() & crate::value::POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_small_handle(handle_addr) {
-        return;
-    }
-    // `this` must be a real heap object (not a closure, not another handle).
-    // Accept both the NaN-boxed and the raw-i64-pointer object shapes.
-    let obj_addr = object_addr_of(this_arg);
-    if obj_addr == 0
-        || !super::is_valid_obj_ptr(obj_addr as *const u8)
-        || crate::closure::is_closure_ptr(obj_addr)
-    {
-        return;
-    }
+    register_this_to_handle_alias(this_arg, result, false);
+}
 
-    ensure_scanner_registered();
-    ALIASES.with(|a| {
-        let mut aliases = a.borrow_mut();
-        if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {
-            existing.handle_bits = result.to_bits();
-        } else {
-            aliases.push(AliasEntry {
-                obj_addr,
-                handle_bits: result.to_bits(),
-            });
-        }
-    });
-    ALIAS_ACTIVE.with(|c| c.set(true));
+/// Construct the aliasable native class `(module, method)` through the http
+/// dispatcher and alias `this_val` to the resulting handle. `None` when the
+/// pair is not aliasable or `this_val` is not a plain heap object — the
+/// caller then proceeds with its ordinary dispatch.
+///
+/// Shared by the explicit-`this` call path (`Base.call(this, req)`, below)
+/// and `super()`'s dynamic-parent path (`js_fetch_or_value_super`, for
+/// `class X extends http.ServerResponse` in any heritage shape — http
+/// classes are never recognized at HIR-lowering time). Both must construct
+/// here rather than invoke the bound export: that ordinary call builds a
+/// handle and drops it (#10454).
+pub(crate) fn construct_aliased_native_class(
+    module: &str,
+    method: &str,
+    this_val: f64,
+    args: &[f64],
+) -> Option<f64> {
+    let module = super::native_module::normalize_native_module_alias(module);
+    if !is_construct_before_call_native_class(module, method) {
+        return None;
+    }
+    plain_object_addr_of(this_val)?;
+    Some(unsafe { construct_native_http_class_with_this(module, method, this_val, args) })
+}
+
+/// #10454: `http.ServerResponse.call(this, req)` / `.apply(this, [req])` —
+/// light-my-request's `lib/response.js` shape. Called from the
+/// `Function.prototype.call` / `.apply` arms BEFORE the ordinary call.
+///
+/// # Safety
+/// `rest_ptr`/`rest_len` must describe a valid NaN-boxed argument slice (the
+/// arguments after the explicit `this`).
+pub(crate) unsafe fn maybe_construct_http_class_with_this(
+    callee: f64,
+    this_arg: f64,
+    rest_ptr: *const f64,
+    rest_len: usize,
+) -> Option<f64> {
+    let (module, method) = super::native_module::bound_native_callable_module_and_method(callee)?;
+    let args: &[f64] = if rest_ptr.is_null() || rest_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(rest_ptr, rest_len)
+    };
+    construct_aliased_native_class(&module, &method, this_arg, args)
+}
+
+/// Run the node:stream subclass-init shim for the base named `method`
+/// (`Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough`/`Stream`) on
+/// `this`, mutating it in place. Shared by `super()`'s dynamic-parent path
+/// (`js_fetch_or_value_super`, #10448/#10798) and the explicit-`this`
+/// `Base.call(this, opts)` path below (#10454), so every construction shape
+/// installs the identical surface. False when `method` is no stream base.
+pub(crate) fn run_node_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
+    use crate::node_stream as ns;
+    match method {
+        "Readable" => ns::js_node_stream_readable_subclass_init(this, opts),
+        "Writable" => ns::js_node_stream_writable_subclass_init(this, opts),
+        "Duplex" => ns::js_node_stream_duplex_subclass_init(this, opts),
+        "Transform" => ns::js_node_stream_transform_subclass_init(this, opts),
+        "PassThrough" => ns::js_node_stream_passthrough_subclass_init(this, opts),
+        "Stream" => ns::js_node_stream_legacy_subclass_init(this),
+        _ => return false,
+    };
+    true
+}
+
+/// #10454: `util.inherits(Fn, Readable)` + `Readable.call(this, opts)` — the
+/// pre-class stream subclass shape (light-my-request's `lib/request.js`).
+/// Stream bases are not handle factories: their surface is installed as own
+/// properties on the instance, so there is no handle to alias `this` to. The
+/// ordinary call built a fresh, unrelated stream and discarded it, leaving
+/// `this` with no `push`/`pipe`. Run the same subclass-init shim `super()`
+/// uses directly on the explicit `this` instead.
+///
+/// Called from the `Function.prototype.call` / `.apply` arms BEFORE the
+/// ordinary call; returns `None` (caller proceeds as before) for every other
+/// callee or a `this` that is not a plain heap object.
+///
+/// # Safety
+/// `rest_ptr`/`rest_len` must describe a valid NaN-boxed argument slice (the
+/// arguments after the explicit `this`, i.e. `opts`).
+pub(crate) unsafe fn maybe_run_stream_subclass_init_via_this(
+    callee: f64,
+    this_arg: f64,
+    rest_ptr: *const f64,
+    rest_len: usize,
+) -> Option<f64> {
+    let (module, method) = super::native_module::bound_native_callable_module_and_method(callee)?;
+    if super::native_module::normalize_native_module_alias(&module) != "stream" {
+        return None;
+    }
+    plain_object_addr_of(this_arg)?;
+    let opts = if rest_len >= 1 && !rest_ptr.is_null() {
+        *rest_ptr
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    };
+    run_node_stream_subclass_init(&method, this_arg, opts)
+        .then(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 /// Property-read forwarding companion to `alias_handle_for_object`: when a
@@ -181,16 +312,21 @@ pub(crate) fn alias_forward_property_read(obj_addr: usize, key: &str) -> Option<
     if !alias_active() || obj_addr == 0 {
         return None;
     }
-    let handle_bits = ALIASES.with(|a| {
+    let (handle_bits, composite) = ALIASES.with(|a| {
         a.borrow()
             .iter()
             .find(|e| e.obj_addr == obj_addr)
-            .map(|e| e.handle_bits)
+            .map(|e| (e.handle_bits, e.composite))
     })?;
     let handle = (handle_bits & crate::value::POINTER_MASK) as i64;
-    // Primary dispatcher only — see handle_method_dispatch_primary (an
-    // id-colliding ext-net socket must not answer for the server).
-    let dispatch = super::class_handles::handle_property_dispatch_primary()?;
+    // Primary dispatcher only for the server aliases — see
+    // handle_method_dispatch_primary (an id-colliding ext-net socket must not
+    // answer for the server).
+    let dispatch = if composite {
+        super::class_handles::handle_property_dispatch()?
+    } else {
+        super::class_handles::handle_property_dispatch_primary()?
+    };
     let value = unsafe { dispatch(handle, key.as_ptr(), key.len()) };
     if value.to_bits() == crate::value::TAG_UNDEFINED {
         None
@@ -199,11 +335,24 @@ pub(crate) fn alias_forward_property_read(obj_addr: usize, key: &str) -> Option<
     }
 }
 
-/// Shared implementation for the `js_http(s)_server_construct_with_this`
-/// externs: dispatch `(module, "Server")` through the registered native
-/// http dispatcher with the (up to 2) constructor args, then alias
-/// `this_val` to the resulting handle.
-unsafe fn construct_native_server_with_this(module: &str, this_val: f64, a0: f64, a1: f64) -> f64 {
+/// Shared implementation for the `js_http(s)_server_construct_with_this` /
+/// `js_http_server_response_construct_with_this` externs: dispatch
+/// `(module, method)` through the registered native http dispatcher with the
+/// given constructor args, then alias `this_val` to the resulting handle.
+/// This is the ONLY reliable way to construct one of these native http
+/// classes from Rust: `js_native_call_value` on the bound export closure
+/// does NOT reach this dispatcher (confirmed empirically, #10454) — it takes
+/// a completely different, non-constructing path, so a `super()`/`.call()`
+/// hook that tried calling the closure value directly silently produced no
+/// handle at all. Route through `JS_NATIVE_HTTP_DISPATCH` directly instead,
+/// exactly like the codegen-recognized `http.Server.call(this, …)` path
+/// already did (#4973) before this function existed as a shared helper.
+unsafe fn construct_native_http_class_with_this(
+    module: &str,
+    method: &str,
+    this_val: f64,
+    args: &[f64],
+) -> f64 {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let ptr = crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
     if ptr.is_null() {
@@ -219,12 +368,10 @@ unsafe fn construct_native_server_with_this(module: &str, this_val: f64, a0: f64
     ) -> f64 = std::mem::transmute(ptr);
     // Trim trailing undefined padding so the dispatcher's arg
     // classification sees the same arity the source call had.
-    let args = [a0, a1];
     let mut len = args.len();
     while len > 0 && args[len - 1].to_bits() == crate::value::TAG_UNDEFINED {
         len -= 1;
     }
-    let method = "Server";
     let result = dispatch(
         module.as_ptr(),
         module.len(),
@@ -233,32 +380,16 @@ unsafe fn construct_native_server_with_this(module: &str, this_val: f64, a0: f64
         args.as_ptr(),
         len,
     );
-
-    // Alias `this` → handle (same gates as the .call/.apply arm path).
-    let result_jv = JSValue::from_bits(result.to_bits());
-    let handle_addr = (result.to_bits() & crate::value::POINTER_MASK) as usize;
-    let obj_addr = object_addr_of(this_val);
-    if result_jv.is_pointer()
-        && crate::value::addr_class::is_small_handle(handle_addr)
-        && obj_addr != 0
-        && super::is_valid_obj_ptr(obj_addr as *const u8)
-        && !crate::closure::is_closure_ptr(obj_addr)
-    {
-        ensure_scanner_registered();
-        ALIASES.with(|a| {
-            let mut aliases = a.borrow_mut();
-            if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {
-                existing.handle_bits = result.to_bits();
-            } else {
-                aliases.push(AliasEntry {
-                    obj_addr,
-                    handle_bits: result.to_bits(),
-                });
-            }
-        });
-        ALIAS_ACTIVE.with(|c| c.set(true));
-    }
+    register_this_to_handle_alias(this_val, result, method == "ServerResponse");
     result
+}
+
+/// Shared implementation for the `js_http(s)_server_construct_with_this`
+/// externs: dispatch `(module, "Server")` through the registered native
+/// http dispatcher with the (up to 2) constructor args, then alias
+/// `this_val` to the resulting handle.
+unsafe fn construct_native_server_with_this(module: &str, this_val: f64, a0: f64, a1: f64) -> f64 {
+    construct_native_http_class_with_this(module, "Server", this_val, &[a0, a1])
 }
 
 /// #4973: `http.Server.call(this, handler)` — HIR-lowered entry. Constructs
@@ -301,3 +432,195 @@ static KEEP_HTTP_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64)
 #[used(compiler)]
 static KEEP_HTTPS_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_https_server_construct_with_this;
+
+/// #10454: `http.ServerResponse.prototype`'s own methods (Node's
+/// `ServerResponse` + `OutgoingMessage` surface, plus the listener methods the
+/// native handle serves). Every name must be one the http handle dispatchers
+/// answer (`server_response_method_bytes` in perry-ext-http).
+const SERVER_RESPONSE_PROTOTYPE_METHODS: &[&str] = &[
+    "setHeader",
+    "getHeader",
+    "removeHeader",
+    "hasHeader",
+    "getHeaders",
+    "getHeaderNames",
+    "appendHeader",
+    "setHeaders",
+    "writeHead",
+    "write",
+    "addTrailers",
+    "end",
+    "flushHeaders",
+    "cork",
+    "uncork",
+    "destroy",
+    "setTimeout",
+    "writeEarlyHints",
+    "writeContinue",
+    "writeProcessing",
+    "assignSocket",
+    "detachSocket",
+    "pipe",
+    "on",
+    "addListener",
+    "once",
+    "prependOnceListener",
+];
+
+crate::perry_thread_local! {
+    /// Re-entrancy latch for `server_response_prototype_method_thunk`: a
+    /// handle dispatcher that falls back to the receiver's prototype chain for
+    /// a name it does not own must not bounce back into the thunk forever.
+    static IN_SERVER_RESPONSE_FORWARD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Body of every `ServerResponse.prototype.<method>`: resolve `this` to its
+/// native handle — the receiver itself (`new ServerResponse(req)`), or the
+/// handle a `ServerResponse.call(this, req)` / `super(req)` aliased it to —
+/// and dispatch the method on it. This is what makes `util.inherits` /
+/// `setPrototypeOf` / `extends` subclasses see the methods through the
+/// prototype chain, and what `ServerResponse.prototype.writeHead.apply(this,
+/// args)` (light-my-request's override shape) calls.
+extern "C" fn server_response_prototype_method_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg0: f64,
+    arg1: f64,
+    arg2: f64,
+) -> f64 {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
+    let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
+    let receiver = this.as_f64();
+    let receiver_jv = JSValue::from_bits(receiver.to_bits());
+    let receiver_is_handle = receiver_jv.is_pointer()
+        && crate::value::addr_class::is_small_handle(
+            (receiver.to_bits() & crate::value::POINTER_MASK) as usize,
+        );
+    let (handle_val, composite) = if receiver_is_handle {
+        (receiver, true)
+    } else if let Some(alias) = alias_handle_for_object(receiver) {
+        alias
+    } else {
+        let name = unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(name_ptr, name_len))
+        };
+        let msg = format!(
+            "ServerResponse.prototype.{name} called on an object that is not a ServerResponse"
+        );
+        super::object_ops::throw_object_type_error(msg.as_bytes());
+    };
+    if IN_SERVER_RESPONSE_FORWARD.with(|c| c.replace(true)) {
+        return undefined;
+    }
+    let dispatch = if composite {
+        super::class_handles::handle_method_dispatch()
+    } else {
+        super::class_handles::handle_method_dispatch_primary()
+    };
+    let args = [arg0, arg1, arg2];
+    let mut len = args.len();
+    while len > 0 && args[len - 1].to_bits() == crate::value::TAG_UNDEFINED {
+        len -= 1;
+    }
+    let result = match dispatch {
+        Some(dispatch) => unsafe {
+            dispatch(
+                (handle_val.to_bits() & crate::value::POINTER_MASK) as i64,
+                name_ptr,
+                name_len,
+                args.as_ptr(),
+                len,
+            )
+        },
+        None => undefined,
+    };
+    IN_SERVER_RESPONSE_FORWARD.with(|c| c.set(false));
+    // Chainable methods (`setHeader`, `writeHead`, …) return the handle;
+    // hand the aliasing object back instead, as Node returns `this`.
+    if result.to_bits() == handle_val.to_bits() {
+        receiver
+    } else {
+        result
+    }
+}
+
+/// #10454: give `http.ServerResponse` a `.prototype` carrying its methods, so
+/// the classic subclass shapes inherit them. Called from the http module's
+/// callable-export attach hook when the bound constructor is minted.
+pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f64 {
+    use super::{
+        define_builtin_data_property, set_bound_native_closure_name, set_builtin_closure_length,
+        set_builtin_property_attrs, PropertyAttrs,
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer()
+        || !crate::closure::is_closure_ptr(
+            (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        return constructor_value;
+    }
+    let proto = super::js_object_alloc(0, 0);
+    if proto.is_null() {
+        return constructor.get_nanbox_f64();
+    }
+    let proto = scope.root_raw_mut_ptr(proto);
+    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    proto.with_mut_ptr(|proto_ptr| {
+        define_builtin_data_property(
+            proto_ptr,
+            key,
+            constructor.get_nanbox_f64(),
+            "constructor".to_string(),
+            PropertyAttrs::new(true, false, true),
+        );
+    });
+    let func_ptr = server_response_prototype_method_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 3);
+    for method in SERVER_RESPONSE_PROTOTYPE_METHODS {
+        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+        if method_closure.is_null() {
+            continue;
+        }
+        crate::closure::js_closure_set_capture_ptr(method_closure, 0, method.as_ptr() as i64);
+        crate::closure::js_closure_set_capture_ptr(method_closure, 1, method.len() as i64);
+        let method_closure = scope.root_raw_mut_ptr(method_closure);
+        method_closure
+            .with_mut_ptr(|closure_ptr| set_bound_native_closure_name(closure_ptr, method));
+        method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
+            set_builtin_closure_length(closure_ptr as usize, 0)
+        });
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        proto.with_mut_ptr(|proto_ptr| {
+            method_closure.with_mut_ptr(|closure_ptr: *mut u8| {
+                define_builtin_data_property(
+                    proto_ptr,
+                    key,
+                    crate::value::js_nanbox_pointer(closure_ptr as i64),
+                    (*method).to_string(),
+                    PropertyAttrs::new(true, false, true),
+                );
+            });
+        });
+    }
+    let closure_addr =
+        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+    proto.with_mut_ptr(|proto_ptr: *mut u8| {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "prototype",
+            crate::value::js_nanbox_pointer(proto_ptr as i64),
+        );
+    });
+    let closure_addr =
+        (constructor.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+    set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        PropertyAttrs::new(true, false, false),
+    );
+    constructor.get_nanbox_f64()
+}

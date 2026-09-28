@@ -881,10 +881,57 @@ unsafe fn resolve_proto_chain_field_inner(
                 cid = p;
                 depth += 1;
             }
-            _ => break,
+            _ => {
+                if let Some(receiver) = receiver {
+                    return bound_native_parent_prototype_field(cid, key, receiver);
+                }
+                break;
+            }
         }
     }
     None
+}
+
+/// #10454: the class chain ended at `cid`, and `cid`'s heritage may be a
+/// bound native-module export (`class Sub extends http.ServerResponse`).
+/// `js_register_class_parent_dynamic` deliberately registers no parent class
+/// id for those, so the walk above never reaches the export's `.prototype` —
+/// an instance read of an inherited method (or of anything a user added to
+/// `ServerResponse.prototype`) came back `undefined`, while
+/// `Object.getPrototypeOf` (which follows the dynamic parent value) saw it.
+/// Continue the read on that prototype object, with the instance as receiver.
+unsafe fn bound_native_parent_prototype_field(
+    cid: u32,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    let parent = super::parent_static::template_dynamic_parent_value(cid);
+    let parent_js = JSValue::from_bits(parent.to_bits());
+    if !parent_js.is_pointer() {
+        return None;
+    }
+    let parent_addr = (parent.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(parent_addr)
+        || crate::object::native_module::bound_native_callable_module_and_method(parent).is_none()
+    {
+        return None;
+    }
+    let proto = JSValue::from_bits(
+        crate::closure::closure_get_dynamic_prop(parent_addr, "prototype").to_bits(),
+    );
+    if !proto.is_pointer() {
+        return None;
+    }
+    let proto_obj = proto.as_pointer::<ObjectHeader>();
+    if crate::value::addr_class::try_read_gc_header(proto_obj as usize)
+        .is_none_or(|h| h.obj_type != crate::gc::GC_TYPE_OBJECT)
+    {
+        return None;
+    }
+    let prev_override = super::super::field_get_set::accessor_receiver_override_begin(receiver);
+    let value = js_object_get_field_by_name(proto_obj as *const _, key);
+    super::super::field_get_set::accessor_receiver_override_end(prev_override);
+    (!value.is_undefined() && !value.is_null()).then_some(value)
 }
 
 /// #1758: symbol-keyed analogue of [`resolve_proto_chain_field`]. Walks the
