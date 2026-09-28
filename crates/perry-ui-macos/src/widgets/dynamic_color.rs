@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 
 pub(super) fn rgba([r, g, b, a]: [f64; 4]) -> Retained<NSColor> {
-    NSColor::colorWithRed_green_blue_alpha(r, g, b, a)
+    NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, a)
 }
 
 fn color(light: [f64; 4], dark: [f64; 4]) -> Retained<NSColor> {
@@ -170,5 +170,18 @@ pub fn set_button_tint(handle: i64, light: [f64; 4], dark: [f64; 4]) {
         if let Some(button) = view.downcast_ref::<NSButton>() {
             button.setContentTintColor(Some(&color(light, dark)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba_is_srgb() {
+        let cg = rgba([0.0, 194.0 / 255.0, 1.0, 1.0]).CGColor();
+        assert!(crate::srgb::tests::is_srgb(
+            &*cg as *const _ as *mut std::ffi::c_void
+        ));
     }
 }

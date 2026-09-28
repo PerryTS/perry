@@ -149,7 +149,7 @@ fn present_toast(msg: String) {
 
         let bg: Retained<NSColor> = msg_send![
             AnyClass::get(c"NSColor").unwrap(),
-            colorWithRed: 0.0 as CGFloat,
+            colorWithSRGBRed: 0.0 as CGFloat,
             green: 0.0 as CGFloat,
             blue: 0.0 as CGFloat,
             alpha: 0.78 as CGFloat

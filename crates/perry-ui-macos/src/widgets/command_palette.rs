@@ -279,7 +279,7 @@ pub fn show() {
         let _: () = msg_send![layer, setMasksToBounds: true];
         let bg_color: *mut AnyObject = msg_send![
             AnyClass::get(c"NSColor").unwrap(),
-            colorWithCalibratedRed: 0.96 as CGFloat,
+            colorWithSRGBRed: 0.96 as CGFloat,
             green: 0.96 as CGFloat,
             blue: 0.96 as CGFloat,
             alpha: 0.98 as CGFloat

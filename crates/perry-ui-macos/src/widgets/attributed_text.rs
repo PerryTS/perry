@@ -130,7 +130,7 @@ pub fn append(
             let color_cls = AnyClass::get(c"NSColor").unwrap();
             let color: Retained<AnyObject> = msg_send![
                 color_cls,
-                colorWithRed: r as objc2_core_foundation::CGFloat,
+                colorWithSRGBRed: r as objc2_core_foundation::CGFloat,
                 green: g as objc2_core_foundation::CGFloat,
                 blue: b as objc2_core_foundation::CGFloat,
                 alpha: a as objc2_core_foundation::CGFloat

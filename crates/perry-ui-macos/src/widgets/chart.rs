@@ -25,8 +25,6 @@ use crate::ffi::CGContextFillPath;
 use crate::ffi::CGContextFillRect;
 use crate::ffi::CGContextMoveToPoint;
 use crate::ffi::CGContextSetLineWidth;
-use crate::ffi::CGContextSetRGBFillColor;
-use crate::ffi::CGContextSetRGBStrokeColor;
 use crate::ffi::CGContextStrokePath;
 use objc2::msg_send;
 use objc2::rc::Retained;
@@ -158,7 +156,7 @@ unsafe fn draw_chart(
 
     // Background — NSView is transparent by default; explicit white-ish
     // panel keeps the chart legible against any container.
-    CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+    crate::srgb::set_fill_color(ctx, 1.0, 1.0, 1.0, 1.0);
     CGContextFillRect(ctx, bounds);
 
     let plot_top = bounds.size.height - PADDING - if title.is_empty() { 0.0 } else { 18.0 };
@@ -220,7 +218,7 @@ unsafe fn draw_line(
     };
 
     // Axis — bottom + left.
-    CGContextSetRGBStrokeColor(ctx, 0.7, 0.7, 0.7, 1.0);
+    crate::srgb::set_stroke_color(ctx, 0.7, 0.7, 0.7, 1.0);
     CGContextSetLineWidth(ctx, 1.0);
     CGContextBeginPath(ctx);
     CGContextMoveToPoint(ctx, plot.origin.x, plot.origin.y);
@@ -229,7 +227,7 @@ unsafe fn draw_line(
 
     // Series.
     let (r, g, b) = PALETTE[0];
-    CGContextSetRGBStrokeColor(ctx, r, g, b, 1.0);
+    crate::srgb::set_stroke_color(ctx, r, g, b, 1.0);
     CGContextSetLineWidth(ctx, 2.0);
     CGContextBeginPath(ctx);
     for (i, (_, v)) in data.iter().enumerate() {
@@ -262,7 +260,7 @@ unsafe fn draw_bars(
         let x = plot.origin.x + (i as f64) * (bar_w + gap) + gap / 2.0;
         let y = plot.origin.y;
         let (r, g, b) = PALETTE[i % PALETTE.len()];
-        CGContextSetRGBFillColor(ctx, r, g, b, 1.0);
+        crate::srgb::set_fill_color(ctx, r, g, b, 1.0);
         CGContextFillRect(
             ctx,
             objc2_core_foundation::CGRect {
@@ -291,7 +289,7 @@ unsafe fn draw_pie(
         let frac = v / total;
         let end = start + frac * std::f64::consts::TAU;
         let (r, g, b) = PALETTE[i % PALETTE.len()];
-        CGContextSetRGBFillColor(ctx, r, g, b, 1.0);
+        crate::srgb::set_fill_color(ctx, r, g, b, 1.0);
         CGContextBeginPath(ctx);
         CGContextMoveToPoint(ctx, cx, cy);
         CGContextAddArc(ctx, cx, cy, radius, start, end, 0);
@@ -321,7 +319,7 @@ unsafe fn draw_text_centered(text: &str, rect: objc2_core_foundation::CGRect, si
     let _: () = msg_send![attrs, setObject: para, forKey: &*para_key];
 
     let color_cls = AnyClass::get(c"NSColor").unwrap();
-    let color: *mut AnyObject = msg_send![color_cls, colorWithCalibratedRed: 0.10 as CGFloat, green: 0.10 as CGFloat, blue: 0.10 as CGFloat, alpha: 1.0 as CGFloat];
+    let color: *mut AnyObject = msg_send![color_cls, colorWithSRGBRed: 0.10 as CGFloat, green: 0.10 as CGFloat, blue: 0.10 as CGFloat, alpha: 1.0 as CGFloat];
     let _: () = msg_send![attrs, setObject: color, forKey: &*color_key];
 
     let _: () = msg_send![&*ns_text, drawInRect: rect, withAttributes: attrs];

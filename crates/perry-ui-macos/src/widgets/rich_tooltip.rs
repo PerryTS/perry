@@ -251,7 +251,7 @@ fn present_panel(widget_handle: i64) {
         let _: () = msg_send![layer, setMasksToBounds: true];
         let bg_color: *mut AnyObject = msg_send![
             AnyClass::get(c"NSColor").unwrap(),
-            colorWithRed: 0.10 as CGFloat,
+            colorWithSRGBRed: 0.10 as CGFloat,
             green: 0.10 as CGFloat,
             blue: 0.10 as CGFloat,
             alpha: 0.92 as CGFloat

@@ -309,7 +309,7 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
             let color_cls = AnyClass::get(c"NSColor").unwrap();
             let red: Retained<AnyObject> = msg_send![
                 color_cls,
-                colorWithRed: 0.85f64,
+                colorWithSRGBRed: 0.85f64,
                 green: 0.20f64,
                 blue: 0.20f64,
                 alpha: 1.0f64
@@ -378,14 +378,14 @@ fn apply_styling(bar_handle: i64) {
             let selected: Retained<AnyObject> = match state.selected_tint {
                 Some((r, g, b, a)) => msg_send![
                     color_cls,
-                    colorWithRed: r,
+                    colorWithSRGBRed: r,
                     green: g,
                     blue: b,
                     alpha: a
                 ],
                 None => msg_send![
                     color_cls,
-                    colorWithRed: 0.000f64,
+                    colorWithSRGBRed: 0.000f64,
                     green: 0.478f64,
                     blue: 1.000f64,
                     alpha: 1.0f64
@@ -394,7 +394,7 @@ fn apply_styling(bar_handle: i64) {
             let muted: Retained<AnyObject> = match state.unselected_tint {
                 Some((r, g, b, a)) => msg_send![
                     color_cls,
-                    colorWithRed: r,
+                    colorWithSRGBRed: r,
                     green: g,
                     blue: b,
                     alpha: a
