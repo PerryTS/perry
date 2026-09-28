@@ -1785,14 +1785,20 @@ def dominates(idom, a, b):
     return False
 
 
-def between_blocks(f, a_blk, b_blk):
+def between_blocks(f, a_blk, b_blk, killed=frozenset()):
     """Blocks strictly between a_blk and b_blk on some path that does NOT
     re-enter a_blk (so a loop back-edge round trip is not counted -- that is a
-    different dynamic instance of the value)."""
+    different dynamic instance of the value).
+
+    `killed` is a set of `(pred, succ)` CFG edges no path may take: the
+    phi edges along which the value being checked is REPLACED rather than
+    carried (#11604, see `phi_replacing_edges`). Empty by default, which is
+    every caller except the bind-anchored window."""
     if a_blk == b_blk:
         return set()
     fwd = set()
-    q = deque(s for s in f.succs[a_blk] if s in f.insns and s != a_blk)
+    q = deque(s for s in f.succs[a_blk]
+              if s in f.insns and s != a_blk and (a_blk, s) not in killed)
     while q:
         x = q.popleft()
         if x in fwd:
@@ -1801,10 +1807,11 @@ def between_blocks(f, a_blk, b_blk):
         if x == b_blk:
             continue          # sink: do not expand past the bind
         for s in f.succs[x]:
-            if s in f.insns and s != a_blk:
+            if s in f.insns and s != a_blk and (x, s) not in killed:
                 q.append(s)
     bwd = set()
-    q = deque(p for p in f.preds[b_blk] if p in f.insns and p != a_blk)
+    q = deque(p for p in f.preds[b_blk]
+              if p in f.insns and p != a_blk and (p, b_blk) not in killed)
     while q:
         x = q.popleft()
         if x in bwd:
@@ -1813,9 +1820,60 @@ def between_blocks(f, a_blk, b_blk):
         if x == b_blk:
             continue
         for p in f.preds[x]:
-            if p in f.insns and p != a_blk:
+            if p in f.insns and p != a_blk and (p, x) not in killed:
                 q.append(p)
     return (fwd & bwd) - {a_blk, b_blk}
+
+
+def phi_replacing_edges(f, def_of, origin_reg, chain):
+    """CFG edges along which the value `origin_reg` produced is REPLACED on
+    its way to the bound register, rather than carried to it (#11604).
+
+    `chain` is the bound register's backward transparent closure. A `phi` on
+    it merges several values; on an incoming edge whose operand is NOT
+    derived from `origin_reg` (another register, or a constant), the join
+    yields that other value, so a collection on a path that enters the join
+    only through such an edge happens while the slot is about to receive
+    something else -- not `origin_reg`'s pointer. Counting it anyway is the
+    loose-direction over-approximation #7664 already removed from the
+    `--statepoints` mode (`_cast_closure`'s `phi_all_edges` and
+    `_phi_edge_hazard`), and it is exactly the S2 template-coercion join
+    (#11554): `phi [ %v, %entry ], [ %coerced, %tmpl_coerce.slow ]`, where the
+    only collecting call is on the arm that replaces `%v`.
+
+    An edge is killed only when NO chain phi in the join block takes an
+    origin-derived operand from it, so two phis that disagree about an edge
+    keep it (conservative). A collector on any edge that does carry the
+    value, or between the join and the bind, is still reported -- the
+    `_SELFTEST_PHI_*` fixtures assert both.
+    """
+    tainted = {origin_reg}
+    changed = True
+    while changed:
+        changed = False
+        for r in chain:
+            if r in tainted:
+                continue
+            d = def_of.get(r)
+            if d is None or not is_transparent(d):
+                continue
+            if operand_regs(d.text) & tainted:
+                tainted.add(r)
+                changed = True
+    carry = {}      # join block -> preds that carry an origin-derived operand
+    replace = {}    # join block -> preds whose operand is something else
+    for r in tainted:
+        d = def_of.get(r)
+        if d is None or not _is_phi(d):
+            continue
+        for val, pred in phi_incoming(d):
+            val = val.strip()
+            if val.startswith("%") and val[1:] in tainted:
+                carry.setdefault(d.block, set()).add(pred)
+            else:
+                replace.setdefault(d.block, set()).add(pred)
+    return frozenset((pred, blk) for blk, preds in replace.items()
+                     for pred in preds - carry.get(blk, set()))
 
 
 def loop_carried_blocks(f, a_blk, b_blk, barrier_blks=()):
@@ -2004,7 +2062,7 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
     idom = dominators(f)
     violations = []
 
-    def window_hits(A, B):
+    def window_hits(A, B, killed=frozenset()):
         """Collecting calls on some CFG path from just after A to B."""
         hits = []
         if A.block == B.block:
@@ -2018,13 +2076,13 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
         for c in f.insns[B.block]:
             if is_collecting(c.callee) and c.idx < B.idx:
                 hits.append(c)
-        for m_blk in between_blocks(f, A.block, B.block):
+        for m_blk in between_blocks(f, A.block, B.block, killed):
             for c in f.insns[m_blk]:
                 if is_collecting(c.callee):
                     hits.append(c)
         return hits
 
-    def protected(A, B, chain):
+    def protected(A, B, chain, killed=frozenset()):
         """Is the value rooted some other way inside the window?  A temp-root
         push or a mutable-capture box store of any register in the value's
         provenance chain roots it (both are scanned AND rewritten)."""
@@ -2039,7 +2097,7 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
             return True
         if scan(B.block, 0, B.idx):
             return True
-        for m_blk in between_blocks(f, A.block, B.block):
+        for m_blk in between_blocks(f, A.block, B.block, killed):
             if scan(m_blk, 0, len(f.insns[m_blk])):
                 return True
         return False
@@ -2088,10 +2146,12 @@ def check_func(module, f, want_moving_only=False, poll_reaching=frozenset(),
                 continue
             if origin.block == bind_ins.block and origin.idx >= bind_ins.idx:
                 continue
-            hits = window_hits(origin, bind_ins)
+            killed = (phi_replacing_edges(f, def_of, origin.result, chain)
+                      if origin.result else frozenset())
+            hits = window_hits(origin, bind_ins, killed)
             if not hits:
                 continue
-            if protected(origin, bind_ins, chain):
+            if protected(origin, bind_ins, chain, killed):
                 continue
             v = Violation(module, f.name, origin, store_ins, bind_ins, hits,
                           slot, poll_reaching)
@@ -2488,6 +2548,86 @@ define double @perry_fn_selftest__nolabel(double %a) {
   %obj = call ptr @js_object_alloc(i32 4)
   %ret = call double @js_call_function(double %a)
   store ptr %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret double %ret
+}
+"""
+
+
+# #11604: the S2 template-coercion join (#11554). `%v` is a heap value; the
+# only collecting call is on the arm that REPLACES it, so on every path that
+# delivers `%v` to the store nothing collects. Before #11604 this read as a
+# violation (96 of them on the corpus): the window walk followed the phi back
+# to `%v` and then counted the slow arm's call, a path on which the slot
+# receives `%c`, not `%v`.
+_SELFTEST_PHI_SAFE_EDGE = """\
+define double @perry_fn_selftest__tmpl_join(double %a) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %v = call double @js_jsvalue_to_string_method_box(double %a)
+  %bits = bitcast double %v to i64
+  %top = lshr i64 %bits, 48
+  %is_str = icmp eq i64 %top, 32767
+  br i1 %is_str, label %tmpl_coerce.merge.2, label %tmpl_coerce.slow.1
+
+tmpl_coerce.slow.1:
+  %c = call double @js_template_string_coerce_box(double %v)
+  br label %tmpl_coerce.merge.2
+
+tmpl_coerce.merge.2:
+  %p = phi double [ %v, %entry.0 ], [ %c, %tmpl_coerce.slow.1 ]
+  %pb = bitcast double %p to i64
+  store i64 %pb, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret double %p
+}
+"""
+
+# The two ways that join CAN still be a hazard, which the edge refinement must
+# keep reporting: a collector on an edge that CARRIES `%v` into the join, and a
+# collector between the join and the bind (on every path, including the one
+# carrying `%v`).
+_SELFTEST_PHI_HAZARD = """\
+define double @perry_fn_selftest__carrying_edge(double %a, i1 %k) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %v = call double @js_jsvalue_to_string_method_box(double %a)
+  br i1 %k, label %fast.1, label %slow.2
+
+fast.1:
+  %poll = call double @js_gc_loop_safepoint(double %a)
+  br label %merge.3
+
+slow.2:
+  %c = call double @js_template_string_coerce_box(double %v)
+  br label %merge.3
+
+merge.3:
+  %p = phi double [ %v, %fast.1 ], [ %c, %slow.2 ]
+  %pb = bitcast double %p to i64
+  store i64 %pb, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret double %p
+}
+
+define double @perry_fn_selftest__after_join(double %a, i1 %k) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %v = call double @js_jsvalue_to_string_method_box(double %a)
+  br i1 %k, label %merge.2, label %slow.1
+
+slow.1:
+  %c = call double @js_template_string_coerce_box(double %v)
+  br label %merge.2
+
+merge.2:
+  %p = phi double [ %v, %entry.0 ], [ %c, %slow.1 ]
+  %ret = call double @js_call_function(double %a)
+  %pb = bitcast double %p to i64
+  store i64 %pb, ptr %slot
   call void @js_shadow_slot_bind(i32 0, ptr %slot)
   ret double %ret
 }
@@ -5296,6 +5436,37 @@ def self_test():
         if binds != 1:
             print(f"self-test FAIL: control fixture -> {binds} binds, expected 1",
                   file=sys.stderr)
+            ok = False
+
+        # --- #11604: phi edges that REPLACE the value, both directions ------
+        #
+        # The safe join must clear, and the refinement that clears it must
+        # not have blinded the check to a collector on an edge that carries
+        # the value, or to one between the join and the bind.
+        phi_safe = os.path.join(td, "phi_safe.ll")
+        phi_hazard = os.path.join(td, "phi_hazard.ll")
+        for p, text in ((phi_safe, _SELFTEST_PHI_SAFE_EDGE),
+                        (phi_hazard, _SELFTEST_PHI_HAZARD)):
+            with open(p, "w") as fh:
+                fh.write(text)
+        found, binds = _scan([phi_safe], False, "alloc")
+        if found or binds != 1:
+            print(f"self-test FAIL: template-coercion join fixture -> "
+                  f"{len(found)} violations over {binds} binds, expected 0 "
+                  "over 1. The only collecting call is on the arm whose phi "
+                  "edge REPLACES the value, so the slot never receives the "
+                  "allocation across it (#11604).", file=sys.stderr)
+            ok = False
+        found, binds = _scan([phi_hazard], False, "alloc")
+        got = sorted(v.func for v in found)
+        want = ["perry_fn_selftest__after_join",
+                "perry_fn_selftest__carrying_edge"]
+        if got != want or binds != 2 or not all(v.moving for v in found):
+            print(f"self-test FAIL: phi hazard fixture -> {got} over {binds} "
+                  f"binds, expected {want} over 2, both MOVING. The phi-edge "
+                  "refinement must only drop edges that REPLACE the value; a "
+                  "collector on a carrying edge, or after the join, is still "
+                  "a late root store.", file=sys.stderr)
             ok = False
 
         # --stale-registers is a diagnostic, so its exit status is asserted

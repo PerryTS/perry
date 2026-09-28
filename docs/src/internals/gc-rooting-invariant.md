@@ -252,6 +252,19 @@ dominate the bind, so the register being rooted really is the one that
 instruction produced on every path. It is one-sided: an unrecognised call counts
 as collecting, so a gap in its model costs a false positive, never a missed bug.
 
+**Phi edges that replace the value are not part of its window (#11604).** When
+the bound register reaches the producing instruction through a `phi`, a path
+that enters the join through an edge whose operand is something *else* (another
+register or a constant) delivers that other value to the slot, not the one being
+checked. So the window walk does not take such an edge: a collector reachable
+from the producer only through it is not reported. This is the shadow-mode twin
+of #7664's `--statepoints` refinement. The shape that needed it is S2's
+template coercion (#11554): `phi [ %v, %entry ], [ %coerced, %tmpl_coerce.slow ]`,
+where the only collecting call is on the arm that replaces `%v`. Before the
+refinement that one join read as 96 violations. A collector on an edge that
+*carries* the value, or between the join and the bind, is still reported, and
+`--self-test` asserts both (`_SELFTEST_PHI_SAFE_EDGE` / `_SELFTEST_PHI_HAZARD`).
+
 For a single file you are iterating on:
 
 ```bash
