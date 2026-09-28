@@ -1,3 +1,4 @@
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::MainThreadOnly;
@@ -303,7 +304,7 @@ pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             return;
         }
         unsafe {
-            let color = crate::srgb::ns_color(r, g, b, a);
+            let color = srgb::ns_color(r, g, b, a);
             let _: () = msg_send![&*view, setContentTintColor: &*color];
         }
     }

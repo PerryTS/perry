@@ -48,6 +48,7 @@ pub mod vstack;
 pub mod webview;
 pub mod zstack;
 
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, AnyThread, DefinedClass};
@@ -695,7 +696,7 @@ fn apply_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
-                let cg_color = crate::srgb::CgColor::new(r, g, b, a);
+                let cg_color = srgb::CgColor::new(r, g, b, a);
                 let _: () = objc2::msg_send![layer, setBackgroundColor: cg_color.as_ptr()];
             }
         }
@@ -757,8 +758,8 @@ pub fn set_background_gradient(
             let _: () = objc2::msg_send![gradient, setFrame: bounds];
 
             // Create colors array
-            let color1 = crate::srgb::CgColor::new(r1, g1, b1, a1);
-            let color2 = crate::srgb::CgColor::new(r2, g2, b2, a2);
+            let color1 = srgb::CgColor::new(r1, g1, b1, a1);
+            let color2 = srgb::CgColor::new(r2, g2, b2, a2);
 
             // Wrap in NSArray via obj-c id
             let colors: Retained<AnyObject> = {
@@ -803,7 +804,7 @@ pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
-                let cg_color = crate::srgb::CgColor::new(r, g, b, a);
+                let cg_color = srgb::CgColor::new(r, g, b, a);
                 let _: () = objc2::msg_send![layer, setBorderColor: cg_color.as_ptr()];
             }
         }
@@ -849,7 +850,7 @@ pub fn set_shadow(
             let layer: *mut AnyObject = objc2::msg_send![&*view, layer];
             if !layer.is_null() {
                 // Color: opaque CGColor; alpha rides on shadowOpacity.
-                let cg_color = crate::srgb::CgColor::new(r, g, b, 1.0);
+                let cg_color = srgb::CgColor::new(r, g, b, 1.0);
                 let _: () = objc2::msg_send![layer, setShadowColor: cg_color.as_ptr()];
                 let _: () = objc2::msg_send![layer, setShadowOpacity: a as f32];
                 let _: () = objc2::msg_send![layer, setShadowRadius: blur];

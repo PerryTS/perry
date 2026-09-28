@@ -10,6 +10,7 @@
 //! On iOS the equivalent widget uses UITabBar / UITabBarItem natively
 //! (see crates/perry-ui-ios/src/widgets/bottom_nav.rs).
 
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -306,7 +307,7 @@ pub fn set_badge(bar_handle: i64, index: i64, badge_ptr: *const u8) {
             let _: () = msg_send![&*badge, setBordered: false];
             let _: () = msg_send![&*badge, setDrawsBackground: true];
 
-            let red = crate::srgb::ns_color(0.85, 0.20, 0.20, 1.0);
+            let red = srgb::ns_color(0.85, 0.20, 0.20, 1.0);
             let white = objc2_app_kit::NSColor::whiteColor();
             let _: () = msg_send![&*badge, setBackgroundColor: &*red];
             let _: () = msg_send![&*badge, setTextColor: &*white];
@@ -368,9 +369,9 @@ fn apply_styling(bar_handle: i64) {
         };
         unsafe {
             let (r, g, b, a) = state.selected_tint.unwrap_or((0.000, 0.478, 1.000, 1.0));
-            let selected = crate::srgb::ns_color(r, g, b, a);
+            let selected = srgb::ns_color(r, g, b, a);
             let muted = match state.unselected_tint {
-                Some((r, g, b, a)) => crate::srgb::ns_color(r, g, b, a),
+                Some((r, g, b, a)) => srgb::ns_color(r, g, b, a),
                 None => objc2_app_kit::NSColor::secondaryLabelColor(),
             };
             for (i, item) in state.items.iter().enumerate() {
