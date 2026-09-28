@@ -3791,23 +3791,27 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     let in_alloc = flags & (GC_FLAG_IN_ALLOC | GC_FLAG_SUPPRESSED) != 0;
     let unsafe_zone = gc_blocked_by_unsafe_zone();
     let root_lock = GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0);
-    if !(in_alloc || unsafe_zone || root_lock) {
-        // S5: a collection a root-lock exit owed runs here, at the declared
-        // poll, rather than at the lock exit (`flush_deferred_gc_request`).
-        if serve_owed_request_at_poll() {
-            set_safepoint_pending(false);
-            return true;
-        }
-        // S5 (D2): the budgeted cycle's frame-root phases run at declared
-        // points only. An allocation point that reached one parked the cycle
-        // and armed this poll; serve the phase now, with precise roots.
-        if gc_budgeted_cycle_active() && budgeted_cycle_next_step_reads_frame_roots() {
-            let _declared = DeclaredSafepointGuard::enter();
-            serve_budgeted_root_phase();
-            super::alloc_point::note_root_phase_served_at_poll();
-            set_safepoint_pending(false);
-            return true;
-        }
+    // S5: a collection a root-lock exit owed runs here, at the declared poll,
+    // rather than at the lock exit (`flush_deferred_gc_request`).
+    if !(in_alloc || unsafe_zone || root_lock) && serve_owed_request_at_poll() {
+        set_safepoint_pending(false);
+        return true;
+    }
+    // S5 (D2): the budgeted cycle's frame-root phases run at declared points
+    // only. An allocation point that reached one parked the cycle and armed
+    // this poll; serve the phase now, with precise roots. The guard is the
+    // budgeted stepper's own resume guard, not the one above: a budgeted MINOR
+    // holds `GC_FLAG_IN_ALLOC` for its whole life (`new_minor_fallback`), so
+    // `in_alloc` is always set while one is parked.
+    if gc_budgeted_cycle_active()
+        && budgeted_cycle_next_step_reads_frame_roots()
+        && !gc_budgeted_resume_blocked()
+    {
+        let _declared = DeclaredSafepointGuard::enter();
+        serve_budgeted_root_phase();
+        super::alloc_point::note_root_phase_served_at_poll();
+        set_safepoint_pending(false);
+        return true;
     }
     let budgeted = gc_budgeted_cycle_active();
     if in_alloc || unsafe_zone || root_lock || budgeted {

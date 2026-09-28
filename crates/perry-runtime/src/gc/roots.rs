@@ -46,7 +46,8 @@ pub(crate) use stack_roots::with_stack_roots;
 // `shadow_stack` re-exports below.
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_stack_scan_decision, conservative_stack_scan_decision_for,
+    conservative_scan_requested, conservative_stack_scan_decision,
+    conservative_stack_scan_decision_for,
     conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
     resolve_conservative_stack_scan_mode, set_conservative_stack_scan_override,
     ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,

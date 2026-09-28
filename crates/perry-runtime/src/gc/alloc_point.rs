@@ -88,13 +88,18 @@ pub(super) fn with_allocation_point_lifted<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// D2's enforcement for synchronous collections: a collection that begins at
-/// an allocation point must scan conservatively (and therefore cannot move).
+/// an allocation point must be one of the conservative arms, i.e. its caller
+/// must have requested the conservative scan (`ManualGcScanGuard::force_full_scan`,
+/// which also makes the copying minor ineligible).
 ///
 /// Called at the two synchronous chokepoints (`gc_collect_minor_with_trigger_inner`
 /// and `gc_collect_full_mark_sweep_with_trigger`). Every allocation-point arm
 /// that collects — OldReclaim, the nursery valve, the polls-off direct minor,
-/// the emergency reclaim — takes `ManualGcScanGuard::force_full_scan` first,
-/// so this is structurally unreachable. It panics in every build rather than
+/// the emergency reclaim — takes that guard first, so this is structurally
+/// unreachable. It checks the REQUEST, not the resulting scan decision: the
+/// unit-test isolation guards and the `PERRY_CONSERVATIVE_STACK_SCAN=off`
+/// bisection escape hatch both override the decision on purpose, and neither is
+/// a new path into a precise collection. It panics in every build rather than
 /// healing: a heal path nothing can reach is an untested mode (the kill
 /// policy), and the check is one thread-local read per collection.
 #[inline]
@@ -102,10 +107,7 @@ pub(super) fn assert_d2_synchronous_collection() {
     if !at_allocation_point() {
         return;
     }
-    if matches!(
-        super::roots::conservative_stack_scan_decision(),
-        super::roots::ConservativeStackScanDecision::Scan
-    ) {
+    if super::roots::conservative_scan_requested() {
         return;
     }
     D2_VIOLATIONS.fetch_add(1, Ordering::Relaxed);
@@ -157,6 +159,8 @@ pub(super) fn root_phase_parked() -> bool {
 /// The parked cycle has waited `slack` arena bytes past its park point with no
 /// poll to serve it.
 pub(super) fn parked_valve_due(arena_total: usize, slack: usize) -> bool {
+    #[cfg(test)]
+    let slack = TEST_SLACK.with(Cell::get).unwrap_or(slack);
     PARKED_AT.with(|parked| {
         parked
             .get()
@@ -333,9 +337,20 @@ pub(super) fn write_valve_ledger_line() {
     }
 }
 
-/// Move the park point back so the parked-cycle valve is due on the next
-/// allocation point, without allocating the slack for real.
 #[cfg(test)]
-pub(crate) fn test_set_park_base(base: usize) {
-    PARKED_AT.with(|parked| parked.set(Some(base)));
+thread_local! {
+    static TEST_SLACK: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Make the parked-cycle valve due on the next allocation point, without
+/// allocating the slack for real: park "at zero" with a zero slack.
+#[cfg(test)]
+pub(crate) fn test_make_parked_valve_due() {
+    PARKED_AT.with(|parked| parked.set(Some(0)));
+    TEST_SLACK.with(|slack| slack.set(Some(0)));
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_parked_valve_override() {
+    TEST_SLACK.with(|slack| slack.set(None));
 }

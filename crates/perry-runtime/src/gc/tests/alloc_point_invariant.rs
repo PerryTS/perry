@@ -153,6 +153,9 @@ fn a_conservative_collection_at_an_allocation_point_is_allowed() {
     let before = gc_collection_count();
     {
         let _alloc_point = alloc_point::AllocationPointGuard::enter();
+        // The request is what D2 checks; the isolation guard above has pinned
+        // the scan decision itself, exactly as it does for every A-old/valve
+        // test in this crate.
         let _scan =
             ManualGcScanGuard::force_full_scan(ConservativeScanSite::NurseryChurnSlackValve);
         let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
@@ -204,8 +207,9 @@ fn parked_cycle_valve_fires_after_the_slack_and_is_counted() {
     assert_eq!(assist_until_parked(10_000), GcCyclePhase::RootScan.ffi_code());
 
     // Pretend the program allocated the whole slack since parking.
-    alloc_point::test_set_park_base(0);
+    alloc_point::test_make_parked_valve_due();
     gc_check_trigger();
+    alloc_point::test_clear_parked_valve_override();
 
     let counters = alloc_point::alloc_point_counters();
     assert_eq!(counters.parked_valve_fires, 1, "the valve fired once");
