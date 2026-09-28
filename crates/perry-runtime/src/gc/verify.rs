@@ -11,6 +11,28 @@ fn malloc_headers_for_verification() -> Vec<*mut GcHeader> {
     MALLOC_STATE.with(|state| state.borrow().objects.clone())
 }
 
+/// Calls `f` with the user pointer of every marked or pinned, non-forwarded
+/// `GC_TYPE_OBJECT` in the arena. At the sweep start of a synchronous full
+/// collection marks are final and nothing is swept, so "marked" is exactly
+/// "live". The header walk lives here, with the collector, because it reads
+/// headers by linear block iteration rather than from a NaN-box payload.
+#[cfg(feature = "shape-fact-audit")]
+pub(crate) fn for_each_live_object_at_sweep_start(
+    mut f: impl FnMut(*const crate::object::ObjectHeader),
+) {
+    crate::arena::arena_walk_objects(|header_ptr| unsafe {
+        let header = &*(header_ptr as *const GcHeader);
+        let flags = header.gc_flags;
+        if header.obj_type != GC_TYPE_OBJECT
+            || flags & GC_FLAG_FORWARDED != 0
+            || flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0
+        {
+            return;
+        }
+        f(header_ptr.add(GC_HEADER_SIZE) as *const crate::object::ObjectHeader);
+    });
+}
+
 /// Follow forwarding pointers for a word that may hold a heap reference,
 /// NaN-boxed or bare, preserving the form it was stored in.
 ///

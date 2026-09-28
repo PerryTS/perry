@@ -496,10 +496,11 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             "descriptor is the authoritative edge since #8112"
         )
 
-    # The insert/reverse-index body lives in the `_with_holes` variant since
-    # the tombstone-delete work; `_with_generation` is a thin forwarding
-    # wrapper. The authority ordering is checked where the writes are.
-    ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
+    # The insert/reverse-index body lives in `shape_descriptor_mint_with_summary`
+    # (charter step 3 split it out of `_with_holes`, which now derives the
+    # attribute summary and forwards, as does `shape_descriptor_kind_twin`).
+    # The authority ordering is checked where the writes are.
+    ensure = function_body(shapes, "shape_descriptor_mint_with_summary")
     # The property is that the by-id descriptor is installed BEFORE the reverse
     # accelerator points at it — never which append spells it. #9768 added
     # `family_append_fresh`, which is `family_push_back` minus a membership scan
@@ -513,7 +514,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if ensure_append is None:
         raise CensusError(
             "shape descriptor authority surface missing: family append in "
-            "shape_descriptor_ensure_with_holes"
+            "shape_descriptor_mint_with_summary"
         )
     assert_before(
         ensure,
@@ -961,7 +962,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     class_probe = function_body(object_mod, "object_is_regular")
     require_code(
         class_probe,
-        r"ShapeObjectKind::Ordinary",
+        r"shape_object_kind_by_id\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
         "ordinary-object descriptor kind authority",
     )
 

@@ -49,7 +49,7 @@ use crate::object::ObjectHeader;
 
 #[inline(always)]
 unsafe fn gc_header(obj: *const ObjectHeader) -> *mut crate::gc::GcHeader {
-    (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+    crate::object::object_ops::gc_header_for(obj)
 }
 
 /// F-A from the per-object record: the receiver's own slots may be written as
@@ -444,16 +444,7 @@ pub(crate) mod audit {
 /// nothing swept), where "marked" is exactly "live".
 pub(crate) fn audit_heap_at_full_sweep_start() {
     #[cfg(feature = "shape-fact-audit")]
-    crate::arena::arena_walk_objects(|header_ptr| unsafe {
-        let header = header_ptr as *const crate::gc::GcHeader;
-        let flags = (*header).gc_flags;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT
-            || flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) == 0
-        {
-            return;
-        }
-        let obj = header_ptr.add(crate::gc::GC_HEADER_SIZE) as *const ObjectHeader;
+    crate::gc::for_each_live_object_at_sweep_start(|obj| unsafe {
         audit::note_heap_object();
         if !store_facts_agree(obj) {
             report_disagreement(obj);
