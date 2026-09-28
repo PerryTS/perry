@@ -278,7 +278,8 @@ pub(super) fn alloc_point_exit_line() -> String {
         "[gc-alloc-point] valve_fires={} parked_valve_fires={} old_reclaim_alloc_point={} \
          emergency_reclaims={} root_phases_parked={} root_phases_served_at_poll={} \
          owed_requests_routed={} owed_requests_served={} safepoint_drains={} \
-         unsafe_zone_growth_bytes={} unsafe_zone_growth_events={} max_poll_wait_bytes={}",
+         unsafe_zone_growth_bytes={} unsafe_zone_growth_events={} max_poll_wait_bytes={} \
+         entry_polls={}",
         super::scan_fallback::scan_fallback_count_any_thread(
             super::ConservativeScanSite::NurseryChurnSlackValve
         ),
@@ -297,6 +298,7 @@ pub(super) fn alloc_point_exit_line() -> String {
         c.unsafe_zone_growth_bytes,
         c.unsafe_zone_growth_events,
         c.max_poll_wait_bytes,
+        super::entry_polls_reached(),
     )
 }
 

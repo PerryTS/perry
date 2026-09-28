@@ -4086,7 +4086,7 @@ pub extern "C" fn js_gc_loop_safepoint() {
 /// Out of line so the hot entry point above stays a load, a compare and a
 /// return — no frame, no spills.
 #[inline(never)]
-fn js_gc_loop_safepoint_armed() {
+pub(super) fn js_gc_loop_safepoint_armed() {
     // Releases the startup seed unless a resolved seed wants the poll kept
     // reachable. Must run before the opt-in check below: a build with the polls
     // killed still has to get the word back to zero, or every back-edge keeps

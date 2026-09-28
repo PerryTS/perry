@@ -319,6 +319,14 @@ struct FunctionEffects {
 }
 
 fn note_direct_callee(effects: &mut FunctionEffects, callee: &str, defined: &HashSet<&str>) {
+    // RFC deferred collection S5: an entry poll is kept only in a function
+    // this analysis already proves collecting WITHOUT it
+    // (`crate::entry_polls::finalize_module`), so ignoring it here yields the
+    // same fixed point with or without the poll — and is what lets the poll be
+    // added without changing any call's classification.
+    if callee == crate::entry_polls::ENTRY_POLL || callee == crate::entry_polls::ENTRY_POLL_ARGS {
+        return;
+    }
     if defined.contains(callee) {
         effects.internal_callees.insert(callee.to_string());
     } else if !external_callee_cannot_collect(callee) {
@@ -356,6 +364,17 @@ fn effects_of(function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects
         })
         .unwrap_or_else(|e| match e {});
     effects
+}
+
+/// The module's direct call graph over its own definitions: each defined
+/// function mapped to the module-defined functions it calls directly. The
+/// recursive-SCC entry polls (`crate::entry_polls`) are placed from this.
+pub(crate) fn direct_call_graph(functions: &[&LlFunction]) -> HashMap<String, HashSet<String>> {
+    let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+    functions
+        .iter()
+        .map(|f| (f.name.clone(), effects_of(f, &defined).internal_callees))
+        .collect()
 }
 
 /// Compute the largest sound set of module-defined functions that cannot

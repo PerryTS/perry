@@ -1542,6 +1542,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_string_replace_regex_fn", "js_string_replace_string_fn",
     "js_string_replace_all_regex_fn", "js_string_replace_all_string_fn",
     "js_promise_run_microtasks", "js_gc_loop_safepoint",
+    # RFC deferred collection S5: the function-entry polls run the back-edge
+    # poll's body (`gc/entry_poll.rs`), so they collect and MOVE exactly as it does.
+    "js_gc_entry_safepoint", "js_gc_entry_safepoint_args",
     # ToPrimitive / ToString / ToNumber: every one of these dispatches a user
     # `[Symbol.toPrimitive]` / `toString` / `valueOf` on an object operand.
     "js_to_primitive",

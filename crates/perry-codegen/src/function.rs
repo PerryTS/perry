@@ -191,6 +191,9 @@ pub struct LlFunction {
     /// Slots withdrawn by [`Self::forget_pre_return_box_release`]; a later
     /// registration of the same slot stays withdrawn.
     withheld_box_release_slots: Vec<String>,
+    /// RFC deferred collection S5: this function's entry-poll scaffold, if
+    /// lowering emitted one (`crate::entry_polls`).
+    pub(crate) entry_poll: Option<crate::entry_polls::EntryPollSite>,
 }
 
 /// Render the frame-push instruction. Kept in one place so the eager
@@ -318,6 +321,7 @@ impl LlFunction {
             pre_return_void_calls: Vec::new(),
             pre_return_box_releases: Vec::new(),
             withheld_box_release_slots: Vec::new(),
+            entry_poll: None,
         }
     }
 

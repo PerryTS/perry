@@ -3759,6 +3759,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // See `crate::root_reload`.
     progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
+    // RFC deferred collection S5: keep the entry polls that make recursion and
+    // indirect entry reach a poll, drop the rest. Whole-module (it needs the
+    // leaf set and the call graph), and before any rendering path for the same
+    // reason as the pass above.
+    {
+        let mut functions: Vec<&mut crate::function::LlFunction> = llmod.functions_mut().collect();
+        crate::entry_polls::finalize_module(&mut functions);
+    }
 
     crate::typed_feedback_profile::finish_module(&mut llmod.native_rep_records);
 

@@ -1321,6 +1321,14 @@ pub(super) fn compile_closure(
         buffer_alias_base,
     };
 
+    // RFC deferred collection S5: the indirect-entry poll. After every
+    // parameter, capture and self-pointer root is bound (and after the entry
+    // reads through `%this_closure`); before `arguments`, which can allocate.
+    crate::entry_polls::emit_entry_poll(
+        &mut ctx,
+        body,
+        crate::entry_polls::EntryPollKind::Indirect,
+    );
     super::arguments::materialize_arguments_object(
         &mut ctx,
         params,

@@ -852,6 +852,13 @@ pub(super) fn compile_method(
         }
     }
 
+    // RFC deferred collection S5: methods are entered through the class
+    // tables, so they carry the indirect-entry poll (see `crate::entry_polls`).
+    crate::entry_polls::emit_entry_poll(
+        &mut ctx,
+        method_body,
+        crate::entry_polls::EntryPollKind::Indirect,
+    );
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &method.params,

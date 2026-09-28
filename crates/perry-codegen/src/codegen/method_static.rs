@@ -454,6 +454,13 @@ pub(in crate::codegen) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+    // RFC deferred collection S5: static methods are entered through the
+    // class tables too — the indirect-entry poll (`crate::entry_polls`).
+    crate::entry_polls::emit_entry_poll(
+        &mut ctx,
+        &f.body,
+        crate::entry_polls::EntryPollKind::Indirect,
+    );
     crate::codegen::arguments::materialize_arguments_object(
         &mut ctx,
         &f.params,
