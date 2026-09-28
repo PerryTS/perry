@@ -495,6 +495,18 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_EXTERNAL_SIDE_ALLOC_PENDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Byte counters for external side allocations (usize), not addresses: pending bytes noted since the last trigger check and the live external total. Nothing here can hold a GC pointer. They surfaced as rule T once regex operation scratch stopped reporting to them (#11549): the counters are no longer reached from a registered scanner's call graph, which is why the reachability walk used to cover them."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_EXTERNAL_SIDE_LIVE_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Byte counters for external side allocations (usize), not addresses: pending bytes noted since the last trigger check and the live external total. Nothing here can hold a GC pointer. They surfaced as rule T once regex operation scratch stopped reporting to them (#11549): the counters are no longer reached from a registered scanner's call graph, which is why the reachability walk used to cover them."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
       "name": "GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL",
       "verdict": "not_a_gc_pointer",
       "why": "External side-buffer bytes reported released since the last full baseline, including collector finalization and mutator operations such as JSON tape materialization, regex scratch teardown, native-addon adjustments and Map/Set buffer replacement. This cumulative count keeps released bytes in old-reclaim pressure until a full resets it, and can schedule a full earlier than the previous live-only term. A byte COUNT in Cell<usize>, never a heap address or NaN-boxed value. Written by gc_note_external_side_free, reset by finish_full_old_reclaim_baseline and test guards, read by external_side_old_reclaim_pressure_bytes and diagnostics."
