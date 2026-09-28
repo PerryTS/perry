@@ -48,6 +48,8 @@ mod perex_replace_direct;
 #[cfg(feature = "regex-engine")]
 mod perex_reuse;
 #[cfg(feature = "regex-engine")]
+mod perex_scratch_pressure;
+#[cfg(feature = "regex-engine")]
 mod perex_split;
 #[cfg(feature = "regex-engine")]
 mod perex_strings;
