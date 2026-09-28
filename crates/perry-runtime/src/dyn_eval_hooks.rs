@@ -57,10 +57,25 @@ pub(crate) fn prune_dead_function_owners_young(is_dead: &dyn Fn(usize) -> bool) 
 
 /// The interpreter's `try` savepoint; `0` (the catch table's idle value)
 /// without the evaluator.
+///
+/// `js_try_push` runs this on every `try`, and the GC call-effects tables
+/// (`crates/perry-codegen/src/gc_effects/`) keep `js_try_push` Leaf only
+/// because `scripts/gc_call_effects/seeds.txt` delegates this function's
+/// indirect call to its one possible target, `crate::dyn_eval::interp_savepoint`
+/// (the only value [`install`] stores in the slot). `#[inline(never)]` keeps
+/// the indirect call in this named symbol, where that rule can match it; a
+/// closure (`map_or(0, |f| f())`) would move it into an unnamed one.
+#[inline(never)]
 pub(crate) fn interp_savepoint() -> u64 {
-    INTERP_SAVEPOINT.get().map_or(0, |f| f())
+    match INTERP_SAVEPOINT.get() {
+        Some(savepoint) => savepoint(),
+        None => 0,
+    }
 }
 
+/// Restore the interpreter to a `try` savepoint. Delegated in seeds.txt to
+/// `crate::dyn_eval::interp_restore`, like [`interp_savepoint`].
+#[inline(never)]
 pub(crate) fn interp_restore(savepoint: u64) {
     if let Some(restore) = INTERP_RESTORE.get() {
         restore(savepoint);
@@ -73,7 +88,9 @@ pub(crate) fn dynamic_import_data_url(specifier: &str) -> Option<f64> {
     DATA_URL_IMPORT.get().and_then(|f| f(specifier))
 }
 
-/// The `dyn-eval` install.
+/// The `dyn-eval` install: the only writer of these slots. The GC
+/// call-effects rules for [`interp_savepoint`] / [`interp_restore`] name the
+/// targets stored here; change both together.
 #[cfg(feature = "dyn-eval")]
 pub(crate) fn install() {
     FUNCTION_FROM_STRINGS.set(crate::dyn_eval::dyn_function_from_strings);

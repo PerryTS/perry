@@ -174,3 +174,12 @@ indirect regex ^<perry_runtime::tls_hot::HotKey<.*>>::resolve_and_cache => regex
 forbid regex ^std::io::stdio::set_output_capture$ -- the stdio exemption assumes no output-capture sink is installed
 indirect regex ^<std::thread::local::LocalKey<core::cell::Cell<\(u64, u64\)>>>:: -- std's RandomState KEYS thread-local (initializer: hashmap_random_keys -> getrandom); no Perry thread-local has this type
 indirect regex ^perry_runtime::gc::full_trace:: -- the full-trace fetch hook (audited, not delegated): its only registration (perry_ffi_gc_register_fetch_trace from perry-stdlib fetch/lifecycle.rs) installs `phase` / `observe`, which update the per-thread fetch epoch and mark fetch handles through the runtime's `mark` -- heap-only marking during an active full trace; they run no JS and start no collection. Delegating would drag in the std LocalKey accessor pointers the graph cannot resolve
+#
+# Link-time feature Hook slots (#11605, perry-runtime `feature_hooks`). A hub
+# that must not name an optional subsystem calls it through a Hook fn-pointer
+# slot. Most such calls sit in helpers that run JS or collect anyway; these are
+# the ones on Leaf helpers, each delegated to the only functions its slot can
+# hold, so the graph (not this reason) decides the class.
+indirect regex ^perry_runtime::feature_hooks::run_feature_installer$ => regex ^js_runtime_install_ -- js_gc_init runs the installer registered by js_runtime_register_feature_installer. The only registration is the static constructor perry_codegen::stubs::generate_feature_installer_object emits, and the installer it registers is a generated function that only calls js_runtime_install_* entry points (made callees here; the forbid rule below keeps archive code from registering anything else)
+forbid exact js_runtime_register_feature_installer -- the run_feature_installer delegation assumes the generated link-step object is the only registrant
+indirect regex ^perry_runtime::dyn_eval_hooks::interp_(savepoint|restore)$ => regex ^perry_runtime::dyn_eval::interp_(savepoint|restore)$ -- the try savepoint forwarders js_try_push / js_eh_try_push (and the throw restore) call: their private INTERP_SAVEPOINT / INTERP_RESTORE slots are written only by dyn_eval_hooks::install, with dyn_eval::interp_savepoint / interp_restore (made callees here). Without dyn-eval the slots stay empty and the targets match nothing
