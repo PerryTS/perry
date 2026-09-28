@@ -491,13 +491,7 @@ fn next_timer_id() -> i64 {
 /// trap and with the timer handle installed as `this`. `scope` already roots
 /// nothing of this entry's: both the closure and the arguments are rooted here,
 /// and re-read immediately before the call, because installing the receiver is
-/// itself a collecting boundary.
-///
-/// `js_handle` is the entry's rooted `js_handle` field (already kept fresh by
-/// the caller since the entry left the store): the real `Timeout`/`Immediate`
-/// object when there is one, or `TAG_UNDEFINED` for an entry with none (a
-/// native completion callback), which falls back to the pre-#10821
-/// pointer-tagged id — there is no JS handle object for it to be.
+/// itself a collecting boundary. An undefined `js_handle` falls back to the id.
 fn call_timer_callback_entry(
     scope: &crate::gc::RuntimeHandleScope,
     id: i64,
@@ -883,10 +877,7 @@ fn schedule_callback_timer_inner(
         );
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
-    // Re-read the handle root fresh, right before it is copied into the
-    // entry: the allocating calls above (`init_resource*`) can move it.
-    // Entries with no JS handle (native completions) fall back to
-    // `call_timer_callback_entry`'s `timer_handle_value(id)`.
+    // Re-read after `init_resource*`, which can move it.
     let js_handle_value = handle
         .as_ref()
         .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |h| {

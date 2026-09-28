@@ -393,13 +393,7 @@ fn purging_an_agent_drops_its_partition() {
     assert!(with_current_existing(|t| t.any_pending()).is_none());
 }
 
-/// `remove_by_id` frees an Immediate's slab slot but leaves its index queued
-/// in `check` as a placeholder (O(1) cancel). If a later `setTimeout` reuses
-/// that freed slot, `pop_check` must recognize the placeholder is stale
-/// (its stored `seq` no longer matches the slot's new occupant) rather than
-/// stealing the reused Timeout — which is still referenced by the timer heap
-/// and would later panic `key()`'s "heap index is live" assert. Regression
-/// for the ABA bug fixed alongside this test.
+/// `clearImmediate` + a `setTimeout` reusing its slot used to panic "heap index is live".
 #[test]
 fn stale_check_placeholder_does_not_steal_a_reused_slab_slot() {
     reset_for_test();
@@ -430,9 +424,6 @@ fn stale_check_placeholder_does_not_steal_a_reused_slab_slot() {
     });
 }
 
-/// Same ABA hazard, for the poll queue: `remove_by_id` on a `Pending` entry
-/// leaves a placeholder in `poll_ready`, and a later timer reusing its slab
-/// slot must not be stolen by `pop_poll`.
 #[test]
 fn stale_poll_placeholder_does_not_steal_a_reused_slab_slot() {
     reset_for_test();
