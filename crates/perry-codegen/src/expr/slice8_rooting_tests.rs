@@ -129,6 +129,9 @@ pub(super) fn call_line_of(ir: &str, callee: &str) -> usize {
 pub(super) fn call_operand_of(ir: &str, callee: &str, n: usize) -> String {
     let idx = call_line_of(ir, callee);
     let line = ir.lines().nth(idx).expect("index came from this IR");
+    // Drop call-site attributes after the argument list (a callee the
+    // generated GC-effects table proves leaf carries ` "gc-leaf-function"`).
+    let line = line.rsplit_once(')').map_or(line, |(head, _)| head);
     let args = line
         .rsplit_once('(')
         .unwrap_or_else(|| panic!("{callee} call has no argument list: {line}"))

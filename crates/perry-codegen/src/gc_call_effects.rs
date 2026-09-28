@@ -5,11 +5,42 @@
 //! system allocator and still be safe to omit as a Perry GC safepoint. The
 //! only question answered here is: can this call enter Perry's collector?
 //!
-//! Unknown is the safe default. Adding a helper to the allowlist requires
-//! auditing the complete runtime call graph for `gc_check_trigger`,
-//! `js_gc_collect`, `js_gc_loop_safepoint`, or another route into collection.
+//! # Source of truth: the generated table (RFC deferred collection, step S1)
+//!
+//! The answer for a runtime helper is no longer a hand-kept allowlist. It is
+//! read from `gc_effects/<target>.tsv`, generated from the linked runtime and
+//! stdlib archives by `scripts/gc_call_effects/callgraph.py` and checked in CI
+//! against freshly built archives for Linux x86-64, macOS aarch64 and Windows
+//! x86-64 (`cargo xwin`). The generator builds a symbol-level call graph from
+//! the object code and classifies every exported symbol by what it can reach
+//! (seeds, cuts and every audited exemption, each with its reason, are in
+//! `scripts/gc_call_effects/seeds.txt`):
+//!
+//! * `Leaf`      reaches no collector entry, poll, JS entry, unaudited
+//!               indirect call or unknown external symbol;
+//! * `AllocOnly` reaches a collector only through a collector entry point
+//!               (the allocation trigger), never JS or a poll;
+//! * `ThrowOnly` additionally reaches JS only through the throw funnel;
+//! * `Reenters`  everything else.
+//!
+//! Codegen uses the MOST conservative class across the three target tables,
+//! and a symbol missing from any table is `Reenters`. Under today's runtime
+//! (an allocation can still start a collection) only `Leaf` may be marked
+//! `"gc-leaf-function"`. `AllocOnly` keeps its previous meaning,
+//! [`GcCallEffect::AllocNoReentry`]: a leaf only under the research-only
+//! `PERRY_GC_SAFEPOINT_ONLY` contract. `ThrowOnly` is computed and committed
+//! for RFC step S5 but is not used for leaf-marking yet.
+//!
+//! The graph found what the hand audit missed: `js_array_length`'s Proxy arm
+//! reaches `js_proxy_get` (#11522), and every helper whose
+//! `GcRootRegistryGuard` drop can flush a deferred collection reaches the
+//! collector (#11523). Both are simply not `Leaf` in the table.
+//!
+//! [`OVERRIDES`] holds the few symbols the archives cannot speak for. Unknown
+//! stays the safe default for everything else.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use crate::function::{FinalItem, LlFunction};
 use crate::inst::LlInst;
@@ -31,387 +62,109 @@ pub(crate) enum GcCallEffect {
     Unknown,
 }
 
+/// A runtime symbol's class in the generated table, ordered from least to
+/// most conservative.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum RuntimeClass {
+    Leaf,
+    AllocOnly,
+    ThrowOnly,
+    Reenters,
+}
+
+impl RuntimeClass {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "Leaf" => Some(Self::Leaf),
+            "AllocOnly" => Some(Self::AllocOnly),
+            "ThrowOnly" => Some(Self::ThrowOnly),
+            "Reenters" => Some(Self::Reenters),
+            _ => None,
+        }
+    }
+}
+
+/// The committed per-target tables. Regenerate with
+/// `scripts/gc_call_effects/regen.sh <target>` (or take the CI artifact);
+/// never edit by hand.
+pub(crate) const GENERATED_TABLES: &[(&str, &str)] = &[
+    ("linux-x86_64", include_str!("gc_effects/linux-x86_64.tsv")),
+    (
+        "macos-aarch64",
+        include_str!("gc_effects/macos-aarch64.tsv"),
+    ),
+    (
+        "windows-x86_64",
+        include_str!("gc_effects/windows-x86_64.tsv"),
+    ),
+];
+
+/// Symbols the archives cannot speak for, each with its reason. Kept tiny on
+/// purpose: an entry here shadows the graph, so it must name something the
+/// graph does not contain (checked by a unit test).
+pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[];
+
+/// Merge target tables: the most conservative class wins, and a symbol absent
+/// from any table is dropped (reads as `Reenters`). Panics on a malformed row:
+/// a table codegen cannot read must fail the build, never degrade silently.
+pub(crate) fn merge_tables(tables: &[(&str, &str)]) -> HashMap<String, RuntimeClass> {
+    let mut merged: HashMap<String, (RuntimeClass, usize)> = HashMap::new();
+    for (target, text) in tables {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (n, line) in text.lines().enumerate() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let (sym, class) = line
+                .split_once('\t')
+                .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: malformed row", n + 1));
+            let class = RuntimeClass::parse(class)
+                .unwrap_or_else(|| panic!("gc_effects/{target}.tsv:{}: bad class", n + 1));
+            assert!(
+                seen.insert(sym),
+                "gc_effects/{target}.tsv:{}: duplicate {sym}",
+                n + 1
+            );
+            let e = merged.entry(sym.to_string()).or_insert((class, 0));
+            e.0 = e.0.max(class);
+            e.1 += 1;
+        }
+    }
+    merged
+        .into_iter()
+        .filter(|(_, (_, count))| *count == tables.len())
+        .map(|(sym, (class, _))| (sym, class))
+        .collect()
+}
+
+fn generated() -> &'static HashMap<String, RuntimeClass> {
+    static TABLE: OnceLock<HashMap<String, RuntimeClass>> = OnceLock::new();
+    TABLE.get_or_init(|| merge_tables(GENERATED_TABLES))
+}
+
+/// The merged generated class of a runtime symbol (`Reenters` if unknown).
+pub(crate) fn runtime_class(name: &str) -> RuntimeClass {
+    generated()
+        .get(name)
+        .copied()
+        .unwrap_or(RuntimeClass::Reenters)
+}
+
+fn effect_of_class(class: RuntimeClass) -> GcCallEffect {
+    match class {
+        RuntimeClass::Leaf => GcCallEffect::CannotCollect,
+        RuntimeClass::AllocOnly => GcCallEffect::AllocNoReentry,
+        // The throw cut needs RFC step S3 (allocation stops collecting) first.
+        RuntimeClass::ThrowOnly | RuntimeClass::Reenters => GcCallEffect::Unknown,
+    }
+}
+
 /// Classify one direct LLVM callee name, without the leading `@`.
 pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
-    match name {
-        // Pure/read-only ABI helpers audited in `module::helper_decl_attrs`.
-        "js_nanbox_pointer"
-        | "js_nanbox_get_pointer"
-        | "js_typed_f64_arg_guard"
-        | "js_typed_i32_arg_guard"
-        | "js_typed_i1_arg_guard"
-        | "js_typed_i1_arg_to_raw"
-        | "js_typed_i32_arg_to_raw"
-        | "js_typed_string_arg_guard"
-        // `param_type_guard.rs`: read-only descriptor/heap traversal. It may
-        // use Rust Vec/TLS registries, but never allocates in Perry's heap or
-        // invokes JavaScript getters, proxies, coercions, or callbacks.
-        | "js_param_type_guard"
-        | "js_is_truthy"
-        // string/compare.rs: immutable byte reads and bounded UTF-16 decoding;
-        // no allocation, runtime state access, coercion, or collector entry.
-        | "js_string_compare"
-        | "js_typed_feedback_plain_array_index_get_guard"
-        | "js_typed_feedback_numeric_array_index_get_guard"
-        | "js_typed_feedback_plain_array_index_set_guard"
-        | "js_typed_feedback_numeric_array_index_set_guard"
-        | "js_typed_feedback_numeric_array_push_guard"
-        | "js_array_numeric_value_to_raw_f64"
-        // `array/subclass.rs`: scalar descriptor/header comparison only. It
-        // neither allocates nor enters user code; a miss returns zero.
-        | "js_packed_arraylike_loop_revalidate_live"
-        // `json_tape/cached_read.rs`: reads an already-materialized lazy JSON
-        // element. Header/bitmap/slot loads only -- it is `lazy_get`'s two
-        // non-allocating branches with the rooted fallback deliberately left
-        // out, so every case it cannot serve returns TAG_HOLE and the emitted
-        // code takes its ordinary miss call instead.
-        | "js_lazy_array_index_probe"
-        // `gc/roots/temp_roots.rs`: TLS vector operations and an incremental
-        // marking barrier only. They never run a Perry collection.
-        | "js_gc_temp_root_push"
-        | "js_gc_temp_root_get"
-        | "js_gc_temp_root_set"
-        | "js_gc_temp_root_truncate"
-        // Heap-shadow-frame bookkeeping. These helpers touch only the
-        // thread-local shadow buffer; growth is a raw Rust Vec allocation,
-        // and slot writes may run the incremental-mark root barrier, neither
-        // of which can enter Perry's collector. Native-root functions consume
-        // bind/set calls before RS4GC, while #8583-spilled functions retain
-        // them. Classifying both forms lets the module call-graph closure prove
-        // an otherwise-leaf spilled callee without pretending its frame
-        // maintenance is a safepoint. All six are in the root-dominance
-        // checker's NONCOLLECTING authority.
-        | "js_shadow_frame_enter"
-        | "js_shadow_frame_push"
-        | "js_shadow_frame_pop"
-        | "js_shadow_state_addr"
-        | "js_shadow_slot_bind"
-        | "js_shadow_slot_set"
-        // `gc/barrier.rs`: remembered-set / incremental-marking maintenance.
-        | "js_write_barrier"
-        // #9287 transition-IC leaves. `perry_transition_cache_base` returns a TLS
-        // table pointer (pure state read). `js_transition_ic_note_hit` bumps an
-        // atomic counter (probe builds only). `js_transition_ic_spill_append`
-        // re-validates the receiver and performs ONLY the in-capacity spill
-        // store — its capacity gate exists precisely so it cannot reach the
-        // growing (allocating) spill path; growth returns 0 and the emitted
-        // code takes the ordinary miss call. The TLS learned-fields note and
-        // spill bookkeeping inside allocate at most via std::alloc, which is
-        // outside the GC heap (the `js_box_alloc_bits` precedent).
-        | "perry_transition_cache_base"
-        | "js_transition_ic_note_hit"
-        // `object/inherited_read_cache.rs` (#10834/#10842): a direct-mapped
-        // per-thread table probe — identity-word and ShapeId compares, a
-        // validity-word compare, then one load through the holder. It
-        // allocates nothing, never calls user code and never walks the
-        // chain (that is the miss handler's prime); every case it cannot
-        // serve answers TAG_HOLE and the emitted code takes its ordinary
-        // slow call. Listed so nothing is spilled or reloaded around it on
-        // the declined-guard edge of every generic property read.
-        | "js_inherited_read_cache_hit_f64"
-        // S2 of the deferred-collection RFC (`expr/ic_fast_split.rs`): the
-        // GC-leaf hits of the four full-outline inline caches. Each answers a
-        // decline (TAG_HOLE, or a status) for every case it cannot serve, and
-        // the emitted code takes the collecting `_fast_miss` call instead.
-        // Audited 2026-09-27 against the runtime bodies, the checked items
-        // being: no Perry-heap allocation, no `GcRootRegistryGuard`, no
-        // throw, no call into generated code, no poll, no indirect call.
-        //   `js_object_get_field_ic_fast` (`object/field_get_set/ic_miss/
-        //   outline_split.rs`): a static read, a tag compare,
-        //   `pic_outlined_mru_hit` (a OnceLock<bool> env read,
-        //   `pic_slot_peek` — never the allocating `pic_slot_resolve` —, a
-        //   ShapeId compare, one slot load).
-        //   `js_class_field_{get,set}_ic_fast` (`typed_feedback/guards.rs`):
-        //   two static reads, `class_field_{,set_}fast_contract` (header,
-        //   shape-descriptor and layout side-table reads), then one slot
-        //   load, or one store through `runtime_store_jsvalue_slot` (addref,
-        //   layout note, slot barrier — the bodies of `js_string_addref`,
-        //   `js_gc_note_slot_layout`, `js_write_barrier_slot`).
-        // Deliberately NOT reached, because the census call graph shows each
-        // reaching the collector or an indirect call on today's runtime: the
-        // typed-feedback observe/record calls (the registry lock is a
-        // `GcRootRegistryGuard` whose drop can flush a deferred collection,
-        // #11523) and the descriptor walk (`get_accessor_descriptor`). The
-        // fast entries decline outright while feedback or descriptors are in
-        // use. Nor `js_object_set_field`'s diagnostics (formatting is an
-        // indirect call) or a live-bound widening (mints a descriptor).
-        // The S1 generated table and its call-graph checker must pick these
-        // up and are the authority over this comment (see the S2 PR for the
-        // checker run over the built archives).
-        | "js_object_get_field_ic_fast"
-        | "js_class_field_get_ic_fast"
-        | "js_class_field_set_ic_fast"
-        //   `js_put_value_set_packed_fast` (`proxy/put_value/packed_set.rs`):
-        //   `pic_slot_peek`, the receiver test, a ShapeId compare over the
-        //   site's ways, `packed_hit_receiver_ok` (header reads) and
-        //   `store_object_field_slot` (the same `runtime_store_jsvalue_slot`
-        //   as above). A spill way (`dyn_ic_try_store`) and the key-add memo
-        //   (which can allocate) are declined, not served.
-        | "js_put_value_set_packed_fast"
-        | "js_transition_ic_spill_append"
-        | "js_write_barrier_slot"
-        | "js_write_barrier_slot_validated_parent"
-        | "js_write_barrier_root_heap_word"
-        | "js_write_barrier_root_nanbox"
-        // `gc/roots.rs`: registers one module-level global as a root. Audited
-        // 2026-08-04 and admitted because its whole body is two calls that are
-        // already covered:
-        //
-        //   runtime_write_barrier_root_heap_word(*root)  <- `js_write_barrier_
-        //       root_heap_word` immediately above is a ONE-LINE wrapper around
-        //       this exact function, and is already CannotCollect. It shades
-        //       one header and calls `push_mark_seed`, which is a TLS
-        //       `Vec::push` (`gc/trace.rs`) — no trace, no sweep, no trigger.
-        //   GLOBAL_ROOTS.with(|r| r.borrow_mut().push(root))  <- a TLS Vec.
-        //
-        // The `Vec::push` is the only thing worth pausing on, because CLAUDE.md
-        // lists a "malloc count threshold" as a GC trigger. It does not apply:
-        // that counter is `MALLOC_STATE.objects.len()`, a registry of Perry GC
-        // objects, and the `#[global_allocator]` is plain mimalloc/System with
-        // no GC hook. A raw Rust allocation cannot arm a trigger — which is the
-        // case the module doc above already carves out.
-        //
-        // Worth the audit: at 148 call sites across the probe suite this is the
-        // single most frequent non-leaf callee, all of it module-init code
-        // registering `@perry_global_*` roots.
-        | "js_gc_register_global_root"
-        // `gc/layout.rs`: side-table metadata updates only.
-        | "js_gc_note_slot_layout"
-        | "js_gc_note_slot_layout_aware"
-        // The key-add hit's `mark_object_dynamic_shape_unknown`: header bits
-        // and the typed-layout / slot-mask / feedback side tables only.
-        | "js_gc_key_add_layout_unknown"
-        | "js_gc_init_typed_shape_layout"
-        | "js_gc_declare_typed_shape_layout"
-        // #7834: `layout_forget_object` behind a null check — two thread-local
-        // side-table removals, no allocation and no re-entry.
-        | "js_gc_forget_object_layout"
-        // `typed_feedback.rs`: counters/registries only. This intentionally
-        // does not include feedback wrappers that perform the actual object
-        // get/set operation.
-        //
-        // #11523: these, the layout helpers above (via `layout_mark_unknown`
-        // -> `invalidate_representation_change`) and the closure capture
-        // setters below take the typed-feedback registry's
-        // `GcRootRegistryGuard` — the only root-registry lock any entry in
-        // this table reaches. An ordinary guard's release flushes a GC request
-        // deferred under it, which runs a collection. The typed-feedback
-        // registry therefore uses `lock_gc_root_registry_noncollecting`: its
-        // release never flushes, and a request raised inside the region panics
-        // under `debug_assertions`/tests (`gc/tests/noncollecting_root_lock.rs`).
-        // Any new registry lock reachable from an entry here must use it too.
-        | "js_typed_feedback_record_guard_pass"
-        | "js_typed_feedback_record_guard_fail"
-        | "js_typed_feedback_record_fallback_call"
-        | "js_typed_feedback_class_field_get_guard"
-        | "js_typed_feedback_class_field_set_guard"
-        | "js_typed_feedback_observe_property_get"
-        | "js_typed_feedback_observe_property_set"
-        // #8596: closure-call IC guard. Its body reads the closure header and
-        // does registry lookups (arity/rest/func-ptr — all reads), builds a
-        // stack `Observation`, and calls `guard_observe` (`typed_feedback.rs`),
-        // whose whole effect is a TLS registry borrow, saturating counters, and
-        // a `Vec::push` of the observation — a raw Rust allocation, which by the
-        // documented rule above cannot arm a Perry-GC trigger. No Perry
-        // allocation, no re-entry into generated JS, no throw. Same class as the
-        // two observe guards above; unlike the excluded get/set wrappers it does
-        // NOT perform an object get/set. In `NONCOLLECTING` (the audit authority).
-        | "js_typed_feedback_closure_direct_call_guard"
-        // #8775: speculation-safe closure header/function-pointer reads only.
-        // Whole-program object-literal calls use this after arity/rest were
-        // proven statically, so it has no registry or feedback side effects.
-        | "js_closure_exact_func_guard"
-        // #8775: cold own-method IC prime. Validated object/shape/key/slot and
-        // closure reads plus one compiler-private cache store; no allocation,
-        // JS re-entry, throw, or Perry-GC trigger.
-        | "js_object_own_method_cache_miss"
-        // Same family, audited 2026-08-04: under `diagnostics` it reads an env
-        // var, serialises the counters with serde_json and writes a file;
-        // without the feature the body is empty. No Perry allocation, no
-        // re-entry into generated code, no route into collection.
-        | "js_typed_feedback_maybe_dump_trace"
-        // Refcount writes and array-layout observations; none enters GC.
-        | "js_string_addref"
-        | "js_string_addref_if_heap_string"
-        | "js_array_clear_numeric_layout"
-        | "js_array_note_numeric_write"
-        | "js_array_is_numeric_f64_layout"
-        // #7469: two header-bit writes plus the same `layout_forget_object`
-        // side-table remove `layout_init_pointer_free` already does on every
-        // allocation. No Perry allocation, no re-entry into generated code.
-        | "js_array_declare_all_pointer_elements"
-        // `clean_arr_ptr` on a raw head: reads headers and the forwarding
-        // registry, allocates nothing, never re-enters generated code.
-        | "js_array_live_head"
-        // #11522 `.length` fast lane (`array/indexing.rs`,
-        // `array_length_fast_lane`): tag strip, address-class and arena
-        // generation probes, then a GC-header and `ArrayHeader` read. No
-        // allocation, no side-table write, no user code; every receiver it
-        // cannot serve answers -1 and the emitted code takes the collecting
-        // `js_array_length` call (`expr::array_length`).
-        | "js_array_length_leaf"
-        // #9480 dispatch probes. `js_object_get_class_id` performs only
-        // address checks, Set/Map registry membership reads, validated GC
-        // header reads, and a scalar class-id load. `js_object_get_own_field_
-        // or_undef` validates an Object + its dense keys array, compares raw
-        // string slots, and reads the matching inline/overflow field. Its keys
-        // walk deliberately does NOT call the generic array accessors: their
-        // lazy/exotic/accessor paths would invalidate this certification.
-        // Neither call graph allocates in the Perry heap, polls, throws, or
-        // re-enters generated JS (the own-field walk was re-checked to the
-        // leaves for #11522: `object_keys`, `js_string_key_matches_bytes`,
-        // `key_is_accessor_at`, `object_live_slot_count`, `js_object_get_
-        // field` and `overflow_get` are header, slab and RefCell reads, and an
-        // accessor key answers undefined instead of calling its getter).
-        // Rust/TLS table initialization is system allocation and cannot arm
-        // Perry GC; both exports are `extern "C"`
-        // with no explicit panic path, so no unwind edge returns to generated
-        // code. Kept in the dominance checker and root-reload authorities.
-        | "js_object_get_class_id"
-        | "js_object_get_own_field_or_undef"
-        // TLS dynamic-call context only. #8596 adds the `_get` reader — a bare
-        // `IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))` (`object/this_binding.rs`),
-        // the exact shape of the already-admitted `_set` and `js_new_target_get`.
-        // The `_sloppy` reader is deliberately ABSENT: it boxes booleans/strings
-        // and reads globalThis, which allocates.
-        | "js_implicit_this_set"
-        | "js_implicit_this_get"
-        | "js_new_target_get"
-        | "js_new_target_set"
-        // #8596: TDZ-suppression window depth (`box.rs`). Each is a single
-        // thread-local `Cell<u32>` saturating inc/dec, emitted in pairs around a
-        // side-effect-free class-capture snapshot. No allocation, no re-entry.
-        | "js_tdz_suppress_begin"
-        | "js_tdz_suppress_end"
-        // Closure capture-slot accessors (#8132). `closure/alloc.rs`:
-        // `get` is a null check, a bounds check, and a raw slot read;
-        // `set` is the raw slot write plus `note_closure_capture_slot`, whose
-        // whole body is `layout_note_slot` + `runtime_write_barrier_gc_slot` —
-        // the same side-table/barrier bodies already admitted above as
-        // `js_gc_note_slot_layout` / `js_write_barrier_slot`. The `_ptr`
-        // spellings are one-line wrappers over the `_bits` pair. All four are
-        // in `gc_root_dominance_check.py`'s NONCOLLECTING (the audit
-        // authority this table must stay a subset of). On #8132's bundled
-        // module factory these were 1,495 of 5,537 statepoints.
-        | "js_closure_get_capture_bits"
-        | "js_closure_set_capture_bits"
-        | "js_closure_set_box_capture_ptr"
-        | "js_closure_get_capture_ptr"
-        | "js_closure_set_capture_ptr"
-        // Variable-box accessors and allocators (#8132), `box.rs`. Boxes are
-        // `std::alloc::alloc` allocations OUTSIDE the GC heap — allocating
-        // one arms no Perry GC trigger (the malloc-count trigger counts
-        // `MALLOC_STATE` GC objects, not raw Rust allocations), and the
-        // registry insert is a TLS set. `gc_root_dominance_check.py`'s
-        // IMMOVABLE_SOURCES "box" probes pin exactly this: std::alloc, no
-        // arena allocation, no dealloc — if boxes ever become GC objects the
-        // lint fails and these entries must be demoted with it. The setters
-        // are a registry membership check, the raw cell write, and (for the
-        // JSValue box) `runtime_write_barrier_root_nanbox`, admitted above.
-        // The i32/bool getters are registry check + raw read; they have no
-        // TDZ path.
-        //
-        // `js_box_get_bits` is deliberately ABSENT: its TDZ arm calls
-        // `js_throw_reference_error_tdz`, which allocates the ReferenceError
-        // (string + error object) before unwinding — a genuine route into
-        // collection, per the `js_throw*` audit note below. The checker's
-        // NONCOLLECTING currently lists it anyway; this table does not
-        // inherit that entry, it only requires containment in the safe
-        // direction.
-        | "js_box_alloc_bits"
-        | "js_i32_box_alloc"
-        | "js_bool_box_alloc"
-        | "js_box_set_bits"
-        | "js_box_set_bits_trusted_no_barrier"
-        | "js_i32_box_set"
-        | "js_bool_box_set"
-        | "js_i32_box_get"
-        | "js_bool_box_get"
-        // The #7933 release entry points: registry remove + raw cell clear +
-        // TLS free-pool push. No GC-heap allocation, no user code, no
-        // collection trigger — the same audit as the accessors above.
-        | "js_box_release"
-        | "js_i32_box_release"
-        | "js_bool_box_release"
-        // #10464 scope-exit release: a registry probe, a capture-count
-        // lookup, then either the same publish (registry remove, cache evict,
-        // raw clear, TLS free-list push) or a TLS pending-map insert.
-        | "js_box_scope_release"
-        | "js_i32_box_scope_release"
-        | "js_bool_box_scope_release"
-        // A class's function object: an indexed per-agent table load; the
-        // first use allocates it in the old arena under a GcSuppressScope, so
-        // it never collects and calls no user code.
-        | "js_class_value" => GcCallEffect::CannotCollect,
-        // Audited allocate-but-never-reenter helpers (2026-07-31): each body
-        // was checked for closure invocation, coercion (valueOf/toString),
-        // and accessor dispatch — none present. The forced-evacuation probe
-        // gates backstop the audit.
-        //
-        // `js_array_length` is deliberately ABSENT (#11522). It was listed
-        // here on the grounds that it "takes a typed `*const ArrayHeader`,
-        // not a JSValue" — but the parameter type is no barrier: its #5135
-        // arm resolves a Proxy id through `js_proxy_get` (the user's `get`
-        // trap) and its array-like-object arm calls
-        // `js_object_get_field_by_name_f64` (getters) and `js_number_coerce`
-        // (`valueOf`). Its plain-array fast lane is the separate
-        // `js_array_length_leaf` above; `js_array_length` itself is Unknown.
-        "js_closure_alloc_singleton"
-        // Re-audited for #11522 by walking the whole call graph, not just the
-        // body: `object_alloc_class_inline_keys_impl` → `alloc_instance_
-        // keeping_keys` (arena bump, then the rooted collecting allocator),
-        // plus the shape stamp / `set_object_keys_with_live` /
-        // `layout_init_pointer_free` bookkeeping, which touches only Rust
-        // tables and header bits. No getter, trap, coercion or closure call is
-        // reachable. The only collections are the arena slow path's
-        // `gc_check_trigger` arms (old-reclaim, slack valve, budgeted assist)
-        // and `reserve_arena_block`'s emergency reclaim; each runs under
-        // `force_full_scan` and none moves, which is this class's contract.
-        // FinalizationRegistry callbacks are only enqueued by a collection.
-        | "js_object_alloc_class_inline_keys"
-        | "js_object_alloc_class_inline_keys_stamped"
-        // `js_array_push_f64` is deliberately ABSENT for the same reason as
-        // `js_array_length` (found while testing #11522): its #5135 Proxy arm
-        // runs `get("length")` and two `set` traps (`proxy_array_length`,
-        // `proxy_set_str_key`), and its array-like-object arm calls
-        // `array_object_method(recv, "push", …)`. The u31 entry below stays:
-        // it answers null for exactly those receivers and the emitted code
-        // takes the full push behind that test.
-        | "js_array_push_u31_with_length"
-        | "js_array_slice_values"
-        // Second audit round (2026-08-01): ctor-return semantics check
-        // (inspects the returned value, calls nothing), strict-equality
-        // indexOf scan (strict equality never runs user code), and the two
-        // callback-type validators (type check + static-message throw; their
-        // throw path is the audited noreturn funnel). Deliberately NOT
-        // admitted: js_value_length_f64 — its plain-object arm calls
-        // js_object_get_field_by_name_f64, a transitive getter path;
-        // js_value_length_property_f64 deliberately delegates the full
-        // property/getter path; and js_array_get_f64 has hole/accessor paths.
-        | "js_ctor_return_override"
-        | "js_array_indexOf_jsvalue"
-        | "js_validate_array_comparator"
-        | "js_validate_array_map_callback" => GcCallEffect::AllocNoReentry,
-        // NO `js_throw*` prefix arm. It used to classify the whole family
-        // a `NeverReturns` classification that suppressed the safepoint in
-        // every mode — the strongest possible, and the only one that would be
-        // applied by prefix rather than exact name. That variant is DELETED,
-        // not merely unused: it was never constructed, so its three match arms
-        // in `precise_roots.rs` were dead, and the kill-policy in CLAUDE.md
-        // says an unexercised mode is a decision nobody has made.
-        //
-        // Two things make that unsafe. The audit it rested on is already
-        // false: `js_throw_reference_error_tdz`, `js_throw_not_a_constructor`
-        // and others are declared `-> f64`, not `-> !`. And since #7302 a
-        // throw UNWINDS rather than longjmps, so the call site is an `invoke`
-        // whose unwind edge needs relocations — while these helpers allocate
-        // the Error they raise and can therefore collect. Suppressing the
-        // safepoint would leave the catch handler's roots stale after a move.
-        //
-        // Falling through to `Unknown` costs a few statepoints and is
-        // conservative in the only direction that is safe.
-        _ => GcCallEffect::Unknown,
+    if let Some(&(_, effect, _)) = OVERRIDES.iter().find(|(n, _, _)| *n == name) {
+        return effect;
     }
+    effect_of_class(runtime_class(name))
 }
 
 /// Whether a direct external call is a Perry-GC leaf in this compile.
@@ -662,76 +415,257 @@ pub(crate) fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<St
 mod tests {
     use super::*;
 
-    /// The box/closure family's stated containment in the checker's
-    /// `NONCOLLECTING` is now CHECKED rather than merely asserted in prose.
-    ///
-    /// Three comments above claim membership in `NONCOLLECTING`
-    /// (`scripts/gc_root_dominance_check.py`) for the closure capture-slot
-    /// accessors, the box accessors/allocators, and — since #8208 — the box
-    /// release entry points, naming it "the audit authority this table must
-    /// stay a subset of". Nothing enforced it. #7510 is what one-sided drift
-    /// costs: the two lists disagreed and the checker printed 358 spurious
-    /// violations once the corpus widened. #8208 drifted them again by adding
-    /// the three `js_*box_release` names here and not there; a human reading
-    /// the diff caught it, which is not a gate.
-    ///
-    /// SCOPE, deliberately narrow. A whole-table subset is NOT asserted,
-    /// because it is not true: 28 entries here (the `js_typed_*` guards, the
-    /// feedback counters, `js_param_type_guard`, `js_nanbox_pointer`,
-    /// `js_string_addref`, …) are absent from `NONCOLLECTING` today. That
-    /// divergence is safe in the direction it runs — the checker's
-    /// `is_collecting` treats an unknown callee as collecting, so a missing
-    /// entry costs a false POSITIVE, which the script's own header calls its
-    /// one-sided design. Adding those 28 names would make the checker LESS
-    /// conservative and could hide real violations, so each needs its own
-    /// audit evidence; that is a separate decision, not a tidy-up to be
-    /// smuggled in here. What this test pins is the family whose containment
-    /// the comments actually claim, which is also exactly where this PR
-    /// drifted.
+    /// #11522: `js_array_length`'s Proxy arm runs the `get` trap and a
+    /// `valueOf` coercion; the other three reach JS or the collector too. The
+    /// hand audit called them leaf / alloc-no-reentry; the graph proves they
+    /// are neither, and S1 classifies them conservatively.
+    const ISSUE_11522: &[&str] = &[
+        "js_array_length",
+        "js_object_alloc_class_inline_keys",
+        "js_object_alloc_class_inline_keys_stamped",
+        "js_object_get_own_field_or_undef",
+    ];
+
+    /// #11523: these take the typed-feedback registry's root lock. With an
+    /// ordinary `GcRootRegistryGuard` the release can flush a deferred
+    /// collection, and the graph proved all of them collecting. The registry
+    /// now uses `NonCollectingRootRegistryGuard`, a distinct type whose drop
+    /// has no path to `flush_deferred_gc_request`, so the generated table
+    /// proves them `Leaf` again. If this goes red, a flushing lock is back on
+    /// their path: run `scripts/gc_call_effects/why.py`.
+    const ISSUE_11523: &[&str] = &[
+        "js_gc_note_slot_layout",
+        "js_gc_note_slot_layout_aware",
+        "js_gc_key_add_layout_unknown",
+        "js_gc_init_typed_shape_layout",
+        "js_gc_declare_typed_shape_layout",
+        "js_typed_feedback_record_guard_pass",
+        "js_typed_feedback_record_guard_fail",
+        "js_typed_feedback_record_fallback_call",
+        "js_typed_feedback_observe_property_get",
+        "js_typed_feedback_observe_property_set",
+        "js_typed_feedback_closure_direct_call_guard",
+        "js_typed_feedback_plain_array_index_get_guard",
+        "js_typed_feedback_numeric_array_index_get_guard",
+        "js_typed_feedback_plain_array_index_set_guard",
+        "js_typed_feedback_numeric_array_index_set_guard",
+        "js_typed_feedback_numeric_array_push_guard",
+        "js_packed_arraylike_loop_revalidate_live",
+        "js_array_clear_numeric_layout",
+        "js_array_note_numeric_write",
+        "js_array_declare_all_pointer_elements",
+        "js_closure_set_capture_bits",
+        "js_closure_set_box_capture_ptr",
+        "js_closure_set_capture_ptr",
+    ];
+
+    /// Helpers the graph proves `Leaf` on every checked target. Pinned by
+    /// name because they carry most of today's leaf-marked call sites; a
+    /// runtime change that taints one of them turns this red, which is the
+    /// moment to look at `why.py`, not after a relocation regression.
+    const PINNED_LEAF: &[&str] = &[
+        "js_nanbox_pointer",
+        "js_nanbox_get_pointer",
+        "js_is_truthy",
+        "js_string_compare",
+        "js_string_addref",
+        "js_gc_temp_root_push",
+        "js_shadow_frame_enter",
+        "js_shadow_frame_push",
+        "js_shadow_frame_pop",
+        "js_shadow_state_addr",
+        "js_shadow_slot_bind",
+        "js_shadow_slot_set",
+        "js_write_barrier",
+        "js_write_barrier_root_nanbox",
+        "js_gc_register_global_root",
+        "js_object_get_class_id",
+        "js_closure_get_capture_bits",
+        "js_closure_exact_func_guard",
+        "js_box_alloc_bits",
+        "js_box_set_bits",
+        "js_i32_box_get",
+        "js_box_release",
+        "js_box_scope_release",
+        "js_implicit_this_get",
+        "js_tdz_suppress_begin",
+        "js_tdz_suppress_end",
+    ];
+
+    #[test]
+    fn generated_tables_parse_and_are_live() {
+        for (target, text) in GENERATED_TABLES {
+            assert!(
+                text.contains(&format!("# target: {target}\n")),
+                "gc_effects/{target}.tsv does not name its own target"
+            );
+            let rows = text
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .count();
+            assert!(
+                rows >= 1000,
+                "gc_effects/{target}.tsv has only {rows} rows -- a vacuous table would \
+                 classify every helper Unknown and this suite would still pass"
+            );
+        }
+        let merged = generated();
+        let leaves = merged
+            .values()
+            .filter(|c| **c == RuntimeClass::Leaf)
+            .count();
+        assert!(
+            merged.len() >= 1000 && leaves >= 200,
+            "merged table: {} symbols, {leaves} Leaf",
+            merged.len()
+        );
+    }
+
+    #[test]
+    fn merge_takes_the_most_conservative_class_and_drops_partial_symbols() {
+        let a = "# target: a\na_only\tLeaf\nboth\tLeaf\nweaker\tAllocOnly\n";
+        let b = "# target: b\nboth\tLeaf\nweaker\tReenters\n";
+        let m = merge_tables(&[("a", a), ("b", b)]);
+        assert_eq!(m.get("both"), Some(&RuntimeClass::Leaf));
+        assert_eq!(m.get("weaker"), Some(&RuntimeClass::Reenters));
+        assert_eq!(
+            m.get("a_only"),
+            None,
+            "a symbol one target does not prove must read as Reenters"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "bad class")]
+    fn a_malformed_table_fails_the_build() {
+        merge_tables(&[("x", "sym\tMaybeLeaf\n")]);
+    }
+
+    /// The classification of every runtime callee flows from the table:
+    /// Leaf -> CannotCollect, AllocOnly -> AllocNoReentry, else Unknown.
+    #[test]
+    fn classification_flows_from_the_generated_table() {
+        let merged = generated();
+        let mut seen = [0usize; 4];
+        for (sym, class) in merged {
+            if OVERRIDES.iter().any(|(n, _, _)| n == sym) {
+                continue;
+            }
+            let want = match class {
+                RuntimeClass::Leaf => GcCallEffect::CannotCollect,
+                RuntimeClass::AllocOnly => GcCallEffect::AllocNoReentry,
+                RuntimeClass::ThrowOnly | RuntimeClass::Reenters => GcCallEffect::Unknown,
+            };
+            assert_eq!(classify_direct_callee(sym), want, "{sym} ({class:?})");
+            seen[*class as usize] += 1;
+        }
+        assert!(
+            seen[0] > 0 && seen[1] > 0 && seen[3] > 0,
+            "table exercises too few classes: {seen:?}"
+        );
+        assert_eq!(
+            classify_direct_callee("user_function_not_in_any_archive"),
+            GcCallEffect::Unknown
+        );
+    }
+
+    #[test]
+    fn overrides_name_only_symbols_the_graph_cannot_see() {
+        for (name, _, reason) in OVERRIDES {
+            assert!(reason.len() >= 20, "override {name} needs a real reason");
+            assert!(
+                !generated().contains_key(*name),
+                "override {name} shadows a symbol the generated table already classifies"
+            );
+        }
+    }
+
+    #[test]
+    fn pinned_hot_helpers_are_leaf() {
+        for name in PINNED_LEAF {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::CannotCollect,
+                "{name}: run scripts/gc_call_effects/why.py to see what now taints it"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_11522_helpers_are_not_leaf() {
+        for name in ISSUE_11522 {
+            assert_ne!(runtime_class(name), RuntimeClass::Leaf, "{name}");
+            assert_ne!(runtime_class(name), RuntimeClass::AllocOnly, "{name}");
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::Unknown,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_11523_noncollecting_guard_helpers_are_provably_leaf() {
+        let mut leaf = 0;
+        for name in ISSUE_11523 {
+            // Six (the numeric index guards and the lazy-array layout
+            // helpers) reach JS or a materializing allocator on their own
+            // paths; none may be collecting through the root lock alone,
+            // which is exactly what AllocOnly would mean here.
+            assert_ne!(
+                runtime_class(name),
+                RuntimeClass::AllocOnly,
+                "{name} reaches a collector again (a flushing root lock?)"
+            );
+            leaf += usize::from(classify_direct_callee(name) == GcCallEffect::CannotCollect);
+        }
+        assert!(leaf >= 15, "only {leaf} of the #11523 helpers are Leaf");
+    }
+
+    /// The box/closure family's containment in the root-dominance checker's
+    /// `NONCOLLECTING` authority: every member the generated table proves
+    /// `Leaf` must be there, so codegen never leaf-marks a call the checker
+    /// would call collecting (the #7510 drift). The members #11523 demoted
+    /// are simply no longer leaves; containment is only required in the safe
+    /// direction.
     #[test]
     fn box_and_closure_helpers_stay_contained_in_the_checker_authority() {
         let manifest = env!("CARGO_MANIFEST_DIR");
-        let rust_src = std::fs::read_to_string(format!("{manifest}/src/gc_call_effects.rs"))
-            .expect("read gc_call_effects.rs");
         let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
         let py_src = std::fs::read_to_string(&py_path).expect("read gc_root_dominance_check.py");
-
         let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
         assert!(
             noncollecting.len() > 50,
-            "parsed only {} NONCOLLECTING names — the extraction broke, and a \
-             vacuous containment check is worse than none",
+            "parsed only {} NONCOLLECTING names -- the extraction broke",
             noncollecting.len()
         );
-
-        let cannot_collect = extract_cannot_collect_arms(&rust_src);
-        // The subject must be live: if the extraction silently stopped seeing
-        // the family, the containment loop below would pass by checking
-        // nothing at all.
-        let family: Vec<&str> = cannot_collect
-            .iter()
-            .filter(|n| n.contains("_box_") || n.contains("_closure_"))
-            .copied()
-            .collect();
-        assert!(
-            family.len() >= 12,
-            "parsed only {} box/closure helpers from the CannotCollect arms \
-             ({family:?}) — extraction broke",
-            family.len()
-        );
-        for probe in [
+        let family: Vec<&str> = [
+            "js_closure_get_capture_bits",
+            "js_closure_get_capture_ptr",
+            "js_box_alloc_bits",
+            "js_i32_box_alloc",
+            "js_bool_box_alloc",
+            "js_box_set_bits",
+            "js_box_set_bits_trusted_no_barrier",
+            "js_i32_box_set",
+            "js_bool_box_set",
+            "js_i32_box_get",
+            "js_bool_box_get",
             "js_box_release",
             "js_i32_box_release",
             "js_bool_box_release",
-            "js_box_alloc_bits",
-            "js_closure_get_capture_bits",
-        ] {
-            assert!(
-                family.contains(&probe),
-                "{probe} missing from the parsed box/closure family"
-            );
-        }
-
+            "js_box_scope_release",
+            "js_i32_box_scope_release",
+            "js_bool_box_scope_release",
+        ]
+        .into_iter()
+        .filter(|n| classify_direct_callee(n) == GcCallEffect::CannotCollect)
+        .collect();
+        assert!(
+            family.len() >= 8,
+            "only {} of the box/closure family is Leaf ({family:?})",
+            family.len()
+        );
         let missing: Vec<&str> = family
             .iter()
             .filter(|n| !noncollecting.contains(**n))
@@ -739,10 +673,7 @@ mod tests {
             .collect();
         assert!(
             missing.is_empty(),
-            "these box/closure callees are CannotCollect here but absent from \
-             NONCOLLECTING in scripts/gc_root_dominance_check.py, which the \
-             comments above name as the audit authority this family must stay \
-             contained in: {missing:?}"
+            "Leaf box/closure callees absent from NONCOLLECTING: {missing:?}"
         );
     }
 
@@ -766,281 +697,20 @@ mod tests {
         out
     }
 
-    /// Collect the callee names of every match arm resolving to
-    /// `GcCallEffect::CannotCollect`. Arms are `| "name"` chains, freely
-    /// interleaved with `//` comments, terminated by the `=>`.
-    fn extract_cannot_collect_arms(src: &str) -> std::collections::HashSet<&str> {
-        let mut out = std::collections::HashSet::new();
-        let mut pending: Vec<&str> = Vec::new();
-        for line in src.lines() {
-            let t = line.trim();
-            if t.starts_with("//") || t.is_empty() {
-                continue;
-            }
-            // Only accumulate from pure pattern lines: `| "a"` / `"a" | "b"`.
-            let is_pattern = (t.starts_with('|') || t.starts_with('"'))
-                && !t.contains("=>")
-                && !t.contains("assert");
-            if is_pattern {
-                pending.extend(quoted_literals(t));
-                continue;
-            }
-            if let Some(head) = t.split("=>").next() {
-                if t.contains("=>") {
-                    let mut names = pending.clone();
-                    names.extend(quoted_literals(head));
-                    if t.contains("GcCallEffect::CannotCollect") {
-                        out.extend(names);
-                    }
-                    pending.clear();
-                    continue;
-                }
-            }
-            pending.clear();
-        }
-        out
-    }
-
     fn quoted_literals(s: &str) -> Vec<&str> {
         let mut out = Vec::new();
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'"' {
-                if let Some(end) = s[i + 1..].find('"') {
-                    let lit = &s[i + 1..i + 1 + end];
-                    if lit.starts_with("js_") || lit.starts_with("llvm.") {
-                        out.push(lit);
-                    }
-                    i = i + 1 + end + 1;
-                    continue;
-                }
-                break;
-            }
-            i += 1;
+        let mut rest = s;
+        while let Some(a) = rest.find('"') {
+            let tail = &rest[a + 1..];
+            let Some(b) = tail.find('"') else { break };
+            out.push(&tail[..b]);
+            rest = &tail[b + 1..];
         }
         out
     }
 
-    /// `js_gc_register_global_root` is `js_write_barrier_root_heap_word` plus
-    /// a TLS `Vec::push`, so the two must never be classified differently —
-    /// if a future audit demotes the barrier, this catches the sibling that
-    /// would otherwise keep claiming to be leaf.
-    #[test]
-    fn register_global_root_tracks_the_barrier_it_wraps() {
-        assert_eq!(
-            classify_direct_callee("js_gc_register_global_root"),
-            classify_direct_callee("js_write_barrier_root_heap_word"),
-            "js_gc_register_global_root's entire body is that barrier plus a \
-             TLS Vec::push; they cannot have different GC effects"
-        );
-    }
-
-    /// The helpers that *do* allocate must stay out of `CannotCollect`, and
-    /// this pins the two that read as pure but are not.
-    ///
-    /// `js_nanbox_string` looks like bit manipulation and mostly is — but its
-    /// null-pointer guard calls `js_string_from_bytes` to allocate an empty
-    /// string rather than boxing null. At 120 call sites it is the obvious
-    /// thing to reach for next; it is not admissible.
-    #[test]
-    fn allocating_helpers_are_not_cannot_collect() {
-        assert_eq!(
-            classify_direct_callee("js_string_compare"),
-            GcCallEffect::CannotCollect
-        );
-        for name in [
-            "js_nanbox_string",
-            "js_string_from_bytes",
-            "js_array_alloc",
-            "js_string_compare_value",
-            "js_rel_lt",
-            "js_rel_gt",
-            "js_object_get_field_ic_miss_packed",
-            // T1: the generic-get tower's two slow exits. One reaches the same
-            // `get_field_ic_miss_impl`, the other the by-name helper, so both
-            // allocate and can run a user getter.
-            "js_object_get_field_ic_slow",
-            "js_object_get_field_ic_nonptr",
-        ] {
-            assert_ne!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name} can allocate and must not be marked gc-leaf"
-            );
-        }
-    }
-
-    #[test]
-    fn audited_runtime_bookkeeping_cannot_collect() {
-        for name in [
-            "js_gc_temp_root_push",
-            "js_shadow_frame_enter",
-            "js_shadow_frame_push",
-            "js_shadow_frame_pop",
-            "js_shadow_state_addr",
-            "js_shadow_slot_bind",
-            "js_shadow_slot_set",
-            "js_write_barrier_root_nanbox",
-            "js_gc_note_slot_layout",
-            "js_typed_feedback_record_guard_pass",
-            "js_string_addref",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name}"
-            );
-        }
-    }
-
-    /// #9480: these are the only runtime calls between re-reading the
-    /// dispatch operands and the class/own-property branch that consumes
-    /// them. Their runtime bodies carry the full call-graph audit; pin both
-    /// the compiler classification and the checker's independent authority so
-    /// a future edit cannot silently reopen only one side of the window.
-    #[test]
-    fn dispatch_probe_helpers_cannot_collect_and_stay_in_checker_authority() {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
-        let py_src = std::fs::read_to_string(py_path).expect("read gc_root_dominance_check.py");
-        let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
-
-        for name in ["js_object_get_class_id", "js_object_get_own_field_or_undef"] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name}"
-            );
-            assert!(
-                noncollecting.contains(name),
-                "{name} must stay in the root-dominance checker's NONCOLLECTING set"
-            );
-        }
-    }
-
-    /// #8132: capture-slot and variable-box accessors are leaf calls. On the
-    /// bundled-module-factory shape these were ~45% of all statepoints, each
-    /// paying a relocation for every live GC value.
-    #[test]
-    fn capture_and_box_accessors_cannot_collect() {
-        for name in [
-            "js_closure_get_capture_bits",
-            "js_closure_set_capture_bits",
-            "js_closure_set_box_capture_ptr",
-            "js_closure_get_capture_ptr",
-            "js_closure_set_capture_ptr",
-            "js_box_alloc_bits",
-            "js_i32_box_alloc",
-            "js_bool_box_alloc",
-            "js_box_set_bits",
-            "js_box_set_bits_trusted_no_barrier",
-            "js_i32_box_set",
-            "js_bool_box_set",
-            "js_i32_box_get",
-            "js_bool_box_get",
-            "js_box_release",
-            "js_i32_box_release",
-            "js_bool_box_release",
-            "js_box_scope_release",
-            "js_i32_box_scope_release",
-            "js_bool_box_scope_release",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name}"
-            );
-        }
-    }
-
-    /// #8596: helpers reclassified as non-safepoints (`CannotCollect`), each
-    /// verified against its runtime body AND already present in the checker's
-    /// `NONCOLLECTING` authority (so the containment test above stays green):
-    ///   - `js_typed_feedback_closure_direct_call_guard` — header/registry
-    ///     reads + a `guard_observe` whose only allocation is a Rust `Vec::push`
-    ///     (cannot arm a Perry-GC trigger); no re-entry, no throw.
-    ///   - `js_closure_exact_func_guard` — the same safe header reads without
-    ///     registry access or feedback recording (#8775).
-    ///   - `js_object_own_method_cache_miss` — cold shape/key/closure
-    ///     validation plus a compiler-private token store (#8775).
-    ///   - `js_implicit_this_get` — a bare `IMPLICIT_THIS` `Cell` read, the
-    ///     shape of the already-admitted `js_implicit_this_set`.
-    ///   - `js_tdz_suppress_begin`/`_end` — a thread-local `Cell<u32>` inc/dec.
-    #[test]
-    fn issue_8596_tls_and_feedback_guards_cannot_collect() {
-        for name in [
-            "js_typed_feedback_closure_direct_call_guard",
-            "js_closure_exact_func_guard",
-            "js_object_own_method_cache_miss",
-            "js_implicit_this_get",
-            "js_tdz_suppress_begin",
-            "js_tdz_suppress_end",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::CannotCollect,
-                "{name}"
-            );
-        }
-    }
-
-    /// The discriminating negatives for #8596: near-neighbours of the four
-    /// admitted above that DO allocate or throw, so they must stay
-    /// `Unknown` (a safepoint). `js_implicit_this_get_sloppy` boxes
-    /// booleans/strings and reads globalThis; the ordinary `_get` it wraps is
-    /// the only leaf-safe half.
-    #[test]
-    fn issue_8596_allocating_lookalike_stays_a_safepoint() {
-        assert_eq!(
-            classify_direct_callee("js_implicit_this_get_sloppy"),
-            GcCallEffect::Unknown,
-            "the sloppy reader boxes primitives / reads globalThis and must remain a safepoint"
-        );
-    }
-
-    /// The discriminating negative for the family above: `js_box_get_bits`
-    /// reads a TDZ-seeded box's sentinel and calls
-    /// `js_throw_reference_error_tdz`, which ALLOCATES the ReferenceError
-    /// (string + error object) before unwinding. A leaf marking would leave
-    /// the catch handler's relocations unrecorded on the unwind edge. If a
-    /// future split gives the non-TDZ boxes their own entry point, THAT
-    /// symbol can be admitted; this one cannot.
-    #[test]
-    fn the_tdz_capable_box_getter_stays_a_safepoint() {
-        for name in [
-            "js_box_get_bits",
-            "js_box_get_bits_trusted",
-            "js_box_get_bits_named",
-            "js_box_get_bits_trusted_named",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name} can throw (and allocate) on the TDZ path"
-            );
-        }
-    }
-
-    #[test]
-    fn collection_and_unknown_calls_stay_conservative() {
-        for name in [
-            "js_gc_collect",
-            "js_gc_loop_safepoint",
-            "js_alloc_object",
-            "user_function",
-        ] {
-            assert_eq!(
-                classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name}"
-            );
-        }
-    }
-
-    /// #11522: `js_array_length` runs the Proxy `get` trap and, for an
-    /// array-like object, getters plus `valueOf` — so it must stay a
-    /// safepoint in every mode. Only its header-read fast lane is a leaf.
+    /// #11522's runtime split: the plain-array fast lane is a separate export
+    /// the graph proves leaf, and `js_array_length` itself stays collecting.
     #[test]
     fn array_length_is_split_into_a_leaf_lane_and_a_collecting_call() {
         assert_eq!(
@@ -1056,53 +726,104 @@ mod tests {
         assert!(external_callee_cannot_collect("js_array_length_leaf"));
     }
 
+    /// RFC S2 (#11554, `expr/ic_fast_split.rs`): each full-outline IC hit is
+    /// a GC-leaf `_fast` export and its decline continues into a collecting
+    /// call. S2 hand-listed the four hits because this table did not exist
+    /// yet; the graph now proves them `Leaf` on every checked target. Two
+    /// edges S2's census had to cut are modelled here without a hand entry:
+    /// the `Arena as Drop` TLS destructor registered by `tls_hot::fill`'s lazy
+    /// init is a `teardown` cut in `seeds.txt` (it runs at thread exit), and
+    /// `typed_feedback::invalidate_representation_change` takes the registry
+    /// through `NonCollectingRootRegistryGuard`, whose drop has no path to a
+    /// flush. The continuations are the control: a `_fast_miss` classified
+    /// `CannotCollect` SIGSEGVs S2's evacuating slow-path test.
     #[test]
-    fn audited_alloc_helpers_are_contract_only_non_safepoints() {
+    fn ic_fast_split_hits_are_leaf_and_their_continuations_collect() {
         for name in [
-            "js_closure_alloc_singleton",
-            "js_array_push_u31_with_length",
-            "js_ctor_return_override",
-            "js_array_indexOf_jsvalue",
-            "js_validate_array_comparator",
+            "js_object_get_field_ic_fast",
+            "js_class_field_get_ic_fast",
+            "js_class_field_set_ic_fast",
+            "js_put_value_set_packed_fast",
+        ] {
+            assert_eq!(runtime_class(name), RuntimeClass::Leaf, "{name}");
+            assert!(external_callee_cannot_collect(name), "{name}");
+        }
+        for name in [
+            "js_object_get_field_ic_fast_miss",
+            "js_class_field_get_ic_fast_miss",
+            "js_class_field_set_ic_fast_miss",
+            "js_put_value_set_packed_miss",
         ] {
             assert_eq!(
                 classify_direct_callee(name),
-                GcCallEffect::AllocNoReentry,
+                GcCallEffect::Unknown,
                 "{name}"
             );
         }
-        // Transitive re-entry paths found by the body audit must stay out:
-        // Both length helpers can reach js_object_get_field_by_name_f64 for
-        // plain objects; js_array_get_f64 has hole/accessor paths.
+    }
+
+    #[test]
+    fn register_global_root_tracks_the_barrier_it_wraps() {
+        assert_eq!(
+            classify_direct_callee("js_gc_register_global_root"),
+            classify_direct_callee("js_write_barrier_root_heap_word"),
+            "js_gc_register_global_root's entire body is that barrier plus a \
+             TLS Vec::push; they cannot have different GC effects"
+        );
+    }
+
+    /// Helpers that allocate, run JS or throw must never be `CannotCollect`.
+    /// `js_nanbox_string`'s null guard allocates an empty string; the TDZ box
+    /// getters throw a ReferenceError; the sloppy `this` reader boxes
+    /// primitives.
+    #[test]
+    fn allocating_reentering_and_throwing_helpers_are_not_cannot_collect() {
         for name in [
-            // #11522: Proxy traps and `array_object_method` behind both.
-            "js_array_length",
-            "js_array_push_f64",
+            "js_nanbox_string",
+            "js_string_from_bytes",
+            "js_array_alloc",
+            "js_string_compare_value",
+            "js_rel_lt",
+            "js_rel_gt",
+            "js_object_get_field_ic_miss_packed",
+            "js_object_get_field_ic_slow",
+            "js_object_get_field_ic_nonptr",
+            "js_implicit_this_get_sloppy",
+            "js_box_get_bits",
+            "js_box_get_bits_trusted",
+            "js_box_get_bits_named",
+            "js_box_get_bits_trusted_named",
             "js_value_length_f64",
             "js_value_length_property_f64",
             "js_value_length_property_ic_f64",
             "js_array_get_f64",
         ] {
-            assert_eq!(
+            assert_ne!(
                 classify_direct_callee(name),
-                GcCallEffect::Unknown,
-                "{name}"
+                GcCallEffect::CannotCollect,
+                "{name} can allocate, throw or run JS and must not be marked gc-leaf"
             );
         }
-        // Re-entering helpers must never be in the AllocNoReentry class:
-        // a poll can fire inside the callback/getter with this frame
-        // mid-stack, and the caller's roots must be findable.
+    }
+
+    #[test]
+    fn collection_polls_and_reentering_calls_stay_conservative() {
         for name in [
+            "js_gc_collect",
+            "js_gc_loop_safepoint",
             "js_array_map",
             "js_array_sort_with_comparator",
             "js_number_coerce",
             "js_dynamic_string_or_number_add",
             "js_object_get_field_by_name_f64",
+            "js_native_call_value",
+            "js_proxy_get",
+            "user_function",
         ] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,
-                "{name}"
+                "{name} is a poll or can re-enter JS: never a leaf, never AllocNoReentry"
             );
         }
     }

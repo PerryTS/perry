@@ -403,7 +403,7 @@ fn read_static_str(ptr: *const u8, len: usize) -> String {
 /// release of this lock must never run a collection. Every critical section
 /// below touches only Rust-heap state (`HashMap`/`Vec`/`String`) and reads GC
 /// headers; none allocates in the Perry heap or checks a trigger.
-fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> {
+fn registry() -> crate::gc::NonCollectingRootRegistryGuard<'static, TypedFeedbackRegistry> {
     let guard = crate::gc::lock_gc_root_registry_noncollecting(&REGISTRY);
     #[cfg(test)]
     leaf_lock_test_hooks::run_planted_locked_region_hook();
