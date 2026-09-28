@@ -166,17 +166,15 @@ pub(crate) fn normalize_blob_type(raw: &str) -> String {
 /// undefined and other objects -> NaN.
 unsafe fn blob_to_number(value: f64) -> f64 {
     let bits = value.to_bits();
-    // Heap string?
-    if (bits >> 48) == 0x7FFF {
-        let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-        if let Some(s) = string_from_header(p) {
-            let t = s.trim();
-            if t.is_empty() {
-                return 0.0;
-            }
-            return t.parse::<f64>().unwrap_or(f64::NAN);
-        }
-        return f64::NAN;
+    // Heap or inline SSO string (#11519)?
+    if let Some(n) =
+        perry_runtime::string::with_string_value_bytes(value, |b| match std::str::from_utf8(b) {
+            Ok(s) if s.trim().is_empty() => 0.0,
+            Ok(s) => s.trim().parse::<f64>().unwrap_or(f64::NAN),
+            Err(_) => f64::NAN,
+        })
+    {
+        return n;
     }
     // SSO / non-string: materialize via ToString then parse only if it was
     // a string-like value; otherwise use the numeric coercion of the value.

@@ -261,6 +261,11 @@ fn describe_received(value: JsValue) -> String {
         format!("Received type boolean ({})", value.to_bool())
     } else if value.is_int32() || value.is_number() {
         format!("Received type number ({})", fmt_number(value.to_number()))
+    } else if value.is_short_string() {
+        format!(
+            "Received type string ('{}')",
+            value.to_owned_string().unwrap_or_default()
+        )
     } else if value.is_string() {
         format!("Received type string ('{}')", read_js_string(value))
     } else {

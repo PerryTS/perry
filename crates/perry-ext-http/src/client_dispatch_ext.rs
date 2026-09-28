@@ -19,8 +19,6 @@
 
 use std::sync::Once;
 
-use perry_ffi::StringHeader;
-
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -195,7 +193,9 @@ unsafe fn incoming_message_method(handle: i64, name: &str, args: &[f64]) -> Opti
         return None;
     }
     let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
-    let arg_ptr = |n: usize| (args[n].to_bits() & PTR_MASK) as *const StringHeader;
+    // `string_arg_ptr`, not a bare mask: an inline SSO event name or encoding
+    // has no header behind its bits (#11519). The natives copy it out.
+    let arg_ptr = |n: usize| perry_ffi::string_arg_ptr(args[n]);
     Some(match name {
         "pause" | "resume" => self_ref,
         "setEncoding" if !args.is_empty() => {

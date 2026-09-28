@@ -507,6 +507,70 @@ pub(crate) fn unbox_ffi_str_arg(blk: &mut LlBlock, boxed: &str) -> String {
     blk.call(I64, "js_ffi_arg_ptr", &[(DOUBLE, boxed)])
 }
 
+/// `arr[idx]` through `js_array_get_index_or_string` for a receiver typed as
+/// an array. It can still be an inline SSO string at runtime
+/// (`{ items: String(n) }`), whose masked bits are no header at all, so that
+/// case takes the generic indexer instead (#11519).
+pub(crate) fn array_or_sso_index_get(ctx: &mut FnCtx<'_>, arr_box: &str, idx: &str) -> String {
+    split_on_short_string(
+        ctx,
+        arr_box,
+        |ctx| {
+            ctx.block().call(
+                DOUBLE,
+                "js_dyn_index_get",
+                &[(DOUBLE, arr_box), (DOUBLE, idx)],
+            )
+        },
+        |ctx| {
+            let arr_handle = unbox_to_i64(ctx.block(), arr_box);
+            ctx.block().call(
+                DOUBLE,
+                "js_array_get_index_or_string",
+                &[(I64, &arr_handle), (DOUBLE, idx)],
+            )
+        },
+    )
+}
+
+/// Emit `if (value is an inline SSO string) { sso } else { other }` and merge
+/// the two `double` results (#11519). For a slow path whose runtime entry
+/// unboxes `value` as a heap header: SSO values have none.
+fn split_on_short_string(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    sso: impl FnOnce(&mut FnCtx<'_>) -> String,
+    other: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(value);
+    let tag = blk.lshr(I64, &bits, "48");
+    let is_sso = blk.icmp_eq(I64, &tag, "32761"); // SHORT_STRING_TAG >> 48 = 0x7FF9
+    let sso_idx = ctx.new_block("sso.split.sso");
+    let other_idx = ctx.new_block("sso.split.other");
+    let done_idx = ctx.new_block("sso.split.done");
+    let sso_label = ctx.block_label(sso_idx);
+    let other_label = ctx.block_label(other_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&is_sso, &sso_label, &other_label);
+
+    ctx.current_block = sso_idx;
+    let sso_value = sso(ctx);
+    let sso_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    ctx.current_block = other_idx;
+    let other_value = other(ctx);
+    let other_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&sso_value, &sso_end), (&other_value, &other_end)],
+    )
+}
+
 /// Built-in constructor / namespace names that the runtime pre-populates
 /// on the globalThis singleton (`populate_global_this_builtins` in
 /// crates/perry-runtime/src/object.rs). Used by codegen to decide whether

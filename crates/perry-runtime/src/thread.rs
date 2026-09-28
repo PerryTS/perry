@@ -185,6 +185,11 @@ fn is_truthy_bits(bits: u64) -> bool {
         }
         return unsafe { (*ptr).byte_len > 0 };
     }
+    // Inline SSO string (#11519): truthy iff non-empty. Its bits are a NaN
+    // pattern, so the f64 fallthrough below would call every one falsy.
+    if crate::value::JSValue::from_bits(bits).is_short_string() {
+        return crate::value::JSValue::from_bits(bits).short_string_len() > 0;
+    }
     // Pointer (object/array/closure): always truthy
     if (bits & TAG_MASK) == POINTER_TAG || (bits & TAG_MASK) == BIGINT_TAG {
         return true;

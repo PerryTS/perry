@@ -211,13 +211,19 @@ pub(super) fn lower_builtin_new<'a>(
                 None => lower_expr(ctx, &Expr::String(String::new()))?,
             };
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &msg_box);
-            let runtime = if class_name == "EvalError" {
-                "js_evalerror_new"
+            // The message goes over NaN-boxed and the runtime coerces it: a
+            // masked inline SSO message (`new EvalError(String(n))`) was read
+            // as a header address (#11519).
+            let kind = if class_name == "EvalError" {
+                "6" // ERROR_KIND_EVAL_ERROR
             } else {
-                "js_urierror_new"
+                "7" // ERROR_KIND_URI_ERROR
             };
-            let err_handle = blk.call(I64, runtime, &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, kind), (DOUBLE, &msg_box)],
+            );
             Ok(Some(nanbox_pointer_inline(blk, &err_handle)))
         }
         // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
@@ -611,7 +617,10 @@ pub(super) fn lower_builtin_new<'a>(
             // #6986: `enc_box` was held across the discard loop's lowering.
             let enc_box = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
-            let enc_handle = unbox_to_i64(blk, &enc_box);
+            // The raw NaN-box bits, not a mask: the runtime tells undefined, a
+            // heap string and an inline SSO name (`"ut" + "f8"`) apart by tag
+            // (#11519); a masked SSO value was read as a header address.
+            let enc_handle = blk.bitcast_double_to_i64(&enc_box);
             let handle = blk.call(I64, "js_string_decoder_new", &[(I64, &enc_handle)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
