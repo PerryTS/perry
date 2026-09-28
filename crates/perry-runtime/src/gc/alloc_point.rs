@@ -127,6 +127,17 @@ static OWED_REQUESTS_ROUTED: AtomicU64 = AtomicU64::new(0);
 static OWED_REQUESTS_SERVED: AtomicU64 = AtomicU64::new(0);
 static UNSAFE_ZONE_GROWTH_BYTES: AtomicU64 = AtomicU64::new(0);
 static UNSAFE_ZONE_GROWTH_EVENTS: AtomicU64 = AtomicU64::new(0);
+static MAX_POLL_WAIT_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// A deferred collection was drained (at a poll) or given up on (by the
+/// valve) `waited` arena bytes after it was armed. The maximum is the measured
+/// answer to decision 3's question — how far does a program allocate between
+/// arming a collection and reaching a poll — and it is what a straight-line
+/// body that needs statement-boundary polls would show.
+#[inline]
+pub(super) fn note_poll_wait(waited: usize) {
+    MAX_POLL_WAIT_BYTES.fetch_max(waited as u64, Ordering::Relaxed);
+}
 
 /// An allocation point found the active budgeted cycle about to read frame
 /// roots. Arms the poll (via `arm`) the first time for this park and records
@@ -229,6 +240,7 @@ pub struct AllocPointCounters {
     pub owed_requests_served: u64,
     pub unsafe_zone_growth_bytes: u64,
     pub unsafe_zone_growth_events: u64,
+    pub max_poll_wait_bytes: u64,
 }
 
 pub fn alloc_point_counters() -> AllocPointCounters {
@@ -241,6 +253,7 @@ pub fn alloc_point_counters() -> AllocPointCounters {
         owed_requests_served: OWED_REQUESTS_SERVED.load(Ordering::Relaxed),
         unsafe_zone_growth_bytes: UNSAFE_ZONE_GROWTH_BYTES.load(Ordering::Relaxed),
         unsafe_zone_growth_events: UNSAFE_ZONE_GROWTH_EVENTS.load(Ordering::Relaxed),
+        max_poll_wait_bytes: MAX_POLL_WAIT_BYTES.load(Ordering::Relaxed),
     }
 }
 
@@ -255,6 +268,7 @@ pub(crate) fn reset_alloc_point_counters() {
         &OWED_REQUESTS_SERVED,
         &UNSAFE_ZONE_GROWTH_BYTES,
         &UNSAFE_ZONE_GROWTH_EVENTS,
+        &MAX_POLL_WAIT_BYTES,
     ] {
         counter.store(0, Ordering::Relaxed);
     }
@@ -268,7 +282,7 @@ pub(super) fn alloc_point_exit_line() -> String {
         "[gc-alloc-point] valve_fires={} parked_valve_fires={} old_reclaim_alloc_point={} \
          emergency_reclaims={} root_phases_parked={} root_phases_served_at_poll={} \
          owed_requests_routed={} owed_requests_served={} safepoint_drains={} \
-         unsafe_zone_growth_bytes={} unsafe_zone_growth_events={}",
+         unsafe_zone_growth_bytes={} unsafe_zone_growth_events={} max_poll_wait_bytes={}",
         super::scan_fallback::scan_fallback_count_any_thread(
             super::ConservativeScanSite::NurseryChurnSlackValve
         ),
@@ -286,6 +300,7 @@ pub(super) fn alloc_point_exit_line() -> String {
         super::scan_fallback::safepoint_drain_total_any_thread(),
         c.unsafe_zone_growth_bytes,
         c.unsafe_zone_growth_events,
+        c.max_poll_wait_bytes,
     )
 }
 
@@ -318,7 +333,8 @@ pub(super) fn write_valve_ledger_line() {
         .unwrap_or_else(|| "?".to_string());
     let line = format!(
         "v1 exe={exe} pid={} valve_fires={valve} parked_valve_fires={} d2_violations={} \
-         old_reclaim_alloc_point={} root_phases_served_at_poll={} safepoint_drains={}\n",
+         old_reclaim_alloc_point={} root_phases_served_at_poll={} safepoint_drains={} \
+         max_poll_wait_bytes={}\n",
         std::process::id(),
         c.parked_valve_fires,
         c.d2_violations,
@@ -327,6 +343,7 @@ pub(super) fn write_valve_ledger_line() {
         ),
         c.root_phases_served_at_poll,
         super::scan_fallback::safepoint_drain_total_any_thread(),
+        c.max_poll_wait_bytes,
     );
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)

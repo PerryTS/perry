@@ -3333,6 +3333,7 @@ fn gc_check_trigger_evaluate() {
                     }
                     return;
                 }
+                note_pending_poll_wait();
                 // The deferral never drained. The direct minor below IS the
                 // collection that was owed, so retire the request — leaving it
                 // pending would pin `GC_SAFEPOINT_DEFER_ARENA_BASE` at a stale,
@@ -3794,6 +3795,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // S5: a collection a root-lock exit owed runs here, at the declared poll,
     // rather than at the lock exit (`flush_deferred_gc_request`).
     if !(in_alloc || unsafe_zone || root_lock) && serve_owed_request_at_poll() {
+        note_pending_poll_wait();
         set_safepoint_pending(false);
         return true;
     }
@@ -3810,6 +3812,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
         let _declared = DeclaredSafepointGuard::enter();
         serve_budgeted_root_phase();
         super::alloc_point::note_root_phase_served_at_poll();
+        note_pending_poll_wait();
         set_safepoint_pending(false);
         return true;
     }
@@ -3852,6 +3855,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // `set_safepoint_pending`, not a raw `.set(false)`: since #7735 the pending
     // flag is mirrored into the poll arming word, and clearing it behind the
     // mirror would leave the back-edge poll armed forever.
+    note_pending_poll_wait();
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
     let kind = match due {
@@ -4680,6 +4684,15 @@ pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
 /// baseline and disable deferral for the rest of the process, the #7024 shape).
 fn defer_nursery_cap_to_precise_safepoint() {
     arm_precise_safepoint();
+}
+
+/// Record how far the arena grew between arming the pending poll and now
+/// (`alloc_point::note_poll_wait`). A no-op when nothing was pending.
+fn note_pending_poll_wait() {
+    if GC_SAFEPOINT_PENDING.with(Cell::get) {
+        let base = GC_SAFEPOINT_DEFER_ARENA_BASE.with(Cell::get);
+        super::alloc_point::note_poll_wait(crate::arena::arena_total_bytes().saturating_sub(base));
+    }
 }
 
 /// Arm the next declared poll, recording the arena baseline the nursery valve
