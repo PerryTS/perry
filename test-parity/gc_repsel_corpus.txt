@@ -878,3 +878,9 @@ test_gap_gc_store_ic_generic_receivers
 # clone polls and grows through a cached copy of the global, which must be a
 # GC root. SIGSEGV'd on every seed under the seeded schedule before the fix.
 test_gap_gc_11590_packed_loop_global_cache_rooting
+
+# --- #11604: template coercion's S2 phi join ----------------------------------
+# `${x.toString()}` feeds a heap value into `phi [ %v, %entry ], [ %coerced,
+# %tmpl_coerce.slow ]`; puts the shape in the root-dominance curated corpus and
+# runs it under every moving arm.
+test_gap_gc_template_coerce_join
