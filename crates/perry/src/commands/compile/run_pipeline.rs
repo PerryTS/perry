@@ -6383,23 +6383,31 @@ pub fn run_with_parse_cache(
         .clone()
         .or_else(|| find_stdlib_library(target.as_deref()));
 
-    // perry-stdlib's optional features install through the installer this
-    // object registers (see `stdlib_installs.rs`): everything the archive was
-    // compiled with for an auto-optimized archive, only this program's
-    // features for the prebuilt full-feature one. Generated before the stub
-    // scan below so the scan sees its install references resolved by the
-    // stdlib archive.
-    if ctx.needs_stdlib && stdlib_lib_resolved.is_some() {
-        let install_symbols =
-            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs);
+    // Optional runtime features — and perry-stdlib's, when the stdlib is
+    // linked — install through the installers this object registers (see
+    // `stdlib_installs.rs`): everything the archive was compiled with for an
+    // auto-optimized archive, only this program's features for a prebuilt
+    // full-feature one. Generated before the stub scan below so the scan sees
+    // its install references resolved by the runtime/stdlib archives.
+    {
+        let runtime_symbols = crate::commands::stdlib_installs::runtime_installer_callees(
+            &optimized_libs.runtime_installs,
+        );
+        let stdlib_symbols = (ctx.needs_stdlib && stdlib_lib_resolved.is_some()).then(|| {
+            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs)
+        });
         if matches!(format, OutputFormat::Text) && verbose > 0 {
-            eprintln!("  stdlib installs: {}", install_symbols.join(", "));
+            eprintln!("  runtime installs: {}", runtime_symbols.join(", "));
+            if let Some(stdlib) = &stdlib_symbols {
+                eprintln!("  stdlib installs: {}", stdlib.join(", "));
+            }
         }
-        let installer_bytes = perry_codegen::stubs::generate_stdlib_installer_object(
-            &install_symbols,
+        let installer_bytes = perry_codegen::stubs::generate_feature_installer_object(
+            &runtime_symbols,
+            stdlib_symbols.as_deref(),
             target.as_deref(),
         )?;
-        let installer_path = object_output_dir.join("_perry_stdlib_installs.o");
+        let installer_path = object_output_dir.join("_perry_feature_installs.o");
         fs::write(&installer_path, &installer_bytes)?;
         obj_cleanup_paths.push(installer_path.clone());
         obj_paths.push(installer_path);

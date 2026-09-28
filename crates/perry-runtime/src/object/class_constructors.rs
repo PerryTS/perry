@@ -743,7 +743,6 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // and stash the returned cell as the subclass instance's brand — the
     // `super(...spread)` counterpart of the `js_fetch_or_value_super` branch
     // that handles non-spread `super(a, b)`. (#5587)
-    #[cfg(feature = "temporal")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
         if crate::object::global_this::temporal_ctor_kind(parent_val).is_some() {
@@ -757,7 +756,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
             for i in 0..n {
                 flat.push(crate::array::js_array_get_f64(arr, i as u32));
             }
-            crate::object::global_this::temporal_subclass_super(
+            crate::temporal::hooked::subclass_super(
                 parent_val,
                 this_box,
                 flat.as_ptr(),
@@ -773,10 +772,9 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // reason as the instanceof probe: with the feature off no Intl
     // constructor value exists, so the branch is unreachable, and skipping it
     // keeps this always-live path from pinning the Intl constructor web.
-    #[cfg(feature = "intl-namespace")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
-        if crate::intl::is_intl_constructor_value(parent_val) {
+        if crate::intl::hooked::is_intl_constructor_value(parent_val) {
             let this_box = crate::value::js_nanbox_pointer(this_raw);
             let n = if arr.is_null() {
                 0
@@ -787,7 +785,12 @@ pub unsafe extern "C" fn js_super_construct_apply(
             for i in 0..n {
                 flat.push(crate::array::js_array_get_f64(arr, i as u32));
             }
-            crate::intl::intl_subclass_super(parent_val, this_box, flat.as_ptr(), flat.len());
+            crate::intl::hooked::intl_subclass_super(
+                parent_val,
+                this_box,
+                flat.as_ptr(),
+                flat.len(),
+            );
         }
     }
     undef

@@ -153,10 +153,9 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
     {
         return None;
     }
-    #[cfg(feature = "url-engine")]
-    {
-        match idna::domain_to_ascii(raw) {
-            Ok(ascii) if !ascii.is_empty() => {
+    if let Some(ascii) = super::idna_domain_to_ascii(raw) {
+        return match ascii {
+            Some(ascii) if !ascii.is_empty() => {
                 // #3056: apply the WHATWG numeric/IPv4-shorthand host parser as a
                 // post-step. `idna::domain_to_ascii` only runs IDNA, so a numeric
                 // host like `123` survives as `"123"` instead of canonicalizing to
@@ -169,11 +168,10 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
                 super::whatwg_canonicalize_host(&ascii)
             }
             _ => None,
-        }
+        };
     }
-    // URL engine gated off: no IDNA. Fall back to the hand-rolled host
-    // canonicalizer (which, also gated off, passes the host through unchanged).
-    #[cfg(not(feature = "url-engine"))]
+    // URL engine not installed: no IDNA. Fall back to the hand-rolled host
+    // canonicalizer (which, also without the engine, passes the host through).
     super::whatwg_canonicalize_host(raw)
 }
 

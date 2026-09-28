@@ -523,21 +523,15 @@ unsafe fn date_inspect_string(value: f64) -> String {
 /// not a Temporal cell, so the caller's `else if let Some(..)` chain falls
 /// through. Cfg-paired: with the Temporal engine gated off no cell can exist, so
 /// the off twin is a constant `None` (and doesn't reference the gated module).
-#[cfg(feature = "temporal")]
 fn temporal_inspect_arm(addr: usize, value: f64) -> Option<String> {
     if crate::temporal::is_temporal_cell_addr(addr) {
         Some(
-            crate::temporal::temporal_inspect_string(value)
+            crate::temporal::hooked::inspect_string(value)
                 .unwrap_or_else(|| "[object Object]".to_string()),
         )
     } else {
         None
     }
-}
-
-#[cfg(not(feature = "temporal"))]
-fn temporal_inspect_arm(_addr: usize, _value: f64) -> Option<String> {
-    None
 }
 
 /// Print multiple values from an array (console.log with spread support)

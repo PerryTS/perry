@@ -2681,12 +2681,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // prototype walk) has missed by here, so a subclass override still wins;
     // only genuinely inherited Temporal methods reach this forward. Route them
     // to the stashed cell (`temporal_subclass_cell`). (#5587)
-    #[cfg(feature = "temporal")]
     if jsval().is_pointer() {
         let raw = crate::value::js_nanbox_get_pointer(object()) as usize;
-        if let Some(cell) = crate::object::temporal_subclass_cell(raw) {
+        if let Some(cell) = crate::temporal::hooked::subclass_cell(raw) {
             let args = refreshed_args();
-            return crate::temporal::dispatch::call_method(cell, method_name, &args);
+            return crate::temporal::hooked::call_method(cell, method_name, &args);
         }
     }
 

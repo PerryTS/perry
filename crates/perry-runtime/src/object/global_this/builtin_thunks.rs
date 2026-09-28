@@ -520,19 +520,19 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
     // feature-probing libraries (zod's JIT probe, #6031) still get an honest
     // signal: the probe now SUCCEEDS and their generated code runs
     // interpreted.
-    #[cfg(feature = "dyn-eval")]
-    {
-        return crate::dyn_eval::dyn_function_from_strings(&args_vec);
+    // The interpreter is reached through the slot the `dyn-eval` install
+    // fills (see `crate::dyn_eval_hooks`), so this always-live constructor does
+    // not keep it in programs that never build a function from source.
+    if let Some(function) = crate::dyn_eval_hooks::function_from_strings(&args_vec) {
+        return function;
     }
-    // Without the `dyn-eval` feature (size-optimized builds that carry no
-    // dynamic-eval site), keep the historical clean throw: it lets
-    // feature-detecting libraries take their non-`Function` fallback. The
-    // eprintln names the offending library for diagnostics.
-    #[cfg(not(feature = "dyn-eval"))]
-    {
-        let body = args_vec.last().map(String::as_str).unwrap_or("");
-        refuse_dynamic_function(args_len, body)
-    }
+    // Without the evaluator (a size-optimized build with no dynamic-eval site,
+    // or a prebuilt runtime whose program did not install it), keep the
+    // historical clean throw: it lets feature-detecting libraries take their
+    // non-`Function` fallback. The eprintln names the offending library for
+    // diagnostics.
+    let body = args_vec.last().map(String::as_str).unwrap_or("");
+    refuse_dynamic_function(args_len, body)
 }
 
 /// #10423: the `Function` constructor called WITHOUT `new` through a value —
@@ -566,7 +566,6 @@ fn function_call_thunk_impl(rest: f64) -> f64 {
     js_function_ctor_from_strings_impl(values.as_ptr(), values.len())
 }
 
-#[cfg(any(not(feature = "dyn-eval"), test))]
 fn refuse_dynamic_function(args_len: usize, body: &str) -> ! {
     let preview: String = body.chars().take(160).collect();
     eprintln!(

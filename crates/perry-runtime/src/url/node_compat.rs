@@ -609,11 +609,9 @@ pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
         // CANONICALIZED host, not the raw input: `/`, `?`, `#` and `\` terminate
         // the host, so `domainToUnicode("a/b")` is `"a"`. Feeding the raw input to
         // `domain_to_unicode` skipped that truncation and echoed `"a/b"` back.
-        #[cfg(feature = "url-engine")]
-        Some(canon) => idna::domain_to_unicode(&canon).0,
-        // URL engine gated off: no IDNA, so return the canonical host unchanged.
-        #[cfg(not(feature = "url-engine"))]
-        Some(canon) => canon,
+        // Without the URL engine there is no IDNA: return the canonical host
+        // unchanged, as a build without `url-engine` does.
+        Some(canon) => super::idna_domain_to_unicode(&canon).unwrap_or(canon),
     };
     create_string_f64(&out)
 }

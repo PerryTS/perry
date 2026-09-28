@@ -42,6 +42,13 @@ mod bigint_promise;
 mod builtin_thunks;
 mod ctor_thunks;
 mod fetch_globals;
+
+/// `dyn-eval` install: every hub slot the script evaluator fills in this
+/// module (see `crate::feature_hooks`).
+#[cfg(feature = "dyn-eval")]
+pub(crate) fn install_dyn_eval() {
+    fetch_globals::install_global_eval();
+}
 mod generator;
 mod install_static;
 mod math_temporal;
@@ -171,6 +178,8 @@ pub(crate) use install_static::{
 };
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::install_temporal_namespace;
+#[cfg(feature = "temporal")]
+pub(crate) use math_temporal::temporal_ctor_kind_impl;
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::temporal_kind_prototype;
 pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};

@@ -1577,8 +1577,7 @@ fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Optio
         let promise = crate::promise::js_promise_resolved(ns_handle.get_nanbox_f64());
         return js_nanbox_pointer(promise as i64);
     }
-    #[cfg(feature = "dyn-eval")]
-    if let Some(namespace) = dynamic_import_javascript_data_url(&spec_str) {
+    if let Some(namespace) = crate::dyn_eval_hooks::dynamic_import_data_url(&spec_str) {
         let promise = crate::promise::js_promise_resolved(namespace);
         return js_nanbox_pointer(promise as i64);
     }
@@ -1617,7 +1616,7 @@ fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Optio
 }
 
 #[cfg(feature = "dyn-eval")]
-fn dynamic_import_javascript_data_url(specifier: &str) -> Option<f64> {
+pub(crate) fn dynamic_import_javascript_data_url(specifier: &str) -> Option<f64> {
     let encoded = specifier.strip_prefix("data:text/javascript,")?;
     let mut decoded = Vec::with_capacity(encoded.len());
     let bytes = encoded.as_bytes();

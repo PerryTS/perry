@@ -419,14 +419,14 @@ pub(super) unsafe fn dispatch_raw_pointer(
                     method_name,
                 ));
             }
-            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
             {
-                return Some(crate::regex::dispatch_regexp_string_iterator_method(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                ));
+                if let Some(value) =
+                    crate::regex::hooked_iterator_method(obj as *mut ObjectHeader, method_name)
+                {
+                    return Some(value);
+                }
             }
             // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
             if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {

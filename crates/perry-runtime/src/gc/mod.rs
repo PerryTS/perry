@@ -1230,8 +1230,9 @@ pub fn gc_init() {
     // temporaries, arguments of in-flight interpreted frames). Mark +
     // REWRITE — interpreter state must survive moving collections triggered
     // from inside interpreted code.
-    #[cfg(feature = "dyn-eval")]
-    reg_scanner!(crate::dyn_eval::scan_dyn_eval_roots_mut);
+    // Registered unconditionally; it scans once the `dyn-eval` install has
+    // connected the interpreter (see `crate::dyn_eval_hooks`).
+    reg_scanner!(crate::dyn_eval_hooks::scan_dyn_eval_roots_mut);
     reg_scanner!(crate::tls::scan_tls_roots_mut);
     reg_scanner!(crate::process::scan_process_finalization_roots_mut);
     reg_scanner!(crate::process::scan_process_module_loader_roots_mut);
@@ -1397,6 +1398,9 @@ pub extern "C" fn js_gc_init() {
         crate::object::disable_class_field_inline_guard();
     }
     gc_init();
+    // Optional runtime features install from the program's generated
+    // installer (see `crate::feature_hooks`), before any user code runs.
+    crate::feature_hooks::run_feature_installer();
 }
 
 /// Release external Map/Set/JSON-tape storage owned by the current thread.

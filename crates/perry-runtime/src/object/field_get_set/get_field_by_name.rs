@@ -1222,7 +1222,6 @@ fn get_field_by_name_past_data_probe(
     // bare value is rare; the `value.method()` call form is handled in
     // `js_native_call_method`). `obj` may be NaN-boxed (top16 0x7FFD) or a
     // raw-I64 pointer (top16 0).
-    #[cfg(feature = "temporal")]
     {
         let bits = obj as u64;
         let top16 = bits >> 48;
@@ -1253,7 +1252,7 @@ fn get_field_by_name_past_data_probe(
                     ) {
                         return JSValue::from_bits(v.to_bits());
                     }
-                    if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
+                    if let Some(v) = crate::temporal::hooked::get_property(boxed, &name) {
                         return JSValue::from_bits(v.to_bits());
                     }
                     // A prototype METHOD read as a value (`d.abs`, not `d.abs()`):
@@ -1262,7 +1261,7 @@ fn get_field_by_name_past_data_probe(
                     // spread/dynamic call `d[m](...args)` to a property read + apply,
                     // so the read must yield a callable. Only bind genuine method
                     // names so an unknown property still reads as `undefined`. (#5587)
-                    if crate::temporal::dispatch::has_method(boxed, &name) {
+                    if crate::temporal::hooked::has_method(boxed, &name) {
                         let heap_name = {
                             let layout =
                                 std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)

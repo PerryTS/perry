@@ -414,11 +414,22 @@ pub fn zone_offset_seconds(tz: &str, secs: i64) -> i64 {
         // the correct (DST-aware) offset for `secs`.
         return timestamp_to_local_components(secs).6;
     }
-    #[cfg(feature = "intl-datetime")]
-    if let Some(offset) = compiled_zone_offset_seconds(tz, secs) {
+    // The compiled IANA database is reached through the `intl-datetime`
+    // install (see `crate::feature_hooks`); without it non-host named zones
+    // keep the UTC fallback, as a build without the feature does.
+    if let Some(offset) = COMPILED_ZONE_OFFSET.get().and_then(|f| f(tz, secs)) {
         return offset;
     }
     0
+}
+
+static COMPILED_ZONE_OFFSET: crate::feature_hooks::Hook<fn(&str, i64) -> Option<i64>> =
+    crate::feature_hooks::Hook::empty();
+
+/// The `intl-datetime` install's Date half.
+#[cfg(feature = "intl-datetime")]
+pub(crate) fn install_compiled_tzdb() {
+    COMPILED_ZONE_OFFSET.set(compiled_zone_offset_seconds);
 }
 
 /// Get current timestamp in milliseconds (Date.now())
@@ -1259,9 +1270,8 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
     // hard `TypeError` (the spec bans implicit numeric coercion / ordering), so
     // route a Temporal receiver to its brand dispatch, which throws — rather
     // than returning the opaque cell as a pseudo-Date timestamp.
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(timestamp) {
-        return crate::temporal::dispatch::call_method(timestamp, "valueOf", &[]);
+        return crate::temporal::hooked::call_method(timestamp, "valueOf", &[]);
     }
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
         return payload;
