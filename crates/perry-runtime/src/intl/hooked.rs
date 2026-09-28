@@ -11,6 +11,7 @@
 //! formatting falls back to the plain ECMA-262 rendering.
 
 use crate::feature_hooks::Hook;
+use crate::object::ObjectHeader;
 use crate::string::StringHeader;
 
 static INSTANCEOF: Hook<fn(f64, f64) -> Option<bool>> = Hook::empty();
@@ -18,6 +19,25 @@ static IS_CONSTRUCTOR_VALUE: Hook<fn(f64) -> bool> = Hook::empty();
 static SUBCLASS_SUPER: Hook<unsafe fn(f64, f64, *const f64, usize) -> bool> = Hook::empty();
 static NUMBER_TO_LOCALE_STRING: Hook<fn(f64, f64, f64) -> *mut StringHeader> = Hook::empty();
 static BIGINT_TO_LOCALE_STRING: Hook<fn(f64, f64, f64) -> *mut StringHeader> = Hook::empty();
+static INTL_NAMESPACE_MEMBERS: Hook<fn(*mut ObjectHeader)> = Hook::empty();
+
+/// Install the `Intl.*` namespace members. Behind `intl-namespace` (default-on;
+/// the compiler enables it whenever the program mentions `Intl` or any
+/// locale-formatting API): when the feature is off this is a no-op, the
+/// `Intl` global is still a real (empty) namespace object, and `-dead_strip`
+/// reclaims the constructor/option/format machinery that nothing else
+/// reaches. `toLocale*` / `localeCompare` are unaffected — their entry points
+/// and helpers live outside this gate.
+///
+/// `globalThis` population is live in every program, so it reaches the members
+/// only through a slot the `intl-namespace` install fills (see
+/// `crate::feature_hooks`); an empty slot leaves the namespace empty, exactly
+/// as a build without the feature does.
+pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
+    if let Some(install) = INTL_NAMESPACE_MEMBERS.get() {
+        install(ns_obj);
+    }
+}
 
 pub(crate) fn intl_instanceof(value: f64, type_ref: f64) -> Option<bool> {
     INSTANCEOF.get().and_then(|f| f(value, type_ref))
@@ -62,9 +82,10 @@ pub(crate) fn bigint_to_locale_string(
         .map(|f| f(value, locales, options))
 }
 
-/// The hub half of the `intl-namespace` install.
+/// The `intl-namespace` install.
 #[cfg(feature = "intl-namespace")]
-pub(crate) fn install() {
+pub(crate) fn install_intl_namespace_feature() {
+    INTL_NAMESPACE_MEMBERS.set(super::install_intl_namespace_members);
     INSTANCEOF.set(super::intl_instanceof);
     IS_CONSTRUCTOR_VALUE.set(super::is_intl_constructor_value);
     SUBCLASS_SUPER.set(super::intl_subclass_super);

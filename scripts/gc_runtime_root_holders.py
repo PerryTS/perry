@@ -326,6 +326,9 @@ ALLOCATOR_TOKENS = (
 # C-ABI registration the ext crates use, and a `[^()]*` argument body
 # silently missed it — every holder that trampoline covers then read as
 # uncovered.
+# `SLOT.get()` on a `Hook` static inside a registered scanner — see the
+# feature-slot step in `_scan` for why its `SLOT.set(path)` targets seed.
+HOOK_GET = re.compile(r"\b([A-Z][A-Z0-9_]*)\s*\.get\(\)")
 REGISTER_CALL = re.compile(
     r"(?:gc_register_\w*root_scanner\w*|reg_scanner!|reg_budgeted_scanner!)"
     r"\s*\((?P<args>(?:[^;()]|\([^()]*\))*)\)",
@@ -925,21 +928,53 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
     # qualification; one that resolves to several must match the path.
     seeds: set[str] = set()
     seed_files: dict[str, set[Path]] = {}
-    for name, segments in registered_paths:
+
+    def add_seed(name: str, segments: list[str]) -> bool:
         definitions = bodies.get(name)
         if not definitions:
             # Not a function in these crates — a type name (`as
             # MutableRootScanner`) or a path segment. Seeding it would make half
             # the crate reachable.
-            continue
+            return False
         if len(definitions) == 1:
             matched = definitions
         else:
             matched = [(p, b) for (p, b) in definitions if path_matches(p, segments)]
             if not matched:
                 matched = definitions  # unresolvable: fall back, over-approximate
+        files = seed_files.setdefault(name, set())
+        before = (name in seeds, len(files))
         seeds.add(name)
-        seed_files.setdefault(name, set()).update(p for p, _ in matched)
+        files.update(p for p, _ in matched)
+        return before != (True, len(files))
+
+    for name, segments in registered_paths:
+        add_seed(name, segments)
+
+    # A registered scanner may forward through a link-time feature slot
+    # (`perry_runtime::feature_hooks::Hook`): its body reads `SLOT.get()` and
+    # calls the fn pointer, so the call graph ends there. The functions that
+    # can be in the slot are exactly the bare paths the SAME file stores with
+    # `SLOT.set(path)` (a Hook static is private to its file), so each of
+    # those is registered as far as coverage goes. Resolving it here keeps the
+    # coverage computed: delete the real scanner or its `set` and the holders
+    # it reaches read as uncovered again.
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(seeds):
+            for path in sorted(seed_files.get(name, ())):
+                file_text = strip_comments(texts[path])
+                for defining, body in bodies.get(name, []):
+                    if defining != path:
+                        continue
+                    for slot in HOOK_GET.findall(body):
+                        for target in re.findall(
+                            rf"\b{slot}\s*\.set\(\s*((?:\w+::)*[A-Za-z_]\w*)\s*\)",
+                            file_text,
+                        ):
+                            segments = target.split("::")
+                            changed |= add_seed(segments[-1], segments[:-1])
 
     def reachable_text(call_pattern: re.Pattern) -> dict[Path, str]:
         reachable: set[str] = set()
@@ -1348,10 +1383,35 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::thing::scan_thing_roots_mut);
     gc_register_mutable_root_scanner(crate::other::scan_other_roots_mut);
     gc_register_mutable_root_scanner(crate::dup_a::scan_dup_roots_mut);
+    gc_register_mutable_root_scanner(crate::fwd::scan_fwd_roots_mut);
 """ + "\n".join(
         f"    gc_register_mutable_root_scanner(crate::pad::scan_pad_{i}_mut);"
         for i in range(MIN_REGISTERED)
     ) + """
+}
+""",
+    # A registered forwarder that reaches its scanner only through a
+    # link-time feature slot. The slot's `set` target is covered; a scanner
+    # stored into a slot no registered function reads is not.
+    "crates/perry-runtime/src/fwd.rs": """
+static SCAN: Hook<fn(&mut V)> = Hook::empty();
+static UNREAD: Hook<fn(&mut V)> = Hook::empty();
+pub fn scan_fwd_roots_mut(v: &mut V) {
+    if let Some(scan) = SCAN.get() { scan(v); }
+}
+pub fn install() {
+    SCAN.set(crate::behind_slot::scan_behind_slot_mut);
+    UNREAD.set(crate::behind_slot::scan_unread_slot_mut);
+}
+""",
+    "crates/perry-runtime/src/behind_slot.rs": """
+static COVERED_VIA_HOOK: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
+static UNCOVERED_UNREAD_HOOK: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
+pub fn scan_behind_slot_mut(v: &mut V) {
+    for p in COVERED_VIA_HOOK.borrow_mut().iter_mut() { v.visit(p); }
+}
+pub fn scan_unread_slot_mut(v: &mut V) {
+    for p in UNCOVERED_UNREAD_HOOK.borrow_mut().iter_mut() { v.visit(p); }
 }
 """,
     "crates/perry-runtime/src/thing.rs": """
@@ -1585,6 +1645,18 @@ def self_test() -> int:
         "COVERED_OPAQUE_TLS",
         True,
         "crate::perry_thread_local! declaration with a type opaque to rules A/B",
+    )
+    expect(
+        "crates/perry-runtime/src/behind_slot.rs",
+        "COVERED_VIA_HOOK",
+        True,
+        "reached through a Hook slot the registered forwarder reads",
+    )
+    expect(
+        "crates/perry-runtime/src/behind_slot.rs",
+        "UNCOVERED_UNREAD_HOOK",
+        False,
+        "stored into a Hook slot no registered scanner reads",
     )
     expect(
         "crates/perry-runtime/src/leak.rs",
