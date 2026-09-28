@@ -99,6 +99,21 @@ const CLASSLESS_ADMIT_I16: &str = "512";
 
 /// `PERRY_REGIONS=0` switches loop regions off in ONE compiler (A/B arm);
 /// `PERRY_REGION_READS=0` (slices 1/2) switches them off too.
+/// `PERRY_REGION_SPILL=0` (compile time): no spill-reading copies. The
+/// runtime is then told every key is stored, which is exactly the condition
+/// under which it never publishes a spill word, so no copy is needed.
+fn effective_stored_mask(stored: u32, keys: usize) -> u32 {
+    let off = matches!(
+        std::env::var("PERRY_REGION_SPILL").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    if off {
+        (1u32 << keys) - 1
+    } else {
+        stored
+    }
+}
+
 fn disabled() -> bool {
     matches!(
         std::env::var("PERRY_REGIONS").as_deref(),
@@ -286,7 +301,7 @@ pub(crate) fn begin(
                 recv: *r,
                 keys: k.clone(),
                 has_store: *st,
-                stored_mask: *sm,
+                stored_mask: effective_stored_mask(*sm, k.len()),
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
@@ -364,7 +379,7 @@ pub(crate) fn begin(
                 recv: *r,
                 keys: k.clone(),
                 has_store: *st,
-                stored_mask: *sm,
+                stored_mask: effective_stored_mask(*sm, k.len()),
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
