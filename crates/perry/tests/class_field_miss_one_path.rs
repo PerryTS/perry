@@ -75,6 +75,44 @@ fn run_census(source: &str) -> (String, impl Fn(&str) -> u64) {
     )
 }
 
+/// Sabotage: restore `mark_object_dynamic_shape_unknown` ahead of the
+/// in-bounds overwrite in `try_existing_own_data_overwrite` -> every call's
+/// `this.a` misses the pre-check on every call (misses ~= 3000).
+#[test]
+fn a_by_name_overwrite_keeps_the_layout_a_method_body_reads() {
+    let (stdout, count) = run_census(
+        r#"// The receiver reaches the loop as a PARAMETER, so `o.d = k` is the generic
+// store, whose first execution is the runtime's by-name overwrite; `o.m()`
+// runs the literal's method, whose `this.a` is a class-field read.
+const N = process.argv.length > 99 ? 1 : 3000;
+// Arms the census: runtime-counted routes count only after the first emitted
+// route note, so a read nothing can fold runs first.
+const probes: any[] = [{ x: 5 }, { y: 0, x: 5 }];
+const px = probes[process.argv.length & 1].x;
+function run(n: number, o: any): number {
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        o.d = k;
+        h += o.m();
+    }
+    return h + o.d;
+}
+console.log(px, run(N, { a: 1, b: 2, c: 4, e: 8, d: 16, m() { return this.a; } }));
+"#,
+    );
+    assert_eq!(stdout, "5 5999");
+    let misses = count("rt_class_miss_shape") + count("rt_class_miss_ladder");
+    assert!(
+        misses < 16,
+        "`this.a` left the inline pre-check {misses} times in 3000 calls: the \
+         overwrite dropped the object's typed layout"
+    );
+    assert!(
+        count("rt_overwrite_kept_typed") >= 1,
+        "the by-name overwrite of a typed object never ran: the test lost its premise"
+    );
+}
+
 /// Sabotage: route `js_class_field_get_ic`'s feedback-off arm back to
 /// `class_field_get_after_guard_fail` (the by-name walk) -> the shape answers
 /// nothing (`rt_class_miss_shape` == 0).

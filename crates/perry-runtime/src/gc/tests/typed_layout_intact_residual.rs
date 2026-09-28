@@ -463,3 +463,54 @@ fn the_bake_healed_itself_only_because_the_descriptor_probe_reads_the_same_bit()
         );
     }
 }
+
+/// A by-name overwrite of a key the shape already places in a live inline slot
+/// keeps the object's typed layout: the per-slot note decides what the VALUE
+/// changes, and a number into a raw-f64 slot changes nothing. It used to
+/// declare the whole layout unknown first, which dropped the intact bit on the
+/// first `o.d = k` a generic store site sent through the runtime, and every
+/// class-field read guard on the object (a method body's `this.a`) missed from
+/// then on. The control stores a string into a raw-f64 slot through the same
+/// entry: that contradiction must still retire the licence.
+///
+/// Sabotage: put `mark_object_dynamic_shape_unknown(obj)` back ahead of the
+/// in-bounds store in `try_existing_own_data_overwrite` -> the first assertion
+/// after the number store fails.
+#[test]
+fn a_by_name_number_overwrite_keeps_the_typed_layout_a_contradiction_drops_it() {
+    unsafe {
+        let obj = plant_descriptor_backed_instance(0x1160_0001, b"s\0x\0y\0");
+        crate::object::mark_object_plain_ordinary(obj);
+        assert!(
+            inline_guard_raw_f64_arm_taken(reserved_of(obj)),
+            "premise: the declared descriptor licenses the raw-f64 arm"
+        );
+        let x = crate::string::intern_ascii_literal(b"x");
+        assert!(
+            crate::object::try_existing_own_data_overwrite(obj, x, 2.5),
+            "premise: the overwrite fast path must serve the store"
+        );
+        assert_eq!(slot_bits(obj, 1), 2.5f64.to_bits(), "the number is stored");
+        let reserved = reserved_of(obj);
+        assert!(
+            inline_guard_raw_f64_arm_taken(reserved),
+            "a number overwrite of a raw-f64 slot must keep the typed layout \
+             — `_reserved` = {reserved:#06x}"
+        );
+        assert!(
+            layout_descriptor_reachable(obj as usize),
+            "and its descriptor"
+        );
+
+        let y = crate::string::intern_ascii_literal(b"y");
+        let text = f64::from_bits(string_bits(young_leaf()));
+        assert!(
+            crate::object::try_existing_own_data_overwrite(obj, y, text),
+            "premise: the overwrite fast path must serve the control store"
+        );
+        assert!(
+            !inline_guard_raw_f64_arm_taken(reserved_of(obj)),
+            "control: a string in a raw-f64 slot must retire the licence"
+        );
+    }
+}
