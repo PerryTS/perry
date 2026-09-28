@@ -774,7 +774,9 @@ pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
     }
 }
 
-/// Define/overwrite class `class_id`'s own static data property `name`.
+/// Define/overwrite class `class_id`'s own static data property `name`: the
+/// value only, the key keeps its attributes. Callers performing a [[Set]]
+/// have checked `writable` (the attributes live with the key).
 pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: as above; the bag writers run under a GcSuppressScope.
@@ -782,7 +784,7 @@ pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
         if is_internal_static_key(name) {
             crate::closure::props::state_internal_set(ptr, name, value);
         } else {
-            crate::closure::props::bag_set(ptr, name, value);
+            crate::closure::props::bag_define_value(ptr, name, value);
         }
     }
 }
@@ -799,6 +801,48 @@ pub(crate) fn class_static_remove(class_id: u32, name: &str) -> bool {
             crate::closure::props::bag_remove(ptr, name)
         }
     }
+}
+
+/// `Object.freeze` / `Object.seal` of class `class_id`'s function object:
+/// every own string-keyed property becomes non-configurable, and with
+/// `drop_writable` every data property non-writable. The attributes are
+/// those of the own-property object's keys.
+pub(crate) fn class_static_restrict_all(class_id: u32, drop_writable: bool) {
+    for (name, _) in class_static_entries(class_id) {
+        if let Some((writable, enumerable, _)) =
+            super::class_registry::class_static_defined_attrs(class_id, &name)
+        {
+            super::class_registry::class_static_set_defined_attrs(
+                class_id,
+                &name,
+                writable && !drop_writable,
+                enumerable,
+                false,
+            );
+        }
+    }
+    for name in class_static_accessor_names(class_id) {
+        if let Some((_, enumerable, _)) = class_static_own_accessor(class_id, &name) {
+            class_static_set_accessor_attrs(class_id, &name, enumerable, false);
+        }
+    }
+}
+
+/// TestIntegrityLevel over class `class_id`'s own string-keyed properties
+/// (the object is already known non-extensible): none configurable, and
+/// when `frozen` no data property writable.
+pub(crate) fn class_static_integrity(class_id: u32, frozen: bool) -> bool {
+    for (name, _) in class_static_entries(class_id) {
+        let (writable, _, configurable) =
+            super::class_registry::class_static_defined_attrs(class_id, &name)
+                .unwrap_or((true, true, true));
+        if configurable || (frozen && writable) {
+            return false;
+        }
+    }
+    class_static_accessor_names(class_id).iter().all(|name| {
+        class_static_own_accessor(class_id, name).is_none_or(|(_, _, configurable)| !configurable)
+    })
 }
 
 /// Class `class_id`'s own static data properties in own-key order (integer

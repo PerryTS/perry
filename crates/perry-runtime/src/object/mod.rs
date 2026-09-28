@@ -741,17 +741,6 @@ pub(crate) struct ShapeCacheEntry {
     keys_array: *mut ArrayHeader,
 }
 
-crate::perry_thread_local! {
-    /// #7190: `(writable, enumerable)` for static own keys installed by
-    /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
-    /// next to `static x = …` fields, which are writable AND enumerable by
-    /// CreateDataPropertyOrThrow — a data descriptor defaults to neither. An
-    /// ABSENT entry therefore means "declared static field", and keeps the
-    /// previous `(true, true)` reporting untouched.
-    pub(crate) static CLASS_STATIC_DEFINED_ATTRS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, (bool, bool, bool)>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
 // Storage: `ObjectHotTables::{shape_inline_cache, shape_cache_overflow}`.
 
 /// Look up a static shape's keys by shape_id. `ObjectKeys::NONE` on miss.

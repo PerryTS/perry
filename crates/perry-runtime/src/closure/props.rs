@@ -122,6 +122,21 @@ pub(crate) unsafe fn bag_set(ptr: usize, key: &str, value: f64) {
     object_own_set(bag, key, value);
 }
 
+/// [[DefineOwnProperty]] of own data property `key` with just a value: the
+/// value is stored and the key keeps (or, when new, gets default) attributes.
+/// Unlike [`bag_set`] it ignores the key's `writable` attribute; a caller
+/// that is performing a [[Set]] has checked it (a class function object's
+/// statics, whose attributes live with these keys).
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let bag = bag_ensure(ptr);
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::object_ops::define_property_force_store_value(bag, key, value);
+}
+
 /// Remove the function's own data property `key`; true when it existed.
 ///
 /// # Safety

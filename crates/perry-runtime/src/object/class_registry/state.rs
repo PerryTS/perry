@@ -202,10 +202,11 @@ pub(crate) fn class_own_dynamic_prop_names(class_id: u32) -> Vec<String> {
         .collect()
 }
 
-/// #7190: record a `defineProperty`-installed static key's attributes. Called
-/// only from the define path; `static x = …` never touches it, so a declared
-/// field keeps its CreateDataPropertyOrThrow `(writable, enumerable) = (true,
-/// true)` reporting.
+/// #7190: set the attributes of class `class_id`'s own static data property
+/// `name`. They are the key attributes of the class function object's
+/// own-property object, as for any ordinary object: a declared `static x = …`
+/// field never sets any, so it keeps CreateDataPropertyOrThrow's
+/// `(true, true, true)`, and a delete removes them with the key.
 pub(crate) fn class_static_set_defined_attrs(
     class_id: u32,
     name: &str,
@@ -213,37 +214,56 @@ pub(crate) fn class_static_set_defined_attrs(
     enumerable: bool,
     configurable: bool,
 ) {
-    crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
-        m.borrow_mut()
-            .entry(class_id)
-            .or_default()
-            .insert(name.to_string(), (writable, enumerable, configurable));
-    });
+    {
+        let _no_collect = crate::gc::GcSuppressScope::new();
+        let ptr = crate::object::class_value::class_value_ptr(class_id) as usize;
+        // SAFETY: this agent's live class function object; no collection in
+        // this scope.
+        let bag = unsafe { crate::closure::props::bag_ensure(ptr) };
+        crate::object::set_builtin_property_attrs(
+            bag as usize,
+            name.to_string(),
+            crate::object::PropertyAttrs::new(writable, enumerable, configurable),
+        );
+    }
     class_static_alias_sync(class_id, name);
 }
 
-/// Forget the recorded attributes of static `name` (it becomes an ordinary
-/// writable, enumerable, configurable data property again) and re-sync its
-/// compiled alias. A static FIELD definition does this: DefineField creates
-/// the property with CreateDataPropertyOrThrow, replacing e.g. the class's
-/// own intrinsic `name`.
+/// Static `name` becomes an ordinary writable, enumerable, configurable data
+/// property again, and its compiled alias is re-synced. A static FIELD
+/// definition does this: DefineField creates the property with
+/// CreateDataPropertyOrThrow, replacing e.g. the class's own intrinsic `name`.
 pub(crate) fn class_static_clear_defined_attrs(class_id: u32, name: &str) {
-    let removed = crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
-        m.borrow_mut()
-            .get_mut(&class_id)
-            .and_then(|k| k.remove(name))
-            .is_some()
-    });
-    if removed {
-        class_static_alias_sync(class_id, name);
+    let Some(ptr) = crate::object::class_value::class_value_if_minted(class_id) else {
+        return;
+    };
+    // SAFETY: this agent's live class function object.
+    let bag = unsafe { crate::closure::props::bag_of(ptr as usize) };
+    if bag.is_null() {
+        return;
     }
+    crate::object::clear_property_attrs(bag as usize, name);
+    class_static_alias_sync(class_id, name);
 }
 
-/// `(writable, enumerable)` if this static key was installed by
-/// `Object.defineProperty`; `None` for a declared `static x = …` field.
+/// `(writable, enumerable, configurable)` of class `class_id`'s own static
+/// DATA property `name`; `None` when it owns no such data property. Reads
+/// the key of the function object's own-property object and never mints the
+/// function object (one never created owns no properties).
 pub(crate) fn class_static_defined_attrs(class_id: u32, name: &str) -> Option<(bool, bool, bool)> {
-    crate::object::CLASS_STATIC_DEFINED_ATTRS
-        .with(|m| m.borrow().get(&class_id).and_then(|k| k.get(name)).copied())
+    let ptr = crate::object::class_value::class_value_if_minted(class_id)? as usize;
+    // SAFETY: this agent's live class function object.
+    unsafe {
+        if crate::object::is_internal_runtime_key(name)
+            || crate::closure::props::bag_get(ptr, name.as_bytes()).is_none()
+        {
+            return None;
+        }
+        let bag = crate::closure::props::bag_of(ptr);
+        let attrs = crate::object::get_property_attrs(bag as usize, name)
+            .unwrap_or(crate::object::PropertyAttrs::new(true, true, true));
+        Some((attrs.writable(), attrs.enumerable(), attrs.configurable()))
+    }
 }
 
 pub(crate) fn class_static_key_is_non_enumerable(class_id: u32, name: &str) -> bool {

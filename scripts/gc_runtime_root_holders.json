@@ -3822,10 +3822,6 @@
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "CLASS_STATIC_DEFINED_ATTRS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
       "name": "FS_CONSTANTS_CACHE_SLOT"
     },
     {
