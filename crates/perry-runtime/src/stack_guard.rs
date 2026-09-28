@@ -54,16 +54,19 @@ fn stack_bounds() -> Option<(usize, usize)> {
 /// `(lowest usable address, size)` of the calling thread's stack.
 #[cfg(target_vendor = "apple")]
 fn stack_bounds() -> Option<(usize, usize)> {
-    extern "C" {
-        fn pthread_get_stackaddr_np(thread: libc::pthread_t) -> *mut libc::c_void;
-        fn pthread_get_stacksize_np(thread: libc::pthread_t) -> libc::size_t;
-    }
+    // #11625: call `libc`'s own declarations of these two Darwin extensions
+    // instead of redeclaring them locally — a second, independently hand-
+    // rolled `extern "C"` block for `pthread_get_stackaddr_np` in
+    // `error_stack_frames.rs` typed the parameter as `*mut c_void` rather
+    // than `libc::pthread_t` (`uintptr_t`/`usize` on Apple targets), and
+    // `-D warnings` promotes the resulting `clashing_extern_declarations`
+    // into a hard build failure.
     // SAFETY: plain queries about the calling thread.
     let (top, size) = unsafe {
         let me = libc::pthread_self();
         (
-            pthread_get_stackaddr_np(me) as usize,
-            pthread_get_stacksize_np(me),
+            libc::pthread_get_stackaddr_np(me) as usize,
+            libc::pthread_get_stacksize_np(me),
         )
     };
     (top != 0 && size != 0 && top > size).then(|| (top - size, size))
