@@ -590,9 +590,9 @@ js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
 js_class_field_add	f64	f64,f64,f64
-js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
-js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
-js_class_field_get_ic_fast_miss	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
+js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
+js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
+js_class_field_get_ic_fast_miss	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_set_fallback	void	i64,i64,i64,f64
 js_class_field_set_ic	void	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
 js_class_field_set_ic_fast	i32s	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
