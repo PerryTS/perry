@@ -188,6 +188,15 @@ fn make_stop_function(index: usize) -> f64 {
 }
 
 fn install_promise_hook(callbacks: PromiseHookCallbacks) -> f64 {
+    // #11541: the table's only insert, so the thread-exit hook is registered
+    // here rather than named in `arena::thread_exit`'s dispatcher (which
+    // linked it into every binary).
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_promise_hooks_in_freed_ranges,
+        );
+    });
     let mut hooks = PROMISE_HOOKS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

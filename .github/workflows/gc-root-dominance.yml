@@ -402,25 +402,41 @@ jobs:
       # This step is minutes, not seconds -- the scan is superlinear in
       # instruction count and the dependency corpus is 62 MB. That is the price
       # of checking the population that actually breaks.
+      #
+      # 39 -> 2 at #11604. The checker stopped counting a use reached only
+      # through a phi edge that REPLACES the source (the `&&`/`??` short-circuit
+      # join, and S2's template-coercion join from #11554). Those uses were
+      # never below the replacing arm's collector. Measured on the corpus
+      # before the change: 8 on 62ab59233, and 32 on 7401e6c0d, because #11554
+      # added 24 template-join uses. After the change: 2, the two
+      # `InOrder.run` uses in test_gap_class_field_named_stack_index. Pinned
+      # at the measured value, because a ratchet is only a ratchet if it is
+      # pinned where it stands.
       - name: Stale-register budget (curated)
         run: |
           set -euo pipefail
           python3 scripts/gc_root_dominance_check.py ir-corpus \
             --stale-registers --moving-only \
             --min-files 90 --min-binds 1500 --min-funcs 1200 \
-            --max-stale 39
+            --max-stale 2
 
       # 86 -> 104 at #7616: widening POLL_CAPABLE_RUNTIME by 77 symbols makes
       # windows MOVING that `--moving-only` previously dropped. Still inside
       # the pinned 118, so the budget is deliberately NOT raised — a ratchet
       # you loosen every time it gets closer is not a ratchet.
+      #
+      # 118 -> 10 at #11604, for the same phi-edge reason as the curated step.
+      # Main was at 457, over this budget, and nothing reported it: the
+      # dominance step above was red on the same #11554 join, so this step
+      # never ran. 436 of those uses were S2 template joins and 11 were
+      # `??`/`&&` joins. After the change: 10.
       - name: Stale-register budget (dependency-scale)
         run: |
           set -euo pipefail
           python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
             --stale-registers --moving-only \
             --min-files 60 --min-binds 4000 --min-funcs 5000 \
-            --max-stale 118
+            --max-stale 10
 
       - name: Upload the IR corpus on failure
         if: failure()

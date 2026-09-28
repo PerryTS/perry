@@ -48,6 +48,12 @@ impl PrimeScope {
             _suppress: crate::gc::GcSuppressScope::new(),
             _lock: lock,
         };
+        // Materialize the realm FIRST. Its bootstrap reads builtins by name
+        // through `js_object_get_field_by_name`, whose hook D primes this
+        // cache; left lazy, that happens inside whichever test first touches
+        // the realm and lands in its counters. It also makes
+        // `%Object.prototype%` resolvable, which the default-link tests need.
+        crate::object::js_get_global_this();
         test_clear_cache();
         test_reset_counters();
         scope
@@ -70,6 +76,9 @@ fn a_repeated_inherited_read_is_served_by_the_cache() {
     unsafe {
         let (obj, _proto) = one_level();
         let k = key("irc_a");
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
         assert!(
             inherited_read_cache_hit(obj, k).is_none(),
             "nothing is primed yet"
@@ -393,6 +402,9 @@ fn several_object_create_receivers_do_not_evict_each_other() {
             objs.push(o);
         }
         let k = key("irc_shared");
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
         let mut slot: crate::object::field_get_set::PicCacheSlot = std::ptr::null_mut();
         let rounds = 8;
         for _ in 0..rounds {
@@ -853,6 +865,9 @@ fn a_closure_only_accessor_is_not_primed() {
         let obj = crate::object::js_object_alloc(0, 4);
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
         assert!(inherited_read_cache_prime(obj, key("irc_closure")).is_none());
         assert_eq!(inherited_read_cache_primes(), 0);
     }
@@ -873,6 +888,9 @@ fn an_accessor_on_the_prototype_primes_an_accessor_entry() {
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
         let k = key("irc_acc");
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
 
         let primed = inherited_read_cache_prime(obj, k).expect("the accessor primes");
         assert_eq!(
@@ -916,10 +934,21 @@ fn a_refusal_is_remembered_so_the_chain_is_walked_once() {
         // A key on no prototype at all: the walk runs off the chain.
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_other", 7.0);
+        // End the chain at an explicit null: a key on no hop of a chain that
+        // reaches `%Object.prototype%` is now a confirmed ABSENT entry (see
+        // `an_absent_key_primes_a_confirmed_absent_entry`), so a refusal needs
+        // a chain the walk genuinely cannot describe.
+        crate::object::js_object_set_prototype_of(
+            boxed(proto),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
         let obj = crate::object::js_object_alloc(0, 4);
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
         let k = key("irc_absent");
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
 
         assert!(inherited_read_cache_prime(obj, k).is_none());
         assert_eq!(
@@ -986,10 +1015,21 @@ fn adding_the_key_to_the_prototype_re_opens_a_remembered_refusal() {
         // the `proto.a = 1` that makes the pair resolvable invalidates it.
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_other", 1.0);
+        // End the chain at an explicit null: a key on no hop of a chain that
+        // reaches `%Object.prototype%` is now a confirmed ABSENT entry (see
+        // `an_absent_key_primes_a_confirmed_absent_entry`), so a refusal needs
+        // a chain the walk genuinely cannot describe.
+        crate::object::js_object_set_prototype_of(
+            boxed(proto),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
         let obj = crate::object::js_object_alloc(0, 4);
         set(obj, "irc_own", 1.0);
         crate::object::js_object_set_prototype_of(boxed(obj), boxed(proto));
         let k = key("irc_late");
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
         assert!(inherited_read_cache_prime(obj, k).is_none());
         assert!(matches!(
             inherited_read_cache_lookup(obj, k),
@@ -1020,6 +1060,9 @@ fn a_nursery_prototype_primes() {
             "fixture is vacuous — the prototype was not in the nursery, so \
              this test would pass with the old-generation refusal in place"
         );
+        // Setup reads (a `constructor` read, a builtin lookup) prime entries of
+        // their own through hook D; count only the operation under test.
+        test_reset_counters();
         assert!(inherited_read_cache_prime(obj, key("irc_a")).is_some());
         assert_eq!(inherited_read_cache_primes(), 1);
     }
@@ -1164,4 +1207,178 @@ fn fresh_thread_cache_reads_empty_everywhere() {
     })
     .join()
     .unwrap();
+}
+
+// --- the default `%Object.prototype%` link and ABSENT entries (#10495) -----
+
+/// `%Object.prototype%`, marked as a prototype so the walk records through it
+/// on the first attempt instead of marking it and abandoning (which is its
+/// own, separately tested behaviour).
+unsafe fn marked_object_prototype() -> *mut ObjectHeader {
+    let op = crate::array::object_prototype_addr();
+    assert_ne!(op, 0, "the realm must be materialized (PrimeScope does it)");
+    crate::object::proto_validity::mark_object_as_prototype(op);
+    op as *mut ObjectHeader
+}
+
+/// A receiver with no class and no recorded `[[Prototype]]`: what an object
+/// literal is.
+unsafe fn plain_receiver() -> *mut ObjectHeader {
+    let obj = crate::object::js_object_alloc(0, 4);
+    set(obj, "irc_own", 1.0);
+    obj
+}
+
+/// Before the default link existed, this pair declined unrecorded and every
+/// read re-ran the whole generic walk to `Object.prototype` (#10495's
+/// `literal_absent3`, lru-cache's options bag). Sabotage: an ABSENT hit that
+/// fell through to the holder load would read `Object.prototype`'s slot
+/// `u32::MAX - 1`.
+#[test]
+fn an_absent_key_primes_a_confirmed_absent_entry() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        marked_object_prototype();
+        let obj = plain_receiver();
+        let k = key("irc_nowhere_at_all");
+        test_reset_counters();
+        let primed = inherited_read_cache_prime(obj, k).expect("the walk reaches the end");
+        assert!(primed.is_undefined());
+        assert_eq!(
+            inherited_read_cache_primes(),
+            1,
+            "the ABSENT entry was not confirmed"
+        );
+        for _ in 0..3 {
+            match inherited_read_cache_lookup(obj, k) {
+                Lookup::Hit(v) => assert!(v.is_undefined()),
+                _ => panic!("the confirmed ABSENT entry must serve the read"),
+            }
+        }
+        assert_eq!(inherited_read_cache_hits(), 3);
+        let leaf = js_inherited_read_cache_hit_f64(obj, k);
+        assert_eq!(
+            leaf.to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "the emitted leaf must serve an ABSENT entry as undefined, not decline"
+        );
+    }
+}
+
+#[test]
+fn adding_the_key_to_object_prototype_retires_an_absent_entry() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let op = marked_object_prototype();
+        let obj = plain_receiver();
+        let k = key("irc_later_on_object_prototype");
+        assert!(inherited_read_cache_prime(obj, k)
+            .expect("absent")
+            .is_undefined());
+        assert!(matches!(
+            inherited_read_cache_lookup(obj, k),
+            Lookup::Hit(_)
+        ));
+
+        set(op, "irc_later_on_object_prototype", 3.0);
+        assert!(
+            matches!(inherited_read_cache_lookup(obj, k), Lookup::Unknown),
+            "an ABSENT entry outlived a key added to Object.prototype — a stale \
+             `undefined` is a wrong answer, not a slow one"
+        );
+        // Object.prototype carries many keys, so a late one lands in a
+        // spilled slot, which the walk declines by design. Whatever the
+        // cache does now, no read may see the old `undefined`.
+        if let Some(value) = inherited_read_cache_prime(obj, k) {
+            assert_eq!(f64::from_bits(value.bits()), 3.0);
+        }
+        if let Lookup::Hit(v) = inherited_read_cache_lookup(obj, k) {
+            assert_eq!(f64::from_bits(v.bits()), 3.0);
+        }
+        let read = crate::object::js_object_get_field_by_name(obj, k);
+        assert_eq!(f64::from_bits(read.bits()), 3.0);
+    }
+}
+
+/// The confirmation is what lets the walk answer from key lists alone: for
+/// every key, what the prime returns and what a later hit returns must be
+/// exactly what the generic getter answers — including names the generic
+/// getter synthesizes (`constructor`, `__proto__`) rather than reads from a
+/// key list.
+#[test]
+fn the_prime_and_the_hit_answer_what_the_generic_getter_answers() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        marked_object_prototype();
+        let obj = plain_receiver();
+        for name in [
+            "toString",
+            "hasOwnProperty",
+            "valueOf",
+            "isPrototypeOf",
+            "constructor",
+            "__proto__",
+            "irc_not_anywhere",
+        ] {
+            let k = key(name);
+            let truth =
+                crate::object::field_get_set::get_field_by_name_past_inherited_cache(obj, k);
+            if let Some(primed) = inherited_read_cache_prime(obj, k) {
+                assert_eq!(primed.bits(), truth.bits(), "prime of {name} diverged");
+            }
+            if let Lookup::Hit(hit) = inherited_read_cache_lookup(obj, k) {
+                assert_eq!(hit.bits(), truth.bits(), "hit of {name} diverged");
+            }
+        }
+    }
+}
+
+/// Hook D: a by-name read primes on the SECOND miss of a (shape, key) pair
+/// and is served from the entry after that.
+#[test]
+fn a_by_name_read_primes_on_its_second_miss() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        marked_object_prototype();
+        let obj = plain_receiver();
+        let k = key("irc_by_name_absent");
+        test_reset_counters();
+        assert!(crate::object::js_object_get_field_by_name(obj, k).is_undefined());
+        assert_eq!(
+            inherited_read_cache_primes(),
+            0,
+            "a first sighting must not prime"
+        );
+        assert!(crate::object::js_object_get_field_by_name(obj, k).is_undefined());
+        assert_eq!(
+            inherited_read_cache_primes(),
+            1,
+            "the second sighting primes"
+        );
+        assert!(crate::object::js_object_get_field_by_name(obj, k).is_undefined());
+        assert_eq!(inherited_read_cache_hits(), 1, "the third read is served");
+    }
+}
+
+/// A key minted fresh for every read never repeats its address, so hook D
+/// never pays a prime (a walk AND a confirming getter) for it.
+#[test]
+fn a_fresh_key_per_read_never_primes_by_name() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        marked_object_prototype();
+        let obj = plain_receiver();
+        test_reset_counters();
+        for _ in 0..16 {
+            let k = key("irc_fresh_every_time");
+            assert!(crate::object::js_object_get_field_by_name(obj, k).is_undefined());
+        }
+        assert_eq!(inherited_read_cache_primes(), 0);
+    }
+}
+
+/// The size figures in the `CACHE_SIZE` and `MAX_HOPS` docs are this number.
+#[test]
+fn an_entry_is_the_size_the_docs_state() {
+    assert_eq!(std::mem::size_of::<Entry>(), 128);
 }

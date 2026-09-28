@@ -268,6 +268,19 @@ thread_local! {
 }
 
 #[inline]
+/// Register [`release_cp_children_in_freed_ranges`] before the first
+/// `CP_LIVE` insert (#11541). Every insert calls this first; named in
+/// `arena::thread_exit`'s dispatcher instead, the release (and `LiveChild`'s
+/// drop glue) was linked into every binary.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_cp_children_in_freed_ranges,
+        );
+    });
+}
+
 fn cp_live_lock() -> std::sync::MutexGuard<'static, Option<HashMap<u64, LiveChild>>> {
     CP_LIVE.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -539,6 +552,7 @@ fn cp_register_live_child_parts(
     };
 
     {
+        register_thread_exit_release();
         let mut guard = cp_live_lock();
         let map = guard.get_or_insert_with(HashMap::new);
         map.insert(
@@ -1175,6 +1189,7 @@ pub(super) fn cp_exec_async(
             let (process_ids, pipe_ids) = cp_init_async_resources(cp, None, stdout_obj, stderr_obj);
 
             {
+                register_thread_exit_release();
                 let mut guard = cp_live_lock();
                 let map = guard.get_or_insert_with(HashMap::new);
                 map.insert(
@@ -1790,6 +1805,7 @@ pub fn cp_register_idle_live_child_for_test(cp: f64) -> u64 {
         async_id: 0,
         trigger_async_id: 0,
     };
+    register_thread_exit_release();
     cp_live_lock().get_or_insert_with(HashMap::new).insert(
         handle,
         LiveChild {

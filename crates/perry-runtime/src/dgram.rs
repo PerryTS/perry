@@ -267,6 +267,12 @@ pub(crate) struct DgramRegistry {
 }
 
 pub(crate) static DGRAM_REGISTRY: LazyLock<Mutex<DgramRegistry>> = LazyLock::new(|| {
+    // #11541: register the thread-exit hook when the registry is first
+    // touched (before any binding can exist) instead of naming it in
+    // `arena::thread_exit`'s dispatcher.
+    crate::arena::thread_exit::register_thread_exit_range_hook(
+        release_dgram_bindings_in_freed_ranges,
+    );
     Mutex::new(DgramRegistry {
         next_port: 49152,
         bound: HashMap::new(),

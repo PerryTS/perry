@@ -262,6 +262,16 @@ pub fn port_state_registered_for_test(port: usize) -> bool {
 }
 
 fn with_port_states<R>(f: impl FnOnce(&mut HashMap<usize, PortState>) -> R) -> R {
+    // #11541: every entry is created through here (the root scanner and the
+    // release below lock `PORT_STATES` directly), so the thread-exit hook is
+    // registered before the first one instead of being named in
+    // `arena::thread_exit`'s dispatcher, which linked it into every binary.
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_port_states_in_freed_ranges,
+        );
+    });
     let mut guard = PORT_STATES.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
     f(map)

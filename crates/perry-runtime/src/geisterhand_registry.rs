@@ -235,6 +235,7 @@ pub extern "C" fn perry_geisterhand_register(
     label_ptr: *const u8,
 ) {
     let label = decode_label_from_string_header(label_ptr);
+    register_thread_exit_release();
     if let Ok(mut reg) = REGISTRY.lock() {
         reg.push(RegisteredWidget {
             handle,
@@ -297,6 +298,7 @@ pub extern "C" fn perry_geisterhand_register_with_shortcut(
                 .into_owned()
         }
     };
+    register_thread_exit_release();
     if let Ok(mut reg) = REGISTRY.lock() {
         reg.push(RegisteredWidget {
             handle,
@@ -338,6 +340,7 @@ pub extern "C" fn perry_geisterhand_find_by_shortcut(
 /// Queue a scroll action for main-thread dispatch.
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_queue_scroll(handle: i64, x: f64, y: f64) {
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::ScrollTo { handle, x, y });
     }
@@ -346,6 +349,7 @@ pub extern "C" fn perry_geisterhand_queue_scroll(handle: i64, x: f64, y: f64) {
 /// Queue a callback invocation for main-thread dispatch.
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_queue_action(closure_f64: f64) {
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::InvokeCallback {
             closure_f64,
@@ -357,6 +361,7 @@ pub extern "C" fn perry_geisterhand_queue_action(closure_f64: f64) {
 /// Queue a callback invocation with one argument for main-thread dispatch.
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_queue_action1(closure_f64: f64, arg: f64) {
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::InvokeCallback {
             closure_f64,
@@ -368,6 +373,7 @@ pub extern "C" fn perry_geisterhand_queue_action1(closure_f64: f64, arg: f64) {
 /// Queue a state-set action for main-thread dispatch.
 #[no_mangle]
 pub extern "C" fn perry_geisterhand_queue_state_set(handle: i64, value: f64) {
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::SetState { handle, value });
     }
@@ -395,6 +401,7 @@ pub extern "C" fn perry_geisterhand_queue_apply_style(
     a2: f64,
     a3: f64,
 ) {
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::ApplyStyle {
             handle,
@@ -418,6 +425,7 @@ pub extern "C" fn perry_geisterhand_queue_set_text(
     } else {
         String::new()
     };
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::SetText { handle, text });
     }
@@ -681,6 +689,7 @@ pub extern "C" fn perry_geisterhand_request_screenshot(out_len: *mut usize) -> *
     }
 
     // Queue the capture action for the main thread pump
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(PendingAction::CaptureScreenshot);
     }
@@ -744,6 +753,7 @@ fn request_string_from_main(
     if let Ok(mut r) = result.lock() {
         *r = None;
     }
+    register_thread_exit_release();
     if let Ok(mut q) = PENDING_ACTIONS.lock() {
         q.push(action);
     }
@@ -833,6 +843,19 @@ pub extern "C" fn perry_geisterhand_get_closure(handle: i64, callback_kind: u8) 
         }
         Err(_) => 0.0,
     }
+}
+
+/// Register [`release_geisterhand_in_freed_ranges`] before the first widget
+/// or action is queued (#11541): every `REGISTRY`/`PENDING_ACTIONS` push calls
+/// this first. Named in `arena::thread_exit`'s dispatcher instead, it was
+/// linked into every binary.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_geisterhand_in_freed_ranges,
+        );
+    });
 }
 
 /// Thread-exit release (#11471): drop every registered widget callback and

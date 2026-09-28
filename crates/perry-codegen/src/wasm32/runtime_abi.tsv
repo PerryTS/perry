@@ -3517,7 +3517,23 @@ js_static_this_arm_value	void	f64
 js_static_this_resolve	f64	f64
 js_stdlib_has_active_handles	i32s	
 js_stdlib_init_dispatch	void	
+js_stdlib_install_bundled_nodemailer	void	
+js_stdlib_install_bundled_streams	void	
+js_stdlib_install_compiled	void	
+js_stdlib_install_compression_gzip	void	
+js_stdlib_install_crypto	void	
+js_stdlib_install_database_sqlite	void	
+js_stdlib_install_events	void	
+js_stdlib_install_external_http_client_pump	void	
+js_stdlib_install_external_http_server_pump	void	
+js_stdlib_install_external_net_pump	void	
+js_stdlib_install_external_zlib_pump	void	
+js_stdlib_install_tls_runtime	void	
+js_stdlib_install_turnloop_http_client	void	
+js_stdlib_install_turnloop_smtp_client	void	
+js_stdlib_install_web_fetch	void	
 js_stdlib_process_pending	i32s	
+js_stdlib_register_feature_installer	void	ptr
 js_stream_handle_is_registered	bool	usize
 js_stream_handle_kind	i8u	usize
 js_stream_unwrap_handle	f64	f64

@@ -40,6 +40,7 @@ pub mod sanitize;
 pub mod setup;
 mod sidecar;
 pub mod stdlib_features;
+pub mod stdlib_installs;
 pub mod typecheck;
 pub mod types;
 pub mod update;

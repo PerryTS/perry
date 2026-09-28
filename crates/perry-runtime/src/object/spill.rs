@@ -68,19 +68,40 @@ unsafe fn spill_elements(spill: *const crate::array::ArrayHeader) -> *mut u64 {
 
 #[inline]
 unsafe fn spill_store_slot(spill: *mut crate::array::ArrayHeader, index: usize, vbits: u64) {
-    let slot = spill_elements(spill).add(index);
-    let old_bits = *slot;
-    *slot = vbits;
+    let elements = spill_elements(spill);
+    let slot = elements.add(index);
+    let length = (*spill).length as usize;
     // Length is the buffer's high-water mark: `js_array_alloc_with_length`
     // sets length = REQUESTED capacity while the physical capacity rounds up
     // (MIN_ARRAY_CAPACITY), and the in-capacity fast path stores past the
     // current length. Everything keys off length — `spill_get`'s bounds
     // check, the GC element range (a value past length is invisible to
-    // marking/rewriting), and the growth copy — so extend it here. Slots
-    // between the old and new length are TAG_HOLE from allocation.
-    if index >= (*spill).length as usize {
+    // marking/rewriting), and the growth copy — so extend it here.
+    //
+    // #11550: a slot at or past `length` holds NO value. The allocator
+    // initializes only the requested prefix, so the rounded-up tail still
+    // holds whatever that arena memory last held — very often a NaN-boxed
+    // heap pointer from a dead object. Reading it as the "old value" made a
+    // first store of a pointer look like a pointer-over-pointer overwrite,
+    // which `layout_note_slot_aware` answers WITHOUT setting the slot's GC
+    // mask bit. The collector then skipped the slot: the stored value was
+    // neither marked nor rewritten, and the object kept a from-space address
+    // (qs's `{ __proto__: null }` accumulator, 12 keys, 10 of them spilled).
+    // Treat the tail as holes, and hole-fill any gap the new length exposes,
+    // so the element range the GC walks never contains stale bits.
+    let old_bits = if index < length {
+        *slot
+    } else {
+        for gap in length..index {
+            // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer
+            // sentinel for a never-written spill slot.
+            elements.add(gap).write(crate::value::TAG_HOLE);
+        }
         (*spill).length = (index + 1) as u32;
-    }
+        crate::value::TAG_HOLE
+    };
+    // GC_STORE_AUDIT(BARRIERED): layout note + slot barrier below.
+    *slot = vbits;
     // Spill elements are boxed JS values just like ordinary array slots. The
     // old value is already in hand, so preserve the same overwrite invariant
     // as array stores: scalar -> scalar and pointer -> pointer cannot change

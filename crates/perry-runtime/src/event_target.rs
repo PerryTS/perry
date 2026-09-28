@@ -553,6 +553,15 @@ pub extern "C" fn js_dom_exception_new(message: f64, name: f64) -> *mut crate::e
     let err =
         crate::error::js_error_new_with_name_message_bytes(name_string.as_bytes(), message_ptr);
     if !err.is_null() {
+        // #11541: registered before the first insert rather than named in
+        // `arena::thread_exit`'s dispatcher (which linked it into every
+        // binary). This is the table's only production insert.
+        static REGISTER: std::sync::Once = std::sync::Once::new();
+        REGISTER.call_once(|| {
+            crate::arena::thread_exit::register_thread_exit_range_hook(
+                release_dom_exception_errors_in_freed_ranges,
+            );
+        });
         DOM_EXCEPTIONS_CREATED.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut set) = dom_exception_errors().lock() {
             set.insert(err as usize);

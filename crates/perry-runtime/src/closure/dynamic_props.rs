@@ -478,7 +478,11 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             );
         }
         {
-            let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+            // The thread's canonical interned header: no allocation per read,
+            // and one stable key identity, so the read below can be served by
+            // (and prime) the inherited-read cache instead of minting a fresh
+            // key string that no cache entry can ever match again.
+            let key_hdr = crate::string::canonical_key(prop.as_bytes());
             let v = crate::object::js_object_get_field_by_name(
                 proto_ptr as *const crate::object::ObjectHeader,
                 key_hdr as *const crate::StringHeader,
@@ -543,7 +547,11 @@ pub(crate) fn function_prototype_inherited_get(
         }
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
-    let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    // The thread's canonical interned header: no allocation per read,
+    // and one stable key identity, so the read below can be served by
+    // (and prime) the inherited-read cache instead of minting a fresh
+    // key string that no cache entry can ever match again.
+    let key_hdr = crate::string::canonical_key(prop.as_bytes());
     let v = crate::object::js_object_get_field_by_name(
         proto_ptr as *const crate::object::ObjectHeader,
         key_hdr as *const crate::StringHeader,
