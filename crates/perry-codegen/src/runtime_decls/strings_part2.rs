@@ -448,7 +448,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_aggregateerror_new", I64, &[I64, I64]);
     module.declare_function("js_error_new_with_cause", I64, &[I64, DOUBLE]);
     // #2838/#2836: full AggregateError ctor — errors as raw value, options.
-    module.declare_function("js_aggregateerror_new_full", I64, &[DOUBLE, I64, DOUBLE]);
+    module.declare_function("js_aggregateerror_new_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     // #2836: Error/subclass ctor honoring a runtime `{ cause }` options value.
     module.declare_function("js_error_new_kind_with_options", I64, &[I32, I64, DOUBLE]);
     // #2904: Error.isError(value) duck-check.

@@ -35,7 +35,7 @@ fn require_ns(v: f64) -> i128 {
             0
         };
     }
-    if jv.is_string() {
+    if jv.is_any_string() {
         let s = dispatch::read_string(v);
         let t = s.trim();
         if t.is_empty() {
@@ -107,7 +107,7 @@ fn coerce_instant(v: f64) -> Instant {
         }
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         return ok_or_throw(Instant::from_utf8(dispatch::read_string(v).as_bytes()));
     }
     // Non-Temporal object → ToString → parse as an instant string.

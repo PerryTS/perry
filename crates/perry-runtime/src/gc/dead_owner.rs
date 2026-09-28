@@ -474,7 +474,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_builtin_closure_metadata_owners,
-        young_prune: None,
+        young_prune: Some(crate::object::prune_dead_builtin_closure_metadata_owners_young),
     },
     // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
     // value's closure address, and is REKEYED (not re-derived) when that

@@ -743,4 +743,71 @@ mod tests {
             Some(0)
         );
     }
+
+    /// #11559: a spill store at or past the buffer's high-water mark must not
+    /// read the headroom word as the value it overwrites.
+    ///
+    /// `js_array_alloc_with_length(8)` initializes eight `TAG_HOLE` slots in a
+    /// sixteen-slot allocation; the other eight hold whatever the memory held
+    /// before. The poison below stands in for that previous tenant: a live
+    /// pointer, so it is exactly the pointer-shaped word that made the
+    /// pointer-over-pointer layout shortcut skip the note. The assertion is
+    /// the collector's own question — does it enumerate (and so mark and
+    /// rewrite) the slot the new child lives in?
+    #[test]
+    fn spill_store_past_high_water_ignores_headroom_bits() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _trigger_guard = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let owner = js_object_alloc(0x6B45_5A16, 0);
+        let first = js_object_alloc(0x6B45_5A17, 0);
+        let first_bits = crate::value::POINTER_TAG | (first as u64 & crate::value::POINTER_MASK);
+        spill_set(owner as usize, 2, first_bits);
+
+        let spill = crate::object::test_spill_buffer_addr(owner as usize);
+        let header = spill as *mut crate::array::ArrayHeader;
+        let (length, capacity) =
+            unsafe { ((*header).length as usize, (*header).capacity as usize) };
+        assert_eq!(
+            length, 8,
+            "fixture: the first spill buffer requests 8 slots"
+        );
+        assert!(
+            capacity > 9,
+            "fixture: index 9 must take the in-capacity path past the high-water mark"
+        );
+
+        let stale = js_object_alloc(0x6B45_5A18, 0);
+        let stale_bits = crate::value::POINTER_TAG | (stale as u64 & crate::value::POINTER_MASK);
+        unsafe {
+            let elements = spill_elements(header);
+            for i in length..capacity {
+                // GC_STORE_AUDIT(INIT): test poison past `length`, standing in
+                // for a previous tenant's leftover word; nothing reads it as a value.
+                *elements.add(i) = stale_bits;
+            }
+        }
+
+        let child = js_object_alloc(0x6B45_5A19, 0);
+        let child_bits = crate::value::POINTER_TAG | (child as u64 & crate::value::POINTER_MASK);
+        spill_set(owner as usize, 9, child_bits);
+
+        assert_eq!(
+            crate::object::test_spill_buffer_addr(owner as usize),
+            spill,
+            "fixture: the store must not have grown the buffer"
+        );
+        let slot_addr = unsafe { spill_elements(header).add(9) as usize };
+        let rewrite = crate::gc::test_gc_rewrite_slot_addresses(spill).unwrap();
+        assert!(
+            rewrite.contains(&slot_addr),
+            "the collector must enumerate a pointer stored past the high-water mark"
+        );
+        let gap_addr = unsafe { spill_elements(header).add(8) as usize };
+        assert_eq!(
+            unsafe { *(gap_addr as *const u64) },
+            crate::value::TAG_HOLE,
+            "the gap the store brings inside `length` must not expose the headroom word"
+        );
+        assert_eq!(unsafe { (*header).length }, 10);
+    }
 }

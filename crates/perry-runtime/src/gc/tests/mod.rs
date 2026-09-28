@@ -63,6 +63,7 @@ mod lazy_tape_side_alloc;
 mod leaf_marks;
 mod map_store;
 mod mark_slot_hoists;
+mod minor_fixed_cost;
 mod noncollecting_root_lock;
 mod object_create;
 mod old_free_intrusive;

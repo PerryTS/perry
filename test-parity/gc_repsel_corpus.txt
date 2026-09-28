@@ -913,3 +913,12 @@ test_gap_gc_scope_loops
 test_gap_gc_scope_async
 test_gap_gc_scope_arguments
 test_gap_gc_scope_retention
+
+test_gap_gc_template_coerce_join
+
+# --- #11559: spill store past the buffer's high-water mark ------------------
+# A store into the MIN_ARRAY_CAPACITY headroom of an object's spill buffer
+# read the leftover word as the overwritten value and skipped the layout note,
+# so the collector never traced the slot. claude-code `-p` read a tool
+# record's `prompt` method back as a plain object.
+test_gap_gc_11559_spill_headroom_store

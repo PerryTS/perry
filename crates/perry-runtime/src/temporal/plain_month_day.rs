@@ -55,7 +55,7 @@ fn coerce_md(v: f64) -> PlainMonthDay {
         return md.clone();
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         return ok_or_throw(dispatch::read_string(v).parse::<PlainMonthDay>());
     }
     if jv.is_pointer() {
@@ -81,7 +81,7 @@ pub fn from_static(args: &[f64]) -> f64 {
     // never threw.)
     let item = raw_arg(args, 0);
     let opts = raw_arg(args, 1);
-    if JSValue::from_bits(item.to_bits()).is_string() {
+    if JSValue::from_bits(item.to_bits()).is_any_string() {
         let md = ok_or_throw(dispatch::read_string(item).parse::<PlainMonthDay>());
         let _ = super::options::overflow(opts);
         return wrap(md);

@@ -90,16 +90,27 @@ unsafe fn buffer_from_addr(addr: usize) -> *mut BufferHeader {
     unbox_ptr(addr as u64) as *mut BufferHeader
 }
 
-/// Read the bytes of a `StringHeader` (passed as an i64 handle, possibly
-/// NaN-boxed). Returns `None` when the handle is null.
-unsafe fn string_bytes<'a>(str_handle: i64) -> Option<&'a [u8]> {
-    let addr = unbox_ptr(str_handle as u64);
+/// Copy the input string's bytes out; `None` when the handle is null. The
+/// handle is a NaN-boxed string, heap or inline SSO (#11519:
+/// `Uint8Array.fromHex("4" + "869")` masked an SSO value into an address), or
+/// a raw `StringHeader` pointer. The copy also keeps the bytes valid across
+/// the result buffer's allocation, which can move a heap string. Payloads up
+/// to 64 bytes are copied without allocating.
+unsafe fn string_bytes(str_handle: i64) -> Option<crate::string::OwnedStringBytes> {
+    let raw = str_handle as u64;
+    if let Some(copy) = crate::string::with_string_value_bytes(
+        f64::from_bits(raw),
+        crate::string::OwnedStringBytes::copy_from_slice,
+    ) {
+        return Some(copy);
+    }
+    let addr = unbox_ptr(raw);
     if addr < 0x1000 {
         return None;
     }
-    let hdr = addr as *const StringHeader;
-    let bytes = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-    Some(std::slice::from_raw_parts(bytes, (*hdr).byte_len as usize))
+    Some(crate::string::OwnedStringBytes::copy_from_header(
+        addr as *const StringHeader,
+    ))
 }
 
 fn throw_syntax(message: &[u8]) -> ! {
@@ -167,19 +178,11 @@ unsafe fn opt_string_field(opts_bits: f64, name: &[u8]) -> Option<String> {
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let val = crate::object::js_object_get_field_by_name(obj, key);
-    let vbits = val.bits();
-    if (vbits >> 48) as u16 != 0x7FFF {
-        return None;
-    }
-    let ptr = (vbits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-    if ptr.is_null() {
-        return None;
-    }
-    let bytes = std::slice::from_raw_parts(
-        (ptr as *const u8).add(std::mem::size_of::<StringHeader>()),
-        (*ptr).byte_len as usize,
-    );
-    std::str::from_utf8(bytes).ok().map(str::to_string)
+    // Heap or inline SSO string (#11519): `"loose"` fits inline.
+    crate::string::with_string_value_bytes(f64::from_bits(val.bits()), |bytes| {
+        std::str::from_utf8(bytes).ok().map(str::to_string)
+    })
+    .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +495,7 @@ pub extern "C" fn js_u8_from_base64(str_handle: i64, opts_bits: f64) -> *mut Buf
         let Some(input) = string_bytes(str_handle) else {
             throw_type(b"input argument must be a string");
         };
+        let input = input.as_bytes();
         let url = opt_is_base64url(opts_bits);
         let last_chunk = opt_last_chunk_handling(opts_bits);
         let max = base64_max_bytes(input);
@@ -510,6 +514,7 @@ pub extern "C" fn js_u8_from_hex(str_handle: i64) -> *mut BufferHeader {
         let Some(input) = string_bytes(str_handle) else {
             throw_type(b"input argument must be a string");
         };
+        let input = input.as_bytes();
         let max = input.len() / 2;
         let buf = buffer_alloc(max as u32);
         let dst = std::slice::from_raw_parts_mut(buffer_data_mut(buf), max);
@@ -531,6 +536,7 @@ pub extern "C" fn js_u8_set_from_base64(addr: i64, str_handle: i64, opts_bits: f
         let Some(input) = string_bytes(str_handle) else {
             throw_type(b"input argument must be a string");
         };
+        let input = input.as_bytes();
         let url = opt_is_base64url(opts_bits);
         let last_chunk = opt_last_chunk_handling(opts_bits);
         let cap = (*buf).length as usize;
@@ -551,6 +557,7 @@ pub extern "C" fn js_u8_set_from_hex(addr: i64, str_handle: i64) -> f64 {
         let Some(input) = string_bytes(str_handle) else {
             throw_type(b"input argument must be a string");
         };
+        let input = input.as_bytes();
         let cap = (*buf).length as usize;
         let dst = std::slice::from_raw_parts_mut(buffer_data_mut(buf), cap);
         let res = hex_decode_strict(input, dst);

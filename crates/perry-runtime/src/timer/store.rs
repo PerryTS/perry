@@ -102,6 +102,9 @@ pub(super) struct Entry {
     pub(super) value: f64,
     /// Closure pointer for the callback classes; 0 for `Class::Promise`.
     pub(super) callback: i64,
+    /// The `Timeout`/`Immediate` object the callback runs with as `this`, or
+    /// `TAG_UNDEFINED` when there is none. A GC root like `callback`/`args`.
+    pub(super) js_handle: f64,
     pub(super) args: Vec<f64>,
     pub(super) context: crate::async_context::AsyncContextSnapshot,
     pub(super) async_id: u64,
@@ -126,6 +129,7 @@ impl Entry {
         deadline: Instant,
         delay_ms: u64,
         callback: i64,
+        js_handle: f64,
         args: Vec<f64>,
         context: crate::async_context::AsyncContextSnapshot,
         async_id: u64,
@@ -143,6 +147,7 @@ impl Entry {
             promise: std::ptr::null_mut(),
             value: 0.0,
             callback,
+            js_handle,
             args,
             context,
             async_id,
@@ -174,6 +179,7 @@ impl Entry {
             promise: self.promise,
             value: self.value,
             callback: self.callback,
+            js_handle: self.js_handle,
             args: self.args.clone(),
             context: self.context.clone(),
             async_id: self.async_id,
@@ -201,6 +207,7 @@ impl Entry {
             promise,
             value,
             callback: 0,
+            js_handle: f64::from_bits(crate::value::TAG_UNDEFINED),
             args: Vec::new(),
             context: crate::async_context::AsyncContextSnapshot::default(),
             async_id: 0,
@@ -219,9 +226,10 @@ pub(super) struct AgentTimers {
     refed: Vec<usize>,
     /// Slab indices, min-heap on `(deadline, seq)`, unref'd entries only.
     unrefed: Vec<usize>,
-    /// Check-phase queue in scheduling order. Holds slab indices; a cancelled
-    /// entry leaves a `None` slab slot behind, skipped on pop.
-    check: VecDeque<usize>,
+    /// Check-phase queue in scheduling order, as `(slab index, seq)`. A
+    /// cancelled entry leaves its placeholder behind and its slot may be
+    /// reused, so a placeholder is live only while the slot's `seq` matches.
+    check: VecDeque<(usize, u64)>,
     /// Ref'd entries currently in `check`.
     refed_check: usize,
     /// Live (not cancelled) entries in `check`, and in the two poll queues.
@@ -233,9 +241,9 @@ pub(super) struct AgentTimers {
     poll_live: usize,
     /// Native completion callbacks waiting for the poll phase that will run
     /// them, and the ones still waiting to become eligible. See
-    /// [`AgentTimers::promote_pending`].
-    poll_ready: VecDeque<usize>,
-    poll_staged: VecDeque<usize>,
+    /// [`AgentTimers::promote_pending`]. Same `(slab index, seq)` scheme as `check`.
+    poll_ready: VecDeque<(usize, u64)>,
+    poll_staged: VecDeque<(usize, u64)>,
     by_id: BTreeMap<i64, usize>,
     next_seq: u64,
 }
@@ -410,7 +418,8 @@ impl AgentTimers {
         debug_assert_eq!(entry.class, Class::Immediate);
         let refed = entry.refed;
         let index = self.alloc(entry);
-        self.check.push_back(index);
+        let seq = self.slab[index].as_ref().expect("just allocated").seq;
+        self.check.push_back((index, seq));
         self.refed_check += usize::from(refed);
         self.check_live += 1;
         index
@@ -488,21 +497,24 @@ impl AgentTimers {
     /// scheduled *by* a check callback runs on the next turn, as in Node.
     pub(super) fn pop_check(&mut self, horizon: u64) -> Option<Entry> {
         loop {
-            let index = *self.check.front()?;
-            match self.slab.get(index).and_then(|e| e.as_ref()) {
-                // Cancelled: its slab slot is already gone. Drop the placeholder.
-                None => {
-                    self.check.pop_front();
-                }
-                Some(entry) if entry.seq >= horizon => return None,
-                Some(entry) => {
-                    let refed = entry.refed;
-                    self.check.pop_front();
-                    self.refed_check -= usize::from(refed);
-                    self.check_live -= 1;
-                    return self.take(index);
-                }
+            let (index, seq) = *self.check.front()?;
+            let live = match self.slab.get(index).and_then(|e| e.as_ref()) {
+                // Cancelled, or the slot was reused by a later insert.
+                None => None,
+                Some(entry) if entry.seq != seq => None,
+                Some(entry) => Some((entry.seq, entry.refed)),
+            };
+            let Some((entry_seq, refed)) = live else {
+                self.check.pop_front();
+                continue;
+            };
+            if entry_seq >= horizon {
+                return None;
             }
+            self.check.pop_front();
+            self.refed_check -= usize::from(refed);
+            self.check_live -= 1;
+            return self.take(index);
         }
     }
 
@@ -522,7 +534,8 @@ impl AgentTimers {
     pub(super) fn insert_pending(&mut self, entry: Entry) -> usize {
         debug_assert_eq!(entry.class, Class::Pending);
         let index = self.alloc(entry);
-        self.poll_staged.push_back(index);
+        let seq = self.slab[index].as_ref().expect("just allocated").seq;
+        self.poll_staged.push_back((index, seq));
         self.poll_live += 1;
         index
     }
@@ -530,18 +543,18 @@ impl AgentTimers {
     /// Take the next native completion callback the poll phase may run.
     pub(super) fn pop_poll(&mut self) -> Option<Entry> {
         loop {
-            let index = *self.poll_ready.front()?;
-            match self.slab.get(index).and_then(|e| e.as_ref()) {
-                // Cancelled: drop the placeholder and look at the next one.
-                None => {
-                    self.poll_ready.pop_front();
-                }
-                Some(_) => {
-                    self.poll_ready.pop_front();
-                    self.poll_live -= 1;
-                    return self.take(index);
-                }
+            let (index, seq) = *self.poll_ready.front()?;
+            let live = matches!(
+                self.slab.get(index).and_then(|e| e.as_ref()),
+                Some(entry) if entry.seq == seq
+            );
+            if !live {
+                self.poll_ready.pop_front();
+                continue;
             }
+            self.poll_ready.pop_front();
+            self.poll_live -= 1;
+            return self.take(index);
         }
     }
 
@@ -559,7 +572,10 @@ impl AgentTimers {
             self.poll_ready
                 .iter()
                 .chain(self.poll_staged.iter())
-                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .filter(|&&(i, seq)| matches!(
+                    self.slab.get(i).and_then(|e| e.as_ref()),
+                    Some(entry) if entry.seq == seq
+                ))
                 .count(),
             "poll_live drifted from the poll queues"
         );
@@ -586,10 +602,10 @@ impl AgentTimers {
         if class.is_timer() {
             self.heap_detach(index);
         } else if class == Class::Pending {
-            // Leave the queue placeholder; `pop_poll` skips an emptied slot.
+            // Leave the queue placeholder; `pop_poll` skips it.
             self.poll_live -= 1;
         } else {
-            // Leave the queue placeholder: `pop_check` skips an emptied slot.
+            // Leave the queue placeholder: `pop_check` skips it.
             // Removing it here would be O(n) in the queue length for no gain.
             let refed = self.slab[index].as_ref().expect("live entry").refed;
             self.refed_check -= usize::from(refed);
@@ -682,7 +698,10 @@ impl AgentTimers {
             self.check_live,
             self.check
                 .iter()
-                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .filter(|&&(i, seq)| matches!(
+                    self.slab.get(i).and_then(|e| e.as_ref()),
+                    Some(entry) if entry.seq == seq
+                ))
                 .count(),
             "check_live drifted from the check queue"
         );
