@@ -269,17 +269,10 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // code. Kept in the dominance checker and root-reload authorities.
         | "js_object_get_class_id"
         | "js_object_get_own_field_or_undef"
-        // TLS dynamic-call context only. #8596 adds the `_get` reader — a bare
-        // `IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))` (`object/this_binding.rs`),
-        // the exact shape of the already-admitted `_set` and `js_new_target_get`.
-        // The `_sloppy` reader is deliberately ABSENT: it boxes booleans/strings
-        // and reads globalThis, which allocates.
-        | "js_implicit_this_set"
-        | "js_implicit_this_get"
-        // Witness builds only (`PERRY_THIS_WITNESS=1`): compares its argument
-        // with the same cell `_get` reads, bumps two atomics and may write
-        // stderr. No Perry allocation, no re-entry into generated code.
-        | "js_this_param_witness"
+        // TLS dynamic-call context only: the `new.target` cell
+        // (`object/this_binding.rs`). `js_this_coerce_sloppy` is deliberately
+        // ABSENT: it boxes booleans/strings and reads globalThis, which
+        // allocates.
         | "js_new_target_get"
         | "js_new_target_set"
         // #8596: TDZ-suppression window depth (`box.rs`). Each is a single
@@ -964,8 +957,6 @@ mod tests {
     ///     registry access or feedback recording (#8775).
     ///   - `js_object_own_method_cache_miss` — cold shape/key/closure
     ///     validation plus a compiler-private token store (#8775).
-    ///   - `js_implicit_this_get` — a bare `IMPLICIT_THIS` `Cell` read, the
-    ///     shape of the already-admitted `js_implicit_this_set`.
     ///   - `js_tdz_suppress_begin`/`_end` — a thread-local `Cell<u32>` inc/dec.
     #[test]
     fn issue_8596_tls_and_feedback_guards_cannot_collect() {
@@ -973,7 +964,6 @@ mod tests {
             "js_typed_feedback_closure_direct_call_guard",
             "js_closure_exact_func_guard",
             "js_object_own_method_cache_miss",
-            "js_implicit_this_get",
             "js_tdz_suppress_begin",
             "js_tdz_suppress_end",
         ] {
@@ -987,15 +977,14 @@ mod tests {
 
     /// The discriminating negatives for #8596: near-neighbours of the four
     /// admitted above that DO allocate or throw, so they must stay
-    /// `Unknown` (a safepoint). `js_implicit_this_get_sloppy` boxes
-    /// booleans/strings and reads globalThis; the ordinary `_get` it wraps is
-    /// the only leaf-safe half.
+    /// `Unknown` (a safepoint). `js_this_coerce_sloppy` boxes
+    /// booleans/strings and reads globalThis.
     #[test]
     fn issue_8596_allocating_lookalike_stays_a_safepoint() {
         assert_eq!(
-            classify_direct_callee("js_implicit_this_get_sloppy"),
+            classify_direct_callee("js_this_coerce_sloppy"),
             GcCallEffect::Unknown,
-            "the sloppy reader boxes primitives / reads globalThis and must remain a safepoint"
+            "the sloppy coercion boxes primitives / reads globalThis and must remain a safepoint"
         );
     }
 

@@ -50,18 +50,14 @@ pub extern "C" fn js_promise_then_checked(
             ));
         }
         let args = [on_fulfilled, on_rejected];
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = unsafe {
-            crate::closure::js_native_call_value(
+        return unsafe {
+            crate::closure::native_call_value_this(
                 own_then,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(promise_val),
                 args.as_ptr(),
                 args.len(),
             )
         };
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return result;
     }
     if promise_has_own_constructor(promise_addr)
         || subclass::subclass_backing_promise(promise_val).is_some()
@@ -69,16 +65,12 @@ pub extern "C" fn js_promise_then_checked(
         // Own `constructor` override OR a `class X extends Promise` instance:
         // route through the SpeciesConstructor-aware thunk, which unwraps the
         // backing cell and reads `this.constructor` for species chaining.
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_then_thunk(
+        return promise_prototype_then_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::from_f64(promise_val),
             on_fulfilled,
             on_rejected,
         );
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return result;
     }
     let promise = promise_addr as *mut Promise;
     box_promise_ptr(js_promise_then(
@@ -95,15 +87,11 @@ pub extern "C" fn js_promise_catch_checked(promise_val: f64, on_rejected: f64) -
         || promise_has_own_constructor(promise_addr)
         || subclass::subclass_backing_promise(promise_val).is_some()
     {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_catch_thunk(
+        return promise_prototype_catch_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::from_f64(promise_val),
             on_rejected,
         );
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return result;
     }
     let promise = promise_addr as *mut Promise;
     box_promise_ptr(js_promise_catch(promise, arg_to_closure(on_rejected)))
@@ -116,15 +104,11 @@ pub extern "C" fn js_promise_finally_checked(promise_val: f64, on_finally: f64) 
         || promise_has_own_constructor(promise_addr)
         || subclass::subclass_backing_promise(promise_val).is_some()
     {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(promise_val));
-        let result = promise_prototype_finally_thunk(
+        return promise_prototype_finally_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::from_f64(promise_val),
             on_finally,
         );
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return result;
     }
     let promise = promise_addr as *mut Promise;
     box_promise_ptr(js_promise_finally(promise, arg_to_closure(on_finally)))

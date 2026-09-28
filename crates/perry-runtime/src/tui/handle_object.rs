@@ -209,8 +209,7 @@ pub(crate) fn tui_widget_id_from_bits(bits: u64) -> i64 {
 }
 
 /// `(kind, id)` for a NaN-boxed JS value. The prototype thunks resolve their
-/// receiver through this, since `js_implicit_this_get` hands back a boxed
-/// value.
+/// receiver (their `this` parameter, a boxed value) through this.
 fn tui_handle_parts_value(value: f64) -> Option<(TuiKind, i64)> {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {

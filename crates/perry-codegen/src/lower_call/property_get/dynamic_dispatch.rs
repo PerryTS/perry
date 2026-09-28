@@ -506,30 +506,23 @@ pub(crate) fn try_lower_instance_method_call(
                 ));
                 (ptr_reg, user_arg_count_probe.to_string())
             };
-            // Issue #632: bind IMPLICIT_THIS to the receiver around
-            // the override call. The stored function may be a class
-            // field assigning a non-arrow function (`class X { match
-            // = match; }` — hono RegExpRouter — where the imported
-            // `match` body reads `this.buildAllMatchers()`). Without
-            // the bind, the body sees stale IMPLICIT_THIS and reads
-            // garbage. Mirrors `lower_call.rs:2607` for the closure-
-            // call fallthrough pattern (#519).
-            let recv_for_this_probe = recv_box.clone();
-            // #7211: rooted save/restore across the user-code dispatch.
-            let prev_this_probe = crate::rooting::implicit_this_save(ctx, &recv_for_this_probe);
-            // Stage 1: the call runs with the implicit-`this` cell's value.
-            let this_bits = crate::expr::body_call::current_this_bits(ctx);
+            // Issue #632: pass the receiver as `this` to the override
+            // call. The stored function may be a class field assigning a
+            // non-arrow function (`class X { match = match; }` — hono
+            // RegExpRouter — where the imported `match` body reads
+            // `this.buildAllMatchers()`). Mirrors the closure-call
+            // fallthrough pattern (#519).
+            let this_bits_probe = ctx.block().bitcast_double_to_i64(&recv_box);
             let v_override_probe = ctx.block().call(
                 DOUBLE,
                 "js_native_call_value",
                 &[
                     (DOUBLE, &own_method_probe),
-                    (I64, &this_bits),
+                    (I64, &this_bits_probe),
                     (crate::types::PTR, &probe_args_ptr),
                     (I64, &probe_args_len_str),
                 ],
             );
-            crate::rooting::implicit_this_restore(ctx, prev_this_probe);
             let after_override_probe = ctx.block().label.clone();
             if !ctx.block().is_terminated() {
                 ctx.block().br(&probe_outer_merge_label);
@@ -1927,13 +1920,10 @@ fn emit_collapsed_instance_dispatch(
     ctx.block()
         .cond_br(&is_undef, &dispatch_label, &override_label);
 
-    // Override arm: bind IMPLICIT_THIS to the receiver and call the stored
-    // function value (#632 — a class-field non-arrow function reads `this`).
+    // Override arm: call the stored function value with the receiver as
+    // `this` (#632 — a class-field non-arrow function reads `this`).
     ctx.current_block = override_idx;
-    // #7211: rooted save/restore across the user-code dispatch.
-    let prev_this = crate::rooting::implicit_this_save(ctx, recv_box);
-    // Stage 1: the call runs with the implicit-`this` cell's value.
-    let this_bits = crate::expr::body_call::current_this_bits(ctx);
+    let this_bits = ctx.block().bitcast_double_to_i64(recv_box);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
@@ -1944,7 +1934,6 @@ fn emit_collapsed_instance_dispatch(
             (I64, &args_len),
         ],
     );
-    crate::rooting::implicit_this_restore(ctx, prev_this);
     let after_override = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);

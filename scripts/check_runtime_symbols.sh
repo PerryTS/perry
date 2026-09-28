@@ -54,7 +54,7 @@ SENTINELS=(
   js_closure_get_capture_bits
   js_closure_set_capture_bits
   js_closure_set_box_capture_ptr
-  js_closure_resolve_arrow_direct_call
+  js_closure_resolve_plain_direct_call
   js_register_closure_trusted_direct
   # #9188: codegen switched module init from the copying spellings to these.
   # A runtime archive predating the split defines neither, and every program

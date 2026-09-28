@@ -186,8 +186,8 @@ fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, 
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn receiver_value() -> f64 {
-    f64::from_bits(IMPLICIT_THIS.with(|c| c.get()))
+fn receiver_value(this: crate::closure::JsThis) -> f64 {
+    f64::from_bits(this.bits())
 }
 
 fn throw_incompatible_receiver(proto: &str, method: &str) -> ! {
@@ -202,8 +202,8 @@ fn boxed_payload(receiver: f64, expected_class_id: u32) -> Option<f64> {
     (class_id == expected_class_id).then_some(payload)
 }
 
-fn number_receiver_or_throw(method: &str) -> f64 {
-    let receiver = receiver_value();
+fn number_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
+    let receiver = receiver_value(this);
     if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_NUMBER) {
         return payload;
     }
@@ -226,8 +226,8 @@ fn number_receiver_or_throw(method: &str) -> f64 {
     throw_incompatible_receiver("Number.prototype", method)
 }
 
-fn boolean_receiver_or_throw(method: &str) -> f64 {
-    let receiver = receiver_value();
+fn boolean_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
+    let receiver = receiver_value(this);
     if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_BOOLEAN) {
         return payload;
     }
@@ -245,8 +245,8 @@ fn boolean_receiver_or_throw(method: &str) -> f64 {
     throw_incompatible_receiver("Boolean.prototype", method)
 }
 
-fn symbol_receiver_or_throw(method: &str) -> f64 {
-    let receiver = receiver_value();
+fn symbol_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
+    let receiver = receiver_value(this);
     if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_SYMBOL) {
         return payload;
     }
@@ -256,8 +256,8 @@ fn symbol_receiver_or_throw(method: &str) -> f64 {
     throw_incompatible_receiver("Symbol.prototype", method)
 }
 
-fn bigint_receiver_or_throw(method: &str) -> f64 {
-    let receiver = receiver_value();
+fn bigint_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
+    let receiver = receiver_value(this);
     if let Some(payload) = boxed_payload(receiver, CLASS_ID_BOXED_BIGINT) {
         return payload;
     }
@@ -270,8 +270,8 @@ fn bigint_receiver_or_throw(method: &str) -> f64 {
 /// ECMA-262 `thisStringValue(value)`: accept a String primitive or a boxed
 /// `String` object; throw `TypeError` for anything else, including `null`,
 /// `undefined`, numbers, booleans, symbols, and plain objects.
-fn string_receiver_or_throw(method: &str) -> f64 {
-    let receiver = receiver_value();
+fn string_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
+    let receiver = receiver_value(this);
     let jv = crate::value::JSValue::from_bits(receiver.to_bits());
     // String primitive (heap or SSO inline).
     if jv.is_string() || jv.is_short_string() {
@@ -295,51 +295,51 @@ fn string_value(ptr: *mut crate::string::StringHeader) -> f64 {
 
 pub(super) extern "C" fn number_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    number_receiver_or_throw("valueOf")
+    number_receiver_or_throw(this, "valueOf")
 }
 
 pub(super) extern "C" fn number_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     radix: f64,
 ) -> f64 {
     string_value(crate::value::js_jsvalue_to_string_radix(
-        number_receiver_or_throw("toString"),
+        number_receiver_or_throw(this, "toString"),
         radix,
     ))
 }
 
 pub(super) extern "C" fn number_proto_to_fixed_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     decimals: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_fixed(
-        number_receiver_or_throw("toFixed"),
+        number_receiver_or_throw(this, "toFixed"),
         decimals,
     ))
 }
 
 pub(super) extern "C" fn number_proto_to_precision_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     precision: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_precision(
-        number_receiver_or_throw("toPrecision"),
+        number_receiver_or_throw(this, "toPrecision"),
         precision,
     ))
 }
 
 pub(super) extern "C" fn number_proto_to_exponential_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     decimals: f64,
 ) -> f64 {
     string_value(crate::string::js_number_to_exponential(
-        number_receiver_or_throw("toExponential"),
+        number_receiver_or_throw(this, "toExponential"),
         decimals,
     ))
 }
@@ -362,10 +362,10 @@ pub(super) extern "C" fn number_proto_to_exponential_thunk(
 /// (Intl builds a fresh instance per call; there is no formatter cache).
 pub(super) extern "C" fn number_proto_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let n = number_receiver_or_throw("toLocaleString");
+    let n = number_receiver_or_throw(this, "toLocaleString");
     #[cfg(feature = "intl-namespace")]
     {
         let args = super::global_this::global_this_rest_array_values(rest);
@@ -385,16 +385,16 @@ pub(super) extern "C" fn number_proto_to_locale_string_thunk(
 
 pub(super) extern "C" fn boolean_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    boolean_receiver_or_throw("valueOf")
+    boolean_receiver_or_throw(this, "valueOf")
 }
 
 pub(super) extern "C" fn boolean_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let value = boolean_receiver_or_throw("toString");
+    let value = boolean_receiver_or_throw(this, "toString");
     let bytes = if crate::value::JSValue::from_bits(value.to_bits()).as_bool() {
         b"true".as_slice()
     } else {
@@ -406,16 +406,16 @@ pub(super) extern "C" fn boolean_proto_to_string_thunk(
 
 pub(super) extern "C" fn symbol_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    symbol_receiver_or_throw("valueOf")
+    symbol_receiver_or_throw(this, "valueOf")
 }
 
 pub(super) extern "C" fn symbol_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let symbol = symbol_receiver_or_throw("toString");
+    let symbol = symbol_receiver_or_throw(this, "toString");
     let s =
         unsafe { crate::symbol::js_symbol_to_string(symbol) } as *mut crate::string::StringHeader;
     string_value(s)
@@ -423,28 +423,28 @@ pub(super) extern "C" fn symbol_proto_to_string_thunk(
 
 pub(super) extern "C" fn bigint_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    bigint_receiver_or_throw("valueOf")
+    bigint_receiver_or_throw(this, "valueOf")
 }
 
 pub(super) extern "C" fn bigint_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     radix: f64,
 ) -> f64 {
     string_value(crate::value::js_jsvalue_to_string_radix(
-        bigint_receiver_or_throw("toString"),
+        bigint_receiver_or_throw(this, "toString"),
         radix,
     ))
 }
 
 pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let value = bigint_receiver_or_throw("toLocaleString");
+    let value = bigint_receiver_or_throw(this, "toLocaleString");
     let args = super::global_this::global_this_rest_array_values(rest);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let _locales = args.first().copied().unwrap_or(undef);
@@ -477,16 +477,16 @@ pub(super) extern "C" fn bigint_proto_to_locale_string_thunk(
 /// `TypeError` for any other receiver.
 pub(super) extern "C" fn string_proto_to_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    string_receiver_or_throw("toString")
+    string_receiver_or_throw(this, "toString")
 }
 
 /// `String.prototype.valueOf()` — brand-checked, identical semantics to
 /// `toString()`: returns the [[StringData]] of the receiver.
 pub(super) extern "C" fn string_proto_value_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    string_receiver_or_throw("valueOf")
+    string_receiver_or_throw(this, "valueOf")
 }

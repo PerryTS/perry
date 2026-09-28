@@ -1194,12 +1194,6 @@ fn compute_object_cache_key_with_env(
         "env_recv_route_count",
         env_var("PERRY_RECV_ROUTE_COUNT").as_deref().unwrap_or(""),
     );
-    // This-as-a-parameter stage 1: a `=1` build emits a witness call at the
-    // entry of every body that reads the implicit-`this` cell.
-    h.field(
-        "env_this_witness",
-        env_var("PERRY_THIS_WITNESS").as_deref().unwrap_or(""),
-    );
     h.field(
         "env_full_outline_ic",
         env_var("PERRY_FULL_OUTLINE_IC").as_deref().unwrap_or(""),

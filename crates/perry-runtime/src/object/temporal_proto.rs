@@ -44,7 +44,7 @@ fn throw_brand(member: &str) -> ! {
 }
 
 /// Shared accessor getter for every `Temporal.<Type>.prototype` field. Reads
-/// `IMPLICIT_THIS`, derives the property name from the closure (`"get hour"` →
+/// its `this` argument, derives the property name from the closure (`"get hour"` →
 /// `"hour"`), and routes to the brand router; a non-Temporal `this` throws.
 pub(super) extern "C" fn temporal_proto_getter_thunk(
     c: *const crate::closure::ClosureHeader,
@@ -60,7 +60,7 @@ pub(super) extern "C" fn temporal_proto_getter_thunk(
 }
 
 /// Shared method thunk for every `Temporal.<Type>.prototype` method. Reads
-/// `IMPLICIT_THIS`, derives the method name from the closure, brand-checks the
+/// its `this` argument, derives the method name from the closure, brand-checks the
 /// receiver, and routes to the brand router with the rest-array args.
 pub(super) extern "C" fn temporal_proto_method_thunk(
     c: *const crate::closure::ClosureHeader,

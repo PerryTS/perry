@@ -356,11 +356,11 @@ pub(super) extern "C" fn noop_listener(
 
 pub(super) extern "C" fn capture_data_listener(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    receiver: crate::closure::JsThis,
     chunk: f64,
 ) -> f64 {
     let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let actual = crate::object::js_implicit_this_get();
+    let actual = receiver.as_f64();
     READABLE_THIS_MATCHES.with(|matches| {
         matches
             .borrow_mut()
@@ -408,10 +408,10 @@ pub(super) extern "C" fn capture_readable_listener(
 
 pub(super) extern "C" fn capture_end_listener(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    receiver: crate::closure::JsThis,
 ) -> f64 {
     let expected = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let actual = crate::object::js_implicit_this_get();
+    let actual = receiver.as_f64();
     READABLE_THIS_MATCHES.with(|matches| {
         matches
             .borrow_mut()
@@ -566,12 +566,12 @@ extern "C" fn read_throws(
 
 extern "C" fn transform_upper_callback(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    receiver: crate::closure::JsThis,
     chunk: f64,
     _enc: f64,
     cb: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = receiver.as_f64();
     TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| {
         matches.borrow_mut().push(
             get_hidden_value(this, hidden_readable_flag_key()).is_some()
@@ -633,29 +633,21 @@ extern "C" fn transform_error_callback(
 
 extern "C" fn transform_push_pair_callback(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    receiver: crate::closure::JsThis,
     _chunk: f64,
     _enc: f64,
     cb: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = receiver.as_f64();
     let push = js_object_get_field_by_name_f64(
         raw_ptr_from_value(this) as *const ObjectHeader,
         hidden_key(b"push"),
     );
     unsafe {
-        let _ = crate::closure::js_native_call_value(
-            push,
-            crate::closure::plain_call_receiver(),
-            [string_value("a")].as_ptr(),
-            1,
-        );
-        let _ = crate::closure::js_native_call_value(
-            push,
-            crate::closure::plain_call_receiver(),
-            [string_value("b")].as_ptr(),
-            1,
-        );
+        let _ =
+            crate::closure::native_call_value_this(push, receiver, [string_value("a")].as_ptr(), 1);
+        let _ =
+            crate::closure::native_call_value_this(push, receiver, [string_value("b")].as_ptr(), 1);
         let _ = crate::closure::js_native_call_value(
             cb,
             crate::closure::plain_call_receiver(),
@@ -668,10 +660,10 @@ extern "C" fn transform_push_pair_callback(
 
 extern "C" fn transform_flush_tail_callback(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    receiver: crate::closure::JsThis,
     cb: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = receiver.as_f64();
     TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| {
         matches.borrow_mut().push(
             get_hidden_value(this, hidden_readable_flag_key()).is_some()
@@ -1321,23 +1313,21 @@ fn stream_json_stringify_uses_node_state_shape() {
 }
 
 #[test]
-fn stream_methods_use_implicit_this_without_closure_capture() {
+fn stream_methods_use_their_receiver_without_closure_capture() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
-    let prev_this = crate::object::js_implicit_this_set(stream);
     let _ = ns_end3(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::from_f64(stream),
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(TAG_UNDEFINED),
     );
-    crate::object::js_implicit_this_set(prev_this);
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
 }
 
 #[test]
-fn stream_method_closure_capture_wins_over_stale_implicit_this() {
+fn stream_method_closure_capture_wins_over_a_foreign_receiver() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let other = box_pointer(crate::object::js_object_alloc(0, 0) as *const u8);
     let end = js_object_get_field_by_name_f64(
@@ -1345,16 +1335,14 @@ fn stream_method_closure_capture_wins_over_stale_implicit_this() {
         hidden_key(b"end"),
     );
 
-    let prev_this = crate::object::js_implicit_this_set(other);
     unsafe {
-        let _ = crate::closure::js_native_call_value(
+        let _ = crate::closure::native_call_value_this(
             end,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(other),
             std::ptr::null(),
             0,
         );
     }
-    crate::object::js_implicit_this_set(prev_this);
 
     assert!(js_node_stream_is_stub_ended_after_read(stream));
     assert!(!stream_hidden_ended(other));
@@ -1409,7 +1397,7 @@ fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
     assert_eq!(
         ns_pipe2(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             dest,
             f64::from_bits(TAG_UNDEFINED)
         )

@@ -27,8 +27,8 @@ use super::class_registry::{
 ///     stored address would point at the stale/forwarded location.
 ///
 /// This is the same rooting-hazard class the integer-hack design (#1772) was
-/// rejected for, and a sibling of the `IMPLICIT_THIS` fix in #1813
-/// (`scan_implicit_this_roots_mut`). The keys are scalar `class_id`s (no GC
+/// rejected for, and a sibling of the #1813 fix to the (since removed)
+/// implicit-`this` cell. The keys are scalar `class_id`s (no GC
 /// concern); only the pointer *values* are visited. `CLASS_STATIC_METHODS`
 /// stores code `func_ptr`s, not heap pointers, so it is deliberately not
 /// scanned here.

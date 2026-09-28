@@ -131,7 +131,11 @@ unsafe fn alloc_transform_stream_with_strategies(
     // transform/flush callbacks receive), so `controller.enqueue(c)` /
     // `controller.terminate()` / `controller.error(e)` act on the readable.
     if start_cb != 0 {
-        js_closure_call1(start_cb as *const ClosureHeader, readable_id as f64);
+        js_closure_call1(
+            start_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            readable_id as f64,
+        );
     }
     id as f64
 }
@@ -316,6 +320,7 @@ extern "C" fn transform_write_job2(
         if transform_cb != 0 && readable_id != 0 {
             let ret = js_closure_call2(
                 transform_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
                 chunk,
                 readable_id as f64,
             );
@@ -831,6 +836,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     let flush_result = if !handled_native && flush_cb != 0 && readable_id != 0 {
         Some(js_closure_call1(
             flush_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
             readable_id as f64,
         ))
     } else {

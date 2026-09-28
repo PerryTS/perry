@@ -32,44 +32,21 @@
 //! declares N parameters reads only the first N (`wide_call.rs`).
 
 /// The receiver a JS body takes as its second native parameter
-/// (`perry_abi::JS_BODY_THIS_PARAM`): the NaN-boxed `this` bits, passed in an
-/// integer register. Defined once in perry-abi and shared with perry-ffi.
-///
-/// Stage 1 of this-as-a-parameter: every caller passes the receiver the
-/// implicit-`this` cell holds for the call (a runtime caller reads it with
-/// [`current_this`]), and bodies still read the cell. A native body declares
-/// the parameter and must not assume anything about it yet.
+/// (`perry_abi::JS_BODY_THIS_PARAM`), defined once in perry-abi and shared
+/// with perry-ffi. It is the ONLY way a body learns its receiver: a
+/// method-style caller passes the receiver, a plain call
+/// [`JsThis::UNDEFINED`]. There is no ambient `this` state.
 pub use crate::codegen_abi::JsThis;
 
 const _: () = assert!(crate::codegen_abi::TAG_UNDEFINED == crate::value::TAG_UNDEFINED);
 
-/// The receiver the implicit-`this` cell holds right now: what a body called
-/// at this point would read from the cell. Read through the per-agent pointer
-/// block (`agent_ptrs`), the cheapest path to the cell on every target but
-/// Apple aarch64, where `HotTls` is the fast path.
+/// The receiver of a PLAIN call — a call with no receiver: `f(x)` through a
+/// function value, a callback a builtin invokes without a `thisArg`:
+/// `undefined` (OrdinaryCallBindThis; a sloppy body coerces it to
+/// `globalThis` itself).
 #[inline(always)]
-pub fn current_this() -> JsThis {
-    #[cfg(not(all(
-        target_vendor = "apple",
-        target_arch = "aarch64",
-        target_pointer_width = "64"
-    )))]
-    return JsThis(crate::agent_ptrs::implicit_this_bits());
-    #[cfg(all(
-        target_vendor = "apple",
-        target_arch = "aarch64",
-        target_pointer_width = "64"
-    ))]
-    return JsThis(crate::object::implicit_this_bits());
-}
-
-/// The receiver a runtime caller passes for a PLAIN call (a call with no
-/// receiver of its own). Stage 1 keeps the plain-call behavior of the cell:
-/// a plain call runs with whatever the cell holds, so this is
-/// [`current_this`], and the entry it is passed to binds nothing.
-#[inline(always)]
-pub fn plain_call_receiver() -> JsThis {
-    current_this()
+pub const fn plain_call_receiver() -> JsThis {
+    JsThis::UNDEFINED
 }
 
 /// The native type of a JS body taking the receiver and one `f64` per
@@ -174,3 +151,19 @@ pub(crate) use {
     js_bare_body_fn, js_body_call, js_body_call_unwind, js_body_fn, js_body_fn_ty,
     js_method_body_call, js_method_body_fn,
 };
+
+/// Call function value `func` with receiver `this` and `args`: the Rust-side
+/// method-style call (`thisArg` of a builtin, an emitter, a getter's holder).
+/// A plain call passes [`plain_call_receiver`].
+///
+/// # Safety
+/// As [`crate::closure::js_native_call_value`].
+#[inline]
+pub unsafe fn call_value(func: f64, this: JsThis, args: &[f64]) -> f64 {
+    let ptr = if args.is_empty() {
+        std::ptr::null()
+    } else {
+        args.as_ptr()
+    };
+    crate::closure::native_call_value_this(func, this, ptr, args.len())
+}

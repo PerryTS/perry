@@ -321,17 +321,15 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     let handler_h = scope.root_nanbox_f64(handler);
     let event_h = scope.root_nanbox_f64(event);
     let port_h = scope.root_nanbox_f64(port_box);
-    let prev_this = scope.root_nanbox_f64(object::js_implicit_this_set(port_h.get_nanbox_f64()));
     let args = [event_h.get_nanbox_f64()];
     unsafe {
-        let _ = crate::closure::js_native_call_value(
+        let _ = crate::closure::native_call_value_this(
             handler_h.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(port_h.get_nanbox_f64()),
             args.as_ptr(),
             args.len(),
         );
     }
-    object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 /// Macrotask body: deliver exactly one queued message to `port_box`'s port.

@@ -111,18 +111,14 @@ pub(super) fn call(
     args: &List<'_>,
     memory: &MemoryBudget,
 ) -> Result<f64, EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
-        let result = api::caught(|| {
+        return api::caught(|| {
             crate::proxy::js_proxy_apply(
                 method.get_nanbox_f64(),
                 receiver.get_nanbox_f64(),
                 args.value(),
             )
         });
-        crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-        return result;
     }
     let mut slots = Vec::<std::cell::UnsafeCell<f64>>::new();
     slots
@@ -146,15 +142,13 @@ pub(super) fn call(
         slots.capacity().checked_mul(8).ok_or(StorageError::Limit)?,
     )?;
     let result = api::caught(|| unsafe {
-        crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             method.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
             slots.as_ptr().cast(),
             slots.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     drop(reservation);
     drop(frame);
     drop(slots);
@@ -212,8 +206,6 @@ pub(super) fn call_native(
             crate::gc::js_shadow_frame_pop(self.0);
         }
     }
-    let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let slots = &args.slots;
     for slot in slots {
         // SAFETY: nothing else holds a reference to these cells, and the
@@ -232,15 +224,13 @@ pub(super) fn call_native(
         slots.len().checked_mul(8).ok_or(StorageError::Limit)?,
     )?;
     let result = api::caught(|| unsafe {
-        crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             method.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
             slots.as_ptr().cast(),
             slots.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     drop(reservation);
     drop(frame);
     result

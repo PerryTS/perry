@@ -3,11 +3,11 @@
 //! The runtime keeps its hottest per-thread state in one `HotTls` block whose
 //! address every thread publishes under a pthread key (`tls_hot.rs`); on this
 //! platform the pthread TSD array is addressable straight from
-//! `TPIDRRO_EL0`, which is how `pthread_getspecific` itself works. Two runtime
-//! entries generated code calls on every dynamically-dispatched method call —
-//! `js_implicit_this_set` (the save and the restore) — and the once-per-
-//! allocating-activation `js_inline_arena_state` do nothing but that lookup
-//! plus one load or store, so the lookup is emitted here instead:
+//! `TPIDRRO_EL0`, which is how `pthread_getspecific` itself works. Runtime
+//! entries that do nothing but that lookup plus one load or store — the
+//! once-per-allocating-activation `js_inline_arena_state`, and the agent
+//! pointer block read (`agent_ptr.rs`) — have the lookup emitted here
+//! instead:
 //!
 //! ```text
 //!   key  = load @PERRY_HOT_TSD_KEY          ; -1 = no direct path
@@ -33,8 +33,6 @@ use crate::types::{I64, I8, PTR};
 
 /// `HotTls::inline_state` — see `tls_hot::HOT_TLS_INLINE_STATE_OFFSET`.
 pub(crate) const HOT_TLS_INLINE_STATE_OFFSET: &str = "8";
-/// `HotTls::implicit_this` — see `tls_hot::HOT_TLS_IMPLICIT_THIS_OFFSET`.
-pub(crate) const HOT_TLS_IMPLICIT_THIS_OFFSET: &str = "128";
 
 /// Is the inline hot-cache access available for this compile's target?
 pub(crate) fn inline_hot_tls_enabled(ctx: &FnCtx<'_>) -> bool {
@@ -119,13 +117,6 @@ mod layout_tie_tests {
             super::HOT_TLS_INLINE_STATE_OFFSET.parse::<usize>().unwrap(),
             runtime_offset("HOT_TLS_INLINE_STATE_OFFSET"),
             "codegen emits a stale HotTls::inline_state offset",
-        );
-        assert_eq!(
-            super::HOT_TLS_IMPLICIT_THIS_OFFSET
-                .parse::<usize>()
-                .unwrap(),
-            runtime_offset("HOT_TLS_IMPLICIT_THIS_OFFSET"),
-            "codegen emits a stale HotTls::implicit_this offset",
         );
     }
 }

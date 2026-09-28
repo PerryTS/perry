@@ -35,7 +35,7 @@ pub use alloc::{
 pub(crate) use alloc::{
     closure_install_boxed_captures, gc_capture_slot_range, singleton_closure_if_cached,
 };
-pub use body_call::{current_this, plain_call_receiver, JsThis};
+pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;
 
 pub(crate) use registry::closure_registry_census;
@@ -67,6 +67,7 @@ pub use registry::{
     BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, NO_THIS_REBIND_FLAG,
 };
 
+pub(crate) use dispatch::native_call_value_this;
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
     coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,

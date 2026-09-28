@@ -1259,7 +1259,7 @@ pub(super) fn compile_function(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,

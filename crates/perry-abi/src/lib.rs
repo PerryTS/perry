@@ -10,14 +10,13 @@
 pub const ARRAY_HEADER_SIZE: usize = 8;
 
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
-/// Slot 0 is reserved (the megamorphic follow-up's shape-record directory).
+/// Slot 0 is reserved (the megamorphic follow-up's shape-record directory);
+/// slot 1 held the implicit-`this` cell's address until this-as-a-parameter
+/// deleted the cell, and is free.
 pub const AGENT_PTR_SLOTS: usize = 4;
-/// Slot 1: the address of this agent's implicit-`this` cell
-/// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
-pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;
-/// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): directly
-/// after `implicit_this` (128), behind fixed-size fields only.
-pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 136;
+/// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): the first
+/// inline value, behind fixed-size fields only.
+pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 128;
 
 /// `closure::ClosureHeader` (LP64): the u32 capture count at 0, the ShapeId
 /// at 4 (the same word as `ObjectHeader`), the code pointer at 8, the shaped
@@ -56,10 +55,8 @@ pub const GC_HEADER_SIZE: usize = 8;
 /// `closure/body_call.rs`; emitted code only through
 /// `expr::body_call::emit_js_body_call`.
 ///
-/// While the implicit-`this` cell still exists (this-as-a-parameter stage 1),
-/// bodies read the cell: every call entry passes its `this` argument as the
-/// body's receiver parameter AND binds the cell to it for the call when the
-/// cell holds anything else, so the parameter and the cell never disagree.
+/// The `this` parameter is the only way a body learns its receiver: a
+/// method-style caller passes the receiver, a plain call `undefined`.
 pub const JS_BODY_CALLEE_PARAM: usize = 0;
 /// Native parameter index of the receiver (`this`) bits.
 pub const JS_BODY_THIS_PARAM: usize = 1;

@@ -32,17 +32,15 @@ pub(super) unsafe fn call_object_to_string_method(object: f64) -> Option<f64> {
     if !crate::closure::is_closure_ptr(method_ptr) {
         throw_object_to_string_not_function();
     }
+    // Re-read: the key allocation and the method read can move the receiver.
+    let receiver = object_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
+    Some(crate::closure::native_call_value_this(
         f64::from_bits(bound),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
         std::ptr::null(),
         0,
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    Some(result)
+    ))
 }
 
 pub(crate) unsafe fn js_object_default_value_of(receiver: f64) -> f64 {

@@ -33,10 +33,9 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(
         crate::object::regex_proto_thunks::scan_canonical_test_site_roots_mut,
     );
-    gc_register_mutable_root_scanner(crate::object::scan_implicit_this_roots_mut);
-    // PR #10564 review finding: implicit_this/new_target savepoints in
-    // exception.rs are a second root for whatever these tests displace
-    // IMPLICIT_THIS to across a throw. gc_init registers this in
+    gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
+    // PR #10564 review finding: the new_target savepoint in exception.rs is
+    // a second root for whatever a throw displaces. gc_init registers this in
     // production; the isolation guard clears that registry too.
     gc_register_mutable_root_scanner(crate::exception::scan_exception_roots_mut);
     gc_register_mutable_root_scanner(crate::closure::scan_singleton_closure_roots_mut);

@@ -216,8 +216,10 @@ unsafe fn provider_run_catching(
 }
 
 /// Provider callback wrapper for external EventEmitter-style dispatch. It
-/// additionally restores implicit `this` and can retire a one-shot provider
-/// before propagating a JavaScript exception.
+/// additionally roots the listener receiver for the duration of the callback
+/// and can retire a one-shot provider before propagating a JavaScript
+/// exception. `callback` makes its own JS calls and passes them the receiver
+/// itself: nothing here binds `this` for it.
 #[no_mangle]
 pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
     async_id: u64,
@@ -227,7 +229,7 @@ pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
     data: *mut std::ffi::c_void,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let this_value = scope.root_nanbox_f64(this_value);
+    let _receiver_root = scope.root_nanbox_f64(this_value);
     if let Err(error) = try_enter_resource_scope(provider_ids(async_id)) {
         let error = scope.root_nanbox_f64(error);
         if destroy_after != 0 {
@@ -238,15 +240,11 @@ pub unsafe extern "C" fn js_async_hooks_provider_run_catching_with_this(
         }
         crate::exception::js_throw(error.get_nanbox_f64());
     }
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        this_value.get_nanbox_f64(),
-    ));
     let outcome = crate::exception::js_call_catching(|| callback(data));
     let (threw, result) = match outcome {
         Ok(value) => (false, scope.root_nanbox_f64(value)),
         Err(error) => (true, scope.root_nanbox_f64(error)),
     };
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     let leave = try_leave_resource_scope(async_id);
     let (leave_threw, leave_result) = match leave {
         Ok(()) => (

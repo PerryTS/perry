@@ -84,32 +84,32 @@ extern "C" fn throw_string(
 }
 extern "C" fn search_override(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     gc_collect_minor();
     api::finish(dispatch::set_last_index(&receiver, 7.0));
     receiver.get_nanbox_f64()
 }
 extern "C" fn search_throw(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     api::finish(dispatch::set_last_index(&receiver, 7.0));
     crate::exception::js_throw(902.0)
 }
 extern "C" fn global_override(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     gc_collect_minor();
     let count = api::finish(dispatch::get(&receiver, b"calls"));
     if count == 0.0 {

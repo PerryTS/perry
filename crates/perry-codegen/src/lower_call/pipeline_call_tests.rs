@@ -86,17 +86,10 @@ fn immutable_function_alias_calls_the_known_symbol_directly() {
 }
 
 #[test]
-fn mutable_function_alias_keeps_guarded_receiverless_dispatch() {
+fn mutable_function_alias_keeps_guarded_plain_dispatch() {
     let ir = alias_call_ir(true);
-    // A plain call passes `undefined`; the entry owns binding it.
     assert!(
-        ir.lines()
-            .any(|l| l.contains("call double @js_closure_call1(")
-                && l.contains(&format!("i64 {}, double", crate::nanbox::TAG_UNDEFINED_I64))),
+        ir.contains("call double @js_closure_call1("),
         "a mutable alias has no stable target and must retain dynamic dispatch:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_implicit_this_set"),
-        "the arrow-aware call entry owns receiverless this binding:\n{ir}"
     );
 }

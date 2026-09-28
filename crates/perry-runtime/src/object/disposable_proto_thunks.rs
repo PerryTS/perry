@@ -5,7 +5,7 @@
 //! runtime helpers and never touch these thunks. The thunks exist for the
 //! *reflective* path — `DisposableStack.prototype.use`, method extraction
 //! (`const use = stack.use`), `.call`/`.apply`, and Test262's `verifyProperty`
-//! descriptor checks. Each reads the `IMPLICIT_THIS` receiver, brand-checks it
+//! descriptor checks. Each takes the receiver as `this`, brand-checks it
 //! against the stack class id, throws a `TypeError` on an incompatible
 //! receiver, and otherwise dispatches to the shared runtime helper.
 //!
@@ -29,7 +29,7 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
     ))
 }
 
-/// Resolve `IMPLICIT_THIS` to a stack `ObjectHeader` of the expected class id,
+/// Resolve the `this` receiver to a stack `ObjectHeader` of the expected class id,
 /// or throw a `TypeError`.
 fn stack_receiver_or_throw(
     this: crate::closure::JsThis,

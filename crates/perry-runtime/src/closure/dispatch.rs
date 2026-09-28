@@ -40,6 +40,7 @@ pub use calln::{
 };
 pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
 
+pub(crate) use value_call::native_call_value_this;
 pub use value_call::{
     js_closure_call_apply_with_spread, js_closure_call_array, js_native_call_value,
 };

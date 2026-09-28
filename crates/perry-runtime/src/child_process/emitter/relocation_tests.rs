@@ -22,10 +22,10 @@ extern "C" fn relocate(
 
 extern "C" fn observe(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    let target = crate::object::js_implicit_this_get();
+    let target = this.as_f64();
     cp_set_field(target, b"seen", arg);
     cp_undefined()
 }

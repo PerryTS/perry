@@ -1,14 +1,14 @@
-//! This-as-a-parameter stage 1: a JS body is
-//! `body(callee, this, a0, ...)` (`perry_abi::JS_BODY_*`), and every runtime
-//! route into it passes, as `this`, the receiver the implicit-`this` cell
-//! holds — with the JS arguments still in their own positions after it.
+//! This-as-a-parameter: a JS body is `body(callee, this, a0, ...)`
+//! (`perry_abi::JS_BODY_*`), and every runtime route into it passes, as `this`,
+//! the receiver its caller supplied — with the JS arguments still in their own
+//! positions after it. A plain call supplies `undefined`.
 //!
-//! Each test binds a receiver in the cell, calls a probe body through one
-//! dispatch route (exact arity, padded arity, rest bundling, the padded wide
-//! ladder, a hoisted `DirectCallN`), and checks what the probe received.
-//! Sabotage: the funnel passes anything but `current_this()` -> the
-//! receiver assertions fail; the funnel drops the receiver argument (the
-//! arguments shift one slot) -> the argument assertions fail.
+//! Each test calls a probe body with an explicit receiver through one dispatch
+//! route (exact arity, padded arity, rest bundling, the padded wide ladder, a
+//! hoisted `DirectCallN`), and checks what the probe received.
+//! Sabotage: a route passes anything but its `this` argument -> the receiver
+//! assertions fail; a route drops the receiver argument (the arguments shift
+//! one slot) -> the argument assertions fail.
 
 use super::*;
 use std::cell::{Cell, RefCell};
@@ -58,30 +58,19 @@ wide_probe!(
 
 const UNDEF: u64 = crate::value::TAG_UNDEFINED;
 
-/// Bind `receiver` in the cell for the duration of `f`, as a method dispatch does.
-fn with_receiver<R>(receiver: f64, f: impl FnOnce() -> R) -> R {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let _bind = crate::object::ImplicitThisScope::bind(&scope, receiver);
-    f()
-}
-
 fn receiver() -> f64 {
     f64::from_bits(crate::value::JSValue::int32(4242).bits())
 }
 
+fn this() -> JsThis {
+    JsThis::from_f64(receiver())
+}
+
 #[test]
-fn an_exact_arity_call_passes_the_cell_receiver_then_the_arguments() {
+fn an_exact_arity_call_passes_the_receiver_then_the_arguments() {
     let closure = js_closure_alloc(probe3 as *const u8, 0);
     js_register_closure_arity(probe3 as *const u8, 3);
-    let r = with_receiver(receiver(), || {
-        js_closure_call3(
-            closure,
-            crate::closure::plain_call_receiver(),
-            1.0,
-            2.0,
-            3.0,
-        )
-    });
+    let r = js_closure_call3(closure, this(), 1.0, 2.0, 3.0);
     assert_eq!(r, 3.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits(), "the body's `this` parameter");
@@ -92,9 +81,7 @@ fn an_exact_arity_call_passes_the_cell_receiver_then_the_arguments() {
 fn a_padded_call_passes_the_receiver_and_pads_after_it() {
     let closure = js_closure_alloc(probe3 as *const u8, 0);
     js_register_closure_arity(probe3 as *const u8, 3);
-    with_receiver(receiver(), || {
-        js_closure_call1(closure, crate::closure::plain_call_receiver(), 9.0)
-    });
+    js_closure_call1(closure, this(), 9.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(args, vec![9f64.to_bits(), UNDEF, UNDEF]);
@@ -104,16 +91,7 @@ fn a_padded_call_passes_the_receiver_and_pads_after_it() {
 fn a_rest_bundled_call_passes_the_receiver_before_the_fixed_arguments() {
     let closure = js_closure_alloc(probe_rest as *const u8, 0);
     js_register_closure_rest(probe_rest as *const u8, 1);
-    with_receiver(receiver(), || {
-        js_closure_call4(
-            closure,
-            crate::closure::plain_call_receiver(),
-            5.0,
-            6.0,
-            7.0,
-            8.0,
-        )
-    });
+    js_closure_call4(closure, this(), 5.0, 6.0, 7.0, 8.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(
@@ -128,14 +106,8 @@ fn a_wide_call_passes_the_receiver_and_every_argument_slot() {
     let closure = js_closure_alloc(probe_wide as *const u8, 0);
     js_register_closure_arity(probe_wide as *const u8, 36);
     let args: Vec<f64> = (0..36).map(f64::from).collect();
-    let r = with_receiver(receiver(), || unsafe {
-        js_closure_call_array(
-            closure as i64,
-            crate::closure::plain_call_receiver(),
-            args.as_ptr(),
-            args.len() as i64,
-        )
-    });
+    let r =
+        unsafe { js_closure_call_array(closure as i64, this(), args.as_ptr(), args.len() as i64) };
     assert_eq!(r, 0.0);
     let (this, seen_args) = seen();
     assert_eq!(this, receiver().to_bits());
@@ -146,39 +118,33 @@ fn a_wide_call_passes_the_receiver_and_every_argument_slot() {
 }
 
 #[test]
-fn a_hoisted_direct_call_passes_the_cell_receiver() {
+fn a_hoisted_direct_call_passes_the_receiver() {
     let closure = js_closure_alloc(probe3 as *const u8, 0);
     js_register_closure_arity(probe3 as *const u8, 3);
     let site = DirectCall3::resolve(closure);
     assert!(site.is_direct(), "the probe resolves to a direct call");
-    with_receiver(receiver(), || {
-        site.call(
-            closure,
-            crate::closure::plain_call_receiver(),
-            1.0,
-            2.0,
-            3.0,
-        )
-    });
+    site.call(closure, this(), 1.0, 2.0, 3.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
     assert_eq!(args, vec![1f64.to_bits(), 2f64.to_bits(), 3f64.to_bits()]);
 }
 
 #[test]
-fn the_witness_counts_a_parameter_that_disagrees_with_the_cell() {
-    let (checks0, mismatches0) = crate::object::this_witness_counts();
-    let receiver_bits = receiver().to_bits();
-    with_receiver(receiver(), || {
-        crate::object::js_this_param_witness(receiver_bits, std::ptr::null(), 0);
-        crate::object::js_this_param_witness(UNDEF, std::ptr::null(), 0);
-    });
-    let (checks1, mismatches1) = crate::object::this_witness_counts();
-    // Counters are process-wide; other tests may witness concurrently, so
-    // only lower bounds are exact.
-    assert!(checks1 >= checks0 + 2);
-    assert!(
-        mismatches1 > mismatches0,
-        "a disagreeing `this` was not counted"
+fn a_plain_call_passes_undefined_even_inside_a_receiver_call() {
+    let closure = js_closure_alloc(probe3 as *const u8, 0);
+    js_register_closure_arity(probe3 as *const u8, 3);
+    js_closure_call3(closure, this(), 1.0, 2.0, 3.0);
+    js_closure_call3(
+        closure,
+        crate::closure::plain_call_receiver(),
+        4.0,
+        5.0,
+        6.0,
     );
+    let (this, args) = seen();
+    assert_eq!(
+        this, UNDEF,
+        "a plain call must not inherit an earlier receiver"
+    );
+    assert_eq!(args, vec![4f64.to_bits(), 5f64.to_bits(), 6f64.to_bits()]);
 }

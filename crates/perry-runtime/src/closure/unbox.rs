@@ -39,7 +39,7 @@ pub extern "C-unwind" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
 /// the fused member-call lowering (`o.m(args)` compiled as property-get +
 /// `js_closure_callN`). An object-literal method carries its `this` baked
 /// into a reserved capture slot at construction time, and that slot WINS over
-/// the `IMPLICIT_THIS` cell codegen sets around the call — so a method
+/// the `this` parameter codegen passes to the call — so a method
 /// inherited through `Object.setPrototypeOf(obj, proto)` ran with `this`
 /// bound to the PROTO literal instead of the receiver. `js_native_call_method`
 /// (the by-name dispatcher) already rebinds via `clone_closure_rebind_this`;

@@ -590,14 +590,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Re-read below every allocation above: the slot is a mutable root
             // an evacuating cycle rewrites in place.
             let cb_box = callee_group.reread(ctx, cb_root)?;
-            // Stage 1: `f(...xs)` runs with the implicit-`this` cell's value.
-            let this_bits = crate::expr::body_call::current_this_bits(ctx);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_closure_call_apply_with_spread",
                 &[
                     (DOUBLE, &cb_box),
-                    (I64, &this_bits),
+                    // `f(...xs)`: a plain call.
+                    (I64, crate::expr::body_call::JS_THIS_UNDEFINED),
                     (crate::types::PTR, &regs_ptr),
                     (I64, &regs_len),
                     (I64, &spread_handle),

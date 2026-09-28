@@ -321,7 +321,7 @@ pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
 /// original under a setjmp trap so a sync `throw` rejects the promise.
 extern "C" fn outer_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest_value: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -332,6 +332,9 @@ extern "C" fn outer_thunk(
         js_closure_get_capture_f64(closure, 0)
     };
     let fn_handle = scope.root_nanbox_f64(fn_value);
+    // Node calls `original` with the wrapper's own receiver
+    // (`ReflectApply(original, this, args)`).
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
 
     let promise_ptr = js_promise_new();
     if promise_ptr.is_null() {
@@ -406,7 +409,7 @@ extern "C" fn outer_thunk(
                 unsafe {
                     crate::closure::js_native_call_value(
                         fn_handle.get_nanbox_f64(),
-                        crate::closure::plain_call_receiver(),
+                        crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
                         data,
                         n,
                     );
@@ -462,7 +465,7 @@ extern "C" fn inner_callback_thunk(
 /// `customPromisifyArgs`) rather than just the public key.
 extern "C" fn gkp_outer_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest_value: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -473,6 +476,9 @@ extern "C" fn gkp_outer_thunk(
         js_closure_get_capture_f64(closure, 0)
     };
     let fn_handle = scope.root_nanbox_f64(fn_value);
+    // Node calls `original` with the wrapper's own receiver
+    // (`ReflectApply(original, this, args)`).
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
 
     let promise_ptr = js_promise_new();
     if promise_ptr.is_null() {
@@ -540,7 +546,7 @@ extern "C" fn gkp_outer_thunk(
                 unsafe {
                     crate::closure::js_native_call_value(
                         fn_handle.get_nanbox_f64(),
-                        crate::closure::plain_call_receiver(),
+                        crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
                         data,
                         n,
                     );
@@ -628,7 +634,7 @@ extern "C" fn gkp_inner_callback_thunk(
 /// `rest_value`, emits one warning per wrapper, then forwards the call.
 extern "C" fn deprecate_outer_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest_value: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -640,6 +646,9 @@ extern "C" fn deprecate_outer_thunk(
     let msg = js_closure_get_capture_f64(closure, 1);
     let code = js_closure_get_capture_f64(closure, 2);
     let fn_handle = scope.root_nanbox_f64(fn_value);
+    // Node calls `original` with the wrapper's own receiver
+    // (`ReflectApply(original, this, args)`).
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
     let msg_handle = scope.root_nanbox_f64(msg);
     let code_handle = scope.root_nanbox_f64(code);
     let rest_handle = scope.root_nanbox_f64(rest_value);
@@ -678,7 +687,7 @@ extern "C" fn deprecate_outer_thunk(
     unsafe {
         crate::closure::js_native_call_value(
             fn_handle.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
             rest_data,
             rest_len,
         )
@@ -691,7 +700,7 @@ extern "C" fn deprecate_outer_thunk(
 /// argument is forwarded to the original promise-returning function.
 extern "C" fn callbackify_outer_thunk(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest_value: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -702,6 +711,9 @@ extern "C" fn callbackify_outer_thunk(
         js_closure_get_capture_f64(closure, 0)
     };
     let fn_handle = scope.root_nanbox_f64(fn_value);
+    // Node calls `original` with the wrapper's own receiver
+    // (`ReflectApply(original, this, args)`).
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
 
     let rest_bits = rest_value.to_bits();
     let rest_arr_ptr = if (rest_bits & TAG_MASK) == POINTER_TAG {
@@ -743,7 +755,7 @@ extern "C" fn callbackify_outer_thunk(
         let data = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         crate::closure::js_native_call_value(
             fn_handle.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
             data,
             original_arg_len,
         )
@@ -816,18 +828,14 @@ extern "C" fn callbackify_outer_thunk(
         let on_rejected =
             nanbox_pointer(rejected_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
         let args = [on_fulfilled, on_rejected];
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-            returned_handle.get_nanbox_f64(),
-        ));
         unsafe {
-            crate::closure::js_native_call_value(
+            crate::closure::native_call_value_this(
                 then_handle.get_nanbox_f64(),
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(returned_handle.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return TAG_UNDEFINED_F64;
     }
 

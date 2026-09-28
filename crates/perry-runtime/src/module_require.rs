@@ -1529,7 +1529,7 @@ static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambien
 pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
     require_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         spec,
     )
 }

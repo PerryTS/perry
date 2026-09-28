@@ -92,10 +92,10 @@ pub(crate) fn is_constructor_function(value: f64) -> bool {
 /// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no
 /// `apply` trap). If `target` is itself a proxy, recurse so its own trap chain
 /// runs; otherwise invoke the target through the canonical value-call path with
-/// `this_arg` bound via `IMPLICIT_THIS`. Routing through `js_native_call_value`
-/// (rather than calling the closure directly) also recovers built-in prototype
-/// methods invoked as values — e.g. forwarding to `Object.prototype.hasOwnProperty`
-/// re-dispatches by name with the receiver taken from `IMPLICIT_THIS`.
+/// `this_arg` as its receiver. Routing through the value-call path (rather than
+/// calling the closure directly) also recovers built-in prototype methods
+/// invoked as values — e.g. forwarding to `Object.prototype.hasOwnProperty`
+/// re-dispatches by name with `this_arg` as the receiver.
 fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
     if lookup(target).is_some() {
         return js_proxy_apply(target, this_arg, args_array);
@@ -121,20 +121,16 @@ fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
     } else {
         (buf.as_ptr(), buf.len())
     };
-    let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        this_arg.get_nanbox_f64(),
-    ));
     // Keep the native argument owner above the trap. A JS longjmp would
     // otherwise bypass Vec::drop on every throwing forwarded proxy call.
     let result = crate::exception::catch_js_throw(|| unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             target.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_arg.get_nanbox_f64()),
             ptr,
             n,
         )
     });
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     drop(buf);
     match result {
         Ok(value) => value,
@@ -155,7 +151,6 @@ pub fn call_proxy_value_with_this(proxy: f64, this_arg: f64, args: &[f64]) -> f6
     let proxy_h = scope.root_nanbox_f64(proxy);
     let this_h = scope.root_nanbox_f64(this_arg);
     let arg_handles: Vec<_> = args.iter().map(|a| scope.root_nanbox_f64(*a)).collect();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let result = crate::exception::catch_js_throw(|| {
         let arr_h = scope
             .root_nanbox_u64(POINTER_TAG | (crate::array::js_array_alloc(0) as u64 & POINTER_MASK));
@@ -170,7 +165,6 @@ pub fn call_proxy_value_with_this(proxy: f64, this_arg: f64, args: &[f64]) -> f6
             f64::from_bits(arr_h.get_nanbox_u64()),
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     drop(arg_handles);
     match result {
         Ok(value) => value,
@@ -243,26 +237,22 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
     }
     // Invoke the trap with the handler bound as `this` and the spec argument
     // list (target, thisArgument, argArray). Object-literal/free-function traps
-    // read `this` from a closure slot and/or the IMPLICIT_THIS fallback, so we
-    // set both — mirroring the `Reflect.get` accessor path.
+    // read `this` from a closure slot and/or the `this` parameter, so we
+    // supply both — mirroring the `Reflect.get` accessor path.
     let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return throw_type_error("proxy apply trap is not a function");
     }
-    let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        handler.get_nanbox_f64(),
-    ));
     let result = crate::exception::catch_js_throw(|| {
         js_closure_call3(
             closure,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(handler.get_nanbox_f64()),
             target.get_nanbox_f64(),
             this_arg.get_nanbox_f64(),
             args_array.get_nanbox_f64(),
         )
     });
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     match result {
         Ok(value) => value,
         Err(error) => crate::exception::js_throw(error),
@@ -372,19 +362,15 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
         if closure.is_null() {
             return throw_type_error("proxy construct trap is not a function");
         }
-        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-            handler.get_nanbox_f64(),
-        ));
         let result = crate::exception::catch_js_throw(|| {
             js_closure_call3(
                 closure,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(handler.get_nanbox_f64()),
                 target.get_nanbox_f64(),
                 args_array.get_nanbox_f64(),
                 nt.get_nanbox_f64(),
             )
         });
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         match result {
             Ok(value) => value,
             Err(error) => crate::exception::js_throw(error),

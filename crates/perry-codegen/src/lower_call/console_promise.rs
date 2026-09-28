@@ -14,8 +14,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::rooting::{
-    any_operand_may_collect, implicit_this_restore, implicit_this_save, operand_may_collect,
-    with_operands_rooted, with_rooted_group,
+    any_operand_may_collect, operand_may_collect, with_operands_rooted, with_rooted_group,
 };
 
 use crate::expr::{
@@ -1364,21 +1363,17 @@ pub fn try_lower_closure_call_fallthrough(
     // The runtime checks the closure header on its own — if the value
     // isn't actually a closure, js_closure_call<N> handles the error.
     // Issue #519: when the callee shape is `recv.method(args)` (a
-    // PropertyGet) — i.e. a method-style invocation — bind the
-    // receiver as the implicit `this` for the duration of the call.
-    // Non-arrow function bodies (including FuncRef wrappers) read
-    // `this` via `js_implicit_this_get` when their lexical
-    // this_stack is empty (codegen Expr::This fallback). Without
-    // this save/set/restore, hono's `RegExpRouter.match = match`
-    // (where `match` is an imported function declaration whose
-    // body does `this.buildAllMatchers()`) sees `this = undefined`
-    // and TypeErrors out at the first chained method call.
+    // PropertyGet) — i.e. a method-style invocation — pass the receiver as
+    // the body's `this` (`js_closure_call{N}(closure, this, ..)`). Without it, hono's
+    // `RegExpRouter.match = match` (where `match` is an imported function
+    // declaration whose body does `this.buildAllMatchers()`) sees
+    // `this = undefined` and TypeErrors out at the first chained method call.
     //
     // We evaluate `object` once into a fresh slot so that
     // (a) it's only side-effect-evaluated once, and
     // (b) the lowered `callee` (which re-reads `object` to get the
-    //     property) and the IMPLICIT_THIS save/set both see the
-    //     same receiver value.
+    //     property) and the receiver passed as `this` are the same
+    //     value.
     //
     // The `this`-binding / closure-unbox setup below is arity-independent;
     // only the final dispatch differs. Arities 0..=16 use the per-arity
@@ -1578,67 +1573,6 @@ fn lower_closure_call_rooted<'a>(
         None => None,
     };
     let recv_box = group.reread(ctx, callee_slot)?;
-    // One-argument receiverless calls pass `undefined` to the call entry,
-    // which binds the implicit-`this` cell to it only for a non-arrow callee
-    // (arrow-ness comes from the existing closure-strategy cache). Other
-    // arities retain the generated save/restore path below.
-    let receiverless_one_arg =
-        method_recv.is_none() && !matches!(callee, Expr::PropertyGet { .. }) && args.len() == 1;
-
-    // #7211: the value `js_implicit_this_set` hands back is the PREVIOUS
-    // implicit `this`, read straight out of the `IMPLICIT_THIS` cell — which
-    // `object/this_binding.rs:176` registers as a scanned MUTABLE root the
-    // collector rewrites in place (`scan_implicit_this_roots_mut`). The swap
-    // has already overwritten the cell by the time we hold it, so this
-    // register is now the only copy this frame has, and it stays live across
-    // the allocating rebind unbox below AND the entire user-code dispatch.
-    //
-    // Two ways that hurts, and the second is the one that makes this worse
-    // than an ordinary stale read:
-    //
-    //  * the enclosing frame still roots the same object (its own operand
-    //    group, one temp-root frame down), so an evacuating minor inside the
-    //    callee MOVES it and rewrites that root — leaving this register
-    //    naming from-space. The restore then publishes a pre-move address
-    //    back INTO a root the collector scans, so the corruption outlives the
-    //    call that caused it and surfaces in whatever reads `this` next.
-    //  * where no other root holds it, the object is simply collected.
-    //
-    // It WAS invisible to `scripts/gc_root_dominance_check.py` at both ends,
-    // which is how it survived #7206 and #7214: `js_implicit_this_set` was
-    // NONCOLLECTING but not in `ROOT_READ_CALLS`, so the register had no
-    // recognised heap-value source, and the restore is not a `RECEIVER_SINKS`
-    // fatal sink, so it would not have ranked even if it had. Being
-    // non-collecting is precisely what makes a call a root READ — the same
-    // rule `js_closure_get_capture_bits` is listed under — and it is now
-    // classified that way, so the checker reports any lowering that
-    // reintroduces this.
-    //
-    // Unconditional, unlike the operand groups above: the window is the user
-    // call itself, so `operand_protection`'s "can this window collect?" test
-    // has exactly one answer here and there is nothing to gate on.
-    //
-    // Six sibling lowerings emit the same pair; `implicit_this_save` /
-    // `implicit_this_restore` is the shared form, so a seventh cannot
-    // reintroduce this by copy-paste.
-    let prev_this_root = if let Some(ref this_val) = method_recv {
-        Some(implicit_this_save(ctx, this_val))
-    } else if !matches!(callee, Expr::PropertyGet { .. }) && !receiverless_one_arg {
-        // Receiverless closure-value call (`fn()`, IIFE, `curry(1)(2)`):
-        // OrdinaryCallBindThis binds `this` to undefined — without the
-        // reset the enclosing method dispatch's IMPLICIT_THIS leaks into
-        // the callee (#3576). Member-shaped callees keep their existing
-        // receiver/skip behavior above.
-        //
-        // The value pushed here is the ENCLOSING method's receiver, not
-        // `undefined`: this arm is the one that runs for `helper()` called
-        // from inside `o.m()`, and dropping that object is #3576's leak with
-        // the sign flipped.
-        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        Some(implicit_this_save(ctx, &undef))
-    } else {
-        None
-    };
 
     // #5247: record the source location right before the throw-capable
     // dispatch — after the receiver/args are lowered, so a nested-call
@@ -1654,7 +1588,7 @@ fn lower_closure_call_rooted<'a>(
     // a function` for any non-`POINTER_TAG` value.
     // #6475: a member-shaped call (`o.m(args)`) must rebind an
     // object-literal method's baked `this` capture slot to the receiver —
-    // the slot wins over the IMPLICIT_THIS cell set above, so a method
+    // the slot wins over the `this` parameter passed below, so a method
     // inherited via `Object.setPrototypeOf(obj, proto)` otherwise runs
     // with `this` bound to the proto literal (effect's Pipeable
     // `TagClass.pipe(...)` composed against the wrong `this` and
@@ -1689,16 +1623,16 @@ fn lower_closure_call_rooted<'a>(
         lowered_args.push(group.reread(ctx, arg_base + i)?);
     }
 
-    let result = if receiverless_one_arg {
-        // A plain call binds `undefined` (OrdinaryCallBindThis); the entry
-        // binds the implicit-`this` cell to it unless the callee is an arrow.
-        super::emit_closure_handle_call_this(
-            ctx,
-            &closure_handle,
-            crate::expr::body_call::JS_THIS_UNDEFINED,
-            &lowered_args,
-        )
+    let result = if recv_slot.is_some() {
+        // A member-shaped call binds its receiver: re-read it from its root
+        // below the (allocating) rebind unbox and pass it as the body's
+        // `this`.
+        let this_val = group.reread(ctx, 0)?;
+        let this_bits = ctx.block().bitcast_double_to_i64(&this_val);
+        super::emit_closure_handle_call_this(ctx, &closure_handle, &this_bits, &lowered_args)
     } else {
+        // A plain call: `js_closure_call{N}` hands the body `undefined`
+        // (OrdinaryCallBindThis; a sloppy body coerces it itself).
         // #3527: > 16 args marshal into an entry-block `[N x double]` buffer and
         // dispatch through the variadic `js_closure_call_array`.
         //
@@ -1710,24 +1644,6 @@ fn lower_closure_call_rooted<'a>(
         super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args)
     };
 
-    // #7211: re-read the saved implicit `this` from its slot. Mandatory, not
-    // defensive, and for the same reason the operand re-reads above are: the
-    // temp-root slot is a MUTABLE root, so an evacuating cycle anywhere inside
-    // the dispatch rewrote the slot and left the register that was pushed
-    // naming from-space. Restoring the register instead of the slot is the
-    // whole bug.
-    //
-    // Ordered inner-to-outer: this slot was pushed above `roots`' first slot,
-    // so it is dropped first and `roots.release` then drops the group below
-    // it. `js_gc_temp_root_truncate` drops everything at or above its
-    // argument, so `roots.release` alone would in fact take this slot with it
-    // — but only when `roots` actually pushed one, and a receiverless call on
-    // inert arguments pushes nothing at all. Releasing this one explicitly is
-    // what makes the order correct in both shapes rather than in the common
-    // one.
-    if let Some(prev) = prev_this_root {
-        implicit_this_restore(ctx, prev);
-    }
     // The group is released by `with_rooted_group` AFTER this returns, which is
     // after the dispatch — the dispatcher allocates while it reads these values.
     Ok(Some(result))

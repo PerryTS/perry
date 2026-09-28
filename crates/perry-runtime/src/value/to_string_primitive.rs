@@ -175,8 +175,6 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
     } else {
         [b"valueOf", b"toString"]
     };
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for name in order {
         let recv = value_handle.get_nanbox_f64();
         // #10510: a runtime-spelled literal — reuse the interned key instead
@@ -199,15 +197,12 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
             return time;
         }
         let method_handle = scope.root_nanbox_f64(method);
-        let recv = value_handle.get_nanbox_f64();
-        crate::object::js_implicit_this_set(recv);
-        let result = crate::closure::js_native_call_value(
+        let result = crate::closure::native_call_value_this(
             method_handle.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
             std::ptr::null(),
             0,
         );
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         if is_primitive_value(result) {
             return result;
         }
@@ -459,16 +454,15 @@ pub(crate) unsafe fn call_own_method(method: f64, receiver: f64) -> Option<f64> 
     // Rebind `this` to the receiver — an assigned closure may have baked a
     // different value into its reserved `this` slot (an inherited or bound
     // method), exactly as the method-dispatch tower does (#1982).
-    let bound = crate::closure::clone_closure_rebind_this(bits, receiver);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let ret = crate::closure::js_native_call_value(
+    let receiver = this_scope.root_nanbox_f64(receiver);
+    let bound = crate::closure::clone_closure_rebind_this(bits, receiver.get_nanbox_f64());
+    let ret = crate::closure::native_call_value_this(
         f64::from_bits(bound),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
         std::ptr::null(),
         0,
     );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     Some(ret)
 }
 
@@ -639,14 +633,12 @@ unsafe fn call_method_for_primitive(
     // receiver, so rebinding is a correct no-op. Mirrors #1982.
     let recv = value_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let ret = crate::closure::js_native_call_value(
+    let ret = crate::closure::native_call_value_this(
         f64::from_bits(bound),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         std::ptr::null(),
         0,
     );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     let ret_jsv = JSValue::from_bits(ret.to_bits());
     let is_primitive = ret_jsv.is_any_string()
         || ret_jsv.is_number()
@@ -699,14 +691,12 @@ unsafe fn call_function_method(
 
     let method_handle = scope.root_nanbox_f64(method);
     let bound = crate::closure::clone_closure_rebind_this(method_handle.get_nanbox_u64(), recv);
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let ret = crate::closure::js_native_call_value(
+    let ret = crate::closure::native_call_value_this(
         f64::from_bits(bound),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         std::ptr::null(),
         0,
     );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 
     FunctionMethodOutcome::Value(ret)
 }

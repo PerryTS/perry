@@ -600,16 +600,14 @@ fn sys_namespace_types_member_reuses_util_types() {
 fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
     let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
     let end = get_object_property(stream, b"end").expect("stream.end should exist");
-    let prev_this = crate::object::js_implicit_this_set(stream);
     unsafe {
-        let _ = crate::closure::js_native_call_value(
+        let _ = crate::closure::native_call_value_this(
             end,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(stream),
             std::ptr::null(),
             0,
         );
     }
-    crate::object::js_implicit_this_set(prev_this);
     let _ = crate::promise::js_promise_run_microtasks();
 
     let opts = js_object_alloc(0, 1);
@@ -621,7 +619,7 @@ fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
 
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         boxed_ptr(opts as *const u8),
     );
@@ -638,7 +636,7 @@ fn stream_promises_finished_resolves_for_finished_writable_side_stub_stream() {
 fn stream_promises_finished_rejects_invalid_inputs() {
     let number_promise = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         undefined_value(),
     );
@@ -650,7 +648,7 @@ fn stream_promises_finished_rejects_invalid_inputs() {
 
     let string_promise = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         string_value("x"),
         undefined_value(),
     );
@@ -663,7 +661,7 @@ fn stream_promises_finished_rejects_invalid_inputs() {
     let object = js_object_alloc(0, 0);
     let object_promise = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         boxed_ptr(object as *const u8),
         undefined_value(),
     );
@@ -682,7 +680,7 @@ fn stream_promises_finished_rejects_hidden_stream_error() {
 
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         undefined_value(),
     );
@@ -701,7 +699,7 @@ fn stream_promises_finished_rejects_later_destroy_error() {
     crate::node_stream::test_install_manual_read(stream);
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         undefined_value(),
     );
@@ -775,7 +773,7 @@ fn stream_promises_finished_resolves_for_resumed_readable_from() {
 
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         undefined_value(),
     );
@@ -792,7 +790,7 @@ fn stream_promises_finished_duplex_default_waits_after_writable_finish_only() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         undefined_value(),
     );
@@ -816,7 +814,7 @@ fn stream_promises_finished_duplex_default_waits_after_readable_end_only() {
     let stream = crate::node_stream::js_node_stream_duplex_new(undefined_value());
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         undefined_value(),
     );
@@ -841,7 +839,7 @@ fn stream_promises_finished_duplex_readable_false_resolves_after_writable_finish
     let options = finished_bool_option(b"readable", false);
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         options,
     );
@@ -861,7 +859,7 @@ fn stream_promises_finished_duplex_writable_false_resolves_after_readable_end() 
     let options = finished_bool_option(b"writable", false);
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         options,
     );
@@ -928,7 +926,7 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
 
     let promise_value = thunk_streamP_pipeline(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         source,
         boxed_ptr(sink as *const u8),
         undefined_value(),
@@ -945,7 +943,7 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
 fn stream_promises_pipeline_rejects_missing_streams() {
     let direct_promise = thunk_streamP_pipeline(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         undefined_value(),
         undefined_value(),
         undefined_value(),
@@ -959,7 +957,7 @@ fn stream_promises_pipeline_rejects_missing_streams() {
     let empty_rest = crate::array::js_array_alloc(0);
     let rest_promise = thunk_streamP_pipeline(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         undefined_value(),
         boxed_ptr(empty_rest as *const u8),
@@ -975,7 +973,7 @@ fn stream_promises_pipeline_rejects_missing_streams() {
 fn stream_promises_pipeline_rejects_invalid_source_body() {
     let direct_promise = thunk_streamP_pipeline(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         456.0,
         undefined_value(),
@@ -989,7 +987,7 @@ fn stream_promises_pipeline_rejects_invalid_source_body() {
     let empty_rest = crate::array::js_array_alloc(0);
     let rest_promise = thunk_streamP_pipeline(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         123.0,
         456.0,
         boxed_ptr(empty_rest as *const u8),
@@ -1015,7 +1013,7 @@ fn stream_promises_finished_rejects_when_signal_aborts() {
 
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         boxed_ptr(opts as *const u8),
     );
@@ -1044,21 +1042,19 @@ fn stream_promises_finished_with_signal_resolves_for_finished_writable_side_stub
     );
     let stream = crate::node_stream::js_node_stream_passthrough_new(undefined_value());
     let end = get_object_property(stream, b"end").expect("stream.end should exist");
-    let prev_this = crate::object::js_implicit_this_set(stream);
     unsafe {
-        let _ = crate::closure::js_native_call_value(
+        let _ = crate::closure::native_call_value_this(
             end,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(stream),
             std::ptr::null(),
             0,
         );
     }
-    crate::object::js_implicit_this_set(prev_this);
     let _ = crate::promise::js_promise_run_microtasks();
 
     let promise_value = thunk_streamP_finished(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         stream,
         boxed_ptr(opts as *const u8),
     );

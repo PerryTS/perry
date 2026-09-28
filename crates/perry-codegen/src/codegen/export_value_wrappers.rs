@@ -117,18 +117,9 @@ pub(super) fn emit_export_value_wrappers(c: ExportValueWrapperCtx<'_>) {
         let arg_names: Vec<String> = (0..arity).map(|i| format!("%a{}", i)).collect();
         let wrap_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
         let wrap_name = format!("__perry_wrap_{}", original_name);
-        // Stage-1 witness: the function body reads its receiver from the
-        // implicit-`this` cell; its value wrapper is the entry a function
-        // object calls, so it checks the receiver it was passed.
-        let witness_site = if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
-            crate::expr::body_call::this_witness_site(llmod, &wrap_name)
-        } else {
-            None
-        };
         let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
         let _ = wf.create_block("entry");
         let blk = wf.block_mut(0).unwrap();
-        crate::expr::body_call::emit_this_param_witness(blk, witness_site.as_ref());
         // Call the underlying function with the arg doubles — a this-reading
         // function's receiver-taking body with the receiver first.
         let mut result = call_function_body(blk, f, &original_name, &arg_names);

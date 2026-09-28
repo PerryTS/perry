@@ -754,7 +754,7 @@ mod tests {
         ]);
         let f = global_this_function_call_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             rest,
         );
         let args = [

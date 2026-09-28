@@ -1199,7 +1199,7 @@ fn call_async_step_direct(
         crate::closure::body_call::js_body_call!(
             func_ptr,
             step_closure,
-            crate::closure::body_call::current_this(),
+            crate::closure::plain_call_receiver(),
             value,
             is_error_bits
         )

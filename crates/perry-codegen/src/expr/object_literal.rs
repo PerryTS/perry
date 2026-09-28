@@ -898,9 +898,9 @@ mod by_name_method_closure_tests {
     /// the first place.
     ///
     /// Counting patch calls over the WHOLE function would be vacuous: closure
-    /// construction emits `js_closure_set_capture_bits` too (that is how the
-    /// reserved `this` slot is seeded from `js_implicit_this_get`), so the
-    /// count only means something in the tail.
+    /// construction emits `js_closure_set_capture_bits` too (that is how a
+    /// capturing closure's reserved `this` slot is seeded), so the count only
+    /// means something in the tail.
     #[test]
     fn the_this_patches_run_below_every_property_store() {
         let _pin = pin_routing("0");

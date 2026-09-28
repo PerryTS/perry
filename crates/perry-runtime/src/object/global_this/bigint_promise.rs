@@ -230,8 +230,7 @@ pub(crate) extern "C" fn array_from_thunk(
     value: f64,
 ) -> f64 {
     // Reflective `Array.from.call(C, items)` / `Array.from.apply(C, [items])`
-    // binds `C` as the implicit `this`. Read it FIRST (before any nested call
-    // can overwrite it) and run the spec algorithm — when `C IsConstructor`,
+    // passes `C` as `this`. Run the spec algorithm — when `C IsConstructor`,
     // the result is built via `Construct(C)`. A plain reflective call (no
     // explicit receiver) leaves `this` as undefined / a non-constructor, so
     // the default `%Array%` path is taken.
@@ -245,8 +244,7 @@ pub(crate) extern "C" fn array_of_thunk(
     this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    // Reflective `Array.of.call(C, ...items)` binds `C` as the implicit `this`.
-    // Read it FIRST (before any nested call can overwrite it); when `C
+    // Reflective `Array.of.call(C, ...items)` passes `C` as `this`; when `C
     // IsConstructor` the result is built via `Construct(C, «len»)`, otherwise the
     // default `%Array%` path is taken. See `array_of_full` (ECMA-262 §23.1.2.3).
     let c = this.as_f64();
@@ -760,21 +758,19 @@ pub(crate) extern "C" fn typed_array_from_thunk(
     // coercion at element k means the map callback never ran for k+1
     // (test262 from/set-value-abrupt-completion).
     let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev = this_scope.root_nanbox_f64(this.as_f64());
+    // #9445: `thisArg` is rooted ONCE here, not once per callback, and re-read
+    // at each call because every callback can move it.
+    let this_arg_h = this_scope.root_nanbox_f64(this_arg);
     let map_at = |k: usize, v: f64| -> f64 {
         if map_closure.is_null() {
             return v;
         }
-        crate::object::js_implicit_this_set(this_arg);
-        let r = crate::closure::js_closure_call2(
+        crate::closure::js_closure_call2(
             map_closure,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_arg_h.get_nanbox_f64()),
             v,
             k as f64,
-        );
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        r
+        )
     };
     if let Some(kind) = kind_opt {
         let out = crate::typedarray::typed_array_alloc(kind, raw.len() as u32);

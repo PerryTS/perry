@@ -257,7 +257,7 @@ extern "C" fn object_prototype_dunder_proto_setter_thunk(
 }
 
 /// Install a native accessor (getter only) on a builtin prototype. The getter
-/// is an ordinary `ClosureHeader` that reads its receiver from `IMPLICIT_THIS`
+/// is an ordinary `ClosureHeader` that takes its receiver as `this`
 /// and brand-checks it, so `Object.getOwnPropertyDescriptor(P, k).get.call({})`
 /// throws like node's.
 ///
@@ -395,7 +395,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             // Generic mutators get REAL thunks (vs the noop above) so a borrowed
             // reference works: `obj.pop = Array.prototype.pop; obj.pop()` and
-            // `Array.prototype.splice.call(obj, …)`. Each reads IMPLICIT_THIS and
+            // `Array.prototype.splice.call(obj, …)`. Each reads its `this` and
             // runs the array algorithm on a real array or array-like object.
             // #7760: `values` was a NOOP in the list above, and
             // `Array.prototype[Symbol.iterator]` was not an own property at all

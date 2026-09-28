@@ -57,8 +57,8 @@ fn tombstoned_key_slot(key: f64) -> bool {
 /// keys its already-serialized/dedup Maps by `this`) breaks without it — the
 /// Flight encoder's `referenceMap.get(this)` then never finds the parent path,
 /// so it re-serializes endlessly (Next.js standalone startup runaway). Mirror
-/// the reviver path (`internalize_json_property`), which sets the implicit
-/// `this` to the holder around the user-callback call.
+/// the reviver path (`internalize_json_property`), which passes the holder as
+/// the user callback's `this`.
 #[inline]
 pub(crate) unsafe fn call_replacer(
     replacer: *const crate::ClosureHeader,
@@ -66,15 +66,12 @@ pub(crate) unsafe fn call_replacer(
     value_f64: f64,
     holder_f64: f64,
 ) -> f64 {
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(holder_f64));
-    let result = crate::js_closure_call2(
+    let result = crate::closure::js_closure_call2(
         replacer,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(holder_f64),
         key_f64,
         value_f64,
     );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // The user callback may have installed/removed `Object.prototype.toJSON`
     // (#6009 fast-probe cache).
     super::invalidate_object_proto_tojson_state();

@@ -409,7 +409,7 @@ fn build_temporal_now_namespace() -> f64 {
 /// path and use the returned cell.
 /// Generic accessor-getter thunk shared by every `Temporal.<Type>.prototype`
 /// getter. The property name and expected brand kind are stored on the closure
-/// instance (`__tname` / `__tkind`); the receiver comes from `IMPLICIT_THIS`.
+/// instance (`__tname` / `__tkind`); the receiver is the `this` argument.
 /// Throws `TypeError` on a non-Temporal or wrong-brand receiver (the getter
 /// `branding.js` tests: `blank.call(undefined)`, `years.call({})`, …).
 #[cfg(feature = "temporal")]
@@ -435,7 +435,7 @@ extern "C" fn temporal_proto_getter_thunk(
 
 /// Generic method thunk shared by every `Temporal.<Type>.prototype` method.
 /// Rest-ABI (fixed arity 0): all args arrive in `rest`. Brand-checks the
-/// `IMPLICIT_THIS` receiver, then forwards to the per-type dispatch router —
+/// `this` receiver, then forwards to the per-type dispatch router —
 /// used when a prototype method is invoked through indirection
 /// (`Temporal.Duration.prototype.add.call(d, x)`); the normal `d.add(x)` path
 /// is the brand arm in `js_native_call_method`.
@@ -636,7 +636,7 @@ fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
 }
 
 /// Shared body for a `Temporal.ZonedDateTime.prototype` accessor getter invoked
-/// reflectively. Resolves `this` from `IMPLICIT_THIS`, brand-checks it is a
+/// reflectively. Takes `this` as an argument, brand-checks it is a
 /// `ZonedDateTime`, and returns the getter's value.
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_getter_thunk(

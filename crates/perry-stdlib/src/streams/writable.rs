@@ -53,7 +53,11 @@ pub unsafe extern "C" fn js_writable_stream_new_with_sink_type(
     // start → write → close. The controller arg is the stream handle.
     let start_cb = closure_from_bits(start_bits.to_bits());
     if start_cb != 0 {
-        js_closure_call1(start_cb as *const ClosureHeader, id as f64);
+        js_closure_call1(
+            start_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            id as f64,
+        );
     }
     id as f64
 }
@@ -79,7 +83,11 @@ pub unsafe extern "C" fn js_writable_stream_new_from_sink_object(sink: f64, hwm:
     );
     let start_cb = stream_object_closure(sink, b"start");
     if start_cb != 0 {
-        js_closure_call1(start_cb as *const ClosureHeader, id as f64);
+        js_closure_call1(
+            start_cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            id as f64,
+        );
     }
     id as f64
 }
@@ -362,13 +370,24 @@ unsafe fn attach_writable_write_handlers(
 }
 
 unsafe fn try_call_writable_write(cb: i64, chunk: f64) -> Result<f64, u64> {
-    perry_runtime::exception::catch_js_throw(|| js_closure_call1(cb as *const ClosureHeader, chunk))
-        .map_err(f64::to_bits)
+    perry_runtime::exception::catch_js_throw(|| {
+        js_closure_call1(
+            cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            chunk,
+        )
+    })
+    .map_err(f64::to_bits)
 }
 
 unsafe fn try_call_writable_close(cb: i64) -> Result<f64, u64> {
-    perry_runtime::exception::catch_js_throw(|| js_closure_call0(cb as *const ClosureHeader))
-        .map_err(f64::to_bits)
+    perry_runtime::exception::catch_js_throw(|| {
+        js_closure_call0(
+            cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+        )
+    })
+    .map_err(f64::to_bits)
 }
 
 extern "C" fn writable_close_fulfilled(
@@ -559,9 +578,15 @@ pub(super) unsafe fn writable_stream_write(
         .map(|s| s.strategy_size_cb)
         .unwrap_or(0);
     let chunk_size = if size_cb != 0 {
-        let size =
-            JSValue::from_bits(js_closure_call1(size_cb as *const ClosureHeader, chunk).to_bits())
-                .to_number();
+        let size = JSValue::from_bits(
+            js_closure_call1(
+                size_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
+                chunk,
+            )
+            .to_bits(),
+        )
+        .to_number();
         if size.is_nan() || size < 0.0 || size.is_infinite() {
             let message = invalid_size_message(size);
             throw_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");

@@ -1488,17 +1488,13 @@ mod tests {
     fn async_members_reject_with_compile_error() {
         let closure = std::ptr::null();
         assert_rejected_with_compile_error(
-            webassembly_compile_thunk(
-                closure,
-                crate::closure::body_call::current_this(),
-                undefined(),
-            ),
+            webassembly_compile_thunk(closure, crate::closure::JsThis::UNDEFINED, undefined()),
             "WebAssembly.compile",
         );
         assert_rejected_with_compile_error(
             webassembly_instantiate_thunk(
                 closure,
-                crate::closure::body_call::current_this(),
+                crate::closure::JsThis::UNDEFINED,
                 undefined(),
                 undefined(),
             ),
@@ -1507,7 +1503,7 @@ mod tests {
         assert_rejected_with_compile_error(
             webassembly_compile_streaming_thunk(
                 closure,
-                crate::closure::body_call::current_this(),
+                crate::closure::JsThis::UNDEFINED,
                 undefined(),
             ),
             "WebAssembly.compileStreaming",
@@ -1515,7 +1511,7 @@ mod tests {
         assert_rejected_with_compile_error(
             webassembly_instantiate_streaming_thunk(
                 closure,
-                crate::closure::body_call::current_this(),
+                crate::closure::JsThis::UNDEFINED,
                 undefined(),
             ),
             "WebAssembly.instantiateStreaming",
@@ -1527,7 +1523,7 @@ mod tests {
     fn validate_reports_false() {
         let result = webassembly_validate_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             undefined(),
         );
         assert_eq!(
@@ -1542,7 +1538,7 @@ mod tests {
         let message = string_value("boom");
         let compile_err = webassembly_compile_error_ctor_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             message,
         );
         assert_eq!(error_name_bytes(compile_err), b"CompileError".to_vec());
@@ -1552,7 +1548,7 @@ mod tests {
         // Message coercion mirrors `new Error(v)`.
         let numbered = webassembly_link_error_ctor_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             42.0,
         );
         assert_eq!(error_name_bytes(numbered), b"LinkError".to_vec());
@@ -1560,7 +1556,7 @@ mod tests {
 
         let bare = webassembly_runtime_error_ctor_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             undefined(),
         );
         assert_eq!(error_name_bytes(bare), b"RuntimeError".to_vec());
@@ -1576,12 +1572,12 @@ mod tests {
 
         let compile_err = webassembly_compile_error_ctor_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             string_value("x"),
         );
         let link_err = webassembly_link_error_ctor_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             string_value("x"),
         );
 

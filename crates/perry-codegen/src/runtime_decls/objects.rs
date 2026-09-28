@@ -628,7 +628,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
         "initialexec",
     );
-    module.declare_function("perry_implicit_this_cell", PTR, &[]);
     module.declare_function(
         "js_method_site_miss",
         DOUBLE,

@@ -242,7 +242,7 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
     ))
 }
 
-/// Resolve `IMPLICIT_THIS` to a receiver of the expected weak-wrapper class id,
+/// Resolve the `this` receiver to a receiver of the expected weak-wrapper class id,
 /// or throw a `TypeError`. Mirrors `collection_proto_thunks`'
 /// `weak_receiver_or_throw` for the WeakRef/FinalizationRegistry pair.
 fn wrapper_receiver_or_throw(

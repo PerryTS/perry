@@ -845,8 +845,8 @@ fn build_generator_tower(
     // Without the async one, `for await (x of gen())` over an async-generator
     // *method instance* can't resolve the async iterator and hangs/yields nothing
     // (the instance carries no own iterator symbol). The async-iterator-
-    // acquisition path (`js_get_async_iterator`) sets the implicit-this before
-    // invoking this thunk, so it returns the generator instance.
+    // acquisition path (`js_get_async_iterator`) passes the receiver as `this`
+    // when invoking this thunk, so it returns the generator instance.
     //
     // The SYNC `%Generator.prototype%` carries `[Symbol.iterator]` for the same
     // reason (#6696): a *computed* read `gen[Symbol.iterator]` walks the
@@ -856,8 +856,8 @@ fn build_generator_tower(
     // `value[Symbol.iterator]()` on the delegate generator. `for (x of gen())`
     // is unaffected: it drives the generator's own `.next()` directly (the
     // builtin-iterator recognizers), and where the sync iterator-acquisition
-    // path (`js_get_iterator`) does read `[Symbol.iterator]`, it binds
-    // implicit-this before invoking the method, so the thunk returns the
+    // path (`js_get_iterator`) does read `[Symbol.iterator]`, it passes the
+    // receiver as `this` when invoking the method, so the thunk returns the
     // generator instance.
     let (symbol_name, display_name, thunk) = if is_async {
         (

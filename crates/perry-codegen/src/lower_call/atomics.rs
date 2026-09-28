@@ -60,14 +60,14 @@ pub fn try_lower_atomics_static_call(
     }
 
     // The `js_atomics_*` natives are JS bodies (the function objects
-    // `Atomics.load` &c. run): no environment, and this direct call does not
-    // bind the implicit-`this` cell, so they get the cell's receiver.
-    let this_bits = crate::expr::body_call::current_this_bits(ctx);
+    // `Atomics.load` &c. run): no environment, and they never read their
+    // receiver.
+    let this_bits = crate::expr::body_call::JS_THIS_UNDEFINED;
     Ok(Some(crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Symbol(runtime_fn),
         "0",
-        &this_bits,
+        this_bits,
         &lowered,
     )))
 }

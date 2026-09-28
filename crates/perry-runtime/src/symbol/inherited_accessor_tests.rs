@@ -10,17 +10,17 @@ thread_local! {
 }
 
 /// Getter body: answers the `this` it was invoked with.
-extern "C" fn this_getter(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    crate::object::js_implicit_this_get()
+extern "C" fn this_getter(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
 /// Setter body: records `(this, value)`.
 extern "C" fn recording_setter(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+    let this = this.as_f64();
     SETTER_CALL.with(|c| c.set(Some((this.to_bits(), value.to_bits()))));
     f64::from_bits(TAG_UNDEFINED)
 }

@@ -1,13 +1,8 @@
-//! This-as-a-parameter, stage 1: every JS body — compiled closure, value
-//! wrapper, native builtin — is `double body(i64 callee, i64 this, double
-//! a0, ...)` (`perry_abi::JS_BODY_*`), and every caller hands the body, as its
-//! `this` parameter, exactly the receiver the implicit-`this` cell holds for
-//! the call. Bodies still read the cell, so stage 1 changes no behavior; what
-//! it must not do is let the parameter and the cell disagree.
-//!
-//! A `PERRY_THIS_WITNESS=1` build makes the prologue of every compiled body
-//! that reads the cell compare the two (`js_this_param_witness`), and reports
-//! `PERRY_THIS_WITNESS checks=N mismatches=M` at exit.
+//! This-as-a-parameter: every JS body — compiled closure, value wrapper,
+//! native builtin — is `double body(i64 callee, i64 this, double a0, ...)`
+//! (`perry_abi::JS_BODY_*`), and the `this` parameter is the ONLY way a body
+//! learns its receiver. There is no thread-local receiver cell: a caller that
+//! binds a receiver passes it, and a plain call passes `undefined`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,8 +13,9 @@ fn perry_bin() -> PathBuf {
 
 const ROUTES: &str = include_str!("fixtures/this_param_routes.ts");
 /// node v26.5.1's output for `fixtures/this_param_routes.ts`.
-const ROUTES_NODE: &str =
-    "346350 -933,-25431,81808,320762,1233\nfunction,function,function,function";
+const ROUTES_NODE: &str = "797550 -924,22981,272713,748250,12336 leaks=0\n\
+                           function,function,function,function\n\
+                           async 10 -1 18 9";
 
 struct Run {
     stdout: String,
@@ -28,8 +24,8 @@ struct Run {
     _dir: tempfile::TempDir,
 }
 
-/// Compile `source` with the witness on and the constructed IR saved, run it.
-fn compile_and_run_witnessed(source: &str) -> Run {
+/// Compile `source` with the constructed IR saved, run it.
+fn compile_and_run(source: &str) -> Run {
     let dir = tempfile::tempdir().expect("tempdir");
     let ll_dir = tempfile::tempdir().expect("ll tempdir");
     let entry = dir.path().join("main.ts");
@@ -42,7 +38,6 @@ fn compile_and_run_witnessed(source: &str) -> Run {
         .arg("-o")
         .arg(&output)
         .env("PERRY_NO_CACHE", "1")
-        .env("PERRY_THIS_WITNESS", "1")
         .env("PERRY_SAVE_LL", ll_dir.path())
         .output()
         .expect("run perry compile");
@@ -70,41 +65,18 @@ fn compile_and_run_witnessed(source: &str) -> Run {
     }
 }
 
-/// `(checks, mismatches)` from the witness's exit line.
-fn witness_counts(stderr: &str) -> (u64, u64) {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("PERRY_THIS_WITNESS checks="))
-        .unwrap_or_else(|| panic!("no witness report on stderr:\n{stderr}"));
-    let field = |name: &str| -> u64 {
-        line.split_whitespace()
-            .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-            .unwrap_or_else(|| panic!("no {name} in {line:?}"))
-    };
-    (field("checks"), field("mismatches"))
-}
-
-/// Sabotage: the method-site hit (or any caller) passes `undefined` — or the
-/// runtime funnel passes anything but the cell's receiver — as `this` -> the
-/// witness names the body and `mismatches` is non-zero. Sabotage: the witness
-/// build emits no check -> `checks` is 0 and the lower bound fails.
+/// Every route into a body that reads `this` hands it the receiver node
+/// binds: the sums fold `this.k` from every route, so one route passing the
+/// wrong receiver (or `undefined`) changes them. Sabotage: the method-site
+/// hit passes `undefined` -> the first sum differs. Sabotage: the runtime's
+/// sort/reduce callback call passes the running method's receiver instead of
+/// the plain-call `undefined` (what a thread-local cell did) -> `leaks=` is
+/// non-zero. Sabotage: an async or generator body skips its entry bind ->
+/// the sum or the `async` line differs.
 #[test]
-fn every_call_route_passes_the_cell_receiver_as_the_this_parameter() {
-    let run = compile_and_run_witnessed(ROUTES);
+fn every_call_route_hands_the_body_its_receiver() {
+    let run = compile_and_run(ROUTES);
     assert_eq!(run.stdout, ROUTES_NODE, "stderr:\n{}", run.stderr);
-    let (checks, mismatches) = witness_counts(&run.stderr);
-    // 300 iterations of ~13 routes into cell-reading bodies: a witness that
-    // did not run cannot pass for one that found nothing.
-    assert!(
-        checks >= 3000,
-        "the witness checked only {checks} body entries\nstderr:\n{}",
-        run.stderr
-    );
-    assert_eq!(
-        mismatches, 0,
-        "a caller passed a receiver other than the cell's\nstderr:\n{}",
-        run.stderr
-    );
 }
 
 /// Every symbol the module hands to a closure allocator or registers as a
@@ -112,7 +84,7 @@ fn every_call_route_passes_the_cell_receiver_as_the_this_parameter() {
 /// (e.g. `__perry_wrap_<fn>`) defined without `%js_this` -> named here.
 #[test]
 fn every_installed_body_is_defined_with_the_js_body_abi() {
-    let run = compile_and_run_witnessed(ROUTES);
+    let run = compile_and_run(ROUTES);
     assert_eq!(run.stdout, ROUTES_NODE, "stderr:\n{}", run.stderr);
     let ir = read_ir(run.ll_dir.path());
     let installed = installed_bodies(&ir);

@@ -361,19 +361,21 @@ fn stream_listener_key(event: &str) -> String {
     format!("__perryWorkerStreamListener:{event}")
 }
 
-fn stream_this() -> f64 {
-    perry_runtime::object::js_implicit_this_get()
-}
-
-fn stream_register(event: f64, callback: f64) -> f64 {
-    let this = stream_this();
+fn stream_register(receiver: perry_runtime::closure::JsThis, event: f64, callback: f64) -> f64 {
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return this;
     };
     let key = stream_listener_key(&event);
+    // The listener array allocations can collect: root the receiver (and the
+    // callback being stored) across them and re-read both.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let callback_h = scope.root_nanbox_f64(callback);
     let arr = array_ptr_from_value(get_object_field_from_value(this, &key))
         .unwrap_or_else(|| perry_runtime::array::js_array_alloc(0));
-    let arr = perry_runtime::array::js_array_push_f64(arr, callback);
+    let arr = perry_runtime::array::js_array_push_f64(arr, callback_h.get_nanbox_f64());
+    let this = this_h.get_nanbox_f64();
     if let Some(obj) = object_ptr_from_value(this) {
         set_object_field(
             obj,
@@ -385,7 +387,7 @@ fn stream_register(event: f64, callback: f64) -> f64 {
 }
 
 fn stream_emit_event(receiver: perry_runtime::closure::JsThis, event: f64, arg: f64) -> f64 {
-    let this = stream_this();
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return js_bool(false);
     };
@@ -398,37 +400,33 @@ fn stream_emit_event(receiver: perry_runtime::closure::JsThis, event: f64, arg: 
     // listener allocates enough to trigger a moving minor collection
     // corrupts every read for the rest of this loop, not just one listener.
     // Root all three through one handle scope and re-read the current bits
-    // before every dispatch.
-    //
-    // #10490: the displaced `this` crosses every listener (user code) too.
-    // Root it ONCE in that same scope, before the first
-    // `js_implicit_this_set`, and restore it from that root rather than from
-    // a plain per-iteration local.
+    // before every dispatch. Each listener runs with the stream as `this`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this);
     let arr_h = scope.root_raw_mut_ptr(arr);
     let arg_h = scope.root_nanbox_f64(arg);
-    let prev_this = scope.root_nanbox_f64(receiver.as_f64());
     let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     for i in 0..len {
         let callback = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
-        perry_runtime::object::js_implicit_this_set(this_h.get_nanbox_f64());
         unsafe {
             let args = [arg_h.get_nanbox_f64()];
             let _ = perry_runtime::closure::js_native_call_value(
                 callback,
-                perry_runtime::closure::plain_call_receiver(),
+                perry_runtime::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
     js_bool(len > 0)
 }
 
-fn stream_remove_listener(event: f64, callback: f64) -> f64 {
-    let this = stream_this();
+fn stream_remove_listener(
+    receiver: perry_runtime::closure::JsThis,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let this = receiver.as_f64();
     let Some(event) = string_value_to_string(event) else {
         return this;
     };
@@ -436,14 +434,21 @@ fn stream_remove_listener(event: f64, callback: f64) -> f64 {
     let Some(arr) = array_ptr_from_value(get_object_field_from_value(this, &key)) else {
         return this;
     };
-    let len = perry_runtime::array::js_array_length(arr);
+    // The filtered copy allocates: root the receiver, the old array and the
+    // callback compared against across it and re-read them.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let arr_h = scope.root_raw_mut_ptr(arr);
+    let callback_h = scope.root_nanbox_f64(callback);
+    let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     let mut next = perry_runtime::array::js_array_alloc(len);
     for i in 0..len {
-        let value = perry_runtime::array::js_array_get_f64(arr, i);
-        if value.to_bits() != callback.to_bits() {
+        let value = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
+        if value.to_bits() != callback_h.get_nanbox_f64().to_bits() {
             next = perry_runtime::array::js_array_push_f64(next, value);
         }
     }
+    let this = this_h.get_nanbox_f64();
     if let Some(obj) = object_ptr_from_value(this) {
         set_object_field(
             obj,
@@ -456,11 +461,11 @@ fn stream_remove_listener(event: f64, callback: f64) -> f64 {
 
 extern "C" fn stream_on(
     _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    stream_register(event, callback)
+    stream_register(this, event, callback)
 }
 
 extern "C" fn stream_emit(
@@ -474,26 +479,26 @@ extern "C" fn stream_emit(
 
 extern "C" fn stream_off(
     _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    stream_remove_listener(event, callback)
+    stream_remove_listener(this, event, callback)
 }
 
 extern "C" fn stream_this0(
     _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    stream_this()
+    this.as_f64()
 }
 
 extern "C" fn stream_this1(
     _closure: *const ClosureHeader,
-    _this: perry_runtime::closure::JsThis,
+    this: perry_runtime::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    stream_this()
+    this.as_f64()
 }
 
 extern "C" fn stream_write(

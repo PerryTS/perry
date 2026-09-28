@@ -221,12 +221,12 @@ fn heap_object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
-fn this_value() -> f64 {
-    crate::object::js_implicit_this_get()
+fn this_value(this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
-fn this_object() -> Option<*mut ObjectHeader> {
-    heap_object_ptr(this_value())
+fn this_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
+    heap_object_ptr(this_value(this))
 }
 
 fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
@@ -241,12 +241,14 @@ fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
     None
 }
 
-fn current_fd(default_fd: i32) -> i32 {
-    this_object().and_then(fd_from_object).unwrap_or(default_fd)
+fn current_fd(default_fd: i32, this: crate::closure::JsThis) -> i32 {
+    this_object(this)
+        .and_then(fd_from_object)
+        .unwrap_or(default_fd)
 }
 
-fn this_has_fd() -> bool {
-    this_object().and_then(fd_from_object).is_some()
+fn this_has_fd(this: crate::closure::JsThis) -> bool {
+    this_object(this).and_then(fd_from_object).is_some()
 }
 
 fn value_to_string(value: f64) -> Option<String> {
@@ -910,16 +912,16 @@ pub(crate) fn is_tty_stream_instance(value: f64, class_name: &str) -> bool {
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_set_raw_mode(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     mode: f64,
 ) -> f64 {
     let enabled = crate::value::js_is_truthy(mode) != 0;
-    let fd = current_fd(0);
+    let fd = current_fd(0, this);
     let _ = set_fd_raw_mode(fd, enabled);
-    if let Some(obj) = this_object() {
+    if let Some(obj) = this_object(this) {
         crate::object::js_object_set_field_by_name(obj, named_key(b"isRaw"), js_bool(enabled));
     }
-    this_value()
+    this_value(this)
 }
 
 fn write_all_fd(fd: i32, bytes: &[u8]) -> bool {
@@ -965,14 +967,14 @@ fn numeric_arg(value: f64, default: i32) -> i32 {
     default
 }
 
-fn write_control_sequence(sequence: String) -> f64 {
-    js_bool(write_all_fd(current_fd(1), sequence.as_bytes()))
+fn write_control_sequence(sequence: String, this: crate::closure::JsThis) -> f64 {
+    js_bool(write_all_fd(current_fd(1, this), sequence.as_bytes()))
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_cursor_to(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     x: f64,
     y: f64,
     _callback: f64,
@@ -985,13 +987,13 @@ pub extern "C" fn js_tty_write_stream_cursor_to(
         let y = numeric_arg(y, 0).max(0);
         format!("\x1b[{};{}H", y + 1, x + 1)
     };
-    write_control_sequence(sequence)
+    write_control_sequence(sequence, this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_move_cursor(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     dx: f64,
     dy: f64,
     _callback: f64,
@@ -1009,13 +1011,13 @@ pub extern "C" fn js_tty_write_stream_move_cursor(
     } else if dy > 0 {
         sequence.push_str(&format!("\x1b[{}B", dy));
     }
-    write_control_sequence(sequence)
+    write_control_sequence(sequence, this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_line(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     dir: f64,
     _callback: f64,
 ) -> f64 {
@@ -1024,16 +1026,16 @@ pub extern "C" fn js_tty_write_stream_clear_line(
         1 => 0,
         _ => 2,
     };
-    write_control_sequence(format!("\x1b[{}K", mode))
+    write_control_sequence(format!("\x1b[{}K", mode), this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_clear_screen_down(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _callback: f64,
 ) -> f64 {
-    write_control_sequence("\x1b[0J".to_string())
+    write_control_sequence("\x1b[0J".to_string(), this)
 }
 
 fn winsize_value(fd: i32) -> Option<(i32, i32)> {
@@ -1055,9 +1057,9 @@ pub(crate) fn tty_write_stream_dimension(property: &str) -> Option<f64> {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_get_window_size(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let fd = current_fd(1);
+    let fd = current_fd(1, this);
     let arr = crate::array::js_array_alloc(2);
     let (cols, rows) = winsize_value(fd).unwrap_or((0, 0));
     let col_value = if cols > 0 {
@@ -1078,9 +1080,9 @@ pub extern "C" fn js_tty_write_stream_get_window_size(
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_refresh_size(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let _ = winsize_value(current_fd(1));
+    let _ = winsize_value(current_fd(1, this));
     TAG_UNDEFINED_F64
 }
 
@@ -1096,45 +1098,45 @@ fn register_resize_callback(callback: i64) {
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_on(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
-    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd() {
+    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd(this) {
         let callback = callback_ptr_from_value(callback);
         if callback != 0 {
             register_resize_callback(callback);
         }
     }
-    this_value()
+    this_value(this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_listener(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     _callback: f64,
 ) -> f64 {
-    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd() {
+    if event_name_from_value(event).as_deref() == Some("resize") && this_has_fd(this) {
         RESIZE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     }
-    this_value()
+    this_value(this)
 }
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_remove_all_listeners(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let event_js = JSValue::from_bits(event.to_bits());
     if (event_js.is_undefined() || event_name_from_value(event).as_deref() == Some("resize"))
-        && this_has_fd()
+        && this_has_fd(this)
     {
         RESIZE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
     }
-    this_value()
+    this_value(this)
 }
 
 pub fn throw_invalid_fd(fd: f64) -> ! {

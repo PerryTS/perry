@@ -51,8 +51,7 @@ mod platform_impl {
         cp_get_field, cp_make_error, cp_object_ptr, cp_set_field, cp_this, cp_undefined,
         cp_value_to_bytes, cp_value_to_string, CpFn,
     };
-    use crate::closure::{js_native_call_value, ClosureHeader};
-    use crate::object::js_implicit_this_set;
+    use crate::closure::{native_call_value_this, ClosureHeader, JsThis};
     use crate::value::JSValue;
 
     // Shape-id band kept clear of cluster (0x7FFF_FC80) and child_process
@@ -83,7 +82,6 @@ mod platform_impl {
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let args = scope.root_nanbox_f64_slice(args);
-        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         let key = pty_listener_key(event);
         let Some(arr) = cp_array_ptr(cp_get_field(target.get_nanbox_f64(), &key)) else {
             return;
@@ -95,17 +93,15 @@ mod platform_impl {
             .collect();
         let callbacks = scope.root_nanbox_f64_slice(&callbacks);
         for cb in callbacks {
-            js_implicit_this_set(target.get_nanbox_f64());
             let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
             unsafe {
-                let _ = js_native_call_value(
+                let _ = native_call_value_this(
                     cb.get_nanbox_f64(),
-                    crate::closure::plain_call_receiver(),
+                    JsThis::from_f64(target.get_nanbox_f64()),
                     current_args.as_ptr(),
                     current_args.len(),
                 );
             }
-            js_implicit_this_set(prev.get_nanbox_f64());
         }
     }
 

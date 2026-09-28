@@ -191,7 +191,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
 
 /// Materialize an unbound `AsyncResource.prototype` method for native-handle
 /// property reads whose static type was erased. Invocation observes the
-/// call-site receiver through `IMPLICIT_THIS`, just like the real prototype.
+/// call-site receiver as its `this` argument, just like the real prototype.
 pub(crate) fn async_resource_prototype_method_value(name: &'static str, length: u32) -> f64 {
     let thunk = async_hooks_prototype_method_thunk as *const u8;
     crate::closure::js_register_closure_rest(thunk, 0);

@@ -217,18 +217,18 @@ fn promise_try_closure_ptr(callback: f64) -> Option<*const crate::closure::Closu
     crate::closure::is_closure_ptr(ptr).then_some(ptr as *const crate::closure::ClosureHeader)
 }
 
-fn promise_try_call(callback: f64, args_ptr: *const f64, args_len: usize) -> Result<f64, f64> {
+fn promise_try_call(
+    callback: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Result<f64, f64> {
     let Some(closure) = promise_try_closure_ptr(callback) else {
         return Err(promise_try_type_error_value(callback));
     };
 
     crate::exception::catch_js_throw(|| unsafe {
-        crate::closure::js_closure_call_array(
-            closure as i64,
-            crate::closure::plain_call_receiver(),
-            args_ptr,
-            args_len as i64,
-        )
+        crate::closure::js_closure_call_array(closure as i64, this, args_ptr, args_len as i64)
     })
 }
 
@@ -237,6 +237,16 @@ fn promise_try_call(callback: f64, args_ptr: *const f64, args_len: usize) -> Res
 #[no_mangle]
 pub extern "C" fn js_promise_try(
     callback: f64,
+    args: *const crate::array::ArrayHeader,
+) -> *mut Promise {
+    promise_try_this(callback, crate::closure::plain_call_receiver(), args)
+}
+
+/// `js_promise_try` calling `callback` with `this` as its receiver
+/// (`Array.fromAsync`'s `thisArg` for the map function).
+pub(crate) fn promise_try_this(
+    callback: f64,
+    this: crate::closure::JsThis,
     args: *const crate::array::ArrayHeader,
 ) -> *mut Promise {
     let (args_ptr, args_len) = if args.is_null() {
@@ -249,7 +259,7 @@ pub extern "C" fn js_promise_try(
         (data, len)
     };
 
-    match promise_try_call(callback, args_ptr, args_len) {
+    match promise_try_call(callback, this, args_ptr, args_len) {
         Ok(value) => js_promise_resolved(value),
         Err(reason) => js_promise_rejected(reason),
     }

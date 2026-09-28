@@ -130,19 +130,14 @@ unsafe fn dictionary_function_proto_method_call(
     }
     // A user callable inherited from the recorded prototype: an ordinary
     // method call with the function as `this`.
-    let prev_this_h = scope.root_nanbox_u64(
-        super::IMPLICIT_THIS.with(|c| c.replace(receiver_h.get_nanbox_f64().to_bits())),
-    );
     let callee =
         crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
-    let result = crate::closure::js_native_call_value(
+    Some(crate::closure::native_call_value_this(
         callee,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(receiver_h.get_nanbox_f64()),
         args_ptr,
         args_len,
-    );
-    super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    Some(result)
+    ))
 }
 
 #[cfg(test)]

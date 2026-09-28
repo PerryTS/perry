@@ -300,13 +300,8 @@ fn call_with_this(func: f64, this_arg: f64, args: &[f64]) -> Result<f64, f64> {
     } else {
         (args.as_ptr(), args.len())
     };
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
-    let result = combinator_catch_js(|| unsafe {
-        crate::closure::js_native_call_value(func, crate::closure::plain_call_receiver(), ptr, len)
-    });
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    let this = crate::closure::JsThis::from_f64(this_arg);
+    combinator_catch_js(|| unsafe { crate::closure::native_call_value_this(func, this, ptr, len) })
 }
 
 /// `Invoke(obj, "then", args)` catching exceptions into `Err`.

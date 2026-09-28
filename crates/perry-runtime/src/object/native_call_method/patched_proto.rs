@@ -114,13 +114,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method_patched_proto(
     );
     let bound = scope.root_nanbox_u64(bound);
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // A non-arrow function body reads its receiver from `IMPLICIT_THIS`;
+    // A non-arrow function body reads its receiver from its `this` argument;
     // `clone_closure_rebind_this` only covers a closure that captured `this`.
-    // Restored on the way out, including when the callee throws (#10490).
-    let _this_scope = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
-    crate::closure::js_native_call_value(
+    crate::closure::native_call_value_this(
         bound.get_nanbox_f64(),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
         args.as_ptr(),
         args.len(),
     )

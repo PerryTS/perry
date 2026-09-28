@@ -14,6 +14,9 @@ pub(super) unsafe fn try_symbol_dispose_dispatch(
     // Only real heap objects store symbol-keyed methods. Native handles and
     // primitives return None here and fall through to the existing dispatch.
     let _obj = object_ptr_from_value(object)?;
+    // The symbol read can run a getter; the receiver is re-read from this root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_handle = scope.root_nanbox_f64(object);
     let want_async = method_name == "__perry_async_dispose__";
     let shorts: &[&str] = if want_async {
         &["asyncDispose", "dispose"]
@@ -26,23 +29,16 @@ pub(super) unsafe fn try_symbol_dispose_dispatch(
             continue;
         }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
-        let method = crate::symbol::js_object_get_symbol_property(object, sym_f64);
+        let method =
+            crate::symbol::js_object_get_symbol_property(object_handle.get_nanbox_f64(), sym_f64);
         let mjsv = JSValue::from_bits(method.to_bits());
         if method.to_bits() != crate::value::TAG_UNDEFINED && !mjsv.is_null() && mjsv.is_pointer() {
-            // #8495: root the displaced receiver across the call below — the
-            // replace has already overwritten the cell, so this is the frame's only
-            // copy and the restore would otherwise publish a pre-move address.
-            let prev_scope = crate::gc::RuntimeHandleScope::new();
-            let prev_h =
-                prev_scope.root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(object.to_bits())));
-            let result = crate::closure::js_native_call_value(
+            return Some(crate::closure::native_call_value_this(
                 method,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
                 args_ptr,
                 args_len,
-            );
-            IMPLICIT_THIS.with(|c| c.set(prev_h.get_nanbox_u64()));
-            return Some(result);
+            ));
         }
     }
     None

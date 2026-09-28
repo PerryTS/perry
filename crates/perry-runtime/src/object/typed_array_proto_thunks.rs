@@ -17,7 +17,7 @@
 //! regular Array helper, which (after the array-like-receiver change) silently
 //! accepted a plain array and returned a wrong-but-non-throwing result.
 //!
-//! These thunks instead read the `IMPLICIT_THIS` receiver (set by the
+//! These thunks instead take the receiver as their `this` argument (set by the
 //! `.call`/`.apply` dispatch), brand-check it via `lookup_typed_array_kind`,
 //! throw a `TypeError` on a non-TypedArray receiver, and otherwise delegate to
 //! the existing `dispatch_typed_array_method` tower (the same code the fast
@@ -155,11 +155,14 @@ fn throw_not_typed_array(method: &str) -> ! {
     ))
 }
 
-/// Read the `IMPLICIT_THIS` receiver and brand-check it as a real TypedArray.
+/// Brand-check the `this` receiver as a real TypedArray.
 /// Returns the cleaned receiver, or throws a `TypeError`.
 #[inline]
-unsafe fn ta_receiver_or_throw(method: &str) -> TypedArrayProtoReceiver {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+unsafe fn ta_receiver_or_throw(
+    this: crate::closure::JsThis,
+    method: &str,
+) -> TypedArrayProtoReceiver {
+    let bits = this.bits();
     // A TypedArray receiver reaches here in either of two boxings: a NaN-boxed
     // `POINTER_TAG` value (top16 >= 0x7FF8) or a *raw* heap pointer whose top16
     // is 0 (the receiver-typed fast path threads the bare pointer — see the
@@ -967,8 +970,8 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
 /// `TYPED_ARRAY_PROTO_METHODS`; the `unwrap_or(undefined)` guard never fires in
 /// practice (the name set is kept in sync) but avoids a panic on drift.
 #[inline]
-unsafe fn brand_then_dispatch(method: &str, args: &[f64]) -> f64 {
-    let receiver = ta_receiver_or_throw(method);
+unsafe fn brand_then_dispatch(this: crate::closure::JsThis, method: &str, args: &[f64]) -> f64 {
+    let receiver = ta_receiver_or_throw(this, method);
     let args_ptr = if args.is_empty() {
         std::ptr::null()
     } else {
@@ -1012,13 +1015,13 @@ macro_rules! ta_thunk {
     ($name:ident, $method:literal, $argc:literal) => {
         pub(super) extern "C" fn $name(
             _c: *const crate::closure::ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
             a: f64,
             b: f64,
             d: f64,
         ) -> f64 {
             let all = [a, b, d];
-            unsafe { brand_then_dispatch($method, &all[..$argc]) }
+            unsafe { brand_then_dispatch(this, $method, &all[..$argc]) }
         }
     };
 }
@@ -1053,37 +1056,37 @@ ta_thunk!(ta_with_thunk, "with", 2);
 
 pub(super) extern "C" fn ta_last_index_of_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     search_element: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(search_element, rest);
-        brand_then_dispatch("lastIndexOf", &args)
+        brand_then_dispatch(this, "lastIndexOf", &args)
     }
 }
 
 pub(super) extern "C" fn ta_reduce_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(callback, rest);
-        brand_then_dispatch("reduce", &args)
+        brand_then_dispatch(this, "reduce", &args)
     }
 }
 
 pub(super) extern "C" fn ta_reduce_right_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     callback: f64,
     rest: f64,
 ) -> f64 {
     unsafe {
         let args = first_arg_with_rest(callback, rest);
-        brand_then_dispatch("reduceRight", &args)
+        brand_then_dispatch(this, "reduceRight", &args)
     }
 }
 
@@ -1093,7 +1096,7 @@ pub(super) extern "C" fn ta_reduce_right_thunk(
 /// but keeps the install path total.
 pub(super) extern "C" fn ta_generic_thunk(
     c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     a: f64,
     b: f64,
     d: f64,
@@ -1104,7 +1107,7 @@ pub(super) extern "C" fn ta_generic_thunk(
         let name =
             super::has_own_helpers::str_from_string_header(name_hdr).unwrap_or("TypedArray method");
         let all = [a, b, d];
-        brand_then_dispatch(name, &all)
+        brand_then_dispatch(this, name, &all)
     }
 }
 
@@ -1139,13 +1142,13 @@ fn throw_not_uint8_array(method: &str) -> ! {
     ))
 }
 
-/// Resolve the `IMPLICIT_THIS` receiver to a Uint8Array-backed buffer address.
+/// Resolve the `this` receiver to a Uint8Array-backed buffer address.
 /// The base64/hex methods only exist on Uint8Array, so a multi-byte typed-array
 /// receiver (`Uint8Array.prototype.toBase64.call(new Int8Array())`) is rejected
 /// with a `TypeError` just like Node's `ValidateUint8Array`.
 #[inline]
-unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
-    match ta_receiver_or_throw(method) {
+unsafe fn uint8_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> usize {
+    match ta_receiver_or_throw(this, method) {
         TypedArrayProtoReceiver::Uint8Buffer(addr) => addr,
         TypedArrayProtoReceiver::TypedArray(_) => throw_not_uint8_array(method),
     }
@@ -1153,13 +1156,13 @@ unsafe fn uint8_receiver_or_throw(method: &str) -> usize {
 
 pub(super) extern "C" fn u8_to_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     opts: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("toBase64");
+        let addr = uint8_receiver_or_throw(this, "toBase64");
         let args = [opts];
         super::dispatch_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
     }
@@ -1167,26 +1170,26 @@ pub(super) extern "C" fn u8_to_base64_thunk(
 
 pub(super) extern "C" fn u8_to_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("toHex");
+        let addr = uint8_receiver_or_throw(this, "toHex");
         super::dispatch_buffer_method(addr, "toHex", std::ptr::null(), 0)
     }
 }
 
 pub(super) extern "C" fn u8_set_from_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     str_arg: f64,
     opts: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("setFromBase64");
+        let addr = uint8_receiver_or_throw(this, "setFromBase64");
         let args = [str_arg, opts];
         super::dispatch_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
     }
@@ -1194,13 +1197,13 @@ pub(super) extern "C" fn u8_set_from_base64_thunk(
 
 pub(super) extern "C" fn u8_set_from_hex_thunk(
     _c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     str_arg: f64,
     _b: f64,
     _d: f64,
 ) -> f64 {
     unsafe {
-        let addr = uint8_receiver_or_throw("setFromHex");
+        let addr = uint8_receiver_or_throw(this, "setFromHex");
         let args = [str_arg];
         super::dispatch_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
     }

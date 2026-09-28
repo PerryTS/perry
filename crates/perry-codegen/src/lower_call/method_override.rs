@@ -782,9 +782,9 @@ pub(super) fn emit_own_method_override_check(
     // assigned via `this.method = fn` or `class X { method = fn; }`
     // (hono's RegExpRouter uses this exact shape — `match = match;`
     // assigns the imported standalone `match` function as an instance
-    // own-property; its body reads `this.buildAllMatchers()`). Bind
-    // `IMPLICIT_THIS` to the receiver around the call so non-arrow
-    // function bodies see the right `this` (issue #632 / #519 pattern).
+    // own-property; its body reads `this.buildAllMatchers()`). Pass the
+    // receiver as `this` so non-arrow function bodies see the right `this`
+    // (issue #632 / #519 pattern).
     ctx.current_block = override_idx;
     let user_arg_count = override_user_args.len();
     let (args_ptr, args_len) = if user_arg_count == 0 {
@@ -809,11 +809,7 @@ pub(super) fn emit_own_method_override_check(
     } else {
         this_box.to_string()
     };
-    // #7211: rooted save/restore — the displaced implicit `this` is live
-    // across `js_native_call_value`, which runs arbitrary user code.
-    let prev_this = crate::rooting::implicit_this_save(ctx, &recv_for_this);
-    // Stage 1: the call runs with the implicit-`this` cell's value.
-    let this_bits = crate::expr::body_call::current_this_bits(ctx);
+    let this_bits = ctx.block().bitcast_double_to_i64(&recv_for_this);
     let v_override = ctx.block().call(
         DOUBLE,
         "js_native_call_value",
@@ -824,7 +820,6 @@ pub(super) fn emit_own_method_override_check(
             (I64, &args_len),
         ],
     );
-    crate::rooting::implicit_this_restore(ctx, prev_this);
     let after_override = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);

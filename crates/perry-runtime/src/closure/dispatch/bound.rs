@@ -58,7 +58,11 @@ pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader)
 /// Extracts the namespace object and method name from the closure captures,
 /// then calls js_native_call_method with the packed arguments.
 #[inline]
-pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64]) -> f64 {
+pub unsafe fn dispatch_bound_method(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    args: &[f64],
+) -> f64 {
     let mut namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
@@ -95,10 +99,10 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
                     if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
                         crate::object::lookup_class_method_in_chain(owner_id, name)
                     {
-                        // The call-time `this` (IMPLICIT_THIS) is the receiver the
-                        // private method body runs against — for `f.call(o)` it is
+                        // The call-time `this` is the receiver the private
+                        // method body runs against — for `f.call(o)` it is
                         // `o`, for a bare `f()` it is undefined.
-                        let call_this = crate::object::js_implicit_this_get();
+                        let call_this = this.as_f64();
                         return if let Some(brand) = private_brand {
                             crate::object::call_vtable_method_with_private_brand(
                                 func_ptr,
@@ -127,7 +131,7 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
                     if let (Some(owner_id), Some(brand)) =
                         (crate::object::class_ref_id(namespace_obj), private_brand)
                     {
-                        let call_this = crate::object::js_implicit_this_get();
+                        let call_this = this.as_f64();
                         if let Some(result) = crate::object::call_private_static_method_for_owner(
                             owner_id,
                             name,
@@ -147,10 +151,10 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     // Canonical class method value (test262 method identity): a class method is
     // a single shared function object whose captured receiver is the OWNER
     // class's prototype-ref — a marker, not the real `this`. The actual receiver
-    // is the call-site `this` (IMPLICIT_THIS): for `const f = c.m; f()` that is
-    // the spec `this`, and for `this.m = this.m.bind(this)` the outer
-    // `dispatch_bound_function` has already set IMPLICIT_THIS to the instance so
-    // the rebind targets the right object. Ordinary `obj.method(args)` calls do
+    // is the call-site `this` (the `this` this dispatch was handed): for
+    // `const f = c.m; f()` that is the spec `this`, and for
+    // `this.m = this.m.bind(this)` the outer `dispatch_bound_function` passes
+    // the instance so the rebind targets the right object. Ordinary `obj.method(args)` calls do
     // NOT reach here (they lower straight to `js_native_call_method`), so this
     // only governs method-as-value invocations.
     // The captured slot-0 prototype-ref names the OWNER class. A method value is a
@@ -168,7 +172,7 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     // exactly the failure the comment below describes for the self-shadowing `bind`
     // case.
     let owner_proto_ref = namespace_obj;
-    let call_receiver = crate::object::canonical_bound_method_receiver(owner_proto_ref);
+    let call_receiver = crate::object::canonical_bound_method_receiver(owner_proto_ref, this);
     if method_name_len > 0 && !method_name_ptr.is_null() {
         if let Some(owner_id) = crate::object::class_prototype_ref_id(owner_proto_ref) {
             if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(
@@ -249,12 +253,13 @@ unsafe fn dispatch_symbol_bound_method(
     let has_rest = (meta >> 32) & 1 == 1;
     let is_static = (meta >> 33) & 1 == 1;
     if is_static {
-        // Bind IMPLICIT_THIS to the class ref for the duration, exactly like
+        // The static method runs with the class ref as `this`, exactly like
         // the direct-call path. The one-shot static-`this` override (armed by
         // the Function.prototype call/apply arms for a static bound-method
         // value) still wins in the static-method prologue.
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
+        // A static body binds `this` in its own prologue
+        // (`js_static_this_resolve`: this override, else its class ref), so
+        // it takes no receiver parameter.
         crate::object::static_private_owner_push(receiver);
         let result = crate::object::call_registered_static_method(
             func_ptr,
@@ -264,7 +269,6 @@ unsafe fn dispatch_symbol_bound_method(
             has_rest,
         );
         crate::object::static_private_owner_pop();
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         result
     } else {
         // Computed symbol methods never synthesize an `arguments` object but
@@ -283,8 +287,8 @@ unsafe fn dispatch_symbol_bound_method(
 
 /// Dispatch a `Function.prototype.bind` result (BOUND_FUNCTION_FUNC_PTR
 /// sentinel). Reads the bound target/this/partial-args from the closure
-/// captures, prepends the bound args to the call-time args, sets
-/// `IMPLICIT_THIS` to the bound receiver, and invokes the target closure.
+/// captures, prepends the bound args to the call-time args, and invokes the
+/// target closure with the bound receiver as its `this`.
 /// Refs #2840.
 #[inline]
 pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64]) -> f64 {
@@ -328,19 +332,16 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     };
 
     // A bound concise/object-literal method reads `this` from its baked capture
-    // slot, not IMPLICIT_THIS — rebind it to the bound receiver so the bound
-    // `this` is honored (arrows/non-captures_this targets are returned as-is).
+    // slot, not only the `this` parameter — rebind it to the bound receiver so
+    // the bound `this` is honored (arrows/non-captures_this targets are
+    // returned as-is).
     let target = rebind_explicit_this(target, bound_this);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(bound_this));
-    let result = js_native_call_value(
+    super::value_call::native_call_value_this(
         target,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(bound_this),
         call_ptr,
         call_len,
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    )
 }
 
 /// OrdinaryCallBindThis for the `call`/`apply`/`bind` entry points: box a
@@ -405,7 +406,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
 /// object-literal method (and object-literal accessor / symbol method) is
 /// lowered with `captures_this` and its reserved (last) capture slot baked to
 /// the *defining object* at construction time — so its body reads `this` from
-/// that slot, NOT from `IMPLICIT_THIS`. Setting `IMPLICIT_THIS` therefore can't
+/// that slot, NOT from its `this` parameter. Passing a receiver therefore can't
 /// redirect such a method to an explicit receiver: the baked slot wins, and the
 /// explicit `this` is silently ignored.
 ///
@@ -420,7 +421,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
 /// receiver is honored. Returns `target` UNCHANGED for:
 ///   - arrow functions (lexical `this` — they must ignore an explicit receiver,
 ///     yet still carry `CAPTURES_THIS_FLAG`, so they are excluded explicitly);
-///   - non-`captures_this` functions (they already read `IMPLICIT_THIS`);
+///   - non-`captures_this` functions (they already read the `this` parameter);
 ///   - bound functions and non-closure values
 ///     (`clone_closure_rebind_this` no-ops on these — it only rewrites a
 ///     `CAPTURES_THIS` slot).

@@ -127,7 +127,7 @@ extern "C" fn hook(
 }
 extern "C" fn builtin_callback(
     c: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     matched: f64,
     first: f64,
     absent: f64,
@@ -142,10 +142,7 @@ extern "C" fn builtin_callback(
     let input = scope.root_nanbox_f64(input);
     let groups = scope.root_nanbox_f64(groups);
     gc_collect_minor();
-    assert_eq!(
-        crate::object::js_implicit_this_get().to_bits(),
-        TAG_UNDEFINED
-    );
+    assert_eq!(this.as_f64().to_bits(), TAG_UNDEFINED);
     assert_eq!(
         get(&state, b"lastIndex"),
         if position == 0.0 { 0.0 } else { 77.0 }
@@ -174,11 +171,11 @@ extern "C" fn builtin_callback(
 }
 extern "C" fn alias_exec(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let state = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let state = scope.root_nanbox_f64(this.as_f64());
     gc_collect_minor();
     let n = get(&state, b"calls");
     put(&state, b"calls", n + 1.0);
@@ -423,7 +420,7 @@ fn perex_replace_hooks_preserve_receiver_and_arbitrary_result_before_coercion() 
 }
 
 #[test]
-fn perex_replace_collecting_throw_cleans_native_arguments_roots_and_this() {
+fn perex_replace_collecting_throw_cleans_native_arguments_and_roots() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -433,9 +430,8 @@ fn perex_replace_collecting_throw_cleans_native_arguments_roots_and_this() {
     let input = text(&scope, b"abc");
     let search = text(&scope, b"b");
     let callback = function(&scope, collecting_throw as *const u8, 3);
+    // A young object whose move proves the throwing callback's collection ran.
     let previous = object(&scope);
-    let displaced = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     // Warm lazy String/Function prototype setup before checking native bytes.
     let empty = text(&scope, b"none");
     let _ = crate::regex::js_string_replace_js(
@@ -458,18 +454,13 @@ fn perex_replace_collecting_throw_cleans_native_arguments_roots_and_this() {
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(external_side_live_bytes(), live);
     assert_ne!(previous.get_nanbox_f64().to_bits(), before);
-    assert_eq!(
-        crate::object::js_implicit_this_get().to_bits(),
-        previous.get_nanbox_f64().to_bits()
-    );
-    crate::object::js_implicit_this_set(displaced.get_nanbox_f64());
 }
 
 extern "C" fn primitive_hook_getter(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    assert_eq!(crate::object::js_implicit_this_get(), 23.0);
+    assert_eq!(this.as_f64(), 23.0);
     gc_collect_minor();
     crate::closure::js_register_closure_arity(hook as *const u8, 2);
     js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(hook as *const u8) as i64)

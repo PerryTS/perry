@@ -98,13 +98,10 @@ pub(crate) unsafe fn try_static_accessor_value_call(
     }
     let callee_handle = scope.root_nanbox_f64(callee);
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let receiver = receiver_handle.get_nanbox_f64();
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
-        callee_handle.get_nanbox_f64(), crate::closure::plain_call_receiver(),
+    Some(crate::closure::native_call_value_this(
+        callee_handle.get_nanbox_f64(),
+        crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
         args.as_ptr(),
         args.len(),
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    Some(result)
+    ))
 }

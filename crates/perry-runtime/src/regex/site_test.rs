@@ -318,17 +318,14 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
         0
     };
     let this_value = this_value.map(|value| scope.root_nanbox_f64(value));
-    let this_guard = this_value
-        .as_ref()
-        .map(|value| crate::object::ImplicitThisScope::bind(&scope, value.get_nanbox_f64()));
     let active = ActiveFactoryGuard::push(site_key, expected_identity);
+    let this = this_value
+        .as_ref()
+        .map_or(crate::closure::plain_call_receiver(), |value| {
+            crate::closure::JsThis::from_f64(value.get_nanbox_f64())
+        });
     let result = unsafe {
-        crate::closure::js_native_call_value(
-            callee.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
-            std::ptr::null(),
-            0,
-        )
+        crate::closure::native_call_value_this(callee.get_nanbox_f64(), this, std::ptr::null(), 0)
     };
     if !active.handled() {
         let reason = if lookup(site_key).is_some() {
@@ -339,7 +336,6 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
         note_declined(reason);
     }
     drop(active);
-    drop(this_guard);
     result
 }
 
@@ -479,12 +475,11 @@ fn site_test_dispatch_impl(receiver: f64, method: f64, argument: f64) -> f64 {
     }
 
     let method = scope.root_nanbox_f64(method);
-    let _this_guard = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
     let args = [argument.get_nanbox_f64()];
     unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             method.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
             args.as_ptr(),
             1,
         )

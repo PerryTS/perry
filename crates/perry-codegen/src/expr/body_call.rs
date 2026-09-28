@@ -13,9 +13,9 @@
 //!
 //! The receiver (`this`) is passed as NaN-boxed bits in an INTEGER register
 //! (owner decision D1), so every floating-point argument register stays free
-//! for JS arguments. Stage 1 of this-as-a-parameter: a caller passes exactly
-//! the receiver the implicit-`this` cell holds for the call, and bodies still
-//! read the cell (`PERRY_THIS_WITNESS=1` builds check that the two agree).
+//! for JS arguments. The parameter is the ONLY way a body learns its
+//! receiver: there is no thread-local `this` cell for a caller to set or a
+//! body to read.
 
 use crate::block::LlBlock;
 use crate::types::{LlvmType, DOUBLE, I64};
@@ -108,55 +108,23 @@ pub(crate) fn emit_js_body_call_gc_leaf(
 }
 
 /// The receiver bits for a call whose callee binds `this` to `undefined`
-/// (and whose implicit-`this` cell the caller set to `undefined`, or whose
-/// callee is an arrow and never reads it).
+/// (or whose callee is an arrow and never reads it).
 pub(crate) const JS_THIS_UNDEFINED: &str = crate::nanbox::TAG_UNDEFINED_I64;
 
-/// The receiver bits the implicit-`this` cell holds right now: what a callee
-/// entered here would read from the cell. For a direct call whose caller
-/// does not bind the cell (stage 1 passes the cell's value unchanged).
-pub(crate) fn current_this_bits(ctx: &mut crate::expr::FnCtx<'_>) -> String {
-    if let Some(cell) = crate::rooting::implicit_this_cell_ptr(ctx) {
-        return ctx.block().load(I64, &cell);
+/// The value of `this` in code that has no receiver binding of its own and no
+/// `this` slot: module top-level code. `undefined` in strict code; in sloppy
+/// code OrdinaryCallBindThis's `undefined -> globalThis`, through the same
+/// `js_this_coerce_sloppy` a sloppy body's receiver prologue calls (a
+/// safepoint). A function, method or closure body that reads `this` must bind
+/// it from its receiver parameter (or a lexical capture) at entry instead: a
+/// body reaching this has lost the receiver its caller passed.
+pub(crate) fn unbound_this_value(ctx: &mut crate::expr::FnCtx<'_>) -> String {
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    if ctx.is_strict_fn {
+        return undefined;
     }
-    let blk = ctx.block();
-    let value = blk.call(DOUBLE, "js_implicit_this_get", &[]);
-    blk.bitcast_double_to_i64(&value)
-}
-
-/// Whether this compile emits the stage-1 witness (`PERRY_THIS_WITNESS=1`, a
-/// COMPILE-time knob — a product build emits nothing and pays nothing).
-pub(crate) fn this_witness_enabled() -> bool {
-    std::env::var_os("PERRY_THIS_WITNESS").is_some_and(|v| v == "1")
-}
-
-/// The site-name constant a witness call names its body by, added to
-/// `llmod` BEFORE the body is defined (a definition borrows the module):
-/// `Some((global, byte_len))` in a witness build, `None` otherwise.
-pub(crate) fn this_witness_site(
-    llmod: &mut crate::module::LlModule,
-    site: &str,
-) -> Option<(String, usize)> {
-    this_witness_enabled().then(|| llmod.add_string_constant(site))
-}
-
-/// In a witness build (`site` from [`this_witness_site`]), emit
-/// `js_this_param_witness(%js_this, site, len)` at the entry of a body that
-/// reads the implicit-`this` cell: the runtime compares the parameter with
-/// the cell and names every body whose caller passed a different receiver.
-/// A GC leaf. Nothing when `site` is `None`.
-pub(crate) fn emit_this_param_witness(blk: &mut LlBlock, site: Option<&(String, usize)>) {
-    let Some((global, len)) = site else {
-        return;
-    };
-    blk.call_void(
-        "js_this_param_witness",
-        &[
-            (I64, JS_BODY_THIS),
-            (crate::types::PTR, &format!("@{global}")),
-            (I64, &len.to_string()),
-        ],
-    );
+    ctx.block()
+        .call(DOUBLE, "js_this_coerce_sloppy", &[(DOUBLE, &undefined)])
 }
 
 /// The receiver prologue of a SLOPPY body that reads `this` (stage 2 of

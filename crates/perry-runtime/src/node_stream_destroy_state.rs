@@ -73,17 +73,14 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
                 err
             };
             let args = [destroy_arg, cb_value];
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
             unsafe {
-                let _ = crate::closure::js_native_call_value(
+                let _ = crate::closure::native_call_value_this(
                     destroy,
-                    crate::closure::plain_call_receiver(),
+                    crate::closure::JsThis::from_f64(stream),
                     args.as_ptr(),
                     args.len(),
                 );
             }
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return;
         }
     }
@@ -92,10 +89,10 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
 
 pub(super) extern "C" fn ns_destroy1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     destroy_stream(stream, err);
     stream
 }

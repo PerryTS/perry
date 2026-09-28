@@ -417,9 +417,6 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // `js_native_call_method`'s field-scan dispatch when invoking a
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
-    module.declare_function("js_implicit_this_get", DOUBLE, &[]);
-    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
-    module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
     // Static-method prologue `this`: takes the one-shot receiver override
     // armed by dynamic static dispatch / call/apply, else returns the
     // lexical class-ref argument.

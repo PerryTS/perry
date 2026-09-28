@@ -162,10 +162,10 @@ extern "C" fn no_match(
 }
 extern "C" fn return_this(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _: f64,
 ) -> f64 {
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 extern "C" fn factory(
     _: *const crate::closure::ClosureHeader,
@@ -547,50 +547,45 @@ thread_local! { static ORDER: Cell<u64> = const { Cell::new(0) }; }
 fn ordered(event: u64) {
     ORDER.with(|n| n.set(n.get() * 10 + event));
 }
-fn ordered_field(event: u64, name: &[u8]) -> f64 {
+fn ordered_field(this: crate::closure::JsThis, event: u64, name: &[u8]) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     ordered(event);
     gc_collect_minor();
     get(&receiver, name)
 }
 extern "C" fn ordered_input(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    ordered_field(1, b"text")
+    ordered_field(this, 1, b"text")
 }
 extern "C" fn ordered_constructor(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    ordered_field(2, b"holder")
+    ordered_field(this, 2, b"holder")
 }
 extern "C" fn ordered_species(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    ordered_field(3, b"factory")
+    ordered_field(this, 3, b"factory")
 }
 extern "C" fn ordered_flags(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    ordered_field(4, b"flagText")
+    ordered_field(this, 4, b"flagText")
 }
 extern "C" fn ordered_factory(
     closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     receiver: f64,
     flags: f64,
 ) -> f64 {
     ordered(5);
-    factory(
-        closure,
-        crate::closure::body_call::current_this(),
-        receiver,
-        flags,
-    )
+    factory(closure, this, receiver, flags)
 }
 extern "C" fn ordered_index(
     _: *const crate::closure::ClosureHeader,
@@ -602,11 +597,11 @@ extern "C" fn ordered_index(
 }
 extern "C" fn ordered_set_index(
     _: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     index: f64,
 ) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     ordered(7);
     gc_collect_minor();
     put(&receiver, b"seenIndex", index);

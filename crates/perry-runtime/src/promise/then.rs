@@ -1028,18 +1028,14 @@ fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
         let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
         crate::exception::js_throw(f64::from_bits(err_val));
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = unsafe {
-        crate::closure::js_native_call_value(
+    unsafe {
+        crate::closure::native_call_value_this(
             then_fn,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver),
             args.as_ptr(),
             args.len(),
         )
-    };
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    }
 }
 
 fn throw_promise_finally_non_object() -> ! {
@@ -1595,7 +1591,7 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
 /// `then`/`catch`/`finally` value-read, or `None` for any other property.
 /// Returns the shared prototype method so `p.then === Promise.prototype.then`
 /// (spec-required identity) and `.call(receiver)` properly receives the caller's
-/// `this` via IMPLICIT_THIS rather than a captured pointer.
+/// `this` as its receiver parameter rather than a captured pointer.
 pub unsafe fn js_promise_bound_method(_promise: *mut Promise, property: &str) -> Option<f64> {
     if !matches!(property, "then" | "catch" | "finally") {
         return None;

@@ -15,12 +15,8 @@ defined once, in perry-abi (`js_body_fn_ty!`, `JsBody0`..`JsBody16`,
   `JsClosure::call_slice(this, &args)` and `perry_ffi::call_value(func,
   this, &args)`. The runtime's entries match: `js_closure_call{N}(closure,
   this, ...)`, `js_native_call_value(func, this, args, len)`,
-  `js_closure_call_array(closure, this, args, len)`. Addon code no longer
-  reads or writes the runtime's implicit-`this` cell (the ext crates' own
-  `js_implicit_this_set` save/restore pairs are gone). While bodies still
-  read that cell (this-as-a-parameter stage 1), an entry handed a receiver
-  other than the cell's binds the cell to it for the call; the runtime's own
-  plain calls pass the cell's value and bind nothing.
+  `js_closure_call_array(closure, this, args, len)`. No native code reads or
+  writes an ambient `this`.
 - perry-ffi now carries its own version (0.6.0) and depends on perry-abi,
   which is published before it (`scripts/publish_perry_ffi.sh`).
 - `scripts/check_js_body_call_funnel.py` refuses an `extern` declaration of a

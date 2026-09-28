@@ -1829,7 +1829,7 @@ pub(super) fn callee_binding_resolution_enabled() -> bool {
     })
 }
 
-/// Populate `resolved_arrow_callback_targets` for loop-called immutable callee
+/// Populate `resolved_plain_callback_targets` for loop-called immutable callee
 /// bindings — the generalization of `codegen/method.rs`'s callback-parameter
 /// resolution to plain function and closure bodies, and to captured bindings
 /// and module globals.
@@ -1878,7 +1878,7 @@ pub(super) fn emit_callee_binding_resolutions(
     );
     for (id, arity) in candidates {
         if ctx
-            .resolved_arrow_callback_targets
+            .resolved_plain_callback_targets
             .contains_key(&(id, arity))
         {
             continue;
@@ -1938,10 +1938,10 @@ pub(super) fn emit_callee_binding_resolutions(
         let handle = crate::expr::unbox_to_i64(ctx.block(), &value_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &handle), (I32, &arity.to_string())],
         );
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((id, arity), fn_ptr);
     }
 }

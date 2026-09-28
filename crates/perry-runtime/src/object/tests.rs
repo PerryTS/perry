@@ -112,12 +112,12 @@ extern "C" fn value_of_finite(
 
 extern "C" fn symbol_to_primitive_this_object(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     hint: f64,
 ) -> f64 {
     let hint_value = JSValue::from_bits(hint.to_bits());
     assert_eq!(js_string_to_rust(hint_value), "number");
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 extern "C" fn to_iso_string_sentinel(
@@ -159,9 +159,9 @@ fn date_to_json_number_hint_honors_symbol_to_primitive() {
             crate::value::js_nanbox_pointer(value_of as i64),
         );
 
-        let prev_this = js_implicit_this_set(receiver_value);
-        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
-        js_implicit_this_set(prev_this);
+        let result = catch_js(|| {
+            crate::object::date_proto_thunks::test_date_to_json_with_this(receiver_value)
+        });
 
         let result = result.expect("Date.prototype.toJSON should not throw");
         assert!(
@@ -200,9 +200,9 @@ fn date_to_json_symbol_to_primitive_object_result_throws() {
             crate::value::js_nanbox_pointer(to_iso as i64),
         );
 
-        let prev_this = js_implicit_this_set(receiver_value);
-        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
-        js_implicit_this_set(prev_this);
+        let result = catch_js(|| {
+            crate::object::date_proto_thunks::test_date_to_json_with_this(receiver_value)
+        });
 
         assert!(
             result.is_err(),
@@ -1320,12 +1320,12 @@ fn map_size_by_name_does_not_oob_read_keys_array() {
 }
 
 /// #7518: a `globalThis` built-in CONSTRUCTOR reached as a VALUE must never be
-/// re-dispatched as a method name on `IMPLICIT_THIS`.
+/// re-dispatched as a method name on the call's `this`.
 ///
 /// `try_dispatch_value_called_proto_method` exists for the #3716 uncurry-this
 /// idiom: a built-in *prototype method* invoked as a value arrives backed by the
 /// shared `global_this_builtin_noop_thunk`, so the helper recovers its recorded
-/// `name` and re-dispatches `IMPLICIT_THIS.<name>(…)` through the real by-name
+/// `name` and re-dispatches `this.<name>(…)` through the real by-name
 /// tower. Global constructors share that same no-op thunk, and the only thing
 /// keeping them out was incidental — they recorded no builtin `.length`.
 ///
@@ -1333,8 +1333,8 @@ fn map_size_by_name_does_not_oob_read_keys_array() {
 /// `EventTarget.length` reads `0` like Node. That gave the EventTarget global a
 /// recorded length, opened the gate, and re-broke #6301: `class Bus extends
 /// EventTarget {}` has no static parent class id, so its `super()` runs the
-/// parent VALUE through `js_fetch_or_value_super` — which binds `IMPLICIT_THIS`
-/// to the new instance before the value call — and the helper turned that into
+/// parent VALUE through `js_fetch_or_value_super` — which passes the new
+/// instance as `this` to the value call — and the helper turned that into
 /// `bus.EventTarget()`, whose miss throws `TypeError: EventTarget is not a
 /// function`. `parity` is tag-gated, so the gap test that covers this sat red on
 /// `main` for a week unnoticed; this assertion lives in the per-PR `cargo-test`
@@ -1353,10 +1353,11 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
     // PROCESS-global CLOSURE_PROPS table (#6965).
     let _global = crate::gc::global_side_table_test_lock();
     // Give the pre-fix failure mode a real receiver to miss on, so a regression
-    // surfaces as a clean catchable throw rather than a dispatch on whatever
-    // `IMPLICIT_THIS` happened to hold.
-    let receiver = crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64);
-    let prev_this = crate::object::js_implicit_this_set(receiver);
+    // surfaces as a clean catchable throw rather than a dispatch on an
+    // arbitrary receiver.
+    let root_scope = crate::gc::RuntimeHandleScope::new();
+    let receiver =
+        root_scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_object_alloc(0, 0) as i64));
 
     let mut with_recorded_length = 0usize;
     let mut offenders: Vec<String> = Vec::new();
@@ -1373,7 +1374,12 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
         }
         let verdict = catch_js(|| {
             match unsafe {
-                crate::object::try_dispatch_value_called_proto_method(closure, std::ptr::null(), 0)
+                crate::object::try_dispatch_value_called_proto_method(
+                    closure,
+                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                    std::ptr::null(),
+                    0,
+                )
             } {
                 None => 1.0,
                 Some(_) => 0.0,
@@ -1386,12 +1392,10 @@ fn global_builtin_constructor_values_are_not_redispatched_by_name() {
         }
     }
 
-    crate::object::js_implicit_this_set(prev_this);
-
     assert!(
         offenders.is_empty(),
         "globalThis built-in constructors must not be value-dispatched as \
-         `IMPLICIT_THIS.<Name>(…)`; offenders: {offenders:?}"
+         `this.<Name>(…)`; offenders: {offenders:?}"
     );
     // Non-vacuity: the bug needs the no-op thunk PLUS a recorded spec `.length`.
     // If nothing in the table carries a length, every entry above declined at the

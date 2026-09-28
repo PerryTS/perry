@@ -459,7 +459,7 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
 /// returns `false` when `this` is not callable, so `Function.prototype[Symbol
 /// .hasInstance].call(undefined, {})` is `false` (not a throw). Installed on
 /// `Function.prototype` under the `@@hasInstance` key; the receiver flows in
-/// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
+/// as the `this` argument supplied by the `.call`/member dispatch.
 pub(crate) extern "C" fn function_prototype_has_instance_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,

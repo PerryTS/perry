@@ -31,6 +31,10 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // `lower_expr` and the foundational types (`FnCtx`, `FlatConstInfo`)
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
+// No emitted reader since the implicit-`this` cell (slot 1) was deleted; kept
+// for slot 0, reserved for the megamorphic follow-up's shape-record directory
+// (`perry_abi::AGENT_PTR_SLOTS`).
+#[allow(dead_code)]
 pub(crate) mod agent_ptr;
 pub(crate) mod array_length;
 mod array_literal;
@@ -675,7 +679,7 @@ pub(crate) struct FnCtx<'a> {
     /// Nullable code pointers resolved once from immutable method callback
     /// parameters, indexed by callback local (including exact const aliases)
     /// and call arity.
-    pub resolved_arrow_callback_targets: std::collections::HashMap<(u32, usize), String>,
+    pub resolved_plain_callback_targets: std::collections::HashMap<(u32, usize), String>,
     /// Nullable compiler-private callback targets whose guarded cold arms
     /// poison a versioned loop before they can run user code.
     pub resolved_versioned_loop_callback_targets: std::collections::HashMap<(u32, usize), String>,

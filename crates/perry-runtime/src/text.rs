@@ -787,8 +787,8 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 // Prototype thunks.
 //
 // A native method or accessor installed on a shared prototype is a
-// `ClosureHeader` whose ABI carries no receiver; it reads one from
-// `js_implicit_this_get()`. `temporal_proto_getter_thunk` is the template.
+// `ClosureHeader` body; it reads its receiver from its `this` parameter.
+// `temporal_proto_getter_thunk` is the template.
 // Each thunk brand-checks its receiver against the family class id, so
 // `TextDecoder.prototype.decode.call({})` throws a TypeError exactly as node
 // does, instead of silently decoding as utf-8.

@@ -272,7 +272,7 @@ pub fn is_registered_set(addr: usize) -> bool {
 /// (`TypeError` on a non-`Set` receiver) before dispatching. Mirrors the
 /// receiver extraction used by the `Array.prototype.slice` thunk: a
 /// NaN-boxed pointer, or a bare raw-i64 pointer some module-init call sites
-/// stash in `IMPLICIT_THIS`. Primitives (undefined/null/number/string/bool)
+/// pass as the receiver. Primitives (undefined/null/number/string/bool)
 /// carry a non-zero tag in the top 16 bits and resolve to `None`.
 pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
     let jsv = crate::value::JSValue::from_bits(bits);
@@ -2116,8 +2116,6 @@ fn js_set_foreach_impl(
         // during the callback are visited too. Bounding this by the live count
         // surfaced holes and stopped before later live values (#9072).
         let mut i = 0usize;
-        // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         loop {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
             if i >= (*set).used as usize {
@@ -2139,15 +2137,8 @@ fn js_set_foreach_impl(
             }
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
-            let this_v = this_handle.get_nanbox_f64();
-            crate::object::js_implicit_this_set(this_v);
-            let _ = crate::closure::js_native_call_value(
-                cb,
-                crate::closure::plain_call_receiver(),
-                args.as_ptr(),
-                args.len(),
-            );
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            let this_v = crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64());
+            let _ = crate::closure::native_call_value_this(cb, this_v, args.as_ptr(), args.len());
         }
     }
     let set = set_handle.get_raw_const_ptr::<SetHeader>();

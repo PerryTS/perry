@@ -910,7 +910,7 @@ pub(crate) extern "C" fn thunk_test_run(
 pub extern "C" fn js_node_test_register(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         name,
         options,
         callback,
@@ -921,7 +921,7 @@ pub extern "C" fn js_node_test_register(name: f64, options: f64, callback: f64) 
 pub extern "C" fn js_node_test_skip(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test_skip(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         name,
         options,
         callback,
@@ -932,7 +932,7 @@ pub extern "C" fn js_node_test_skip(name: f64, options: f64, callback: f64) -> f
 pub extern "C" fn js_node_test_todo(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test_todo(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         name,
         options,
         callback,
@@ -943,7 +943,7 @@ pub extern "C" fn js_node_test_todo(name: f64, options: f64, callback: f64) -> f
 pub extern "C" fn js_node_test_only(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test_only(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         name,
         options,
         callback,
@@ -954,7 +954,7 @@ pub extern "C" fn js_node_test_only(name: f64, options: f64, callback: f64) -> f
 pub extern "C" fn js_node_test_suite(name: f64, options: f64, callback: f64) -> f64 {
     thunk_test_suite(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         name,
         options,
         callback,
@@ -965,7 +965,7 @@ pub extern "C" fn js_node_test_suite(name: f64, options: f64, callback: f64) -> 
 pub extern "C" fn js_node_test_before(callback: f64) -> f64 {
     thunk_test_before(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         callback,
     )
 }
@@ -974,7 +974,7 @@ pub extern "C" fn js_node_test_before(callback: f64) -> f64 {
 pub extern "C" fn js_node_test_after(callback: f64) -> f64 {
     thunk_test_after(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         callback,
     )
 }
@@ -983,7 +983,7 @@ pub extern "C" fn js_node_test_after(callback: f64) -> f64 {
 pub extern "C" fn js_node_test_before_each(callback: f64) -> f64 {
     thunk_test_before_each(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         callback,
     )
 }
@@ -992,7 +992,7 @@ pub extern "C" fn js_node_test_before_each(callback: f64) -> f64 {
 pub extern "C" fn js_node_test_after_each(callback: f64) -> f64 {
     thunk_test_after_each(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         callback,
     )
 }
@@ -1001,7 +1001,7 @@ pub extern "C" fn js_node_test_after_each(callback: f64) -> f64 {
 pub extern "C" fn js_node_test_run(options: f64) -> f64 {
     thunk_test_run(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         options,
     )
 }

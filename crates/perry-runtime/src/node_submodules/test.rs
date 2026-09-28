@@ -840,16 +840,15 @@ extern "C" fn mock_function_invoke(
     let rest_handle = scope.root_nanbox_f64(rest);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let call_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value)); // #9445
+    let this_handle = scope.root_nanbox_f64(this_value);
     let call_result = catch_js(|| unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             implementation_handle.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
             call_args.as_ptr(),
             call_args.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
 
     match call_result {
         Ok(result) => {
@@ -1600,7 +1599,7 @@ pub extern "C" fn js_node_test_mock_fn(
 ) -> f64 {
     mock_fn_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         original,
         implementation_or_options,
         options,
@@ -1616,7 +1615,7 @@ pub extern "C" fn js_node_test_mock_method(
 ) -> f64 {
     mock_method_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         target,
         property,
         implementation,
@@ -1633,7 +1632,7 @@ pub extern "C" fn js_node_test_mock_getter(
 ) -> f64 {
     mock_getter_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         target,
         property,
         implementation,
@@ -1650,7 +1649,7 @@ pub extern "C" fn js_node_test_mock_setter(
 ) -> f64 {
     mock_setter_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         target,
         property,
         implementation,
@@ -1675,19 +1674,19 @@ pub extern "C" fn js_node_test_mock_property_with_presence(
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_reset() -> f64 {
-    mock_reset_thunk(std::ptr::null(), crate::closure::body_call::current_this())
+    mock_reset_thunk(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_restore_all() -> f64 {
-    mock_restore_all_thunk(std::ptr::null(), crate::closure::body_call::current_this())
+    mock_restore_all_thunk(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64) -> f64 {
     snapshot_set_default_serializers(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         serializers,
     )
 }
@@ -1696,7 +1695,7 @@ pub extern "C" fn js_node_test_snapshot_set_default_serializers(serializers: f64
 pub extern "C" fn js_node_test_snapshot_set_resolve_snapshot_path(resolver: f64) -> f64 {
     snapshot_set_resolve_snapshot_path(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         resolver,
     )
 }
@@ -1705,37 +1704,29 @@ pub extern "C" fn js_node_test_snapshot_set_resolve_snapshot_path(resolver: f64)
 pub extern "C" fn js_node_test_mock_timers_enable(options: f64) -> f64 {
     mock_timers_enable(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         options,
     )
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_tick(ms: f64) -> f64 {
-    mock_timers_tick(
-        std::ptr::null(),
-        crate::closure::body_call::current_this(),
-        ms,
-    )
+    mock_timers_tick(std::ptr::null(), crate::closure::plain_call_receiver(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_run_all() -> f64 {
-    mock_timers_run_all(std::ptr::null(), crate::closure::body_call::current_this())
+    mock_timers_run_all(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_set_time(ms: f64) -> f64 {
-    mock_timers_set_time(
-        std::ptr::null(),
-        crate::closure::body_call::current_this(),
-        ms,
-    )
+    mock_timers_set_time(std::ptr::null(), crate::closure::plain_call_receiver(), ms)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
-    mock_timers_reset(std::ptr::null(), crate::closure::body_call::current_this())
+    mock_timers_reset(std::ptr::null(), crate::closure::plain_call_receiver())
 }
 
 pub(crate) fn decorate_test_export(

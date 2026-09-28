@@ -96,10 +96,6 @@ extern "C" {
         arguments: *const f64,
         argument_count: usize,
     ) -> f64;
-    #[link_name = "js_implicit_this_set"]
-    fn provider_js_implicit_this_set(value: f64) -> f64;
-    #[link_name = "js_implicit_this_get"]
-    fn provider_js_implicit_this_get() -> f64;
     #[link_name = "js_ffi_root_scope_enter"]
     fn provider_js_ffi_root_scope_enter() -> usize;
     #[link_name = "js_ffi_root_push_nanbox"]
@@ -182,27 +178,16 @@ fn js_closure_alloc(function: *const u8, capture_count: u32) -> *mut ClosureHead
     provider_call!(provider_js_closure_alloc(function, capture_count))
 }
 
-// Stage 1 of this-as-a-parameter: these plain calls run with whatever the
-// implicit-`this` cell holds, which is the receiver they pass.
-fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
-    provider_call!(provider_js_closure_call0(closure, plain_call_receiver()))
+fn js_closure_call0(closure: *const ClosureHeader, this: JsThis) -> f64 {
+    provider_call!(provider_js_closure_call0(closure, this))
 }
 
-fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> f64 {
-    provider_call!(provider_js_closure_call1(
-        closure,
-        plain_call_receiver(),
-        arg0
-    ))
+fn js_closure_call1(closure: *const ClosureHeader, this: JsThis, arg0: f64) -> f64 {
+    provider_call!(provider_js_closure_call1(closure, this, arg0))
 }
 
-fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg1: f64) -> f64 {
-    provider_call!(provider_js_closure_call2(
-        closure,
-        plain_call_receiver(),
-        arg0,
-        arg1
-    ))
+fn js_closure_call2(closure: *const ClosureHeader, this: JsThis, arg0: f64, arg1: f64) -> f64 {
+    provider_call!(provider_js_closure_call2(closure, this, arg0, arg1))
 }
 
 fn js_closure_get_capture_ptr(closure: *const ClosureHeader, index: u32) -> i64 {
@@ -241,41 +226,20 @@ fn js_promise_mark_internally_handled(promise: *mut Promise) {
     provider_call!(provider_js_promise_mark_internally_handled(promise))
 }
 
-fn js_native_call_value(function: f64, arguments: *const f64, argument_count: usize) -> f64 {
+/// Call `function` with `this` bound to `receiver` (a method call of a
+/// function value, `function.call(receiver)`).
+fn js_native_call_value(
+    function: f64,
+    receiver: f64,
+    arguments: *const f64,
+    argument_count: usize,
+) -> f64 {
     provider_call!(provider_js_native_call_value(
         function,
-        plain_call_receiver(),
+        perry_runtime::closure::JsThis::from_f64(receiver),
         arguments,
         argument_count
     ))
-}
-
-/// The receiver of a plain call in stage 1 of this-as-a-parameter: the
-/// implicit-`this` cell's current value, read through the provider's C ABI
-/// like every other runtime access in this file.
-fn plain_call_receiver() -> JsThis {
-    JsThis(provider_call!(provider_js_implicit_this_get()).to_bits())
-}
-
-fn js_implicit_this_set(value: f64) -> f64 {
-    provider_call!(provider_js_implicit_this_set(value))
-}
-
-/// Call `f` with `IMPLICIT_THIS` bound to `receiver`, restoring the displaced
-/// value from a transient ROOT afterwards (#10490): it is the caller's
-/// receiver, and `f` runs user code that an evacuating minor can move it
-/// across. Uses the provider's root stack like every other runtime-owned
-/// operation in this file.
-fn with_implicit_this(receiver: f64, f: impl FnOnce() -> f64) -> f64 {
-    let base = provider_call!(provider_js_ffi_root_scope_enter());
-    let previous = js_implicit_this_set(receiver);
-    let slot = provider_call!(provider_js_ffi_root_push_nanbox(previous.to_bits()));
-    let result = f();
-    js_implicit_this_set(f64::from_bits(provider_call!(
-        provider_js_ffi_root_get_nanbox(slot)
-    )));
-    provider_call!(provider_js_ffi_root_scope_exit(base));
-    result
 }
 
 fn js_promise_new() -> *mut Promise {
@@ -346,7 +310,11 @@ pub(crate) fn internal_promise() -> *mut Promise {
 
 unsafe fn try_call_stream_action(callback: i64, reason: f64) -> Result<f64, u64> {
     perry_runtime::exception::catch_js_throw(|| {
-        js_closure_call1(callback as *const ClosureHeader, reason)
+        js_closure_call1(
+            callback as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            reason,
+        )
     })
     .map_err(f64::to_bits)
 }
@@ -1110,7 +1078,11 @@ unsafe fn invoke_start(stream_id: usize) {
         }
     };
     if cb != 0 {
-        js_closure_call1(cb as *const ClosureHeader, controller);
+        js_closure_call1(
+            cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            controller,
+        );
     }
 }
 
@@ -1148,7 +1120,11 @@ extern "C" fn readable_pull_microtask(
                     pull_deferred_byte_chunk(stream_id, cb);
                     f64::from_bits(TAG_UNDEFINED)
                 } else {
-                    js_closure_call1(cb as *const ClosureHeader, stream_id as f64)
+                    js_closure_call1(
+                        cb as *const ClosureHeader,
+                        perry_runtime::closure::plain_call_receiver(),
+                        stream_id as f64,
+                    )
                 }
             });
             match pull_outcome {
@@ -1296,7 +1272,10 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
 }
 
 unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
-    let chunk = js_closure_call0(cb as *const ClosureHeader);
+    let chunk = js_closure_call0(
+        cb as *const ClosureHeader,
+        perry_runtime::closure::plain_call_receiver(),
+    );
     if chunk.to_bits() == TAG_UNDEFINED {
         let _ = js_readable_stream_controller_close(stream_id as f64);
     } else {
@@ -1772,7 +1751,7 @@ pub(crate) unsafe fn has_async_iterator(value: f64) -> bool {
 
 unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     let method = async_iterator_method(value)?;
-    let iterator = with_implicit_this(value, || js_native_call_value(method, std::ptr::null(), 0));
+    let iterator = js_native_call_value(method, value, std::ptr::null(), 0);
     if iterator.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -1817,18 +1796,21 @@ unsafe fn await_maybe_promise(value: f64) -> SettledValue {
 }
 
 unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
-    let iter_ptr = js_nanbox_get_pointer(iterator);
-    if iter_ptr == 0 {
+    if js_nanbox_get_pointer(iterator) == 0 {
         return None;
     }
-    let iter_obj = iter_ptr as *const ObjectHeader;
+    // The key allocation can collect: the iterator is the receiver of the
+    // call below, so it is rooted across it and re-read.
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let slot = provider_call!(provider_js_ffi_root_push_nanbox(iterator.to_bits()));
     let next_key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let iterator = f64::from_bits(provider_call!(provider_js_ffi_root_get_nanbox(slot)));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
+    let iter_obj = js_nanbox_get_pointer(iterator) as *const ObjectHeader;
     let next_val = js_object_get_field_by_name(iter_obj, next_key);
     let next = f64::from_bits(next_val.bits());
     if is_callable_value(next) {
-        let result =
-            with_implicit_this(iterator, || js_native_call_value(next, std::ptr::null(), 0));
-        Some(result)
+        Some(js_native_call_value(next, iterator, std::ptr::null(), 0))
     } else {
         Some(perry_runtime::object::js_native_call_method(
             iterator,
@@ -2099,6 +2081,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
         let size = if strategy_size_cb != 0 {
             let size = readable_strategy_size_to_number(js_closure_call1(
                 strategy_size_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
                 chunk,
             ));
             if size.is_nan() || size < 0.0 || size.is_infinite() {

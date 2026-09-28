@@ -23,7 +23,7 @@
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The declared function type only narrows which loop-called bindings are ATTEMPTED for entry resolution; it licenses no call. The resolution itself goes through js_closure_resolve_arrow_direct_call(handle, arity), which validates the value is an arrow closure of that arity at runtime, so a wrong or stale declared type yields a failed resolution and the ordinary dynamic call, never a wrong callee. Async and generator function types are excluded at this read."
+      "reason": "The declared function type only narrows which loop-called bindings are ATTEMPTED for entry resolution; it licenses no call. The resolution itself goes through js_closure_resolve_plain_direct_call(handle, arity), which validates the value is a directly callable closure of that arity at runtime, so a wrong or stale declared type yields a failed resolution and the ordinary dynamic call, never a wrong callee. Async and generator function types are excluded at this read."
     },
     {
       "path": "crates/perry-codegen/src/codegen/mod.rs",

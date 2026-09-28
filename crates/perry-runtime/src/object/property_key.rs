@@ -129,14 +129,14 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-        let result = crate::closure::js_native_call_value(
+        // Re-read: the key allocation, the method read and the clone can all
+        // move the receiver.
+        let result = crate::closure::native_call_value_this(
             f64::from_bits(bound),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
             std::ptr::null(),
             0,
         );
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         if js_value_is_not_object(result) {
             return Some(result);
         }
@@ -379,12 +379,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
                                 // A static getter is a BARE body declaring no parameters; the
                                 // receiver passed below is ignored by it (over-application is safe).
                                 let f = crate::closure::body_call::js_bare_body_fn!(getter_ptr as *const u8; a0);
-                                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                                let prev = this_scope
-                                    .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                                let r = f(receiver);
-                                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                                return r;
+                                return f(receiver);
                             }
                         }
                         match crate::object::get_parent_class_id(cid) {
@@ -551,15 +546,12 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
+    crate::closure::native_call_value_this(
         f64::from_bits(bound_handle.get_nanbox_u64()),
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(receiver),
         args_ptr,
         args_len,
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    )
 }
 
 #[cfg(test)]

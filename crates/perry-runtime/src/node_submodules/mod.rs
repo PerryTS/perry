@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call_array,
+    js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
     js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_arity,
     ClosureHeader,
 };

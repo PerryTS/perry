@@ -389,7 +389,7 @@ pub fn try_lower_closure_typed_local_call(
         // enters it.
         if matches!(ctx.local_type_hint(id), Some(HirType::Function(_)))
             || ctx
-                .resolved_arrow_callback_targets
+                .resolved_plain_callback_targets
                 .contains_key(&(*id, args.len()))
         {
             // #7803: the callee outlives the arguments here too, and this is
@@ -448,13 +448,10 @@ pub fn try_lower_closure_typed_local_call(
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)
             };
-            let undef_this =
-                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             // A method callback parameter can be resolved once at entry when
-            // its actual value is a directly callable arrow. Keep the full
-            // dispatcher as a nullable-target fallback: TypeScript's function
-            // annotation is not a runtime proof, and ordinary functions must
-            // still receive receiverless `this === undefined` semantics.
+            // its actual value is directly callable. Keep the full dispatcher
+            // as a nullable-target fallback: TypeScript's function annotation
+            // is not a runtime proof.
             //
             // Exact immutable aliases (`const cb = callback`) have the same
             // identity whenever their read succeeds. A TDZ read throws while
@@ -495,22 +492,22 @@ pub fn try_lower_closure_typed_local_call(
                 }
             }
             if let Some(target) = ctx
-                .resolved_arrow_callback_targets
+                .resolved_plain_callback_targets
                 .get(&(*id, lowered_args.len()))
                 .cloned()
             {
                 let fast_ok = ctx.block().icmp_ne(PTR, &target, "null");
-                let fast_idx = ctx.new_block("callback_arrow_direct.fast");
-                let fallback_idx = ctx.new_block("callback_arrow_direct.fallback");
-                let merge_idx = ctx.new_block("callback_arrow_direct.merge");
+                let fast_idx = ctx.new_block("callback_plain_direct.fast");
+                let fallback_idx = ctx.new_block("callback_plain_direct.fallback");
+                let merge_idx = ctx.new_block("callback_plain_direct.merge");
                 let fast_label = ctx.block_label(fast_idx);
                 let fallback_label = ctx.block_label(fallback_idx);
                 let merge_label = ctx.block_label(merge_idx);
                 ctx.block().cond_br(&fast_ok, &fast_label, &fallback_label);
 
                 ctx.current_block = fast_idx;
-                // The resolved target is an arrow (lexical `this`): the
-                // receiver parameter is unread.
+                // A plain call: the receiver is `undefined`, as
+                // `js_closure_callN` would pass it.
                 let fast_value = crate::expr::body_call::emit_js_body_call(
                     ctx.block(),
                     crate::expr::body_call::JsBody::Pointer(&target),
@@ -524,10 +521,9 @@ pub fn try_lower_closure_typed_local_call(
                 }
 
                 ctx.current_block = fallback_idx;
-                let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
+                // A plain call: the body receives `undefined`.
                 let fallback_value =
                     super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-                crate::rooting::implicit_this_restore(ctx, prev_this);
                 let after_fallback = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
                     ctx.block().br(&merge_label);
@@ -544,19 +540,10 @@ pub fn try_lower_closure_typed_local_call(
                 callee_group.release(ctx);
                 return Ok(Some(merged));
             }
-            // Receiverless call of a closure-typed local: bind `this` to
-            // undefined for the duration of the call (OrdinaryCallBindThis,
-            // #3576) so an enclosing method dispatch's IMPLICIT_THIS does
-            // not leak into the callee body. Like the FuncRef path, the
-            // reset is gated on the statically-known callee actually reading
-            // dynamic `this`, so a hot-loop call of a plain helper closure
-            // pays nothing (#5030). When the typed-feedback guard falls back
-            // (the receiver is NOT the statically-mapped closure), the
-            // fallback block does its own reset — that callee is unknown.
+            // Receiverless call of a closure-typed local: a plain call, the
+            // body receives `undefined` as `this` (OrdinaryCallBindThis,
+            // #3576) — no enclosing receiver can leak into it.
             let known_func_id = ctx.local_closure_func_ids.get(id).copied();
-            let callee_reads_this = known_func_id
-                .map(|fid| ctx.funcs_reading_dynamic_this.contains(&fid))
-                .unwrap_or(true);
             if let Some(func_id) = known_func_id {
                 let declared_count = ctx
                     .local_closure_param_counts
@@ -573,16 +560,6 @@ pub fn try_lower_closure_typed_local_call(
                         &format!("closure:{}", func_id),
                         TypedFeedbackContract::closure_direct_call(),
                     );
-                    // #7211: rooted save/restore. The displaced value is the
-                    // enclosing method's receiver and it is live across the
-                    // callee body; the restore below sits in the merge block,
-                    // so the slot index crosses the diamond exactly as the
-                    // bare register used to.
-                    let prev_this = if callee_reads_this {
-                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
-                    } else {
-                        None
-                    };
                     let expected_arity = declared_count.to_string();
                     let call_arity = lowered_args.len().to_string();
                     let fast_idx = ctx.new_block("closure_direct.fast");
@@ -694,14 +671,8 @@ pub fn try_lower_closure_typed_local_call(
                     }
 
                     ctx.current_block = fast_idx;
-                    // The body is handed the receiver the implicit-`this` cell
-                    // holds for this call (stage 1): `undefined` when this site
-                    // bound it above, else whatever the cell already holds.
-                    let direct_this_bits = if prev_this.is_some() {
-                        crate::expr::body_call::JS_THIS_UNDEFINED.to_string()
-                    } else {
-                        crate::expr::body_call::current_this_bits(ctx)
-                    };
+                    // A plain call: the body receives `undefined`.
+                    let direct_this_bits = crate::expr::body_call::JS_THIS_UNDEFINED;
                     let typed_f64_param_reps = if ctx.typed_f64_closures.contains(&func_id) {
                         ctx.typed_i1_closure_param_reps
                             .get(&func_id)
@@ -816,7 +787,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
-                            &direct_this_bits,
+                            direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -917,7 +888,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
-                            &direct_this_bits,
+                            direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1021,7 +992,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
-                            &direct_this_bits,
+                            direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1128,7 +1099,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&generic_closure_fn),
                             &closure_handle,
-                            &direct_this_bits,
+                            direct_this_bits,
                             &lowered_args,
                         );
                         let after_generic = ctx.block().label.clone();
@@ -1168,7 +1139,7 @@ pub fn try_lower_closure_typed_local_call(
                             ctx.block(),
                             crate::expr::body_call::JsBody::Symbol(&closure_fn),
                             &closure_handle,
-                            &direct_this_bits,
+                            direct_this_bits,
                             &lowered_args,
                         )
                     };
@@ -1183,22 +1154,9 @@ pub fn try_lower_closure_typed_local_call(
                         "js_typed_feedback_record_fallback_call",
                         &[(I64, &site_id)],
                     );
-                    // Guard failed: the receiver is some OTHER closure whose
-                    // body codegen never saw — reset `this` here (and only
-                    // here) when the static gating skipped the outer reset.
-                    let fallback_prev_this = if prev_this.is_none() {
-                        Some(crate::rooting::implicit_this_save(ctx, &undef_this))
-                    } else {
-                        None
-                    };
+                    // Guard failed: some OTHER closure, a plain call.
                     let fallback_value =
                         super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-                    // Inner save, released inside its own arm — so the outer
-                    // slot (restored in the merge block) is still live and the
-                    // temp-root depth matches on both paths into the merge.
-                    if let Some(prev) = fallback_prev_this {
-                        crate::rooting::implicit_this_restore(ctx, prev);
-                    }
                     let after_fallback = ctx.block().label.clone();
                     if !ctx.block().is_terminated() {
                         ctx.block().br(&merge_label);
@@ -1212,9 +1170,6 @@ pub fn try_lower_closure_typed_local_call(
                             (fallback_value.as_str(), after_fallback.as_str()),
                         ],
                     );
-                    if let Some(prev) = prev_this {
-                        crate::rooting::implicit_this_restore(ctx, prev);
-                    }
                     // Below both arms' calls, in the merge that post-dominates
                     // them — which is why this group is `open_rooted_group`.
                     callee_group.release(ctx);
@@ -1222,12 +1177,9 @@ pub fn try_lower_closure_typed_local_call(
                 }
             }
             // Generic js_closure_callN dispatch (unknown func id, rest
-            // params, or arity mismatch): the runtime-resolved callee may
-            // read `this`, so the reset is unconditional here.
-            // #7211: rooted save/restore across the runtime-resolved callee.
-            let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
+            // params, or arity mismatch): a plain call, the body receives
+            // `undefined`.
             let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
-            crate::rooting::implicit_this_restore(ctx, prev_this);
             callee_group.release(ctx);
             return Ok(Some(result));
         }

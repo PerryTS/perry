@@ -242,9 +242,8 @@ pub(super) fn try_lower_imported_object_method_call(
         &closure_symbol,
         &fallback_label,
     );
-    // This direct call does not bind the implicit-`this` cell, so the body
-    // is handed the receiver the cell already holds (stage 1).
-    let this_bits = crate::expr::body_call::current_this_bits(ctx);
+    // `recv.method(args)`: the method's receiver is `recv`.
+    let this_bits = recv_bits.clone();
     let direct_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Symbol(&closure_symbol),
@@ -398,8 +397,8 @@ pub(super) fn try_lower_dynamic_object_method_call(
             &closure_symbol,
             &miss_label,
         );
-        // As above: the cell is not bound here, the body gets its value.
-        let this_bits = crate::expr::body_call::current_this_bits(ctx);
+        // As above: the method's receiver is `recv`.
+        let this_bits = recv_bits.clone();
         let direct_value = crate::expr::body_call::emit_js_body_call(
             ctx.block(),
             crate::expr::body_call::JsBody::Symbol(&closure_symbol),

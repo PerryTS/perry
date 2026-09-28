@@ -553,19 +553,6 @@ pub(super) fn compile_closure(
     let llvm_params =
         crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
 
-    // Stage-1 witness: a body that reads the implicit-`this` cell (it binds
-    // no lexical `this` of its own) checks, at entry, that its caller passed
-    // the cell's receiver as `%js_this`. Witness builds only.
-    let reads_this_cell = !captures_this
-        && enclosing_class.is_none()
-        && !is_arrow
-        && perry_hir::analysis::body_reads_dynamic_this(body);
-    let witness_site = if reads_this_cell {
-        crate::expr::body_call::this_witness_site(llmod, &llvm_name)
-    } else {
-        None
-    };
-
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
@@ -582,23 +569,21 @@ pub(super) fn compile_closure(
     // #10906: a non-arrow closure with its OWN `this` binding (a function
     // expression, or an object-literal method — the closed-shape literal path
     // lowers every method to exactly this) used to call
-    // `js_implicit_this_get{,_sloppy}` at EVERY `this` in its body. Bind the
+    // a thread-local receiver-cell read at EVERY `this` in its body. Bind the
     // receiver once instead, at entry, into a rooted `this` slot that every
     // `Expr::This` loads — what OrdinaryCallBindThis does, and what a class
     // method gets from `%this_arg`. The sloppy conversion (nullish ->
     // globalThis, primitive -> wrapper) then also runs once, so `this === this`
     // holds for a primitive receiver instead of boxing a fresh wrapper per read.
     //
-    // Async and generator bodies are excluded: their statements run across
-    // resumptions, and the entry read has not been audited against re-entry.
-    // Arrows have lexical `this`, which is `captures_this`'s job.
+    // Async and generator bodies bind it the same way: such a body runs ONCE
+    // per call (it returns a promise or a generator object), and the step
+    // closures that do run across resumptions capture the receiver lexically
+    // (the generator transform sets their `captures_this`). Arrows have
+    // lexical `this`, which is `captures_this`'s job.
     let entry_bound_this = !captures_this
         && enclosing_class.is_none()
         && !is_arrow
-        && !is_async
-        && !is_generator
-        && !cross_module.local_generator_funcs.contains(&func_id)
-        && !cross_module.async_step_closures.contains(&func_id)
         && perry_hir::analysis::body_reads_dynamic_this(body);
 
     // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
@@ -643,10 +628,6 @@ pub(super) fn compile_closure(
         crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
-    crate::expr::body_call::emit_this_param_witness(
-        lf.block_mut(0).expect("closure body has an entry block"),
-        witness_site.as_ref(),
-    );
 
     let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
         let scratch_param = params
@@ -1152,7 +1133,7 @@ pub(super) fn compile_closure(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         versioned_loop_deopt_context,

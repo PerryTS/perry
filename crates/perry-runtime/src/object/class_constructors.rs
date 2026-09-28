@@ -865,9 +865,6 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         if let Some((func_ptr, param_count, has_rest)) =
             super::class_registry::lookup_static_method_in_chain(parent_cid, name)
         {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value));
             crate::object::static_this_arm_if_unarmed(this_value);
             let result = if has_rest {
                 // Mirror `js_class_static_method_call`'s rest bundling: fixed
@@ -899,7 +896,6 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
                 super::class_registry::call_static_method(func_ptr, args_ptr, args_len, param_count)
             };
             crate::object::static_this_disarm();
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }
@@ -931,20 +927,12 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // walks the parent chain and drops its read lock before returning, so the
     // invoked body may re-take the registry lock without deadlocking (wall-37).
     if let Some(method_value) = super::class_registry::lookup_prototype_method(parent_cid, name) {
-        // #8495: root the displaced receiver across the call below — the
-        // replace has already overwritten the cell, so this is the frame's only
-        // copy and the restore would otherwise publish a pre-move address.
-        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-        let prev_this_h = prev_this_scope
-            .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-        let result = crate::closure::js_native_call_value(
+        return crate::closure::native_call_value_this(
             method_value,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_value),
             args_ptr,
             args_len,
         );
-        super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-        return result;
     }
     // #6316: the parent chain is real (an intermediate user class) but bottoms
     // out in a NATIVE base whose surface perry stamps onto the instance —
@@ -984,24 +972,16 @@ unsafe fn call_displaced_native_base_method(
         return crate::object::map_set_subclass::super_collection_method(this_value, name, args)
             .unwrap_or(undef);
     };
-    // The stashed closure already captures the receiver in slot 0, but bind
-    // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver
-    // through `this_value(closure)`, which falls back to IMPLICIT_THIS when the
-    // capture is undefined (the prototype-installed form).
-    // #8495: root the displaced receiver across the call below — the
-    // replace has already overwritten the cell, so this is the frame's only
-    // copy and the restore would otherwise publish a pre-move address.
-    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-    let prev_this_h = prev_this_scope
-        .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-    let result = crate::closure::js_native_call_value(
+    // The stashed closure already captures the receiver in slot 0, but pass
+    // it as `this` too: the shared emitter/stream stubs fall back to their
+    // `this` argument when the capture is undefined (the prototype-installed
+    // form).
+    crate::closure::native_call_value_this(
         method_value,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(this_value),
         args_ptr,
         args_len,
-    );
-    super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    result
+    )
 }
 
 /// Keepalive anchor (generated-code-only callee).

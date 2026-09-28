@@ -773,14 +773,6 @@ pub(crate) fn suppress_uncaught_drain<F: FnOnce() -> f64>(f: F) -> f64 {
     result
 }
 
-pub(crate) fn with_implicit_this<F: FnOnce() -> f64>(this_arg: f64, f: F) -> f64 {
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
-    let result = f();
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
-}
-
 pub(crate) fn update_channel_active(id: i64) {
     DIAG_CHANNELS.with(|channels| {
         if let Some(ch) = channels.borrow_mut().get_mut(&id) {
@@ -1117,16 +1109,19 @@ pub(crate) fn run_store_wrapped(
     if !valid_closure_value(fn_value) {
         crate::closure::throw_not_callable();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
-    with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(
+    unsafe {
+        crate::closure::js_closure_call_array(
             cb as i64,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
             args.as_ptr(),
             args.len() as i64,
         )
-    })
+    }
 }
 
 pub(crate) extern "C" fn diag_channel_subscribe(
@@ -1562,16 +1557,19 @@ pub(crate) fn call_fn_value(fn_value: f64, this_arg: f64, args: &[f64]) -> f64 {
     if !valid_closure_value(fn_value) {
         crate::closure::throw_not_callable();
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let rebound = crate::closure::clone_closure_rebind_this(fn_value.to_bits(), this_arg);
     let cb = (rebound & crate::value::POINTER_MASK) as *const ClosureHeader;
-    with_implicit_this(this_arg, || unsafe {
-        js_closure_call_array(
+    unsafe {
+        crate::closure::js_closure_call_array(
             cb as i64,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
             args.as_ptr(),
             args.len() as i64,
         )
-    })
+    }
 }
 
 pub(crate) extern "C" fn diag_trace_sync(

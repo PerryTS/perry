@@ -50,16 +50,11 @@ pub(super) fn is_regexp(value: &RuntimeHandle<'_>) -> Result<bool, EngineError> 
 }
 
 pub(crate) fn get(owner: &RuntimeHandle<'_>, name: &[u8]) -> Result<f64, EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    let result = api::caught(|| {
+    api::caught(|| {
         let key = crate::string::canonical_key(name);
         let value = owner.get_nanbox_f64();
         crate::proxy::js_reflect_get(value, js_nanbox_string(key as i64), value)
-    });
-    // Getter dispatch can throw through its own normal this-restoration path.
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    })
 }
 
 pub(crate) fn call_one(
@@ -68,9 +63,7 @@ pub(crate) fn call_one(
     argument: &RuntimeHandle<'_>,
 ) -> Result<f64, EngineError> {
     let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    let result = api::caught(|| {
-        crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
+    api::caught(|| {
         if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) == 1 {
             // The generic value-call bridge drops this for proxies. Supply
             // the actual receiver and an exact one-element GC argument array.
@@ -86,17 +79,15 @@ pub(crate) fn call_one(
         } else {
             let args = [argument.get_nanbox_f64()];
             unsafe {
-                crate::closure::js_native_call_value(
+                crate::closure::native_call_value_this(
                     method.get_nanbox_f64(),
-                    crate::closure::plain_call_receiver(),
+                    crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
                     args.as_ptr(),
                     1,
                 )
             }
         }
-    });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    })
 }
 
 #[cfg(test)]
@@ -208,25 +199,18 @@ pub(crate) fn to_string(value: &RuntimeHandle<'_>) -> Result<*mut StringHeader, 
             "Cannot convert a Symbol value to a string",
         ));
     }
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    let result =
-        api::caught(|| crate::value::js_jsvalue_to_string_coerce(primitive.get_nanbox_f64()));
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    let string = result?;
+    let string =
+        api::caught(|| crate::value::js_jsvalue_to_string_coerce(primitive.get_nanbox_f64()))?;
     crate::string::js_string_addref(string);
     Ok(string)
 }
 
 pub(crate) fn get_symbol(owner: &RuntimeHandle<'_>, name: &str) -> Result<f64, EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    let result = api::caught(|| {
+    api::caught(|| {
         let key = crate::symbol::well_known_symbol(name);
         let value = owner.get_nanbox_f64();
         crate::proxy::js_reflect_get(value, js_nanbox_pointer(key as i64), value)
-    });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    })
 }
 
 pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<(), EngineError> {
@@ -244,7 +228,6 @@ pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<()
         super::js_regexp_set_last_index(re, value.get_nanbox_f64());
         return Ok(());
     }
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let result = api::caught(|| {
         let key = crate::string::canonical_key(b"lastIndex");
         crate::proxy::js_reflect_set(
@@ -254,7 +237,6 @@ pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<()
             owner.get_nanbox_f64(),
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     if crate::value::js_is_truthy(result?) != 0 {
         Ok(())
     } else {
@@ -277,10 +259,7 @@ pub(crate) fn to_number(value: &RuntimeHandle<'_>) -> Result<f64, EngineError> {
             "Cannot convert a BigInt value to a number",
         ));
     }
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    let result = api::caught(|| crate::builtins::js_number_coerce(primitive.get_nanbox_f64()));
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    api::caught(|| crate::builtins::js_number_coerce(primitive.get_nanbox_f64()))
 }
 
 fn to_primitive(value: &RuntimeHandle<'_>, string_hint: bool) -> Result<f64, EngineError> {
@@ -376,7 +355,7 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
 }
 
 pub(crate) fn test_value(
-    this: crate::closure::JsThis,
+    _this: crate::closure::JsThis,
     receiver: f64,
     argument: f64,
 ) -> Result<bool, EngineError> {
@@ -384,9 +363,7 @@ pub(crate) fn test_value(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
-    let previous = scope.root_nanbox_f64(this.as_f64());
     let input =
         api::caught(|| crate::value::js_jsvalue_to_string_coerce(argument.get_nanbox_f64()));
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     test_string(receiver.get_nanbox_f64(), input?)
 }

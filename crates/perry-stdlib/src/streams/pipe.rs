@@ -882,7 +882,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
             state.abort_listener,
         );
         if perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
-            readable_stream_pipe_to_aborted(listener, perry_runtime::closure::current_this());
+            readable_stream_pipe_to_aborted(listener, perry_runtime::closure::JsThis::UNDEFINED);
             return promise;
         }
     }

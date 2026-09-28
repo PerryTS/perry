@@ -276,22 +276,23 @@ pub(crate) fn emit_rooted_call(
 pub(crate) const MAX_FIXED_CLOSURE_CALL_ARGS: usize = 16;
 
 /// Dispatch an unboxed closure handle over already-lowered arguments through
-/// the closure-call ABI as a PLAIN call. Stage 1 of this-as-a-parameter: a
-/// plain call keeps the implicit-`this` cell's current value, so the
-/// receiver passed is the cell's ([`crate::expr::body_call::current_this_bits`])
-/// and the entry binds nothing.
+/// the closure-call ABI as a PLAIN call (receiver `undefined`).
 pub(crate) fn emit_closure_handle_call(
     ctx: &mut FnCtx<'_>,
     closure_handle: &str,
     args: &[String],
 ) -> String {
-    let this_bits = crate::expr::body_call::current_this_bits(ctx);
-    emit_closure_handle_call_this(ctx, closure_handle, &this_bits, args)
+    emit_closure_handle_call_this(
+        ctx,
+        closure_handle,
+        crate::expr::body_call::JS_THIS_UNDEFINED,
+        args,
+    )
 }
 
 /// Dispatch an unboxed closure handle with receiver `this_bits` (the
-/// receiver's NaN-boxed bits, `i64`, valid here — nothing between here and
-/// the dispatch collects).
+/// receiver's NaN-boxed bits, `i64`, already re-read from its root by the
+/// caller — nothing between here and the dispatch collects).
 ///
 /// Up to [`MAX_FIXED_CLOSURE_CALL_ARGS`] arguments use the per-arity
 /// `js_closure_call{N}(closure, this, ...)` register entry points. Wider

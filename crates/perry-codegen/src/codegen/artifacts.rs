@@ -116,7 +116,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
             .into_iter()
             // A closure with a trusted-box clone is better served by the
-            // ENTRY-RESOLVED path: `js_closure_resolve_arrow_direct_call`
+            // ENTRY-RESOLVED path: `js_closure_resolve_plain_direct_call`
             // hands back the trusted clone with its entry-cached box-capture
             // pointers, which beats the known arm's public/typed call for
             // capturing bodies (measured: 2.5 vs 5.1 ns). Seeding such an id
@@ -333,11 +333,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             let arity = method.params.len();
             let wrap_params =
                 crate::expr::body_call::js_body_params((0..arity).map(|i| format!("%a{}", i)));
-            let witness_site = crate::expr::body_call::this_witness_site(llmod, &wrap_name);
             let wf = llmod.define_function(&wrap_name, DOUBLE, wrap_params);
             let _ = wf.create_block("entry");
             let blk = wf.block_mut(0).unwrap();
-            crate::expr::body_call::emit_this_param_witness(blk, witness_site.as_ref());
             // Forward the call-site receiver (the `this` parameter) as the
             // method's `this`, then the args. See the block comment above
             // (#5138).

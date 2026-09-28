@@ -100,21 +100,20 @@ fn register(plugin: f64) -> f64 {
         b"config",
         js_nanbox_pointer(js_object_alloc(0, 0) as i64),
     );
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(if is_function {
-        undefined()
-    } else {
-        plugin.get_nanbox_f64()
-    }));
     let result = crate::exception::catch_js_throw(|| unsafe {
         let args = [build.get_nanbox_f64()];
-        crate::closure::js_native_call_value(
+        let receiver = if is_function {
+            undefined()
+        } else {
+            plugin.get_nanbox_f64()
+        };
+        crate::closure::native_call_value_this(
             setup.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver),
             args.as_ptr(),
             1,
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     let result = match result {
         Ok(value) => value,
         Err(error) => crate::exception::js_throw(error),

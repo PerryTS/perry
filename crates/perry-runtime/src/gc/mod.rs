@@ -1118,12 +1118,13 @@ pub fn gc_init() {
         crate::symbol::new_symbol_side_table_root_scan_state,
         MutableRootScannerSource::RuntimeMutableScanner,
     );
-    // Issue #1813: the implicit-`this` cell holds the live receiver across a
-    // dynamically-dispatched method body. A moving GC triggered from inside
-    // that body (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble
-    // under concurrent load) must rewrite the cell, or the body's next
-    // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
-    reg_scanner!(crate::object::scan_implicit_this_roots_mut);
+    // Issue #1813: the dispatch-binding cells (`new.target`, the one-shot
+    // static-`this` override, the static private-owner stack) hold a live heap
+    // value across a call body. A moving GC triggered from inside that body
+    // (e.g. @perryts/mysql Pool.acquire → handshake → nativeScramble under
+    // concurrent load, when the implicit-`this` cell still existed) must
+    // rewrite them, or the body's next read derefs a relocated value.
+    reg_scanner!(crate::object::scan_dispatch_binding_roots_mut);
     // Fresh class evaluations are lexical environments, not merely template
     // class ids. Method dispatch keeps the active evaluation here so private
     // accesses remain exact across `.call`/`.apply`; root and rewrite those

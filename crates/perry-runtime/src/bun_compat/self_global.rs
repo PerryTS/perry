@@ -100,11 +100,7 @@ mod tests {
             global_value.to_bits()
         );
 
-        set_self(
-            std::ptr::null(),
-            crate::closure::body_call::current_this(),
-            42.0,
-        );
+        set_self(std::ptr::null(), crate::closure::JsThis::UNDEFINED, 42.0);
         assert!(crate::object::get_accessor_descriptor(global as usize, "self").is_none());
         super::super::js_set_bun_platform();
         assert_eq!(

@@ -53,26 +53,19 @@ unsafe fn emit_warning(warning: f64) {
             // allocate in its own dispatch preamble before it reads the
             // callee/args, which would otherwise leave these pointing at a
             // retired from-space address by the time they're dereferenced.
-            //
-            // #10490: the displaced `this` crosses the (user-replaceable)
-            // `process.emitWarning`, so root it in that same scope and
-            // restore it from the root, not from a plain local.
+            // `process.emitWarning` is called as a method of `process`.
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
             let callback_h = scope.root_nanbox_f64(emit_warning);
             let process_h = scope.root_nanbox_f64(process);
             let arg_handles = scope.root_nanbox_f64_slice(&[warning]);
-            let previous_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(
-                process_h.get_nanbox_f64(),
-            ));
             let live_args =
                 perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             perry_runtime::closure::js_native_call_value(
                 callback_h.get_nanbox_f64(),
-                perry_runtime::closure::plain_call_receiver(),
+                perry_runtime::closure::JsThis::from_f64(process_h.get_nanbox_f64()),
                 live_args.as_ptr(),
                 live_args.len(),
             );
-            perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
             return;
         }
     }

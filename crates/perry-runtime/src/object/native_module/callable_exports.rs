@@ -429,7 +429,7 @@ extern "C" fn buffer_prototype_method_thunk(
 }
 
 /// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
-/// through `IMPLICIT_THIS` (the same mechanism `require_webcrypto_this` in
+/// from the getter's `this` argument (the same mechanism `require_webcrypto_this` in
 /// `ctor_thunks.rs` uses for Web Crypto getters). `None` for a non-buffer
 /// receiver — Node's real getters answer `undefined` rather than throwing
 /// (`isInstance(this, Buffer) ? … : undefined`), and ordinary Buffer/typed-

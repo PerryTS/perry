@@ -307,12 +307,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                     ctx.block().load(DOUBLE, &this_slot)
                 } else {
-                    let helper = if ctx.is_strict_fn {
-                        "js_implicit_this_get"
-                    } else {
-                        "js_implicit_this_get_sloppy"
-                    };
-                    ctx.block().call(DOUBLE, helper, &[])
+                    crate::expr::body_call::unbound_this_value(ctx)
                 };
                 let key_idx = ctx.strings.intern(property);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -380,12 +375,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                 ctx.block().load(DOUBLE, &this_slot)
             } else {
-                let helper = if ctx.is_strict_fn {
-                    "js_implicit_this_get"
-                } else {
-                    "js_implicit_this_get_sloppy"
-                };
-                ctx.block().call(DOUBLE, helper, &[])
+                crate::expr::body_call::unbound_this_value(ctx)
             };
             let key_v = lower_expr(ctx, key)?;
             let value_v = lower_expr(ctx, value)?;

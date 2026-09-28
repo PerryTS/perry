@@ -314,11 +314,11 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
     let sink_run = llvm_function_body_containing(
         &all_ir,
         "@perry_method_sink_ts__Sink__run",
-        "@js_closure_resolve_arrow_direct_call(",
+        "@js_closure_resolve_plain_direct_call(",
     );
     assert_eq!(
         sink_run
-            .matches("@js_closure_resolve_arrow_direct_call(")
+            .matches("@js_closure_resolve_plain_direct_call(")
             .count(),
         1,
         "the callback target must be resolved once at method entry:\n{sink_run}"

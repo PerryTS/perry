@@ -11,9 +11,9 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
-    js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_call_array,
-    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_set_capture_f64,
-    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
+    js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_get_capture_f64,
+    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    js_register_closure_rest, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -1616,16 +1616,13 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     }
     let outcome = try_run_resource_scope(ids, || {
         let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
-        let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-            this_arg_handle.get_nanbox_f64(),
-        ));
         let callback_outcome = crate::exception::js_call_catching(|| {
             args_array_handle.with_const_ptr::<ArrayHeader, _>(|arr| {
                 if arr.is_null() {
                     unsafe {
-                        js_closure_call_array(
+                        crate::closure::js_closure_call_array(
                             callback as i64,
-                            crate::closure::plain_call_receiver(),
+                            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
                             ptr::null(),
                             0,
                         )
@@ -1636,9 +1633,9 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
                         crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
                     };
                     unsafe {
-                        js_closure_call_array(
+                        crate::closure::js_closure_call_array(
                             callback as i64,
-                            crate::closure::plain_call_receiver(),
+                            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
                             data,
                             len,
                         )
@@ -1646,7 +1643,6 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
                 }
             })
         });
-        crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
         match callback_outcome {
             Ok(value) => value,
             Err(error) => crate::exception::js_throw(error),

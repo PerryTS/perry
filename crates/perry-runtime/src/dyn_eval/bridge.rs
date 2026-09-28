@@ -250,24 +250,17 @@ pub(crate) fn set_member(base: f64, name: &str, value: f64) {
 
 /// Plain call `f(args…)` with an explicit `this` (undefined for ordinary
 /// calls). Mirrors the runtime's own `Function.prototype.call` plumbing:
-/// arm the implicit-`this` slot, rebind explicit-`this` closures, dispatch
-/// through the arity-aware value-call tower, restore.
+/// pass the receiver explicitly and dispatch through the arity-aware
+/// value-call tower.
 pub(crate) fn call_function(callee: f64, this: f64, args: &[f64]) -> f64 {
-    let prev = crate::object::js_implicit_this_set(this);
-    let prev_idx = root_push(prev);
-    let result = unsafe {
-        crate::closure::js_native_call_value(
+    unsafe {
+        crate::closure::native_call_value_this(
             callee,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this),
             args.as_ptr(),
             args.len(),
         )
-    };
-    let result_idx = root_push(result);
-    crate::object::js_implicit_this_set(root_get(prev_idx));
-    let result = root_get(result_idx);
-    roots_truncate(prev_idx);
-    result
+    }
 }
 
 /// Method call `base.name(args…)` — the generic dispatch tower compiled code

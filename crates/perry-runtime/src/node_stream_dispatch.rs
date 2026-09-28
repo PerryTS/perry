@@ -309,8 +309,9 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsy
 
 fn require_event_emitter_async_resource_receiver(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> EventEmitterAsyncResourceBacking {
-    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure)) {
+    if let Some(backing) = event_emitter_async_resource_backing(this_value(closure, this)) {
         return backing;
     }
     crate::node_submodules::diagnostics::throw_type_error_no_code(
@@ -324,7 +325,7 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     event: f64,
     rest: f64,
 ) -> f64 {
-    let backing = require_event_emitter_async_resource_receiver(closure);
+    let backing = require_event_emitter_async_resource_receiver(closure, this);
     let runtime_async_id = match backing {
         EventEmitterAsyncResourceBacking::RuntimeResource(resource) => {
             crate::async_hooks::js_async_resource_async_id(resource) as u64
@@ -343,9 +344,9 @@ extern "C" fn ns_ee_async_resource_emit_rest(
 
 extern "C" fn ns_ee_async_resource_destroy(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match require_event_emitter_async_resource_receiver(closure) {
+    match require_event_emitter_async_resource_receiver(closure, this) {
         EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
             crate::object::event_emitter_async_resource_dispatch()
                 .map(|dispatch| unsafe { dispatch(handle, 3) })
@@ -359,10 +360,10 @@ extern "C" fn ns_ee_async_resource_destroy(
 
 extern "C" fn ns_ee_async_resource_getter(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
     let operation = crate::closure::js_closure_get_capture_ptr(closure, 1) as u32;
-    match require_event_emitter_async_resource_receiver(closure) {
+    match require_event_emitter_async_resource_receiver(closure, this) {
         EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
             crate::object::event_emitter_async_resource_dispatch()
                 .map(|dispatch| unsafe { dispatch(handle, operation) })

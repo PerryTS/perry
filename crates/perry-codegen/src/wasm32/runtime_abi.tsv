@@ -618,6 +618,22 @@ js_closure_alloc_init	ptr	ptr,i32u,ptr
 js_closure_alloc_singleton	ptr	ptr
 js_closure_alloc_with_captures_singleton	ptr	ptr,i32u,ptr
 js_closure_call0	f64	ptr,i64
+js_closure_call1	f64	ptr,i64,f64
+js_closure_call10	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call11	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call12	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call13	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call14	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call15	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call16	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call2	f64	ptr,i64,f64,f64
+js_closure_call3	f64	ptr,i64,f64,f64,f64
+js_closure_call4	f64	ptr,i64,f64,f64,f64,f64
+js_closure_call5	f64	ptr,i64,f64,f64,f64,f64,f64
+js_closure_call6	f64	ptr,i64,f64,f64,f64,f64,f64,f64
+js_closure_call7	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call8	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64
+js_closure_call9	f64	ptr,i64,f64,f64,f64,f64,f64,f64,f64,f64,f64
 js_closure_call_apply_with_spread	f64	f64,i64,ptr,i64,i64
 js_closure_call_array	f64	i64,i64,ptr,i64
 js_closure_exact_func_guard	i64	f64,ptr
@@ -625,7 +641,7 @@ js_closure_get_capture_bits	i64	ptr,i32u
 js_closure_get_capture_f64	f64	ptr,i32u
 js_closure_get_capture_ptr	i64	ptr,i32u
 js_closure_get_func	ptr	ptr
-js_closure_resolve_arrow_direct_call	ptr	ptr,i32u
+js_closure_resolve_plain_direct_call	ptr	ptr,i32u
 js_closure_resolve_versioned_loop_direct_call	ptr	ptr,i32u
 js_closure_set_box_capture_ptr	void	ptr,i32u,i64
 js_closure_set_capture_bits	void	ptr,i32u,i64
@@ -1654,9 +1670,6 @@ js_i32_box_scope_release	void	ptr
 js_i32_box_set	void	ptr,i32s
 js_ic_diag_note_hit	void	i64,i32s
 js_immediate_has_pending	i32s	
-js_implicit_this_get	f64	
-js_implicit_this_get_sloppy	f64	
-js_implicit_this_set	f64	f64
 js_import_meta_resolve	f64	f64,f64,f64
 js_import_meta_resolve_value	f64	f64
 js_in_operator	f64	f64,f64
@@ -3684,7 +3697,6 @@ js_text_encoder_new	i64
 js_text_encoder_stream_new	f64	
 js_text_encoding_stream_new	f64	
 js_this_coerce_sloppy	f64	f64
-js_this_param_witness	void	i64,ptr,i64
 js_thread_has_pending	i32s	
 js_thread_parallel_filter	f64	f64,f64
 js_thread_parallel_map	f64	f64,f64
@@ -4598,7 +4610,6 @@ perry_i18n_plural_category	i32s	i32s,f64
 perry_i18n_set_currencies	void	ptr,i32u
 perry_i18n_set_locale_index	void	i32s
 perry_i18n_set_plural_locales	void	ptr,ptr,i32u
-perry_implicit_this_cell	ptr	
 perry_init_guard_check_and_set	i32s	i64
 perry_ios_classes_registered	void	
 perry_ios_get_connected_scene	i64	

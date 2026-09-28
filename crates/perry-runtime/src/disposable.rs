@@ -32,11 +32,12 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::{
     is_closure_ptr, js_closure_alloc, js_closure_call0, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, js_native_call_value, js_register_closure_arity, ClosureHeader,
+    js_closure_set_capture_ptr, js_register_closure_arity, native_call_value_this, ClosureHeader,
+    JsThis,
 };
 use crate::object::{
-    js_implicit_this_set, js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name,
-    js_object_set_field_f64, js_register_class_extends_error,
+    js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name, js_object_set_field_f64,
+    js_register_class_extends_error,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{
@@ -106,18 +107,7 @@ extern "C" fn bound_dispose_thunk(
     if !is_callable_value(method) {
         return undefined();
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(js_implicit_this_set(resource));
-    let result = unsafe {
-        js_native_call_value(
-            method,
-            crate::closure::plain_call_receiver(),
-            std::ptr::null(),
-            0,
-        )
-    };
-    js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    unsafe { native_call_value_this(method, JsThis::from_f64(resource), std::ptr::null(), 0) }
 }
 
 fn make_bound_dispose_thunk(method: f64, resource: f64) -> f64 {

@@ -5,17 +5,12 @@ use super::*;
 use crate::value::js_nanbox_string;
 
 pub(super) unsafe fn call_replace_callback(callback: f64, args: &[f64]) -> String {
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(f64::from_bits(
-        crate::value::TAG_UNDEFINED,
-    )));
-    let ret = crate::closure::js_native_call_value(
+    let ret = crate::closure::native_call_value_this(
         callback,
         crate::closure::plain_call_receiver(),
         args.as_ptr(),
         args.len(),
     );
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     // §22.1.3.19 step "Let replacement be ? ToString(? Call(replaceValue, …))":
     // the callback result is ToString-coerced — `undefined` renders as
     // "undefined", a number stringifies, an object runs its `toString`, and a

@@ -413,7 +413,7 @@ unsafe fn attach_temporal_cell_to_this(this_box: f64, cell_box: f64) {
 /// (`js_fetch_or_value_super`, the non-spread `super(a, b)` path) and the
 /// args-array `js_super_construct_apply` (the `super(...spread)` path). When
 /// `parent_val` is a Temporal constructor, run it (Temporal ctors return a
-/// fresh cell and never mutate the implicit `this`) and stash the returned cell
+/// fresh cell and never mutate their `this`) and stash the returned cell
 /// on `this_box` so method / getter / instanceof dispatch can recover the
 /// Temporal brand. Returns `true` when handled. (#5587)
 #[cfg(feature = "temporal")]
@@ -432,21 +432,19 @@ pub(crate) unsafe fn temporal_subclass_super(
     // to the parent ctor for the duration of the call (the cell it returns is
     // re-homed onto the subclass `this`; the exact new.target identity is not
     // observable to these native ctors beyond being defined). Restore after.
-    // #9445: root the displaced receiver and `this_box` (consumed again below)
-    // across the parent constructor call.
+    // #9445: root `this_box` (consumed again below) across the parent
+    // constructor call.
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
     // #10490: the displaced `new.target` crosses the same call.
     let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
-    let cell = crate::closure::js_native_call_value(
+    let cell = crate::closure::native_call_value_this(
         parent_val,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
         args_ptr,
         args_len,
     );
     crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if crate::temporal::is_temporal_value(cell) {
         attach_temporal_cell_to_this(this_h.get_nanbox_f64(), cell);
     }
@@ -478,14 +476,14 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
     let handle = if kind == 1 {
         global_this_request_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             arg0,
             arg1,
         )
     } else {
         global_this_response_thunk(
             std::ptr::null(),
-            crate::closure::body_call::current_this(),
+            crate::closure::JsThis::UNDEFINED,
             arg0,
             arg1,
         )
@@ -502,7 +500,7 @@ pub(crate) unsafe fn attach_fetch_handle_for_construction(
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
     let handle = global_this_request_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         input,
         init,
     );
@@ -516,7 +514,7 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
     let handle = global_this_response_thunk(
         std::ptr::null(),
-        crate::closure::body_call::current_this(),
+        crate::closure::JsThis::UNDEFINED,
         body,
         init,
     );
@@ -637,8 +635,8 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
 /// instead every runtime-value `super()` dispatches through here. When
 /// `parent_val` resolves to the Request/Response constructor we allocate the
 /// native handle and stash it on `this` (so inherited body methods work);
-/// otherwise we fall back to the ordinary implicit-`this`-bound
-/// `js_native_call_value`, preserving the prior behavior for every other
+/// otherwise we fall back to an ordinary value call with `this` passed,
+/// preserving the prior behavior for every other
 /// runtime-value parent (Effect's `Data.Class`, etc.).
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_or_value_super(
@@ -831,8 +829,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         }
     }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
-    // constructor returns a fresh NaN-boxed cell and does NOT mutate the
-    // implicit `this`, so the ordinary dispatch below would drop that cell and
+    // constructor returns a fresh NaN-boxed cell and does NOT mutate its
+    // `this`, so the ordinary dispatch below would drop that cell and
     // leave the subclass instance an empty object with no Temporal brand. Stash
     // the cell on `this` instead. The native ctor never calls the subclass
     // constructor, so `called`-counter invariants hold. (#5587)
@@ -1036,14 +1034,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             let handle = if kind == Some("Request") {
                 global_this_request_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     arg0,
                     arg1,
                 )
             } else {
                 global_this_response_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     arg0,
                     arg1,
                 )
@@ -1161,16 +1159,12 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                     }
                 }
             }
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
-            let r = crate::closure::js_native_call_value(
+            crate::closure::native_call_value_this(
                 callee,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(this_box),
                 args_ptr,
                 args_len,
-            );
-            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-            r
+            )
         }
     }
 }

@@ -401,10 +401,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
-            // ClosureHeader-backed thunks that read their receiver from
-            // `IMPLICIT_THIS` and dispatch to the corresponding native
-            // entry point — works in tandem with `.call`/`.apply` since
-            // those arms (#970) rebind IMPLICIT_THIS before forwarding.
+            // ClosureHeader-backed thunks that take their receiver as
+            // `this` and dispatch to the corresponding native entry
+            // point — works in tandem with `.call`/`.apply` since those
+            // arms (#970) pass the explicit receiver when forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
             if name == "Function" {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.

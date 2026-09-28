@@ -1141,6 +1141,7 @@ pub unsafe fn build_rest_array_rooted(
 pub unsafe fn dispatch_rest_bundled(
     closure: *const ClosureHeader,
     func_ptr: *const u8,
+    this: crate::closure::JsThis,
     args: &[f64],
     fixed_arity: u32,
     kind: RestDispatchKind,
@@ -1198,11 +1199,11 @@ pub unsafe fn dispatch_rest_bundled(
         ($($i:tt),* $(,)?) => {{
             if let Some(arguments_double) = all_arguments_double {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*, rest_double, arguments_double
+                    func_ptr, closure, this $(, a!($i))*, rest_double, arguments_double
                 )
             } else {
                 crate::closure::body_call::js_body_call_unwind!(
-                    func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*, rest_double
+                    func_ptr, closure, this $(, a!($i))*, rest_double
                 )
             }
         }};
@@ -1237,7 +1238,7 @@ pub unsafe fn dispatch_rest_bundled(
                 slots.push(arguments_double);
             }
             let width = slots.len();
-            super::dispatch_wide_abi(closure, func_ptr, &slots, width)
+            super::dispatch_wide_abi(closure, func_ptr, this, &slots, width)
         }
     }
 }
@@ -1261,6 +1262,7 @@ pub unsafe fn dispatch_rest_bundled(
 pub unsafe fn dispatch_with_arity(
     closure: *const ClosureHeader,
     func_ptr: *const u8,
+    this: crate::closure::JsThis,
     args: &[f64],
     declared_arity: u32,
 ) -> f64 {
@@ -1285,7 +1287,7 @@ pub unsafe fn dispatch_with_arity(
     // `arm!` macro builds the (padded) call args from the arg-index token list.
     macro_rules! arm {
         ($($i:tt),* $(,)?) => {
-            crate::closure::body_call::js_body_call!(func_ptr, closure, crate::closure::body_call::current_this() $(, a!($i))*)
+            crate::closure::body_call::js_body_call!(func_ptr, closure, this $(, a!($i))*)
         };
     }
     match k {
@@ -1352,7 +1354,7 @@ pub unsafe fn dispatch_with_arity(
         ),
         // #10420: more than 32 declared params used to return `undefined`
         // without calling the body.
-        _ => super::dispatch_wide_abi(closure, func_ptr, args, k),
+        _ => super::dispatch_wide_abi(closure, func_ptr, this, args, k),
     }
 }
 
@@ -1365,8 +1367,8 @@ pub const BOUND_METHOD_FUNC_PTR: *const u8 = 0xBADD_DEAD_u64 as *const u8;
 /// result: a bound function with a fixed `this`, prepended partial args, and an
 /// adjusted `.name` / `.length`. When `js_closure_callN` (or `js_native_call_value`)
 /// detects this sentinel it dispatches via `dispatch_bound_function`, which
-/// prepends the bound args, sets `IMPLICIT_THIS` to the bound receiver, and calls
-/// the target closure.
+/// prepends the bound args and calls the target closure with the bound receiver
+/// as its `this`.
 ///
 /// Captures layout (`js_function_bind`, `dispatch/bound.rs`):
 ///   [0] = target closure value (f64, NaN-boxed)

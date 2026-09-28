@@ -162,7 +162,7 @@ pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_des
 // ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn this_value(closure: *const ClosureHeader) -> f64 {
+fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
     if !closure.is_null() {
@@ -170,8 +170,8 @@ fn this_value(closure: *const ClosureHeader) -> f64 {
         // A `TAG_UNDEFINED` slot-0 marks a *prototype-method value* (e.g.
         // `Stream.prototype.on`, installed by `attach_event_emitter_prototype_methods`)
         // rather than an instance-bound method: it has no fixed receiver and must
-        // read the call-site `this` (set by `Function.prototype.call`/`apply` into
-        // IMPLICIT_THIS), so `Stream.prototype.on.call(streamInstance, ev, fn)`
+        // read the call-site `this` (the method's receiver parameter, which
+        // `Function.prototype.call`/`apply` supply), so `Stream.prototype.on.call(streamInstance, ev, fn)`
         // — readable-stream's `Readable.prototype.on` wrapper — registers the
         // listener on the instance, not on the prototype. `build_object` always
         // captures a real object pointer, so existing instance-bound closures
@@ -180,35 +180,35 @@ fn this_value(closure: *const ClosureHeader) -> f64 {
             return f64::from_bits(bits);
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
-extern "C" fn ns_chain0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    this_value(closure)
+extern "C" fn ns_chain0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    this_value(closure, this)
 }
 extern "C" fn ns_chain1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    this_value(closure)
+    this_value(closure, this)
 }
 extern "C" fn ns_chain2(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
 ) -> f64 {
-    this_value(closure)
+    this_value(closure, this)
 }
 extern "C" fn ns_chain3(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     _a: f64,
     _b: f64,
     _c: f64,
 ) -> f64 {
-    this_value(closure)
+    this_value(closure, this)
 }
 
 fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHeader) {
@@ -291,10 +291,10 @@ extern "C" fn ns_wrap_close(closure: *const ClosureHeader, _this: crate::closure
 
 extern "C" fn ns_wrap1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     old_stream: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     crate::closure::js_register_closure_arity(ns_wrap_data as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_wrap_end as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_wrap_error as *const u8, 1);
@@ -555,11 +555,11 @@ extern "C" fn ns_writable_final_callback_done(
 
 extern "C" fn ns_emit2(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     let mut args = crate::array::js_array_alloc(0);
     if arg.to_bits() != TAG_UNDEFINED {
         args = crate::array::js_array_push_f64(args, arg);
@@ -569,56 +569,49 @@ extern "C" fn ns_emit2(
 
 extern "C" fn ns_emit_rest(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     event: f64,
     rest: f64,
 ) -> f64 {
     emit_stream_event_from_array(
-        this_value(closure),
+        this_value(closure, this),
         event,
         raw_ptr_from_value(rest) as *const _,
     )
 }
-extern "C" fn ns_resume0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    resume_readable_stream(this_value(closure))
+extern "C" fn ns_resume0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    resume_readable_stream(this_value(closure, this))
 }
 
-extern "C" fn ns_pause0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    pause_readable_stream(this_value(closure))
+extern "C" fn ns_pause0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    pause_readable_stream(this_value(closure, this))
 }
 
-extern "C" fn ns_is_paused0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    f64::from_bits(if readable_is_paused(this_value(closure)) {
+extern "C" fn ns_is_paused0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    f64::from_bits(if readable_is_paused(this_value(closure, this)) {
         TAG_TRUE
     } else {
         TAG_FALSE
     })
 }
 
-extern "C" fn ns_async_dispose(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let stream = this_value(closure);
+extern "C" fn ns_async_dispose(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let stream = this_value(closure, this);
     destroy_stream(stream, abort_error());
     resolved_promise(f64::from_bits(TAG_UNDEFINED))
 }
 
-extern "C" fn ns_read1(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    n: f64,
-) -> f64 {
-    let stream = this_value(closure);
+extern "C" fn ns_read1(closure: *const ClosureHeader, this: crate::closure::JsThis, n: f64) -> f64 {
+    let stream = this_value(closure, this);
     read_stream_with_size_arg(stream, n)
 }
 
 extern "C" fn ns_set_encoding1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     encoding: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     set_visible_readable_encoding(stream, normalize_readable_encoding(encoding));
     stream
 }
@@ -866,7 +859,7 @@ fn readable_push_receiver(this: crate::closure::JsThis, closure: *const ClosureH
         return implicit;
     }
     if closure.is_null() {
-        return this_value(closure);
+        return this_value(closure, this);
     }
     throw_readable_push_invalid_receiver()
 }
@@ -924,10 +917,10 @@ fn readable_unshift_after_end_error() -> f64 {
 
 extern "C" fn ns_unshift1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
 ) -> f64 {
-    unshift_chunk(this_value(closure), chunk)
+    unshift_chunk(this_value(closure, this), chunk)
 }
 
 /// `readable.compose(stream)` (#1539): the instance-method form of
@@ -935,22 +928,22 @@ extern "C" fn ns_unshift1(
 /// data-flow and error handling paths cover module and prototype calls.
 extern "C" fn ns_compose1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
-    build_node_stream_compose(vec![this_value(closure), arg])
+    build_node_stream_compose(vec![this_value(closure, this), arg])
 }
 
 extern "C" fn ns_pipe2(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     dest: f64,
     options: f64,
 ) -> f64 {
     if pipe_destination_is_missing(dest) {
         throw_readable_pipe_missing_destination();
     }
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     pipe_stream_to_destination(stream, dest, pipe_options_end(options))
 }
 extern "C" fn ns_writable_write_done(
@@ -970,10 +963,10 @@ extern "C" fn ns_writable_write_done(
 
 extern "C" fn ns_unpipe1(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     dest: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     if dest.to_bits() == TAG_UNDEFINED {
         unpipe_all_destinations(stream);
     } else {
@@ -1151,33 +1144,33 @@ extern "C" fn transform_flush_callback(
 
 extern "C" fn ns_write3(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
     enc: f64,
     cb: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     write_writable_chunk(stream, chunk, enc, cb)
 }
 
 extern "C" fn ns_end3(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
 ) -> f64 {
-    let stream = this_value(closure);
+    let stream = this_value(closure, this);
     finish_stream_with_args(stream, chunk, encoding, cb);
     stream
 }
 
-extern "C" fn ns_cork0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    cork_stream(this_value(closure))
+extern "C" fn ns_cork0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    cork_stream(this_value(closure, this))
 }
 
-extern "C" fn ns_uncork0(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
-    uncork_stream(this_value(closure))
+extern "C" fn ns_uncork0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    uncork_stream(this_value(closure, this))
 }
 
 extern "C" fn writable_write_callback_noop(
@@ -1195,17 +1188,14 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
         js_closure_set_capture_f64(cb, 2, callback);
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunk, enc, cb_value];
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 write,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(stream),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     } else {
         throw_missing_stream_method("The _write() method is not implemented");
     }
@@ -1216,17 +1206,14 @@ fn invoke_writable_writev(stream: f64, chunks: f64) {
         let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunks, cb_value];
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 writev,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(stream),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -1266,17 +1253,14 @@ fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback:
         js_closure_set_capture_f64(cb, 2, callback);
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunk, enc, cb_value];
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
         unsafe {
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 transform,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(stream),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return;
     }
     throw_missing_stream_method("The _transform() method is not implemented");

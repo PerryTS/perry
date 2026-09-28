@@ -987,11 +987,31 @@ fn dt_component_option_from_handle(
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
+    make_instance_this(
+        closure,
+        crate::closure::JsThis::UNDEFINED,
+        kind,
+        locales,
+        options,
+    )
+}
+
+/// [`make_instance`] for a constructor native called with receiver `this`:
+/// the receiver the legacy ChainNumberFormat / ChainDateTimeFormat path
+/// (`ctor_guard::chain_legacy_constructed`) installs the instance on.
+fn make_instance_this(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    kind: &str,
+    locales: f64,
+    options: f64,
+) -> f64 {
     // Locale/option access can invoke user Proxy traps. Keep both arguments and
     // the partially initialized result live across those calls; the handles are
     // refreshed explicitly in the long PluralRules read-order sequence below.
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_const_ptr(closure);
+    let this_handle = scope.root_nanbox_f64(this.as_f64());
     let locales_handle = scope.root_nanbox_f64(locales);
     let options_handle = scope.root_nanbox_f64(options);
     let locale = locale_or_default(locales_handle.get_nanbox_f64());
@@ -1631,99 +1651,21 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
     // ChainNumberFormat / ChainDateTimeFormat only (see `chain_legacy_constructed`):
     // Intl.Collator ignores its this-value, so it is deliberately excluded.
     if matches!(kind, KIND_NUMBER | KIND_DATE_TIME) {
-        if let Some(this_value) = closure_handle
-            .with_const_ptr(|closure| ctor_guard::chain_legacy_constructed(closure, instance))
-        {
+        if let Some(this_value) = closure_handle.with_const_ptr(|closure| {
+            ctor_guard::chain_legacy_constructed(closure, this_handle.get_nanbox_f64(), instance)
+        }) {
             return this_value;
         }
     }
     instance
 }
 
-pub(super) extern "C" fn number_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    make_instance(closure, KIND_NUMBER, rest_arg(rest, 0), rest_arg(rest, 1))
-}
-
-pub(super) extern "C" fn date_time_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    make_instance(
-        closure,
-        KIND_DATE_TIME,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn collator_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    make_instance(closure, KIND_COLLATOR, rest_arg(rest, 0), rest_arg(rest, 1))
-}
-
-pub(super) extern "C" fn segmenter_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    require_new_target("Segmenter");
-    make_instance(
-        closure,
-        KIND_SEGMENTER,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn list_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    require_new_target("ListFormat");
-    make_instance(
-        closure,
-        KIND_LIST_FORMAT,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn relative_time_format_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    require_new_target("RelativeTimeFormat");
-    make_instance(
-        closure,
-        KIND_RELATIVE_TIME,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
-
-pub(super) extern "C" fn plural_rules_constructor_thunk(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    rest: f64,
-) -> f64 {
-    require_new_target("PluralRules");
-    make_instance(
-        closure,
-        KIND_PLURAL_RULES,
-        rest_arg(rest, 0),
-        rest_arg(rest, 1),
-    )
-}
+mod constructor_thunks;
+pub(super) use constructor_thunks::{
+    collator_constructor_thunk, date_time_format_constructor_thunk, list_format_constructor_thunk,
+    number_format_constructor_thunk, plural_rules_constructor_thunk,
+    relative_time_format_constructor_thunk, segmenter_constructor_thunk,
+};
 
 fn supported_locales_array(locales: f64, options: f64) -> f64 {
     // `supportedLocalesOf(locales, options)`:

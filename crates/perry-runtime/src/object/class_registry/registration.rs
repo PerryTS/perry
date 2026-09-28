@@ -204,7 +204,7 @@ pub(crate) fn class_own_static_accessor_ptrs(class_id: u32, name: &str) -> Optio
 }
 
 /// Trampoline giving a raw vtable getter func_ptr (`fn(this) -> f64`) the
-/// closure calling convention. The receiver comes from `IMPLICIT_THIS`, set
+/// closure calling convention. The receiver is the `this` argument passed
 /// by the method-call dispatch the closure value travels through.
 extern "C" fn class_accessor_getter_thunk(
     closure: *const crate::closure::ClosureHeader,

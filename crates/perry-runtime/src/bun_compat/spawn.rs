@@ -90,20 +90,15 @@ fn call_method(receiver: f64, name: &[u8], args: &[f64]) -> f64 {
     }
     let method = scope.root_nanbox_f64(method);
     let args = scope.root_nanbox_f64_slice(args);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        receiver.get_nanbox_f64(),
-    ));
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    let result = unsafe {
-        crate::closure::js_native_call_value(
+    unsafe {
+        crate::closure::native_call_value_this(
             method.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
             args.as_ptr(),
             args.len(),
         )
-    };
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    }
 }
 
 fn closure_with_captures(func: *const u8, arity: u32, captures: &[f64]) -> f64 {

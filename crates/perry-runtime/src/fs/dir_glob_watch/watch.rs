@@ -412,13 +412,12 @@ fn emit_listener0(object_value: f64, callback: f64) {
     if cb.is_null() {
         return;
     }
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        object_handle.get_nanbox_f64(),
-    ));
     with_watcher_uncaught_trap(|| {
-        crate::closure::js_closure_call0(cb, crate::closure::plain_call_receiver());
+        crate::closure::js_closure_call0(
+            cb,
+            crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+        );
     });
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 fn emit_fs_watch_event(
@@ -442,28 +441,23 @@ fn emit_fs_watch_event(
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
     let refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
             crate::closure::js_closure_call2(
                 cb,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
                 refreshed_args[0],
                 refreshed_args[1],
             );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
 fn emit_watch_file_change(
-    this: crate::closure::JsThis,
     object_value: f64,
     callbacks: Vec<WatchListener>,
     curr: &StatSnapshot,
@@ -485,23 +479,19 @@ fn emit_watch_file_change(
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
     let refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = scope.root_nanbox_f64(this.as_f64());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
             crate::closure::js_closure_call2(
                 cb,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
                 refreshed_args[0],
                 refreshed_args[1],
             );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -911,21 +901,18 @@ fn emit_fs_watch_error(
     let err_handle = scope.root_nanbox_f64(err_value);
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
             crate::closure::js_closure_call1(
                 cb,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
                 err_handle.get_nanbox_f64(),
             );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -940,7 +927,7 @@ fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
 
 extern "C" fn watch_file_poll_impl(
     closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let delivery = WATCH_FILE_STATES.with(|states| {
@@ -959,7 +946,7 @@ extern "C" fn watch_file_poll_impl(
         Some((state.object_value, callbacks, curr, prev, state.bigint))
     });
     if let Some((object_value, callbacks, curr, prev, bigint)) = delivery {
-        emit_watch_file_change(this, object_value, callbacks, &curr, &prev, bigint);
+        emit_watch_file_change(object_value, callbacks, &curr, &prev, bigint);
     }
     undefined_value()
 }

@@ -493,14 +493,16 @@ pub(crate) fn collect_rest_args(rest: f64) -> Vec<f64> {
     collect_args(raw as *const ArrayHeader)
 }
 
-pub(crate) fn this_value(closure: *const ClosureHeader) -> f64 {
+/// The socket a method thunk acts on: the socket the method was bound to
+/// (capture 0), else the call's receiver.
+pub(crate) fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     if !closure.is_null() {
         let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
         if bits != 0 {
             return f64::from_bits(bits);
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 pub(crate) fn socket_value_from_handle(handle: i64) -> f64 {
@@ -576,9 +578,9 @@ pub(crate) fn socket_async_ids(socket: f64) -> crate::async_hooks::AsyncResource
 
 extern "C" fn dgram_async_dispose(
     closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    close_impl(this_value(closure), &[]);
+    close_impl(this_value(closure, this), &[]);
     let promise = crate::promise::js_promise_resolved(undefined_value());
     boxed_pointer(promise as *const u8)
 }
@@ -815,18 +817,14 @@ pub(crate) fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
     if !is_callable_value(callback) {
         return undefined_value();
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
-    let result = unsafe {
-        crate::closure::js_native_call_value(
+    unsafe {
+        crate::closure::native_call_value_this(
             callback,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this),
             args.as_ptr(),
             args.len(),
         )
-    };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    }
 }
 
 #[cfg(test)]

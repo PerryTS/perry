@@ -1447,18 +1447,16 @@ fn pump_stdin_data_chunks() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
             // Node calls stream listeners with `this === stream`. Re-read the
-            // singleton per listener and root the displaced receiver: the previous
-            // listener was user code, so either may have moved (#9445).
+            // singleton per listener: the previous listener was user code, so it
+            // may have moved (#9445).
             let this = stdin_this_value();
-            let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
             cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
                 crate::closure::js_closure_call1(
                     closure,
-                    crate::closure::plain_call_receiver(),
+                    crate::closure::JsThis::from_f64(this),
                     arg_handle.get_nanbox_f64(),
                 );
             });
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
         return;
     }
@@ -1474,13 +1472,11 @@ fn pump_stdin_data_chunks() {
     for cb in readable_listeners {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-        // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+        // Per-listener re-read of the receiver (#9445), as for `data`.
         let this = stdin_this_value();
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
+            crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this));
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -1522,17 +1518,15 @@ fn maybe_fire_stdin_end() {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let cb_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-                // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+                // Per-listener re-read of the receiver (#9445), as for `data`.
                 let this = stdin_this_value();
-                let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
                 cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
                     crate::closure::js_closure_call1(
                         closure,
-                        crate::closure::plain_call_receiver(),
+                        crate::closure::JsThis::from_f64(this),
                         flush_handle.get_nanbox_f64(),
                     );
                 });
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             }
         }
     }
@@ -1563,13 +1557,11 @@ fn maybe_fire_stdin_end() {
     for cb in end_listeners {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-        // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+        // Per-listener re-read of the receiver (#9445), as for `data`.
         let this = stdin_this_value();
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
+            crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this));
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 

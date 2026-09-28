@@ -509,12 +509,12 @@ fn symbol_iterator_returns_the_helper_itself() {
 ///
 /// This pins the second half of the `iterator_step` fix independently of the
 /// own-vs-inherited lookup: an own `next` takes the closure branch either way,
-/// so only the `js_implicit_this_set` around the call makes this pass. It is
+/// so only the explicit receiver on the call makes this pass. It is
 /// the shape a hand-written `next() { return this.#impl.next(); }` takes, and
 /// pre-fix it saw `undefined`.
 ///
-/// SABOTAGE CHECK: drop the `js_implicit_this_set` pair in `iterator_step` and
-/// this reports a receiver of `undefined`.
+/// SABOTAGE CHECK: pass `JsThis::UNDEFINED` instead of the iterator in
+/// `iterator_step` and this reports a receiver of `undefined`.
 #[test]
 fn an_own_next_method_is_called_with_the_iterator_as_this() {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -523,10 +523,10 @@ fn an_own_next_method_is_called_with_the_iterator_as_this() {
 
     extern "C" fn next_recording_this(
         _c: *const crate::closure::ClosureHeader,
-        _this: crate::closure::JsThis,
+        this: crate::closure::JsThis,
         _arg: f64,
     ) -> f64 {
-        let this = crate::object::js_implicit_this_get();
+        let this = this.as_f64();
         OBSERVED_THIS.store(this.to_bits(), Ordering::SeqCst);
         unsafe { crate::iter_result::make_iter_result(JSValue::undefined(), true) }
     }

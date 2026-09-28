@@ -929,8 +929,9 @@ pub extern "C" fn js_url_search_params_for_each(
     let entries = get_url_search_params_entries(params);
     let this_value = crate::value::js_nanbox_pointer(params as i64);
     let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    // A callback can collect, so `thisArg` is rooted ONCE here and re-read at
+    // each call.
+    let this_arg_handle = this_scope.root_nanbox_f64(this_arg);
     for (key, value) in entries {
         let args = [
             create_string_f64(&value),
@@ -938,14 +939,12 @@ pub extern "C" fn js_url_search_params_for_each(
             this_value,
         ];
         unsafe {
-            crate::object::js_implicit_this_set(this_arg);
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 callback,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             );
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
     }
 }

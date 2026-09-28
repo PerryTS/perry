@@ -75,19 +75,14 @@ fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
     }));
     let js = JSValue::from_bits(callback.get_nanbox_f64().to_bits());
     if !js.is_undefined() && !js.is_null() {
-        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(with_hmut(
-            &module,
-            object_value,
-        )));
         let outcome = crate::exception::js_call_catching(|| unsafe {
-            crate::closure::js_native_call_value(
+            crate::closure::native_call_value_this(
                 callback.get_nanbox_f64(),
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(with_hmut(&module, object_value)),
                 std::ptr::null(),
                 0,
             )
         });
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         if let Err(error) = outcome {
             with_hmut(&module, |module| set_field(module, FIELD_ERROR, error));
             with_hmut(&module, |module| set_status(module, STATUS_ERRORED));

@@ -273,10 +273,13 @@ fn literal_method_this_field_takes_the_guarded_class_field_path() {
 #[test]
 fn arrow_keeps_its_per_use_receiver_reads() {
     // An arrow with no captured `this` is outside the change: lexical `this`
-    // is `captures_this`'s job, and this body must lower exactly as before.
+    // is `captures_this`'s job. It never reads the receiver parameter; with
+    // no enclosing receiver its `this` is module code's (sloppy: globalThis),
+    // per use.
     let ir = compile_ir(&literal_module(method(METHOD, true, false)));
     let body = closure_body(&ir, METHOD);
-    assert_eq!(calls_to(body, "js_implicit_this_get_sloppy"), 3, "{body}");
+    assert!(!body.contains("bitcast i64 %js_this"), "{body}");
+    assert_eq!(calls_to(body, "js_this_coerce_sloppy"), 3, "{body}");
     assert!(!body.contains("@js_class_field_get_ic("), "{body}");
 }
 

@@ -401,7 +401,7 @@ pub static CLASS_VTABLE_REGISTRY: ImageTable<
 
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
 /// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
-/// (no `this` param — they read `this` from the implicit-this slot) and are
+/// (no `this` param — they resolve `this` via `js_static_this_resolve`) and are
 /// NOT in the instance vtable above, so a subclass whose parent is a
 /// class-expression value (`class Sub extends make(...) {}`) can't resolve an
 /// inherited static method (`Sub.greet()`) at compile time. This table is

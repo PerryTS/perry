@@ -18,8 +18,8 @@ use std::sync::{Once, OnceLock};
 use crate::array::ArrayHeader;
 use crate::closure::{js_closure_get_capture_f64, ClosureHeader};
 use crate::object::{
-    js_implicit_this_set, js_object_alloc, js_object_delete_field, js_object_get_field_by_name_f64,
-    js_object_keys, js_object_set_field_by_name, ObjectHeader,
+    js_object_alloc, js_object_delete_field, js_object_get_field_by_name_f64, js_object_keys,
+    js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
@@ -343,21 +343,16 @@ pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
     if listeners.is_empty() {
         return false;
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for listener in listeners {
         let cb = f64::from_bits(listener.callback_bits);
-        js_implicit_this_set(cluster_default_value());
         unsafe {
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 cb,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(cluster_default_value()),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        js_implicit_this_set(prev.get_nanbox_f64());
     }
     true
 }
@@ -1527,26 +1522,25 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
     let mut i = 0;
     let mut fired = false;
     let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    // A listener can collect, so the emitter is rooted ONCE here and re-read
+    // at each use.
+    let target_handle = this_scope.root_nanbox_f64(target);
     loop {
-        let Some(arr) = array_ptr(get_field(target, &key)) else {
+        let Some(arr) = array_ptr(get_field(target_handle.get_nanbox_f64(), &key)) else {
             break;
         };
         if i >= crate::array::js_array_length(arr) {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        js_implicit_this_set(target);
         unsafe {
-            let _ = crate::closure::js_native_call_value(
+            let _ = crate::closure::native_call_value_this(
                 cb,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(target_handle.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             );
         }
-        js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
         i += 1;
     }

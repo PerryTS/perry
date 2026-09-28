@@ -387,8 +387,8 @@ pub(crate) extern "C" fn webcrypto_subtle_getter_thunk(
     super::super::native_module::subtle_crypto_namespace()
 }
 
-fn cryptokey_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn cryptokey_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = crate::value::JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & crate::value::POINTER_MASK) as usize
@@ -406,8 +406,8 @@ fn cryptokey_brand_error() -> ! {
     )
 }
 
-fn cryptokey_property_getter(key: &[u8]) -> f64 {
-    let addr = cryptokey_receiver_addr().unwrap_or_else(|| cryptokey_brand_error());
+fn cryptokey_property_getter(this: crate::closure::JsThis, key: &[u8]) -> f64 {
+    let addr = cryptokey_receiver_addr(this).unwrap_or_else(|| cryptokey_brand_error());
     unsafe {
         super::super::crypto_key_property_value(addr, key)
             .map(|value| f64::from_bits(value.bits()))
@@ -417,30 +417,30 @@ fn cryptokey_property_getter(key: &[u8]) -> f64 {
 
 pub(crate) extern "C" fn cryptokey_algorithm_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"algorithm")
+    cryptokey_property_getter(this, b"algorithm")
 }
 
 pub(crate) extern "C" fn cryptokey_extractable_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"extractable")
+    cryptokey_property_getter(this, b"extractable")
 }
 
 pub(crate) extern "C" fn cryptokey_type_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"type")
+    cryptokey_property_getter(this, b"type")
 }
 
 pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    cryptokey_property_getter(b"usages")
+    cryptokey_property_getter(this, b"usages")
 }
 
 /// #10427: `globalThis.crypto.<method>` is a property READ, resolved fresh

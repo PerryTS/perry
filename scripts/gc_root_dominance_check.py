@@ -567,11 +567,6 @@ NONCOLLECTING = {
     # (closure/dynamic_props.rs:1040) when the callee captures `this`. That one
     # IS a collection point, and #7154's fix re-reads the arguments below it.
     "js_closure_unbox_callee_checked",
-    # object/this_binding.rs:160 -- a thread-local cell swap
-    "js_implicit_this_set", "js_implicit_this_get",
-    # object/this_binding.rs -- the stage-1 this-parameter witness (witness
-    # builds only): compares its argument with that same cell, two atomics.
-    "js_this_param_witness",
     # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
     # (:833). `_aware` is the same body behind an early return taken when
     # neither the new nor the old bits are pointer-bearing, so it does strictly
@@ -2636,17 +2631,14 @@ ROOT_READ_CALLS = {
     "js_closure_get_capture_ptr",
     "js_gc_temp_root_get",           # a MUTABLE root: rewritten on evacuation
     "js_box_get_bits",               # box.rs mutable-capture cell read
-    "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
     "js_new_target_get",
-    # object/this_binding.rs:159 -- `js_implicit_this_SET` is a swap, so its
-    # RETURN value is a read of the same scanned mutable cell
-    # (`scan_implicit_this_roots_mut`, this_binding.rs:176) and the swap has
-    # already overwritten the only other copy. Listing the setter as a reader
-    # looks odd, which is exactly why #7214 left `prev_this` unrooted for a
-    # whole PR: the checker saw a call it knew could not collect, never
-    # classified the result as a heap value, and reported nothing at either
-    # end. Being non-collecting is what makes a call a root READ.
-    "js_implicit_this_set",
+    # A non-collecting SETTER of a scanned mutable cell that returns the
+    # previous value is a root READ too (#7214 left `prev_this` unrooted for a
+    # whole PR because the implicit-`this` swap was not listed here): being
+    # non-collecting is what makes a call a root read. `js_new_target_set`
+    # returns its previous value too; it must be listed here if generated
+    # code ever uses that result (`new_target_save` reads the cell with
+    # `js_new_target_get` first instead).
     # `js_get_string_pointer_unified` is a candidate and is deliberately left
     # out for now: its result IS a raw heap address in a bare register, but it
     # is not in NONCOLLECTING (its SSO branch allocates), so classifying it as
@@ -2932,7 +2924,7 @@ def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
 # hands back an object the collector can move).
 HEAP_SOURCE_CALLS = frozenset({
     "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
-    "js_box_get_bits", "js_implicit_this_get", "js_new_target_get",
+    "js_box_get_bits", "js_new_target_get",
     "js_static_this_resolve", "js_get_exception",
 })
 

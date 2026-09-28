@@ -7,7 +7,7 @@
 //! which previously resolved to `global_this_builtin_noop_thunk` and silently
 //! did nothing. Per spec these methods must perform a `this` brand check and
 //! throw a `TypeError` when called on an incompatible receiver. The thunks
-//! below read the `IMPLICIT_THIS` receiver (set by the `.call`/`.apply`
+//! below take the receiver as `this` (set by the `.call`/`.apply`
 //! dispatch), brand-check it, throw on mismatch, and otherwise dispatch to the
 //! real runtime helper — so reflective collection calls now also *work*.
 //!
@@ -444,7 +444,7 @@ fn map_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> *mut cra
 }
 
 /// Read the original receiver after its brand has been checked. Some native
-/// callers publish a raw pointer in IMPLICIT_THIS; normalize it before rooting
+/// callers pass a raw pointer as `this`; normalize it before rooting
 /// or exposing it to JavaScript. The backing collection is not the receiver.
 fn collection_this_value(this: crate::closure::JsThis) -> f64 {
     let bits = this.bits();

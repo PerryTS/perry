@@ -465,19 +465,17 @@ fn call_timer_callback(
     let previous = crate::async_context::enter_context(context);
     let mut previous = previous;
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
+    let this_handle = scope.root_nanbox_f64(timer_handle_value(id));
     let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let prev_this =
-        scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
     with_timer_uncaught_trap(|| unsafe {
         crate::closure::js_closure_call_array(
             cb as i64,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
             a.as_ptr(),
             a.len() as i64,
         );
     });
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
     crate::async_context::restore_context(previous);
 }
@@ -506,21 +504,19 @@ fn call_timer_callback_entry(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(args);
-    let prev_this =
-        scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
+    let this_handle = scope.root_nanbox_f64(timer_handle_value(id));
     with_timer_uncaught_trap(|| {
         let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
         let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
         unsafe {
             crate::closure::js_closure_call_array(
                 cb as i64,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64()),
                 a.as_ptr(),
                 a.len() as i64,
             );
         }
     });
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 fn timer_delay_text(delay_ms: f64) -> String {

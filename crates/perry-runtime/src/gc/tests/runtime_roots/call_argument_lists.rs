@@ -31,7 +31,7 @@ fn seen() -> Vec<u64> {
 
 extern "C" fn record_this_and_six_args(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     a0: f64,
     a1: f64,
     _a2: f64,
@@ -39,12 +39,7 @@ extern "C" fn record_this_and_six_args(
     _a4: f64,
     a5: f64,
 ) -> f64 {
-    record(&[
-        crate::object::js_implicit_this_get().to_bits(),
-        a0.to_bits(),
-        a1.to_bits(),
-        a5.to_bits(),
-    ]);
+    record(&[this.bits(), a0.to_bits(), a1.to_bits(), a5.to_bits()]);
     0.0
 }
 

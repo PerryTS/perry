@@ -286,7 +286,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         params.extend(std::iter::repeat_n(DOUBLE, argc));
         module.declare_function(name, DOUBLE, &params);
     }
-    module.declare_function("js_closure_resolve_arrow_direct_call", PTR, &[I64, I32]);
+    module.declare_function("js_closure_resolve_plain_direct_call", PTR, &[I64, I32]);
 
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.

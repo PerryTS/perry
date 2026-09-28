@@ -782,12 +782,12 @@ pub extern "C" fn js_wasi_get_import_object(
 #[no_mangle]
 pub extern "C" fn js_wasi_start(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     instance: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let instance = scope.root_nanbox_f64(instance);
-    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw(this));
     ensure_wasi_not_started(wasi.get_nanbox_f64());
     let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
     let memory = scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"memory"));
@@ -833,12 +833,12 @@ pub extern "C" fn js_wasi_start(
 #[no_mangle]
 pub extern "C" fn js_wasi_initialize(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     instance: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let instance = scope.root_nanbox_f64(instance);
-    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw());
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw(this));
     ensure_wasi_not_started(wasi.get_nanbox_f64());
     let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
     let memory = scope.root_nanbox_f64(instance_export(instance.get_nanbox_f64(), b"memory"));
@@ -875,7 +875,7 @@ pub extern "C" fn js_wasi_initialize(
 #[no_mangle]
 pub extern "C" fn js_wasi_finalize_bindings(
     _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     instance: f64,
     rest: f64,
 ) -> f64 {
@@ -886,7 +886,10 @@ pub extern "C" fn js_wasi_finalize_bindings(
     // accepting the optional second argument.
     let options = rest_argument(rest, 0);
     let override_memory = scope.root_nanbox_f64(finalize_memory_option(options));
-    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw_with_code("ERR_INVALID_ARG_TYPE"));
+    let wasi = scope.root_nanbox_f64(wasi_receiver_or_throw_with_code(
+        "ERR_INVALID_ARG_TYPE",
+        this,
+    ));
     ensure_wasi_not_started(wasi.get_nanbox_f64());
     let import = scope.root_nanbox_f64(wasi_import_or_throw(wasi.get_nanbox_f64()));
     let exported_memory =
@@ -903,12 +906,12 @@ pub extern "C" fn js_wasi_finalize_bindings(
     undefined()
 }
 
-fn wasi_receiver_or_throw() -> f64 {
-    wasi_receiver_or_throw_with_code("")
+fn wasi_receiver_or_throw(this: crate::closure::JsThis) -> f64 {
+    wasi_receiver_or_throw_with_code("", this)
 }
 
-fn wasi_receiver_or_throw_with_code(code: &'static str) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+fn wasi_receiver_or_throw_with_code(code: &'static str, this: crate::closure::JsThis) -> f64 {
+    let this = this.as_f64();
     if heap_object_ptr(this).is_none() {
         type_error_with_code("Value of \"this\" must be of type WASI", code);
     }

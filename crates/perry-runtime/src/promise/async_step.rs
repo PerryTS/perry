@@ -1381,7 +1381,7 @@ fn array_from_async_call_next(
     // result so the iteration loop continues without going through .then.
     array_from_async_step(
         chain_closure as *const _,
-        crate::closure::body_call::current_this(),
+        crate::closure::plain_call_receiver(),
         next_result,
     );
 }
@@ -1515,10 +1515,11 @@ fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, v
     let this_arg = crate::closure::js_closure_get_capture_f64(closure, AFA_THIS_ARG);
     let args = [value, index];
     let args_arr = crate::array::js_array_from_f64(args.as_ptr(), args.len() as u32);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
-    let mapped_promise = js_promise_try(map_fn, args_arr);
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+    let mapped_promise = super::combinators::promise_try_this(
+        map_fn,
+        crate::closure::JsThis::from_f64(this_arg),
+        args_arr,
+    );
 
     let mapped_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_MAPPED_CLOSURE)
         as *const crate::closure::ClosureHeader;
@@ -1718,7 +1719,7 @@ mod tests {
                 ])
             });
 
-            async_step_fulfill_thunk(thunk, crate::closure::body_call::current_this(), 41.0);
+            async_step_fulfill_thunk(thunk, crate::closure::plain_call_receiver(), 41.0);
 
             assert_eq!(
                 (*captured_to).state,

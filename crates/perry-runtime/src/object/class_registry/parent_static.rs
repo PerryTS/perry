@@ -1049,14 +1049,10 @@ pub(crate) unsafe fn class_symbol_getter_value(
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
                 let result = if is_static {
-                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                    let prev_this =
-                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     crate::object::static_private_owner_push(receiver);
                     let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
                     let result = f();
                     crate::object::static_private_owner_pop();
-                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     result
                 } else {
                     let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
@@ -1097,15 +1093,11 @@ pub(crate) unsafe fn class_symbol_setter_apply(
             if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
                 if setter != 0 {
                     if is_static {
-                        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                        let prev_this = this_scope
-                            .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                         crate::object::static_private_owner_push(receiver);
                         let f =
                             crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
                         let _ = f(value);
                         crate::object::static_private_owner_pop();
-                        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     } else {
                         let f =
                             crate::closure::body_call::js_method_body_fn!(setter as *const u8; a0);
@@ -1403,7 +1395,7 @@ pub(crate) fn class_method_bind_length(class_id: u32, name: &str) -> Option<u32>
 }
 
 /// Call a static method func_ptr with `args` (no `this` prepend — static
-/// methods read `this` from the implicit-this slot, set by the caller).
+/// methods resolve `this` through `js_static_this_resolve`).
 /// Mirrors the arity dispatch of `call_vtable_method` minus the receiver arg.
 pub(crate) unsafe fn call_static_method(
     func_ptr: usize,
@@ -1576,8 +1568,8 @@ pub(crate) unsafe fn nm_static_buffer_proto_chain(
 /// #1788: dispatch a static method on a class value (`Sub.greet()` where
 /// `Sub extends make(...)`, or a class-object value) by walking the class_id
 /// parent chain in `CLASS_STATIC_METHODS`. Binds `this` to the receiver (so
-/// `this.<field>` resolves through the subclass's static-field chain), calls
-/// the method, and restores the previous implicit-this. On miss returns the
+/// `this.<field>` resolves through the subclass's static-field chain) and calls
+/// the method. On miss returns the
 /// receiver unchanged — preserving the prior "yield the class ref for a
 /// chained call during module init" behavior for genuinely-absent methods.
 #[no_mangle]
@@ -1622,8 +1614,6 @@ pub unsafe extern "C" fn js_class_static_method_call(
         return receiver;
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         crate::object::static_private_owner_push(receiver);
         // Receiver-sensitive static `this`: arm the one-shot override so the
         // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
@@ -1661,7 +1651,6 @@ pub unsafe extern "C" fn js_class_static_method_call(
         };
         crate::object::static_this_disarm();
         crate::object::static_private_owner_pop();
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return result;
     }
     // #10893: not a static METHOD — a static ACCESSOR on the class-id chain
@@ -1727,16 +1716,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
                 let member = f64::from_bits(member.bits());
                 let mv = crate::value::JSValue::from_bits(member.to_bits());
                 if !mv.is_undefined() && !mv.is_null() {
-                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                    let prev_this =
-                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-                    let result = crate::closure::js_native_call_value(
+                    let result = crate::closure::native_call_value_this(
                         member,
-                        crate::closure::plain_call_receiver(),
+                        crate::closure::JsThis::from_f64(receiver),
                         args_ptr,
                         args_len,
                     );
-                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     return result;
                 }
             }
@@ -1750,27 +1735,21 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // `class X extends Promise` — inherited builtin static (`X.all(...)`,
     // `X.resolve(...)`, …). Dispatch the spec static with `this` = the subclass
     // receiver so `NewPromiseCapability(X)` constructs the subclass. Resolves the
-    // reified static value and calls it (its thunk reads `this` from the
-    // implicit-this slot, already bound to `receiver` by the caller above).
+    // reified static value and calls it with `receiver` as its `this`.
     if super::promise_parent_in_chain(class_id)
         && crate::object::promise_static_function_spec(name).is_some()
     {
         let static_val = crate::object::js_promise_static_function_value(name.as_ptr(), name.len());
         if static_val.to_bits() != crate::value::TAG_UNDEFINED {
-            // The reified static thunk reads its `this` constructor from the
-            // implicit-this slot, so bind it to the subclass receiver for the
-            // duration of the call — `NewPromiseCapability(receiver)` then
-            // constructs the subclass.
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(
+            // The reified static thunk reads its `this` constructor from its
+            // `this` argument, so pass the subclass receiver —
+            // `NewPromiseCapability(receiver)` then constructs the subclass.
+            let result = crate::closure::native_call_value_this(
                 static_val,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(receiver),
                 args_ptr,
                 args_len,
             );
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }
@@ -1845,16 +1824,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // not a real inherited member.
             && member.to_bits() != closure_val.to_bits()
         {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(
+            let result = crate::closure::native_call_value_this(
                 member,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(receiver),
                 args_ptr,
                 args_len,
             );
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }
@@ -1868,16 +1843,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
     };
     if let Some(member) = fn_proto_member {
         if crate::collection_iter::is_callable(member) {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-            let result = crate::closure::js_native_call_value(
+            let result = crate::closure::native_call_value_this(
                 member,
-                crate::closure::plain_call_receiver(),
+                crate::closure::JsThis::from_f64(receiver),
                 args_ptr,
                 args_len,
             );
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }

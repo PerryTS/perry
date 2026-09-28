@@ -99,12 +99,11 @@ pub fn is_iterator_helper_addr(addr: usize) -> bool {
 /// it with the INHERITING getter is what killed the entire helper surface.
 /// Every built-in iterator now inherits `.next` from its shared
 /// `%…IteratorPrototype%` singleton (`object/iterator_prototypes.rs`), and that
-/// inherited `next` is a THUNK that resolves its receiver from
-/// `js_implicit_this_get()` and dispatches by class id. So
-/// `js_object_get_field_by_name` found a perfectly callable closure for an
-/// array / Map / Set / String iterator, this function took the closure-call
-/// branch, and the thunk ran with whatever `this` happened to be left in the
-/// thread-local — reporting `done` on the first step for every source kind, or
+/// inherited `next` is a THUNK that resolves its receiver from the call's
+/// `this` and dispatches by class id. So `js_object_get_field_by_name` found a
+/// perfectly callable closure for an array / Map / Set / String iterator, this
+/// function took the closure-call branch, and the thunk ran with whatever
+/// receiver that call supplied rather than the iterator — reporting `done` on the first step for every source kind, or
 /// throwing `Method %IteratorPrototype%.next called on incompatible receiver`.
 /// `js_iterator_to_array` already carries the own-field version of this fix
 /// (#321); this is the same fix for the helper chain.
@@ -148,21 +147,17 @@ unsafe fn iterator_step(iter_f64: f64) -> (f64, bool) {
     };
     let use_field = !next_ptr.is_null() && is_closure_ptr(next_ptr as usize);
 
-    // The user's `next` runs here and can collect anything, so the receiver and
-    // the saved implicit-`this` both come out of handles rather than out of
-    // bare locals that predate the call.
+    // The user's `next` runs here and can collect anything, so the receiver
+    // comes out of a handle rather than out of a bare local that predates the
+    // call.
     let result_f64 = if use_field {
         let next_h = scope.root_nanbox_f64(f64::from_bits(next_val.bits()));
-        let prev_this_h =
-            scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_h.get_nanbox_f64()));
-        let r = crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             next_h.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(iter_h.get_nanbox_f64()),
             std::ptr::null(),
             0,
-        );
-        crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
-        r
+        )
     } else {
         crate::object::js_native_call_method(
             iter_h.get_nanbox_f64(),

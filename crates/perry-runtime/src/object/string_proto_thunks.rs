@@ -248,7 +248,7 @@ fn throw_string_proto_nullish(method: &str) -> ! {
 }
 
 /// `RequireObjectCoercible(this)` + `ToString(this)` for the generic-`this`
-/// String.prototype methods. `this` is the IMPLICIT_THIS receiver bound by
+/// String.prototype methods. `this` is the receiver argument passed by
 /// `.call`/`.apply`/property dispatch. `null`/`undefined` throw `TypeError`;
 /// everything else (a primitive string, a boxed `String`/`Boolean`/`Number`
 /// object, a `{ toString }` object) coerces via the shared `js_string_coerce`,

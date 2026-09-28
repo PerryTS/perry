@@ -10,7 +10,7 @@
 //!
 //! Per spec each `Date.prototype` getter performs `thisTimeValue(this)`, which
 //! throws a `TypeError` when `this` is not an Object with a `[[DateValue]]`
-//! slot. These thunks read the `IMPLICIT_THIS` receiver (set by the
+//! slot. These thunks take the receiver as their `this` argument (set by the
 //! `.call`/`.apply` dispatch), brand-check it via `is_date_value`, throw on
 //! mismatch, and otherwise dispatch to the SAME `js_date_get_*` helper the
 //! instance path uses — so reflective Date getter calls now also *work*.
@@ -22,10 +22,10 @@
 
 use super::*;
 
-/// Resolve the `IMPLICIT_THIS` receiver to a Date time value, or throw a
+/// Resolve the `this` receiver to a Date time value, or throw a
 /// `TypeError` (`thisTimeValue` brand check) when it is not a Date.
-fn require_date_timestamp() -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn require_date_timestamp(this: crate::closure::JsThis) -> f64 {
+    let this = this.as_f64();
     if crate::date::is_date_value(this) {
         crate::date::date_cell_timestamp(this)
     } else {
@@ -37,9 +37,9 @@ macro_rules! date_getter_thunk {
     ($name:ident, $rt:path) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
         ) -> f64 {
-            $rt(require_date_timestamp())
+            $rt(require_date_timestamp(this))
         }
     };
 }
@@ -108,9 +108,9 @@ extern "C" fn date_to_utc_string(
 #[cfg(feature = "temporal")]
 extern "C" fn date_to_temporal_instant(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let timestamp = require_date_timestamp();
+    let timestamp = require_date_timestamp(this);
     crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
 }
 
@@ -139,7 +139,7 @@ extern "C" fn date_to_json(
 
 /// Apply the `Date.prototype.toJSON` algorithm to an explicit receiver.
 ///
-/// The closure thunk above uses the implicit-this slot for normal JavaScript
+/// The closure thunk above takes its receiver as the `this` argument for normal JavaScript
 /// calls. JSON.stringify already has the Date value in hand, so it calls this
 /// shared implementation directly instead of bypassing the observable
 /// `Invoke(O, "toISOString")` step with `date::js_date_to_json`.
@@ -218,21 +218,19 @@ pub(crate) fn date_to_json_value(this: f64) -> f64 {
     {
         // `Call(func, O, «»)` — toJSON's `key` argument is intentionally not
         // forwarded (Invoke passes an empty argument list).
-        let prev = invoke_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-            receiver.get_nanbox_f64(),
-        ));
         let closure = crate::value::js_nanbox_get_pointer(func.get_nanbox_f64())
             as *const crate::closure::ClosureHeader;
-        let r = crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
-        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-        return r;
+        return crate::closure::js_closure_call0(
+            closure,
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        );
     }
     super::object_ops::throw_object_type_error(b"toISOString is not a function")
 }
 
 #[cfg(test)]
-pub(crate) fn test_date_to_json_current_this() -> f64 {
-    date_to_json(std::ptr::null(), crate::closure::body_call::current_this())
+pub(crate) fn test_date_to_json_with_this(this: f64) -> f64 {
+    date_to_json(std::ptr::null(), crate::closure::JsThis::from_f64(this))
 }
 
 /// True iff `value` is an ECMAScript Object (`Type(O) is Object`). Objects are
@@ -463,9 +461,9 @@ pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::Closur
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).
 extern "C" fn date_get_year(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let fy = crate::date::js_date_get_full_year(require_date_timestamp());
+    let fy = crate::date::js_date_get_full_year(require_date_timestamp(this));
     if fy.is_nan() {
         fy
     } else {
@@ -544,18 +542,18 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
 // `setDate.call(nonDate, 1)` silently produced garbage instead of throwing.
 //
 // Each setter performs `thisTimeValue(this)` (TypeError if `this` is not a
-// Date) and is variadic, so these thunks read the `IMPLICIT_THIS` receiver,
+// Date) and is variadic, so these thunks take the `this` receiver,
 // brand-check it, collect the `rest` arguments, and dispatch to the same
 // `js_date_apply_setter` the instance path uses. `js_date_apply_setter` reads
 // `[[DateValue]]` BEFORE coercing the arguments, so the read-before-ToNumber
 // ordering holds on the reflective path too.
 
-/// Resolve the `IMPLICIT_THIS` receiver to a Date value, or throw a `TypeError`
+/// Resolve the `this` receiver to a Date value, or throw a `TypeError`
 /// (`thisTimeValue` brand check) when it is not a Date. Returns the NaN-boxed
 /// `DateCell` value (the setter dispatch needs the receiver itself, not just
 /// its timestamp, so it can mutate the cell in place).
-fn require_date_this() -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+fn require_date_this(this: crate::closure::JsThis) -> f64 {
+    let this = this.as_f64();
     if crate::date::is_date_value(this) {
         this
     } else {
@@ -571,10 +569,10 @@ macro_rules! date_setter_thunk {
     ($name:ident, $is_utc:expr, $field:expr) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
             rest: f64,
         ) -> f64 {
-            let this = require_date_this();
+            let this = require_date_this(this);
             let args = super::global_this::global_this_rest_array_values(rest);
             crate::date::js_date_apply_setter(
                 this,
@@ -625,15 +623,23 @@ date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
 /// fallback simply defers to the non-locale formatter instead of statically
 /// pinning the Intl formatting web from the always-installed Date prototype.
 #[cfg(not(feature = "intl-namespace"))]
-fn date_to_locale_opts_impl(_rest: f64, _ctx: crate::intl::TemporalLocaleCtx) -> f64 {
-    let this = require_date_this();
+fn date_to_locale_opts_impl(
+    this: crate::closure::JsThis,
+    _rest: f64,
+    _ctx: crate::intl::TemporalLocaleCtx,
+) -> f64 {
+    let this = require_date_this(this);
     let s = crate::date::js_date_to_locale_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
 #[cfg(feature = "intl-namespace")]
-fn date_to_locale_opts_impl(rest: f64, ctx: crate::intl::TemporalLocaleCtx) -> f64 {
-    let this = require_date_this();
+fn date_to_locale_opts_impl(
+    this: crate::closure::JsThis,
+    rest: f64,
+    ctx: crate::intl::TemporalLocaleCtx,
+) -> f64 {
+    let this = require_date_this(this);
     let epoch_ms = crate::date::date_cell_timestamp(this);
     if epoch_ms.is_nan() {
         // Invalid Date → "Invalid Date" for all three methods.
@@ -653,26 +659,26 @@ fn date_to_locale_opts_impl(rest: f64, ctx: crate::intl::TemporalLocaleCtx) -> f
 
 extern "C" fn date_to_locale_string_opts(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDateTime)
+    date_to_locale_opts_impl(this, rest, crate::intl::TemporalLocaleCtx::PlainDateTime)
 }
 
 extern "C" fn date_to_locale_date_string_opts(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainDate)
+    date_to_locale_opts_impl(this, rest, crate::intl::TemporalLocaleCtx::PlainDate)
 }
 
 extern "C" fn date_to_locale_time_string_opts(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    date_to_locale_opts_impl(rest, crate::intl::TemporalLocaleCtx::PlainTime)
+    date_to_locale_opts_impl(this, rest, crate::intl::TemporalLocaleCtx::PlainTime)
 }
 
 /// Install the brand-checked `Date.prototype` setter thunks. Called from

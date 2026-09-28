@@ -1242,7 +1242,6 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                 hidden_key(b"__perryStreamComposePriming"),
                 f64::from_bits(TAG_TRUE),
             );
-            let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
             let primed = catch_pipeline_throw(|| {
                 prime_composed_duplex_from_source(
                     composite.get_nanbox_f64(),
@@ -1251,7 +1250,6 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
                 );
                 f64::from_bits(TAG_UNDEFINED)
             });
-            crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
             if let Err(err) = primed {
                 let err = scope.root_nanbox_f64(err);
                 fail_composed_duplex(

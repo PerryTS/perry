@@ -7,7 +7,7 @@ crate::perry_thread_local! {
     /// **This is a GC root, and must stay one (#7231).** It holds a NaN-boxed
     /// closure/class value for the whole constructor body, and a constructor
     /// body runs arbitrary user code. `this_binding.rs`'s `NEW_TARGET` holds
-    /// the same value under `scan_implicit_this_roots_mut`; this is a second
+    /// the same value under `scan_dispatch_binding_roots_mut`; this is a second
     /// copy on a different path, and a second copy of a root that is not
     /// itself a root is exactly the shape #7226 found in `prev_this`.
     ///
@@ -47,8 +47,8 @@ pub(crate) use rooted_arguments::construct_two_rooted;
 /// through `synthetic_class_id_for_function` so the instance's
 /// `class_id` matches the bucket prototype methods were registered
 /// against. Allocates a fresh object stamped with the synthetic id,
-/// then invokes the function as the constructor with `IMPLICIT_THIS`
-/// bound to the new object so any `this.foo = …` writes in the
+/// then invokes the function as the constructor with the new object
+/// as `this` so any `this.foo = …` writes in the
 /// function body land on the instance. Returns the NaN-boxed new
 /// instance pointer.
 ///
@@ -601,7 +601,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_blob_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     parts,
                     options,
                 );
@@ -622,7 +622,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_file_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     parts,
                     name,
                     options,
@@ -654,7 +654,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_headers_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     init,
                 );
             }
@@ -670,7 +670,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_request_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     input,
                     init,
                 );
@@ -687,7 +687,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
                 return crate::object::global_this_response_thunk(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                     body,
                     init,
                 );
@@ -871,7 +871,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             "Storage" => {
                 return crate::web_storage::storage_constructor_illegal(
                     std::ptr::null(),
-                    crate::closure::body_call::current_this(),
+                    crate::closure::JsThis::UNDEFINED,
                 );
             }
             "BroadcastChannel" => {
@@ -1201,13 +1201,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // here — otherwise `new <non-callable>()` would dereference an
     // arbitrary pointer as a `ClosureHeader` and crash.
     if is_callable_function_value(func_value) {
-        // Bind `this` to the new instance, dispatch the constructor,
-        // then restore the previous IMPLICIT_THIS. The dispatch
+        // Pass the new instance as `this` and dispatch the constructor.
+        // The dispatch
         // result is discarded — JS `new` semantics use the receiver,
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
-        // #7280: `nan_boxed` (the implicit `this` this call is building) and
-        // the three DISPLACED cell values are held across a call that runs a
+        // #7280: `nan_boxed` (the `this` this call is building) and
+        // the two DISPLACED new.target values are held across a call that runs a
         // user constructor body — see the long note in
         // `construct_registered_class_ref`. Unrooted, the evacuating minor
         // moves the instance and this arm returns the pre-move address;
@@ -1216,24 +1216,20 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
         // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
         let scope = crate::gc::RuntimeHandleScope::new();
         let inst_handle = scope.root_nanbox_f64(nan_boxed);
-        let prev_this = crate::object::js_implicit_this_get();
-        let prev_this_handle = scope.root_nanbox_f64(prev_this);
         let prev_new_target = crate::object::js_new_target_get();
         let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
-        crate::object::js_implicit_this_set(nan_boxed);
         crate::object::js_new_target_set(func_value);
         let prev_current_new_target =
             CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
         let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-        let result = crate::closure::js_native_call_value(
+        let result = crate::closure::native_call_value_this(
             func_value,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64()),
             args_ptr,
             args_len,
         );
         CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
         crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
-        crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
         if constructor_return_overrides_this(result) {
             return result;
         }
@@ -1895,29 +1891,25 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
 
     // #7280: same unrooted-receiver shape as the plain-`new` tail above —
-    // `nan_boxed` and the three displaced cell values cross a user
+    // `nan_boxed` and the two displaced new.target values cross a user
     // constructor body. Reproduced by
     // `Reflect.construct(plainFn, [x], otherFn)`, 200/200 iterations wrong
     // under `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
     let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_nanbox_f64(nan_boxed);
-    let prev_this = crate::object::js_implicit_this_get();
-    let prev_this_handle = scope.root_nanbox_f64(prev_this);
     let prev_new_target = crate::object::js_new_target_get();
     let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
-    crate::object::js_implicit_this_set(nan_boxed);
     crate::object::js_new_target_set(nt);
     let prev_current_new_target = CURRENT_NEW_TARGET.with(|value| value.replace(nt.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-    let result = crate::closure::js_native_call_value(
+    let result = crate::closure::native_call_value_this(
         func_value,
-        crate::closure::plain_call_receiver(),
+        crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64()),
         args_ptr,
         args_len,
     );
     CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
     crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
     if constructor_return_overrides_this(result) {
         return result;
     }

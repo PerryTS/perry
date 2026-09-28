@@ -650,18 +650,14 @@ fn emit_enabled_trace_warning() {
     let process = scope.root_nanbox_f64(process);
     let callback = scope.root_nanbox_f64(callback);
     let warning = scope.root_nanbox_f64(warning);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        process.get_nanbox_f64(),
-    ));
     unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             callback.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(process.get_nanbox_f64()),
             [warning.get_nanbox_f64()].as_ptr(),
             1,
         );
     }
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
 }
 
 #[cfg(test)]

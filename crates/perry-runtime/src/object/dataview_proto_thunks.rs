@@ -13,8 +13,8 @@
 //! DataView *instances* already worked: `dv.getInt32(0)`, `dv.byteLength`, etc.
 //! are routed through codegen / `buffer_dispatch::dispatch_buffer_method` on a
 //! `BufferHeader` marked as a DataView. The thunks here only add the
-//! *reflectable* own properties on the prototype; they read the receiver from
-//! `IMPLICIT_THIS` (set by the `.call`/`.apply` dispatch), brand-check that it
+//! *reflectable* own properties on the prototype; they take the receiver as
+//! their `this` argument (supplied by the `.call`/`.apply` dispatch), brand-check that it
 //! is a DataView (throwing `TypeError` otherwise, per spec — covering test262's
 //! `this-has-no-*` / `this-is-not-object` cases), then dispatch to the SAME
 //! runtime helpers the instance path uses.
@@ -24,12 +24,12 @@
 
 use super::*;
 
-/// Resolve the `IMPLICIT_THIS` receiver to a DataView `BufferHeader` address,
+/// Resolve the `this` receiver to a DataView `BufferHeader` address,
 /// or `None` if the receiver is not a DataView. Mirrors `typed_array_receiver`
 /// / `array_buffer_receiver_addr` in `global_this.rs` (NaN-boxed pointer or
 /// raw-i64 form), then brand-checks `is_data_view`.
-fn dataview_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn dataview_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = crate::value::JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -47,8 +47,8 @@ fn dataview_receiver_addr() -> Option<usize> {
 
 /// Brand-check helper: returns the DataView address or throws a `TypeError`
 /// for an incompatible receiver. Mirrors `typed_array_brand_error`.
-fn require_dataview_receiver() -> usize {
-    match dataview_receiver_addr() {
+fn require_dataview_receiver(this: crate::closure::JsThis) -> usize {
+    match dataview_receiver_addr(this) {
         Some(addr) => addr,
         None => super::object_ops::throw_object_type_error(
             b"Method DataView.prototype called on incompatible receiver",
@@ -67,9 +67,9 @@ fn undef() -> f64 {
 
 extern "C" fn dataview_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let addr = require_dataview_receiver();
+    let addr = require_dataview_receiver(this);
     let buf = addr as *const crate::buffer::BufferHeader;
     f64::from_bits(
         crate::value::JSValue::number(crate::buffer::js_buffer_length(buf) as f64).bits(),
@@ -78,25 +78,25 @@ extern "C" fn dataview_byte_length_getter_thunk(
 
 extern "C" fn dataview_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let addr = require_dataview_receiver();
+    let addr = require_dataview_receiver(this);
     let offset = crate::buffer::buffer_byte_offset(addr);
     f64::from_bits(crate::value::JSValue::number(offset as f64).bits())
 }
 
 extern "C" fn dataview_buffer_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let addr = require_dataview_receiver();
+    let addr = require_dataview_receiver(this);
     let backing = crate::buffer::buffer_backing_array_buffer(addr);
     f64::from_bits(crate::value::js_nanbox_pointer(backing as i64).to_bits())
 }
 
 // ---------------------------------------------------------------------------
 // get* methods (spec length 1): getInt8 … getFloat64. Signature
-// `(closure, byteOffset, rest)` where `rest` bundles the optional
+// `(closure, this, byteOffset, rest)` where `rest` bundles the optional
 // `littleEndian` flag (big-endian default).
 // ---------------------------------------------------------------------------
 
@@ -112,8 +112,8 @@ fn rest_first_arg(rest: f64) -> f64 {
     crate::array::js_array_get_f64(arr, 0)
 }
 
-fn dataview_get(suffix: &str, offset: f64, rest: f64) -> f64 {
-    let addr = require_dataview_receiver();
+fn dataview_get(this: crate::closure::JsThis, suffix: &str, offset: f64, rest: f64) -> f64 {
+    let addr = require_dataview_receiver(this);
     let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
         Some(k) => k,
         None => return undef(),
@@ -123,8 +123,14 @@ fn dataview_get(suffix: &str, offset: f64, rest: f64) -> f64 {
     crate::buffer::js_data_view_get(buf_f64, offset, kind, little)
 }
 
-fn dataview_set(suffix: &str, offset: f64, value: f64, rest: f64) -> f64 {
-    let addr = require_dataview_receiver();
+fn dataview_set(
+    this: crate::closure::JsThis,
+    suffix: &str,
+    offset: f64,
+    value: f64,
+    rest: f64,
+) -> f64 {
+    let addr = require_dataview_receiver(this);
     let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
         Some(k) => k,
         None => return undef(),
@@ -138,11 +144,11 @@ macro_rules! dataview_get_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
             offset: f64,
             rest: f64,
         ) -> f64 {
-            dataview_get($suffix, offset, rest)
+            dataview_get(this, $suffix, offset, rest)
         }
     };
 }
@@ -151,12 +157,12 @@ macro_rules! dataview_set_thunk {
     ($name:ident, $suffix:literal) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
-            _this: crate::closure::JsThis,
+            this: crate::closure::JsThis,
             offset: f64,
             value: f64,
             rest: f64,
         ) -> f64 {
-            dataview_set($suffix, offset, value, rest)
+            dataview_set(this, $suffix, offset, value, rest)
         }
     };
 }

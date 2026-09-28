@@ -1210,11 +1210,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                         .as_ref()
                         .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
                         .unwrap_or(ptr::null());
-                    let result = call_fn(
-                        local_closure,
-                        crate::closure::body_call::current_this(),
-                        arg,
-                    );
+                    let result = call_fn(local_closure, crate::closure::plain_call_receiver(), arg);
                     results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
 
@@ -1299,7 +1295,7 @@ unsafe fn single_thread_map(
         let closure = closure_handle
             .as_ref()
             .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
-        let result = call_fn(closure, crate::closure::body_call::current_this(), arg);
+        let result = call_fn(closure, crate::closure::plain_call_receiver(), arg);
         let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         // GC_STORE_AUDIT(BARRIERED): single-thread map result slot uses the shared array slot-store helper.
         store_thread_array_slot(result_arr, i, result.to_bits());
@@ -1467,11 +1463,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                         .as_ref()
                         .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
                         .unwrap_or(ptr::null());
-                    let result = call_fn(
-                        local_closure,
-                        crate::closure::body_call::current_this(),
-                        arg,
-                    );
+                    let result = call_fn(local_closure, crate::closure::plain_call_receiver(), arg);
                     let keep = is_truthy_bits(result.to_bits());
                     if keep {
                         kept.push(serialize_nanbox_for_thread(arg.to_bits()));
@@ -1551,7 +1543,7 @@ unsafe fn single_thread_filter(
         let closure = closure_handle
             .as_ref()
             .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
-        let result = call_fn(closure, crate::closure::body_call::current_this(), arg);
+        let result = call_fn(closure, crate::closure::plain_call_receiver(), arg);
         let keep = is_truthy_bits(result.to_bits());
         if keep {
             let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
@@ -1692,7 +1684,7 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
                 unsafe { crate::closure::body_call::js_body_fn!(func_usize as *const u8;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
-            call_fn(local_closure, crate::closure::body_call::current_this())
+            call_fn(local_closure, crate::closure::plain_call_receiver())
         }));
 
         match call_result {

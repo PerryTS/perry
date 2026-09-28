@@ -2,9 +2,8 @@ use super::*;
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    js_register_closure_arity, ClosureHeader,
+    js_register_closure_arity, native_call_value_this, ClosureHeader, JsThis,
 };
-use crate::object::js_implicit_this_set;
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
@@ -54,9 +53,6 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     let key = cp_listener_key(event);
     let mut i: u32 = 0;
     let mut fired = false;
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     loop {
         let arr = match cp_array_ptr(cp_get_field(target.get_nanbox_f64(), &key)) {
             Some(a) => a,
@@ -66,17 +62,15 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        js_implicit_this_set(target.get_nanbox_f64());
         let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
         unsafe {
-            let _ = js_native_call_value(
+            let _ = native_call_value_this(
                 cb,
-                crate::closure::plain_call_receiver(),
+                JsThis::from_f64(target.get_nanbox_f64()),
                 current_args.as_ptr(),
                 current_args.len(),
             );
         }
-        js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
         i += 1;
     }
@@ -351,18 +345,11 @@ pub(crate) extern "C" fn cp_pipe_data_thunk(
     let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let write = cp_get_field(dest, b"write");
     if !crate::fs::extract_closure_ptr(write).is_null() {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [chunk];
         unsafe {
-            let _ = js_native_call_value(
-                write,
-                crate::closure::plain_call_receiver(),
-                args.as_ptr(),
-                args.len(),
-            );
+            let _ =
+                native_call_value_this(write, JsThis::from_f64(dest), args.as_ptr(), args.len());
         }
-        js_implicit_this_set(prev.get_nanbox_f64());
     }
     cp_undefined()
 }
@@ -377,14 +364,10 @@ pub(crate) extern "C" fn cp_pipe_end_thunk(
     let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let end = cp_get_field(dest, b"end");
     if !crate::fs::extract_closure_ptr(end).is_null() {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [cp_undefined()];
         unsafe {
-            let _ =
-                js_native_call_value(end, crate::closure::plain_call_receiver(), args.as_ptr(), 0);
+            let _ = native_call_value_this(end, JsThis::from_f64(dest), args.as_ptr(), 0);
         }
-        js_implicit_this_set(prev.get_nanbox_f64());
     }
     cp_undefined()
 }

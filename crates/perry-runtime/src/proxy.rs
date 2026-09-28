@@ -20,8 +20,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
-
 mod apply_construct;
 pub use apply_construct::{call_proxy_value_with_this, js_proxy_apply, js_proxy_construct};
 pub(crate) use apply_construct::{is_callable_function, is_constructor_function};
@@ -701,44 +699,31 @@ fn coerce_trap_bool(value: f64) -> f64 {
 /// Invoke a present (already-confirmed-callable) handler trap with the handler
 /// bound as the trap's `this` (ECMA-262: traps are called as
 /// `Call(trap, handler, args)`). Object-literal/method traps read `this` from a
-/// reserved closure slot, while free-function traps fall back to
-/// `IMPLICIT_THIS`; we set both so either style observes the handler. Mirrors
+/// reserved closure slot, while free-function traps read the `this`
+/// parameter; we supply both so either style observes the handler. Mirrors
 /// the apply/construct/getOwnPropertyDescriptor trap-call dance, which the
 /// per-trap paths (get/set/has/deleteProperty/defineProperty/…) previously
 /// skipped — they called the trap with the wrong `this` and, for get/set,
 /// dropped the trailing `receiver` argument.
 fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
-    let rebound = crate::closure::clone_closure_rebind_this(trap.to_bits(), handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let handler = this_scope.root_nanbox_f64(handler);
+    let rebound =
+        crate::closure::clone_closure_rebind_this(trap.to_bits(), handler.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return throw_type_error("proxy trap is not a function");
     }
     let undef = f64::from_bits(TAG_UNDEFINED);
     let a = |i: usize| -> f64 { args.get(i).copied().unwrap_or(undef) };
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
-    let result = match args.len() {
-        0 => js_closure_call0(closure, crate::closure::plain_call_receiver()),
-        1 => js_closure_call1(closure, crate::closure::plain_call_receiver(), a(0)),
-        2 => js_closure_call2(closure, crate::closure::plain_call_receiver(), a(0), a(1)),
-        3 => js_closure_call3(
-            closure,
-            crate::closure::plain_call_receiver(),
-            a(0),
-            a(1),
-            a(2),
-        ),
-        _ => crate::closure::js_closure_call4(
-            closure,
-            crate::closure::plain_call_receiver(),
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-        ),
-    };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    let this = crate::closure::JsThis::from_f64(handler.get_nanbox_f64());
+    match args.len() {
+        0 => crate::closure::js_closure_call0(closure, this),
+        1 => crate::closure::js_closure_call1(closure, this, a(0)),
+        2 => crate::closure::js_closure_call2(closure, this, a(0), a(1)),
+        3 => crate::closure::js_closure_call3(closure, this, a(0), a(1), a(2)),
+        _ => crate::closure::js_closure_call4(closure, this, a(0), a(1), a(2), a(3)),
+    }
 }
 
 /// Throw `TypeError: Reflect.<op> called on non-object`. Does not return.
@@ -1005,11 +990,11 @@ enum MovedElement<'a> {
 
 /// Invoke a callable `f64` value with the supplied positional args and an
 /// explicit `thisArg` binding, throwing `TypeError` if `f` is not callable.
-/// Used by `Reflect.apply`. `thisArg` flows through `IMPLICIT_THIS` so free
+/// Used by `Reflect.apply`. `thisArg` is passed as the `this` parameter so free
 /// functions reading `this` observe it.
 fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     // A concise/object-literal method reads `this` from a baked capture slot,
-    // not IMPLICIT_THIS; rebind to the explicit `Reflect.apply` receiver so it
+    // not only the `this` parameter; rebind to the explicit `Reflect.apply` receiver so it
     // is honored (no-op for arrows / plain fns / bound fns).
     //
     // That rebind is also the one thing on this path that ALLOCATES, and the
@@ -1049,47 +1034,26 @@ fn dispatch_with_explicit_this(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
+    let this = crate::closure::JsThis::from_f64(this_arg);
     let a = |i: usize| -> f64 {
         args.get(i)
             .copied()
             .unwrap_or(f64::from_bits(TAG_UNDEFINED))
     };
-    let result = match args.len() {
-        0 => js_closure_call0(closure, crate::closure::plain_call_receiver()),
-        1 => js_closure_call1(closure, crate::closure::plain_call_receiver(), a(0)),
-        2 => js_closure_call2(closure, crate::closure::plain_call_receiver(), a(0), a(1)),
-        3 => js_closure_call3(
-            closure,
-            crate::closure::plain_call_receiver(),
-            a(0),
-            a(1),
-            a(2),
-        ),
-        4 => crate::closure::js_closure_call4(
-            closure,
-            crate::closure::plain_call_receiver(),
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-        ),
+    match args.len() {
+        0 => crate::closure::js_closure_call0(closure, this),
+        1 => crate::closure::js_closure_call1(closure, this, a(0)),
+        2 => crate::closure::js_closure_call2(closure, this, a(0), a(1)),
+        3 => crate::closure::js_closure_call3(closure, this, a(0), a(1), a(2)),
+        4 => crate::closure::js_closure_call4(closure, this, a(0), a(1), a(2), a(3)),
         // #10425: this arm was `_ => js_closure_call4(…)`, so every argument
         // after the fourth was dropped. The variadic entry point owns
         // arbitrary-arity dispatch, rest bundling included. (`call_trap`
         // above keeps its catch-all: a proxy trap receives at most four.)
         n => unsafe {
-            crate::closure::js_closure_call_array(
-                closure as i64,
-                crate::closure::plain_call_receiver(),
-                args.as_ptr(),
-                n as i64,
-            )
+            crate::closure::js_closure_call_array(closure as i64, this, args.as_ptr(), n as i64)
         },
-    };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    }
 }
 
 /// Resolve the ultimate target when a Proxy wraps a class constructor. Used
@@ -1728,15 +1692,19 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     if setter_bits == 0 {
         return false;
     }
-    let rebound = crate::closure::clone_closure_rebind_this(setter_bits, receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let receiver = this_scope.root_nanbox_f64(receiver);
+    let value = this_scope.root_nanbox_f64(value);
+    let rebound = crate::closure::clone_closure_rebind_this(setter_bits, receiver.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return false;
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let _ = js_closure_call1(closure, crate::closure::plain_call_receiver(), value);
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+    let _ = crate::closure::js_closure_call1(
+        closure,
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        value.get_nanbox_f64(),
+    );
     true
 }
 

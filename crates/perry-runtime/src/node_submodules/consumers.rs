@@ -478,7 +478,7 @@ fn call_collector_method(
     if let Some(promise) = promise_ptr_from_value(result) {
         crate::promise::js_promise_then(promise, step, reject);
     } else {
-        consumer_collect_step(step, crate::closure::body_call::current_this(), result);
+        consumer_collect_step(step, crate::closure::plain_call_receiver(), result);
     }
 }
 
@@ -508,17 +508,14 @@ fn call_symbol_async_iterator(stream: f64) -> Option<f64> {
     if !is_callable_value(method) {
         return None;
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
     let iterator = unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             method,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(stream),
             std::ptr::null(),
             0,
         )
     };
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if iterator.to_bits() == crate::value::TAG_UNDEFINED {
         None
     } else {
