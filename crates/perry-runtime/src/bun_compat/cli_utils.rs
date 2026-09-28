@@ -9,7 +9,7 @@ use super::{
     bool_value, boxed_str, is_string_value, is_undefined_or_null, key_ptr, object_field,
     payload_bytes, promise_rejected, promise_value, value_to_string,
 };
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::gc::{RootedValues, RuntimeHandle, RuntimeHandleScope};
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
@@ -53,29 +53,22 @@ fn number_arg(value: f64) -> Option<f64> {
     }
 }
 
-fn closure1(name: &str, func: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
-    js_register_closure_arity(func as *const u8, 1);
-    let closure = js_closure_alloc(func as *const u8, 0);
+fn closure1(name: &str, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, 1);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn closure2(name: &str, func: crate::closure::body_call::js_body_fn_ty!(a, a), length: u32) -> f64 {
-    js_register_closure_arity(func as *const u8, 2);
-    let closure = js_closure_alloc(func as *const u8, 0);
+fn closure2(name: &str, info: *const crate::closure::JsFunctionInfo, length: u32) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn closure3(
-    name: &str,
-    func: crate::closure::body_call::js_body_fn_ty!(a, a, a),
-    length: u32,
-) -> f64 {
-    js_register_closure_arity(func as *const u8, 3);
-    let closure = js_closure_alloc(func as *const u8, 0);
+fn closure3(name: &str, info: *const crate::closure::JsFunctionInfo, length: u32) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
@@ -134,10 +127,13 @@ extern "C" fn yaml_stringify_closure(
 
 pub fn js_bun_yaml() -> f64 {
     namespace_object(&[
-        (b"parse", closure1("parse", yaml_parse_closure)),
+        (
+            b"parse",
+            closure1("parse", crate::fn_info!(yaml_parse_closure, 1)),
+        ),
         (
             b"stringify",
-            closure3("stringify", yaml_stringify_closure, 1),
+            closure3("stringify", crate::fn_info!(yaml_stringify_closure, 3), 1),
         ),
     ])
 }
@@ -183,7 +179,10 @@ pub(crate) fn toml_parse_result(source: &str) -> Result<f64, f64> {
 }
 
 pub fn js_bun_toml() -> f64 {
-    namespace_object(&[(b"parse", closure1("parse", toml_parse_closure))])
+    namespace_object(&[(
+        b"parse",
+        closure1("parse", crate::fn_info!(toml_parse_closure, 1)),
+    )])
 }
 
 fn normalize_semver_version(input: &str) -> &str {
@@ -246,10 +245,13 @@ extern "C" fn semver_satisfies_closure(
 
 pub fn js_bun_semver() -> f64 {
     namespace_object(&[
-        (b"order", closure2("order", semver_order_closure, 2)),
+        (
+            b"order",
+            closure2("order", crate::fn_info!(semver_order_closure, 2), 2),
+        ),
         (
             b"satisfies",
-            closure2("satisfies", semver_satisfies_closure, 2),
+            closure2("satisfies", crate::fn_info!(semver_satisfies_closure, 2), 2),
         ),
     ])
 }
@@ -267,7 +269,11 @@ extern "C" fn jsonl_parse_chunk_closure(
 pub fn js_bun_jsonl() -> f64 {
     namespace_object(&[(
         b"parseChunk",
-        closure3("parseChunk", jsonl_parse_chunk_closure, 1),
+        closure3(
+            "parseChunk",
+            crate::fn_info!(jsonl_parse_chunk_closure, 3),
+            1,
+        ),
     )])
 }
 
@@ -594,7 +600,11 @@ extern "C" fn xxhash64_closure(
 pub fn decorate_bun_hash(value: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let hash = scope.root_nanbox_f64(value);
-    let xxhash = scope.root_nanbox_f64(closure2("xxHash64", xxhash64_closure, 1));
+    let xxhash = scope.root_nanbox_f64(closure2(
+        "xxHash64",
+        crate::fn_info!(xxhash64_closure, 2),
+        1,
+    ));
     let raw = JSValue::from_bits(hash.get_nanbox_f64().to_bits()).as_pointer::<u8>() as usize;
     crate::closure::closure_set_dynamic_prop(raw, "xxHash64", xxhash.get_nanbox_f64());
     hash.get_nanbox_f64()

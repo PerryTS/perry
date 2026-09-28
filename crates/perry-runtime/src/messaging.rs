@@ -1,7 +1,7 @@
 //! Minimal Web messaging globals used by Node-compatible `globalThis` and
 //! `node:worker_threads` constructor identity.
 
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{self, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
@@ -95,9 +95,8 @@ fn set_object_prototype(obj: *mut ObjectHeader, prototype: f64) {
     }
 }
 
-fn closure_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    js_register_closure_arity(func_ptr, arity);
-    let closure = js_closure_alloc(func_ptr, 0);
+fn closure_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     object::set_bound_native_closure_name(closure, name);
     object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -128,8 +127,13 @@ extern "C" fn has_ref(_closure: *const ClosureHeader, _this: crate::closure::JsT
     js_bool(false)
 }
 
-fn install_method(obj: *mut ObjectHeader, name: &str, func_ptr: *const u8, arity: u32) {
-    set_field(obj, name, closure_value(func_ptr, name, arity));
+fn install_method(
+    obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+) {
+    set_field(obj, name, closure_value(info, name, arity));
 }
 
 // ============================================================================
@@ -388,9 +392,7 @@ extern "C" fn deliver_one_message(
 /// `setImmediate` callback-timer queue, passing the port object pointer as a
 /// trailing argument so the native thunk knows which port to flush.
 fn schedule_delivery(port_ptr: usize) {
-    let func = deliver_one_message as *const u8;
-    js_register_closure_arity(func, 1);
-    let closure = js_closure_alloc(func, 0);
+    let closure = js_closure_alloc(crate::fn_info!(deliver_one_message, 1; with_declared(1)), 0);
     let closure_ptr = closure as i64;
     let port_box = crate::value::js_nanbox_pointer(port_ptr as i64);
     let args = [port_box];
@@ -573,29 +575,57 @@ fn is_message_type(type_value: f64) -> bool {
 
 /// Install the delivery-capable method set + onmessage accessor on a port.
 fn install_port_methods(obj: *mut ObjectHeader) {
-    install_method(obj, "postMessage", port_post_message as *const u8, 2);
-    install_method(obj, "start", port_start as *const u8, 0);
-    install_method(obj, "close", port_close as *const u8, 0);
-    install_method(obj, "ref", noop0 as *const u8, 0);
-    install_method(obj, "unref", noop0 as *const u8, 0);
-    install_method(obj, "hasRef", has_ref as *const u8, 0);
+    install_method(
+        obj,
+        "postMessage",
+        crate::fn_info!(port_post_message, 2; with_declared(2)),
+        2,
+    );
+    install_method(
+        obj,
+        "start",
+        crate::fn_info!(port_start, 0; with_declared(0)),
+        0,
+    );
+    install_method(
+        obj,
+        "close",
+        crate::fn_info!(port_close, 0; with_declared(0)),
+        0,
+    );
+    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+    install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+    install_method(
+        obj,
+        "hasRef",
+        crate::fn_info!(has_ref, 0; with_declared(0)),
+        0,
+    );
     install_method(
         obj,
         "addEventListener",
-        port_add_event_listener as *const u8,
+        crate::fn_info!(port_add_event_listener, 2; with_declared(2)),
         2,
     );
     install_method(
         obj,
         "removeEventListener",
-        port_remove_event_listener as *const u8,
+        crate::fn_info!(port_remove_event_listener, 2; with_declared(2)),
         2,
     );
     set_field(obj, "onmessageerror", js_null());
 
     // `onmessage` as a getter/setter so assignment starts the port + flushes.
-    let getter = closure_value(port_onmessage_get as *const u8, "get onmessage", 0);
-    let setter = closure_value(port_onmessage_set as *const u8, "set onmessage", 1);
+    let getter = closure_value(
+        crate::fn_info!(port_onmessage_get, 0; with_declared(0)),
+        "get onmessage",
+        0,
+    );
+    let setter = closure_value(
+        crate::fn_info!(port_onmessage_set, 1; with_declared(1)),
+        "set onmessage",
+        1,
+    );
     let obj_box = boxed_object(obj);
     let key_box = f64::from_bits(JSValue::string_ptr(key("onmessage")).bits());
     object::js_object_define_accessor(obj_box, key_box, getter, setter);
@@ -618,22 +648,62 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
 
     match builtin_name {
         "MessagePort" => {
-            install_method(proto, "postMessage", noop2 as *const u8, 2);
-            install_method(proto, "start", noop0 as *const u8, 0);
-            install_method(proto, "ref", noop0 as *const u8, 0);
-            install_method(proto, "unref", noop0 as *const u8, 0);
-            install_method(proto, "hasRef", has_ref as *const u8, 0);
+            install_method(
+                proto,
+                "postMessage",
+                crate::fn_info!(noop2, 2; with_declared(2)),
+                2,
+            );
+            install_method(
+                proto,
+                "start",
+                crate::fn_info!(noop0, 0; with_declared(0)),
+                0,
+            );
+            install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+            install_method(
+                proto,
+                "unref",
+                crate::fn_info!(noop0, 0; with_declared(0)),
+                0,
+            );
+            install_method(
+                proto,
+                "hasRef",
+                crate::fn_info!(has_ref, 0; with_declared(0)),
+                0,
+            );
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
-            install_method(proto, "close", noop0 as *const u8, 0);
+            install_method(
+                proto,
+                "close",
+                crate::fn_info!(noop0, 0; with_declared(0)),
+                0,
+            );
         }
         "MessageChannel" => {}
         "BroadcastChannel" => {
             set_field(proto, "name", js_undefined());
-            install_method(proto, "close", noop0 as *const u8, 0);
-            install_method(proto, "postMessage", noop1 as *const u8, 1);
-            install_method(proto, "ref", noop0 as *const u8, 0);
-            install_method(proto, "unref", noop0 as *const u8, 0);
+            install_method(
+                proto,
+                "close",
+                crate::fn_info!(noop0, 0; with_declared(0)),
+                0,
+            );
+            install_method(
+                proto,
+                "postMessage",
+                crate::fn_info!(noop1, 1; with_declared(1)),
+                1,
+            );
+            install_method(proto, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+            install_method(
+                proto,
+                "unref",
+                crate::fn_info!(noop0, 0; with_declared(0)),
+                0,
+            );
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
         }
@@ -708,10 +778,15 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
         .across_mut::<object::ObjectHeader, _>(|| crate::builtins::js_string_coerce(name));
     let name_value = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     set_field(obj, "name", name_value);
-    install_method(obj, "close", noop0 as *const u8, 0);
-    install_method(obj, "postMessage", noop1 as *const u8, 1);
-    install_method(obj, "ref", noop0 as *const u8, 0);
-    install_method(obj, "unref", noop0 as *const u8, 0);
+    install_method(obj, "close", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+    install_method(
+        obj,
+        "postMessage",
+        crate::fn_info!(noop1, 1; with_declared(1)),
+        1,
+    );
+    install_method(obj, "ref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
+    install_method(obj, "unref", crate::fn_info!(noop0, 0; with_declared(0)), 0);
     set_field(obj, "onmessage", js_null());
     set_field(obj, "onmessageerror", js_null());
     boxed_object(obj)

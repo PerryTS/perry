@@ -77,7 +77,7 @@ pub(crate) unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToSt
         return ArrayToStringOutcome::UseDefaultJoin;
     }
     let closure = method_ptr as *const crate::closure::ClosureHeader;
-    if (*closure).func_ptr == crate::object::global_this_builtin_noop_thunk as *const u8 {
+    if (*closure).code() == crate::object::global_this_builtin_noop_thunk as *const u8 {
         return ArrayToStringOutcome::UseDefaultJoin;
     }
     let receiver = value_handle.get_nanbox_f64();

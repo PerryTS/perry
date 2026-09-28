@@ -58,9 +58,6 @@ fn child_dispatch_forwards_relocated_receiver_and_arguments_to_stream_listeners(
 }
 
 fn dispatch_after_listener_relocation(shared_stream_listener: bool) {
-    cp_register_arities();
-    js_register_closure_arity(relocate as *const u8, 1);
-    js_register_closure_arity(observe as *const u8, 1);
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     let destination =
@@ -69,10 +66,11 @@ fn dispatch_after_listener_relocation(shared_stream_listener: bool) {
     let moved_argument =
         scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     let first = scope.root_nanbox_f64(cp_box_ptr(
-        js_closure_alloc(relocate as *const u8, 4).cast(),
+        js_closure_alloc(crate::fn_info!(relocate, 1; with_declared(1)), 4).cast(),
     ));
-    let second =
-        scope.root_nanbox_f64(cp_box_ptr(js_closure_alloc(observe as *const u8, 0).cast()));
+    let second = scope.root_nanbox_f64(cp_box_ptr(
+        js_closure_alloc(crate::fn_info!(observe, 1; with_declared(1)), 0).cast(),
+    ));
     let event = scope.root_nanbox_f64(cp_box_string("end"));
     for target in [&source, &destination] {
         if shared_stream_listener {

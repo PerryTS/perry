@@ -8,7 +8,7 @@ use super::keyed_table::PromiseKeyedTable;
 
 use super::assimilate::{
     assimilate_via_then_property, enqueue_thenable_job, get_then_action,
-    promise_resolve_assimilating, thenable_job_reject_fn, thenable_job_resolve_fn,
+    promise_resolve_assimilating,
 };
 
 #[derive(Clone, Copy)]
@@ -771,43 +771,6 @@ fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
     true
 }
 
-/// Register the dispatch arity (= 1) of the native resolving / thenable-job
-/// functions, once per thread. Each is an `extern "C" fn(closure, value)`, so a
-/// JS call that passes FEWER arguments — a thenable whose `then` does
-/// `resolve()` with no args (27.2.1.3.2 step 9) — must pad the missing `value`
-/// to `undefined`. Without a registered arity, `js_closure_call0` falls to the
-/// zero-arg direct-call arm and the function reads a GARBAGE second register
-/// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
-/// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
-///
-/// #10521: the same registration carries every spec-visible fact of these
-/// anonymous built-in functions (27.2.1.3), keyed by function KIND rather than
-/// by closure. The registered arity is the own `length` 1 (`closure_length`
-/// falls back to it), the unregistered func-ptr name reads back as the own
-/// `name` `""`, and the non-constructor bit makes `new resolve()` throw. The
-/// descriptor defaults for an entry-less closure are already
-/// `{writable: false, enumerable: false, configurable: true}` for both keys.
-pub(super) fn ensure_native_resolving_arity_registered() {
-    crate::perry_thread_local! {
-        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    DONE.with(|d| {
-        if d.get() {
-            return;
-        }
-        d.set(true);
-        for f in [
-            promise_resolve_fn as *const u8,
-            promise_reject_fn as *const u8,
-            thenable_job_resolve_fn as *const u8,
-            thenable_job_reject_fn as *const u8,
-        ] {
-            crate::closure::js_register_closure_arity(f, 1);
-            crate::closure::register_closure_body_non_constructor(f);
-        }
-    });
-}
-
 /// Wire a resolve/reject closure pair to a promise with a shared
 /// `[[AlreadyResolved]]` guard. Returns `(resolve_closure, reject_closure)`.
 pub(super) fn make_resolving_functions(
@@ -821,23 +784,17 @@ pub(super) fn make_resolving_functions(
     // capture slots after them. Pre-fix all three lived in bare Rust locals, so
     // a copying minor here wrote pre-collection addresses into the two closures
     // — the from-space-publishing shape, not merely a stale read.
-    //
-    // #9587: `ensure_native_resolving_arity_registered` registers four closure
-    // arities and so can allocate on its first call per thread — root `promise`
-    // BEFORE it, not after, or the very first `new Promise(executor)` on a
-    // thread can publish a pre-collection address into the capture slots.
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
-    ensure_native_resolving_arity_registered();
     let guard_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         alloc_already_resolved_guard() as i64,
     ));
     let resolve_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        promise_resolve_fn as *const u8,
+        &PROMISE_RESOLVE_FN_INFO,
         2,
     ) as i64));
     let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        promise_reject_fn as *const u8,
+        &PROMISE_REJECT_FN_INFO,
         2,
     ) as i64));
     let ptr_of = |h: &crate::gc::RuntimeHandle<'_>| -> i64 {
@@ -853,8 +810,8 @@ pub(super) fn make_resolving_functions(
     // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
     // `resolve-function-*` / `reject-function-*` assert all four.
     //
-    // #10521: all four come from the function kind registered by
-    // `ensure_native_resolving_arity_registered` above, so nothing is
+    // #10521: all four come from the bodies' static infos
+    // (`PROMISE_RESOLVE_FN_INFO` / `PROMISE_REJECT_FN_INFO`), so nothing is
     // installed per closure. Each pair used to get a `name` string, a closure
     // dynamic-prop entry, a descriptor-table entry (whose install bumped the
     // global property-plan epoch, invalidating the `then`-probe verdict and
@@ -866,6 +823,16 @@ pub(super) fn make_resolving_functions(
         ptr_of(&reject_h) as *mut crate::closure::ClosureHeader,
     )
 }
+
+/// `promise_resolve_fn`'s info: an anonymous built-in resolving function (ECMA-262
+/// 27.2.1.3) — declared 1, so a zero-argument call pads to `undefined`, and
+/// no `[[Construct]]`.
+pub(super) static PROMISE_RESOLVE_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        promise_resolve_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
 
 /// Internal resolve function for Promise executor callbacks.
 /// Called when user calls resolve(value) inside the executor.
@@ -910,6 +877,16 @@ pub(super) extern "C" fn promise_resolve_fn(
     promise_resolve_assimilating(promise_ptr, value);
     undef // resolve returns undefined
 }
+
+/// `promise_reject_fn`'s info: an anonymous built-in resolving function (ECMA-262
+/// 27.2.1.3) — declared 1, so a zero-argument call pads to `undefined`, and
+/// no `[[Construct]]`.
+pub(super) static PROMISE_REJECT_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        promise_reject_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
 
 /// Internal reject function for Promise executor callbacks.
 /// Called when user calls reject(reason) inside the executor.
@@ -1074,11 +1051,11 @@ fn attach_promise_all_after_prior_reaction(promise: *mut Promise, state: Promise
         scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state.results_arr as i64));
     let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state.state_arr as i64));
     let fulfill_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        promise_all_ordered_fulfill_handler as *const u8,
+        crate::fn_info!(promise_all_ordered_fulfill_handler, 1),
         4,
     ) as i64));
     let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        promise_all_ordered_reject_handler as *const u8,
+        crate::fn_info!(promise_all_ordered_reject_handler, 1),
         2,
     ) as i64));
 
@@ -1195,9 +1172,9 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
     // Both handlers capture only `result_promise` and don't depend on
     // the input index — so allocate once and share across all N inputs.
     // Saves (N-1) × 2 closure allocs per Promise.race call.
-    let shared_resolve = js_closure_alloc(promise_race_resolve_handler as *const u8, 1);
+    let shared_resolve = js_closure_alloc(crate::fn_info!(promise_race_resolve_handler, 1), 1);
     js_closure_set_capture_ptr(shared_resolve, 0, result_promise as i64);
-    let shared_reject = js_closure_alloc(promise_race_reject_handler as *const u8, 1);
+    let shared_reject = js_closure_alloc(crate::fn_info!(promise_race_reject_handler, 1), 1);
     js_closure_set_capture_ptr(shared_reject, 0, result_promise as i64);
 
     // Normalize each input with PromiseResolve semantics before attaching handlers.
@@ -1375,7 +1352,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     let promise_handle = scope.root_raw_mut_ptr(js_promise_new());
 
     let resolve_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        promise_resolve_fn as *const u8,
+        &PROMISE_RESOLVE_FN_INFO,
         1,
     ));
     resolve_handle.with_mut_ptr(|resolve| {
@@ -1383,10 +1360,8 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
             crate::closure::js_closure_set_capture_ptr(resolve, 0, promise as i64);
         })
     });
-    let reject_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        promise_reject_fn as *const u8,
-        1,
-    ));
+    let reject_handle =
+        scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(&PROMISE_REJECT_FN_INFO, 1));
     reject_handle.with_mut_ptr(|reject| {
         promise_handle.with_mut_ptr::<Promise, _>(|promise| {
             crate::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
@@ -1533,14 +1508,16 @@ pub extern "C" fn js_promise_all_settled(
         };
 
         // Fulfill: store {status:"fulfilled", value:v}
-        let fulfill_closure = js_closure_alloc(promise_all_settled_fulfill_handler as *const u8, 4);
+        let fulfill_closure =
+            js_closure_alloc(crate::fn_info!(promise_all_settled_fulfill_handler, 1), 4);
         js_closure_set_capture_ptr(fulfill_closure, 0, result_promise as i64);
         js_closure_set_capture_ptr(fulfill_closure, 1, results_arr as i64);
         js_closure_set_capture_ptr(fulfill_closure, 2, state_arr as i64);
         js_closure_set_capture_f64(fulfill_closure, 3, i as f64);
 
         // Reject: store {status:"rejected", reason:r}
-        let reject_closure = js_closure_alloc(promise_all_settled_reject_handler as *const u8, 4);
+        let reject_closure =
+            js_closure_alloc(crate::fn_info!(promise_all_settled_reject_handler, 1), 4);
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
         js_closure_set_capture_ptr(reject_closure, 1, results_arr as i64);
         js_closure_set_capture_ptr(reject_closure, 2, state_arr as i64);
@@ -1673,7 +1650,7 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     // the Promise.all reject-closure sharing in commit 7c89fcc6).
     // Reject still needs per-index since it must write its error into
     // the correct slot of `errors_arr` for the eventual AggregateError.
-    let shared_fulfill = js_closure_alloc(promise_any_fulfill_handler as *const u8, 2);
+    let shared_fulfill = js_closure_alloc(crate::fn_info!(promise_any_fulfill_handler, 1), 2);
     js_closure_set_capture_ptr(shared_fulfill, 0, result_promise as i64);
     js_closure_set_capture_ptr(shared_fulfill, 1, state_arr as i64);
 
@@ -1683,7 +1660,7 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
             Err(reason) => js_promise_rejected(reason),
         };
 
-        let reject_closure = js_closure_alloc(promise_any_reject_handler as *const u8, 4);
+        let reject_closure = js_closure_alloc(crate::fn_info!(promise_any_reject_handler, 1), 4);
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
         js_closure_set_capture_ptr(reject_closure, 1, errors_arr as i64);
         js_closure_set_capture_ptr(reject_closure, 2, state_arr as i64);

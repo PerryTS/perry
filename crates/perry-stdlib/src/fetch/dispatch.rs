@@ -278,7 +278,7 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
     // Register before allocating — see `headers_bound_method_value`.
     super::gc::ensure_gc_registered();
     let closure =
-        perry_runtime::closure::js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3);
+        perry_runtime::closure::js_closure_alloc(&perry_runtime::closure::BOUND_METHOD_INFO, 3);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 0, handle_to_f64(form_id));
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);

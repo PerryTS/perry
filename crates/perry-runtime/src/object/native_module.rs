@@ -1508,7 +1508,7 @@ fn build_bound_method_closure_with_private_brand(
     let instance_handle = scope.root_nanbox_f64(instance);
     let private_brand_handle = private_brand.map(|brand| scope.root_nanbox_f64(brand));
     let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::closure::BOUND_METHOD_FUNC_PTR,
+        &crate::closure::BOUND_METHOD_INFO,
         if private_brand_handle.is_some() { 4 } else { 3 },
     ));
     // Capture-slot writes are scoped arguments to non-allocating stores, so
@@ -1612,7 +1612,7 @@ pub(crate) fn build_symbol_bound_method_closure(
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
     let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::closure::BOUND_METHOD_FUNC_PTR,
+        &crate::closure::BOUND_METHOD_INFO,
         5,
     ));
     if closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|c| c.is_null()) {
@@ -1681,7 +1681,7 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
     }
     let closure = raw as *const crate::closure::ClosureHeader;
     if !std::ptr::eq(
-        unsafe { (*closure).func_ptr },
+        unsafe { (*closure).code() },
         crate::closure::BOUND_METHOD_FUNC_PTR,
     ) {
         return false;

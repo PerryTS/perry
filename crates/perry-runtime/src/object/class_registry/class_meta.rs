@@ -329,7 +329,7 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
-        let func_ptr = (*ptr).func_ptr as usize;
+        let func_ptr = (*ptr).code() as usize;
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
             || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize

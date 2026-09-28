@@ -250,7 +250,7 @@ extern "C" fn descending_cmp(
 }
 
 fn descending_comparator() -> *const crate::closure::ClosureHeader {
-    crate::closure::js_closure_alloc(descending_cmp as *const u8, 0)
+    crate::closure::js_closure_alloc(crate::fn_info!(descending_cmp, 2), 0)
 }
 
 #[test]
@@ -842,7 +842,7 @@ fn is_true(v: f64) -> bool {
     v.to_bits() == crate::value::TAG_TRUE
 }
 
-fn closure(func: *const u8) -> *const crate::closure::ClosureHeader {
+fn closure(func: *const crate::closure::JsFunctionInfo) -> *const crate::closure::ClosureHeader {
     crate::closure::js_closure_alloc(func, 0) as *const crate::closure::ClosureHeader
 }
 
@@ -867,7 +867,7 @@ fn subject() -> *mut ArrayHeader {
 fn js_array_map_maps_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let result = crate::array::js_array_map(buf, closure(cb_double as *const u8));
+    let result = crate::array::js_array_map(buf, closure(crate::fn_info!(cb_double, 3)));
     assert_eq!(
         observed_values(),
         vec![3.0, 1.0, 2.0],
@@ -887,7 +887,7 @@ fn js_array_map_discard_still_runs_the_callbacks_on_a_buffer() {
     let buf = subject();
     // `map` whose result is unused: no allocation, but the callback must still
     // observe every real byte in order.
-    crate::array::js_array_map_discard(buf, closure(cb_double as *const u8));
+    crate::array::js_array_map_discard(buf, closure(crate::fn_info!(cb_double, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0, 2.0]);
     assert_eq!(observed_indices(), vec![0.0, 1.0, 2.0]);
 }
@@ -896,7 +896,8 @@ fn js_array_map_discard_still_runs_the_callbacks_on_a_buffer() {
 fn js_array_filter_filters_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let result = crate::array::js_array_filter(buf, closure(cb_is_three_or_two as *const u8));
+    let result =
+        crate::array::js_array_filter(buf, closure(crate::fn_info!(cb_is_three_or_two, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0, 2.0]);
     assert_eq!(
         read_uint8_result(result),
@@ -909,7 +910,7 @@ fn js_array_filter_filters_a_buffer_receivers_bytes() {
 fn js_array_find_finds_a_buffer_receivers_byte() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let found = crate::array::js_array_find(buf, closure(cb_is_one as *const u8));
+    let found = crate::array::js_array_find(buf, closure(crate::fn_info!(cb_is_one, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0]);
     assert_eq!(found, 1.0, "node answers 1; `undefined` is #8137");
 }
@@ -918,7 +919,7 @@ fn js_array_find_finds_a_buffer_receivers_byte() {
 fn js_array_find_index_finds_a_buffer_receivers_index() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let index = crate::array::js_array_findIndex(buf, closure(cb_is_one as *const u8));
+    let index = crate::array::js_array_findIndex(buf, closure(crate::fn_info!(cb_is_one, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0]);
     assert_eq!(index, 1, "node answers 1; `-1` is #8137");
 }
@@ -927,7 +928,7 @@ fn js_array_find_index_finds_a_buffer_receivers_index() {
 fn js_array_some_sees_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let answer = crate::array::js_array_some(buf, closure(cb_is_one as *const u8));
+    let answer = crate::array::js_array_some(buf, closure(crate::fn_info!(cb_is_one, 3)));
     assert_eq!(
         observed_values(),
         vec![3.0, 1.0],
@@ -941,7 +942,7 @@ fn js_array_some_sees_a_buffer_receivers_bytes() {
 fn captureless_some_keeps_the_buffer_receiver_fallback() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let answer = crate::array::js_array_some_captureless(buf, cb_is_one as *const u8);
+    let answer = crate::array::js_array_some_captureless(buf, crate::fn_info!(cb_is_one, 3));
     assert_eq!(
         observed_values(),
         vec![3.0, 1.0],
@@ -957,7 +958,8 @@ fn js_array_every_sees_a_buffer_receivers_bytes() {
     // `cb_is_a_source_byte`, NOT `x > 0`: the garbage reads are also `> 0`, so
     // a sign predicate answers `true` on the BROKEN path too (#8137's own
     // "vacuous probe to avoid").
-    let answer = crate::array::js_array_every(buf, closure(cb_is_a_source_byte as *const u8));
+    let answer =
+        crate::array::js_array_every(buf, closure(crate::fn_info!(cb_is_a_source_byte, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0, 2.0]);
     assert!(is_true(answer), "node answers true; `false` is #8137");
 }
@@ -966,7 +968,7 @@ fn js_array_every_sees_a_buffer_receivers_bytes() {
 fn js_array_for_each_visits_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    crate::array::js_array_forEach(buf, closure(cb_double as *const u8));
+    crate::array::js_array_forEach(buf, closure(crate::fn_info!(cb_double, 3)));
     assert_eq!(
         observed_values(),
         vec![3.0, 1.0, 2.0],
@@ -979,7 +981,7 @@ fn js_array_for_each_visits_a_buffer_receivers_bytes() {
 fn js_array_reduce_accumulates_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let sum = crate::array::js_array_reduce(buf, closure(cb_sum as *const u8), 1, 0.0);
+    let sum = crate::array::js_array_reduce(buf, closure(crate::fn_info!(cb_sum, 4)), 1, 0.0);
     assert_eq!(observed_values(), vec![3.0, 1.0, 2.0]);
     assert_eq!(sum, 6.0, "node answers 6; `9.12e-313` is #8137");
 }
@@ -993,7 +995,7 @@ fn js_array_reduce_without_a_seed_starts_at_the_first_byte() {
     // unconditionally would silently seed every reduce with 0.0 — the same
     // answer here, but the WRONG one for a non-additive callback, and it would
     // turn the empty-receiver TypeError into a silent `undefined`.
-    let sum = crate::array::js_array_reduce(buf, closure(cb_sum as *const u8), 0, 0.0);
+    let sum = crate::array::js_array_reduce(buf, closure(crate::fn_info!(cb_sum, 4)), 0, 0.0);
     assert_eq!(
         observed_values(),
         vec![1.0, 2.0],
@@ -1006,7 +1008,7 @@ fn js_array_reduce_without_a_seed_starts_at_the_first_byte() {
 fn js_array_reduce_right_accumulates_a_buffer_receiver_in_reverse() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let sum = crate::array::js_array_reduce_right(buf, closure(cb_sum as *const u8), 1, 0.0);
+    let sum = crate::array::js_array_reduce_right(buf, closure(crate::fn_info!(cb_sum, 4)), 1, 0.0);
     assert_eq!(
         observed_indices(),
         vec![2.0, 1.0, 0.0],
@@ -1024,7 +1026,7 @@ fn js_array_reduce_right_accumulates_a_buffer_receiver_in_reverse() {
 fn the_callbacks_third_argument_is_the_receiver_itself_not_a_copy() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    crate::array::js_array_forEach(buf, closure(cb_double as *const u8));
+    crate::array::js_array_forEach(buf, closure(crate::fn_info!(cb_double, 3)));
 
     // Non-vacuity: the receiver-identity assertion below ALSO holds on the
     // broken path (the pre-fix helper passes `rooted.receiver()`, which is the
@@ -1056,7 +1058,7 @@ fn the_callbacks_third_argument_is_the_receiver_itself_not_a_copy() {
 fn find_last_is_served_for_a_buffer_receiver() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();
-    let cb = closure(cb_is_three_or_two as *const u8);
+    let cb = closure(crate::fn_info!(cb_is_three_or_two, 3));
     let args = [f64::from_bits(
         crate::value::JSValue::pointer(cb as *const u8).bits(),
     )];
@@ -1095,7 +1097,7 @@ fn a_plain_array_still_maps_through_the_same_helper() {
     for v in [3.0, 1.0, 2.0] {
         arr = js_array_push_f64(arr, v);
     }
-    let result = crate::array::js_array_map(arr, closure(cb_double as *const u8));
+    let result = crate::array::js_array_map(arr, closure(crate::fn_info!(cb_double, 3)));
     assert_eq!(observed_values(), vec![3.0, 1.0, 2.0]);
     let out = crate::array::header::clean_arr_ptr(result);
     assert!(
@@ -1120,9 +1122,9 @@ fn a_plain_array_never_reaches_the_buffer_gate() {
     // receiver-resolution call — the same discipline #8140's probe-count test
     // needed, and for the same reason: reading the result runs its own
     // per-element probes and would swamp the window.
-    crate::array::js_array_map_discard(arr, closure(cb_double as *const u8));
+    crate::array::js_array_map_discard(arr, closure(crate::fn_info!(cb_double, 3)));
     let before = crate::object::typed_array_proto_thunks::test_buffer_gate_probe_count();
-    crate::array::js_array_map_discard(arr, closure(cb_double as *const u8));
+    crate::array::js_array_map_discard(arr, closure(crate::fn_info!(cb_double, 3)));
     let after = crate::object::typed_array_proto_thunks::test_buffer_gate_probe_count();
     assert_eq!(
         after, before,
@@ -1146,7 +1148,10 @@ fn a_generic_array_like_object_receiver_still_materializes() {
     crate::object::js_object_set_field_by_name(obj, key("0"), 3.0);
     crate::object::js_object_set_field_by_name(obj, key("1"), 1.0);
     crate::object::js_object_set_field_by_name(obj, key("2"), 2.0);
-    crate::array::js_array_map_discard(obj as *const ArrayHeader, closure(cb_double as *const u8));
+    crate::array::js_array_map_discard(
+        obj as *const ArrayHeader,
+        closure(crate::fn_info!(cb_double, 3)),
+    );
     assert_eq!(
         observed_values(),
         vec![3.0, 1.0, 2.0],

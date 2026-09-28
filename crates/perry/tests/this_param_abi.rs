@@ -137,24 +137,35 @@ fn read_ir(dir: &Path) -> String {
     ir
 }
 
-/// Symbols passed as `ptr @X` to `js_closure_alloc*` / `js_register_closure_*`.
+/// The bodies function objects run: every `JsFunctionInfo` the module
+/// defines names its body as its first field (`@X$info = ... { ptr @X, ...`),
+/// and every `js_closure_alloc*` names an info (`ptr @X$info`).
 fn installed_bodies(ir: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for call in ["@js_closure_alloc", "@js_register_closure_"] {
-        for (at, _) in ir.match_indices(call) {
-            let rest = &ir[at..];
-            let Some(open) = rest.find('(') else { continue };
-            let Some(close) = rest[open..].find(')') else {
-                continue;
-            };
-            for arg in rest[open + 1..open + close].split(',') {
-                let Some(sym) = arg.trim().strip_prefix("ptr @") else {
-                    continue;
-                };
-                let sym = sym.trim_matches('"').to_string();
-                if !out.contains(&sym) {
-                    out.push(sym);
+    let mut push = |sym: &str| {
+        let sym = sym.trim_matches('"').to_string();
+        if !out.contains(&sym) {
+            out.push(sym);
+        }
+    };
+    for line in ir.lines() {
+        if let Some(at) = line.find("$info = ") {
+            if line.starts_with('@') {
+                if let Some(code) = line[at..].split("{ ptr @").nth(1) {
+                    push(code.split(',').next().unwrap_or_default());
                 }
+            }
+        }
+    }
+    for (at, _) in ir.match_indices("@js_closure_alloc") {
+        let rest = &ir[at..];
+        let Some(open) = rest.find('(') else { continue };
+        let Some(close) = rest[open..].find(')') else {
+            continue;
+        };
+        for arg in rest[open + 1..open + close].split(',') {
+            if let Some(sym) = arg.trim().strip_prefix("ptr @") {
+                push(sym.trim_matches('"').trim_end_matches("$info"));
             }
         }
     }

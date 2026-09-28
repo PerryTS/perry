@@ -1,7 +1,7 @@
 //! Bun's replaceable `self` accessor (#10306). The platform hook runs before
 //! every module, but must never undo a user's assignment or deletion.
 
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use crate::value::{js_nanbox_pointer, JSValue};
 
@@ -19,10 +19,8 @@ pub(super) fn install_once() {
     let global = JSValue::from_bits(crate::object::js_get_global_this().to_bits())
         .as_pointer::<ObjectHeader>()
         .cast_mut();
-    let getter_fn = get_self as *const u8;
-    let setter_fn = set_self as *const u8;
-    js_register_closure_arity(getter_fn, 0);
-    js_register_closure_arity(setter_fn, 1);
+    let getter_fn = crate::fn_info!(get_self, 0; with_declared(0));
+    let setter_fn = crate::fn_info!(set_self, 1; with_declared(1));
     let getter = js_closure_alloc(getter_fn, 0);
     let setter = js_closure_alloc(setter_fn, 0);
     for (closure, name, arity) in [(getter, "get", 0), (setter, "set", 1)] {

@@ -248,7 +248,7 @@ pub(crate) fn function_source_for_closure(closure: usize) -> String {
         let func_ptr = unsafe {
             crate::closure::bound_method_source_func_ptr(closure_ptr)
                 .or_else(|| crate::object::class_accessor_source_func_ptr(closure_ptr))
-                .unwrap_or((*closure_ptr).func_ptr as usize)
+                .unwrap_or((*closure_ptr).code() as usize)
         };
         crate::builtins::function_source_for_func_ptr(func_ptr)
     })
@@ -1307,15 +1307,13 @@ fn script_metadata(script_value: f64) -> Option<ScriptMetadata> {
 fn install_script_method(
     obj: *mut ObjectHeader,
     name: &str,
-    func: crate::closure::body_call::js_body_fn_ty!(a, a),
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
     let key = scope.root_string_ptr(field_key(name));
-    let func_ptr = func as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
         crate::object::set_builtin_closure_length(closure as usize, arity)
@@ -1398,33 +1396,35 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
             PropertyAttrs::new(true, false, true),
         )
     });
+    // One info for both `runInContext` installs, so the two share a body identity.
+    let run_in_context = crate::fn_info!(vm_script_run_in_context_method, 2; with_declared(2));
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
         install_script_method(
             proto,
             "runInThisContext",
-            vm_script_run_in_this_context_method,
+            crate::fn_info!(vm_script_run_in_this_context_method, 2; with_declared(2)),
             1,
         )
     });
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        install_script_method(proto, "runInContext", vm_script_run_in_context_method, 2)
+        install_script_method(proto, "runInContext", run_in_context, 2)
     });
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
         install_script_method(
             proto,
             "runInNewContext",
-            vm_script_run_in_new_context_method,
+            crate::fn_info!(vm_script_run_in_new_context_method, 2; with_declared(2)),
             2,
         )
     });
     base.with_mut_ptr::<ObjectHeader, _>(|base| {
-        install_script_method(base, "runInContext", vm_script_run_in_context_method, 2)
+        install_script_method(base, "runInContext", run_in_context, 2)
     });
     base.with_mut_ptr::<ObjectHeader, _>(|base| {
         install_script_method(
             base,
             "createCachedData",
-            vm_script_create_cached_data_method,
+            crate::fn_info!(vm_script_create_cached_data_method, 2; with_declared(2)),
             0,
         )
     });

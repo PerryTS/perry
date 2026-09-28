@@ -7,8 +7,7 @@
 mod data_import;
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
@@ -221,15 +220,13 @@ fn set_closure_prop(closure: *mut ClosureHeader, name: &str, value: f64) {
     });
 }
 
+/// `info` records the body's declared arity and `.length` (`length`).
 fn named_closure(
-    func: *const u8,
-    arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     length: u32,
     name: &str,
 ) -> (*mut ClosureHeader, f64) {
-    js_register_closure_arity(func, arity);
-    crate::closure::js_register_closure_length(func, length);
-    let closure = js_closure_alloc(func, 1);
+    let closure = js_closure_alloc(info, 1);
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_mut_ptr(closure);
     closure_handle.with_mut_ptr(|closure: *mut ClosureHeader| {
@@ -966,14 +963,22 @@ fn make_require(base: f64, main_value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let base_handle = scope.root_nanbox_f64(base);
     let main_handle = scope.root_nanbox_f64(main_value);
-    let (_, paths_value) = named_closure(resolve_paths_thunk as *const u8, 1, 1, "paths");
+    let (_, paths_value) = named_closure(
+        crate::fn_info!(resolve_paths_thunk, 1; with_declared(1), with_length(1)),
+        1,
+        "paths",
+    );
     let paths_handle = scope.root_nanbox_f64(paths_value);
     js_closure_set_capture_f64(
         object_ptr(paths_handle.get_nanbox_f64()) as *mut ClosureHeader,
         0,
         base_handle.get_nanbox_f64(),
     );
-    let (_, resolve_value) = named_closure(resolve_thunk as *const u8, 2, 2, "resolve");
+    let (_, resolve_value) = named_closure(
+        crate::fn_info!(resolve_thunk, 2; with_declared(2), with_length(2)),
+        2,
+        "resolve",
+    );
     let resolve_handle = scope.root_nanbox_f64(resolve_value);
     js_closure_set_capture_f64(
         object_ptr(resolve_handle.get_nanbox_f64()) as *mut ClosureHeader,
@@ -995,7 +1000,11 @@ fn make_require(base: f64, main_value: f64) -> f64 {
     let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     let extensions_handle = scope.root_nanbox_f64(crate::object::module_cjs_extensions_value());
 
-    let (_, require_value) = named_closure(require_thunk as *const u8, 1, 1, "require");
+    let (_, require_value) = named_closure(
+        crate::fn_info!(require_thunk, 1; with_declared(1), with_length(1)),
+        1,
+        "require",
+    );
     let require_handle = scope.root_nanbox_f64(require_value);
     js_closure_set_capture_f64(
         object_ptr(require_handle.get_nanbox_f64()) as *mut ClosureHeader,

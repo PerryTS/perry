@@ -944,6 +944,9 @@ _NON_DEFINING_MACROS = frozenset((
     "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
     "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
     "write", "writeln", "format", "panic", "vec", "dbg", "todo", "unimplemented",
+    # `fn_info!(body, n)` names a body to build its private `static INFO`
+    # (a JsFunctionInfo); it defines no export.
+    "fn_info",
 ))
 _INDENTED_MACRO_RE = re.compile(
     r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')

@@ -494,8 +494,10 @@ extern "C" fn deferred_send_callback(
 }
 
 fn defer_send_callback(callback: f64, socket: f64, error: f64, bytes: f64) {
-    crate::closure::js_register_closure_arity(deferred_send_callback as *const u8, 0);
-    let closure = crate::closure::js_closure_alloc(deferred_send_callback as *const u8, 4);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(deferred_send_callback, 0; with_declared(0)),
+        4,
+    );
     crate::closure::js_closure_set_capture_f64(closure, 0, callback);
     crate::closure::js_closure_set_capture_f64(closure, 1, socket);
     crate::closure::js_closure_set_capture_f64(closure, 2, error);

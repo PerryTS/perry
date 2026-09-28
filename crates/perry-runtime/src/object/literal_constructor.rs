@@ -71,7 +71,7 @@ mod tests {
         );
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-        let setter = crate::closure::js_closure_alloc(collecting_setter as *const u8, 0);
+        let setter = crate::closure::js_closure_alloc(crate::fn_info!(collecting_setter, 1), 0);
         let descriptor = crate::object::js_object_alloc(0, 0);
         let set_key = crate::js_string_from_bytes(b"set".as_ptr(), 3);
         crate::object::js_object_set_field_by_name(

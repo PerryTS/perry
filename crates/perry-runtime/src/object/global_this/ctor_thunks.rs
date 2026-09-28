@@ -454,34 +454,32 @@ pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
 /// closure for the same `func_ptr` every time — the func_ptr IS the method
 /// identity here since these thunks take no captures.
 pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
-    let (func_ptr, arity) = match property_name {
-        "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
-        "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
+    let (info, arity) = match property_name {
+        "getRandomValues" => (
+            crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1)),
+            1,
+        ),
+        "randomUUID" => (
+            crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0)),
+            0,
+        ),
         _ => return None,
     };
-    Some(webcrypto_singleton_method(
-        func_ptr,
-        property_name,
-        arity,
-        || crate::closure::js_register_closure_arity(func_ptr, arity),
-    ))
+    Some(webcrypto_singleton_method(info, property_name, arity))
 }
 
-/// #10523: decorate a Web Crypto method's singleton closure (body registry
-/// entry, `name`, `length`) only when it is first minted. Redoing it on every
-/// read allocated a name string, reinstalled the `name` descriptor and
-/// invalidated the thunk's cached call-dispatch strategy each time, which was
+/// #10523: decorate a Web Crypto method's singleton closure (`name`,
+/// `length`) only when it is first minted. Redoing it on every read allocated
+/// a name string and reinstalled the `name` descriptor each time, which was
 /// most of what `crypto.randomUUID ? crypto.randomUUID() : …` spent in Perry.
 fn webcrypto_singleton_method(
-    func_ptr: *const u8,
+    func_ptr: *const crate::closure::JsFunctionInfo,
     name: &str,
     length: u32,
-    register_body: impl FnOnce(),
 ) -> f64 {
     if let Some(closure) = crate::closure::singleton_closure_if_cached(func_ptr) {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    register_body();
     let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -493,12 +491,27 @@ fn webcrypto_singleton_method(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
+/// The KEM method's body info (a rest body) and its `.length`.
+fn subtle_crypto_method_spec(
+    property_name: &str,
+) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     match property_name {
-        "encapsulateBits" => Some((subtle_crypto_encapsulate_bits_thunk as *const u8, 2)),
-        "decapsulateBits" => Some((subtle_crypto_decapsulate_bits_thunk as *const u8, 3)),
-        "encapsulateKey" => Some((subtle_crypto_encapsulate_key_thunk as *const u8, 5)),
-        "decapsulateKey" => Some((subtle_crypto_decapsulate_key_thunk as *const u8, 6)),
+        "encapsulateBits" => Some((
+            crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0)),
+            2,
+        )),
+        "decapsulateBits" => Some((
+            crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0)),
+            3,
+        )),
+        "encapsulateKey" => Some((
+            crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0)),
+            5,
+        )),
+        "decapsulateKey" => Some((
+            crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0)),
+            6,
+        )),
         _ => None,
     }
 }
@@ -509,12 +522,7 @@ fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
 /// see #10427's PR body for which paths were and weren't affected).
 pub(crate) fn subtle_crypto_method_value(property_name: &str) -> Option<f64> {
     let (func_ptr, length) = subtle_crypto_method_spec(property_name)?;
-    Some(webcrypto_singleton_method(
-        func_ptr,
-        property_name,
-        length,
-        || crate::closure::js_register_closure_rest(func_ptr, 0),
-    ))
+    Some(webcrypto_singleton_method(func_ptr, property_name, length))
 }
 
 #[cfg(test)]

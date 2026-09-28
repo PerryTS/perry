@@ -910,7 +910,7 @@ pub(crate) fn dir_read_next(id: usize) -> f64 {
     }
 }
 
-pub(crate) fn make_dir_method(id: usize, func: *const u8) -> f64 {
+pub(crate) fn make_dir_method(id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(func, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
@@ -982,7 +982,10 @@ fn dir_pending_read_promise(id: usize, result: Result<Option<f64>, f64>) -> f64 
         Ok(None) => (f64::from_bits(TAG_NULL), false),
         Err(err) => (err, true),
     };
-    let closure = crate::closure::js_closure_alloc(dir_finish_read_promise_impl as *const u8, 4);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(dir_finish_read_promise_impl, 0; with_declared(0)),
+        4,
+    );
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, promise as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
@@ -1041,7 +1044,10 @@ fn dir_schedule_read_callback(
         Ok(None) => (f64::from_bits(TAG_NULL), 1.0),
         Err(err) => (err, 2.0),
     };
-    let closure = crate::closure::js_closure_alloc(dir_finish_read_callback_impl as *const u8, 4);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(dir_finish_read_callback_impl, 0; with_declared(0)),
+        4,
+    );
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, callback as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
@@ -1128,7 +1134,11 @@ pub(crate) extern "C" fn dir_close_impl(
     }
 }
 
-fn dir_iterator_method(id: usize, self_value: f64, func: *const u8) -> f64 {
+fn dir_iterator_method(
+    id: usize,
+    self_value: f64,
+    func: *const crate::closure::JsFunctionInfo,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(func, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
@@ -1246,16 +1256,28 @@ unsafe fn build_dir_iterator_object(id: usize) -> f64 {
     };
     set(
         "next",
-        dir_iterator_method(id, self_value, dir_iterator_next_impl as *const u8),
+        dir_iterator_method(
+            id,
+            self_value,
+            crate::fn_info!(dir_iterator_next_impl, 0; with_declared(0)),
+        ),
     );
     set(
         "return",
-        dir_iterator_method(id, self_value, dir_iterator_return_impl as *const u8),
+        dir_iterator_method(
+            id,
+            self_value,
+            crate::fn_info!(dir_iterator_return_impl, 0; with_declared(0)),
+        ),
     );
     install_dir_symbol(
         self_value,
         "asyncIterator",
-        dir_iterator_method(id, self_value, dir_iterator_self_impl as *const u8),
+        dir_iterator_method(
+            id,
+            self_value,
+            crate::fn_info!(dir_iterator_self_impl, 0; with_declared(0)),
+        ),
     );
     self_value
 }
@@ -1275,10 +1297,12 @@ unsafe fn install_dir_proto_method(
 }
 
 unsafe fn install_dir_proto_path(proto: *mut crate::object::ObjectHeader, path: &str) {
-    crate::closure::js_register_closure_arity(dir_path_getter_impl as *const u8, 0);
     let path_ptr = js_string_from_bytes(path.as_ptr(), path.len() as u32);
     let path_value = crate::value::js_nanbox_string(path_ptr as i64);
-    let getter = crate::closure::js_closure_alloc(dir_path_getter_impl as *const u8, 1);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(dir_path_getter_impl, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(getter, 0, path_value);
     let getter_value = crate::value::js_nanbox_pointer(getter as i64);
 
@@ -1300,19 +1324,6 @@ unsafe fn install_dir_proto_path(proto: *mut crate::object::ObjectHeader, path: 
 }
 
 pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
-    crate::closure::js_register_closure_arity(dir_read_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(dir_close_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(dir_entries_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_dispose_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_async_dispose_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_finish_read_promise_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_finish_read_callback_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_read_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_close_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_iterator_next_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_iterator_return_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(dir_iterator_self_impl as *const u8, 0);
-
     let obj = crate::object::js_object_alloc(CLASS_ID_FS_DIR, 0);
     let self_value = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let proto = crate::object::js_object_alloc(0, 7);
@@ -1331,36 +1342,42 @@ pub(crate) unsafe fn build_dir_object(id: usize, path: &str) -> f64 {
     install_dir_proto_method(
         proto,
         "readSync",
-        make_dir_method(id, dir_read_sync_impl as *const u8),
+        make_dir_method(id, crate::fn_info!(dir_read_sync_impl, 0; with_declared(0))),
     );
     install_dir_proto_method(
         proto,
         "closeSync",
-        make_dir_method(id, dir_close_sync_impl as *const u8),
+        make_dir_method(
+            id,
+            crate::fn_info!(dir_close_sync_impl, 0; with_declared(0)),
+        ),
     );
     install_dir_proto_method(
         proto,
         "read",
-        make_dir_method(id, dir_read_impl as *const u8),
+        make_dir_method(id, crate::fn_info!(dir_read_impl, 1; with_declared(1))),
     );
     install_dir_proto_method(
         proto,
         "close",
-        make_dir_method(id, dir_close_impl as *const u8),
+        make_dir_method(id, crate::fn_info!(dir_close_impl, 1; with_declared(1))),
     );
 
-    let entries = make_dir_method(id, dir_entries_impl as *const u8);
+    let entries = make_dir_method(id, crate::fn_info!(dir_entries_impl, 0; with_declared(0)));
     install_dir_proto_method(proto, "entries", entries);
     install_dir_symbol(proto_value, "asyncIterator", entries);
     install_dir_symbol(
         proto_value,
         "dispose",
-        make_dir_method(id, dir_dispose_impl as *const u8),
+        make_dir_method(id, crate::fn_info!(dir_dispose_impl, 0; with_declared(0))),
     );
     install_dir_symbol(
         proto_value,
         "asyncDispose",
-        make_dir_method(id, dir_async_dispose_impl as *const u8),
+        make_dir_method(
+            id,
+            crate::fn_info!(dir_async_dispose_impl, 0; with_declared(0)),
+        ),
     );
     self_value
 }

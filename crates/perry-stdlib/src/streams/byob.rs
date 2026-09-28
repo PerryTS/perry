@@ -416,15 +416,17 @@ pub unsafe extern "C" fn js_readable_stream_controller_byob_request(stream_handl
     js_array_push(keys, JSValue::string_ptr(k_rwnv));
     js_object_set_field(obj, 0, JSValue::from_bits(view_bits));
 
-    let respond_fn = byob_request_respond as *const u8;
-    perry_runtime::closure::js_register_closure_arity(respond_fn, 1);
-    let respond = perry_runtime::closure::js_closure_alloc(respond_fn, 1);
+    let respond = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(byob_request_respond, 1; with_declared(1)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_f64(respond, 0, id as f64);
     js_object_set_field(obj, 1, JSValue::pointer(respond as *const u8));
 
-    let rwnv_fn = byob_request_respond_with_new_view as *const u8;
-    perry_runtime::closure::js_register_closure_arity(rwnv_fn, 1);
-    let rwnv = perry_runtime::closure::js_closure_alloc(rwnv_fn, 1);
+    let rwnv = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(byob_request_respond_with_new_view, 1; with_declared(1)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_f64(rwnv, 0, id as f64);
     js_object_set_field(obj, 2, JSValue::pointer(rwnv as *const u8));
 

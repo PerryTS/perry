@@ -485,8 +485,8 @@ fn call_collector_method(
 fn collect_by_method_promise(kind: ConsumerKind, receiver: f64, method: CollectMethod) -> f64 {
     let result_promise = crate::promise::js_promise_new();
     let result_arr = crate::array::js_array_alloc(0);
-    let step = js_closure_alloc(consumer_collect_step as *const u8, 6);
-    let reject = js_closure_alloc(consumer_collect_rejected as *const u8, 1);
+    let step = js_closure_alloc(crate::fn_info!(consumer_collect_step, 1), 6);
+    let reject = js_closure_alloc(crate::fn_info!(consumer_collect_rejected, 1), 1);
     js_closure_set_capture_ptr(step, 0, result_promise as i64);
     js_closure_set_capture_ptr(step, 1, result_arr as i64);
     js_closure_set_capture_f64(step, 2, receiver);

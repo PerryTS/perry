@@ -35,8 +35,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use perry_ffi::{
-    alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64,
-    GcRootVisitor, RawClosureHeader,
+    alloc_closure, closure_capture_f64, set_closure_capture_f64, GcRootVisitor, RawClosureHeader,
 };
 
 use crate::statics;
@@ -146,15 +145,6 @@ extern "C" fn pipe_end_forward(closure: *const RawClosureHeader, _this: perry_ff
     f64::from_bits(TAG_UNDEFINED_BITS)
 }
 
-static ARITY_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-fn ensure_pipe_closure_arities_registered() {
-    ARITY_REGISTERED.call_once(|| {
-        register_closure_arity(pipe_data_forward as perry_ffi::JsBody1, 1);
-        register_closure_arity(pipe_end_forward as perry_ffi::JsBody0, 0);
-    });
-}
-
 /// One socket -> destination pipe route, tracked so `unpipe` can remove
 /// exactly the listener closures a matching `pipe()` call installed.
 ///
@@ -220,7 +210,6 @@ pub(crate) fn socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
     crate::ensure_gc_scanner_registered();
-    ensure_pipe_closure_arities_registered();
 
     let end_on_finish = unsafe {
         if is_nullish(options) {
@@ -235,8 +224,8 @@ pub(crate) fn socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
         }
     };
 
-    let data_closure = alloc_closure(pipe_data_forward as perry_ffi::JsBody1, 1);
-    let end_closure = alloc_closure(pipe_end_forward as perry_ffi::JsBody0, 2);
+    let data_closure = alloc_closure(&PIPE_DATA_FORWARD_INFO, 1);
+    let end_closure = alloc_closure(&PIPE_END_FORWARD_INFO, 2);
     if data_closure.is_null() || end_closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED_BITS);
     }
@@ -348,3 +337,9 @@ pub unsafe extern "C" fn js_net_socket_unpipe(handle: i64, dest: f64) -> i64 {
     socket_unpipe(handle, dest);
     handle
 }
+
+static PIPE_DATA_FORWARD_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(pipe_data_forward as perry_ffi::JsBody1).with_declared(1);
+
+static PIPE_END_FORWARD_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(pipe_end_forward as perry_ffi::JsBody0).with_declared(0);

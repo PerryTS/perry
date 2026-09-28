@@ -19,7 +19,8 @@ fn undef() -> f64 {
 
 /// A fresh closure on the calling thread's heap, NaN-boxed.
 fn closure_value() -> f64 {
-    let closure = perry_runtime::closure::js_closure_alloc(probe_thunk as *const u8, 0);
+    let closure =
+        perry_runtime::closure::js_closure_alloc(perry_runtime::fn_info!(probe_thunk, 0), 0);
     f64::from_bits(perry_runtime::JSValue::pointer(closure as *const u8).bits())
 }
 

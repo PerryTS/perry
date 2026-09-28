@@ -126,7 +126,7 @@ extern "C" fn finreg_test_callback(
 /// root it in shadow slot 0. Returns nothing — read the registry back through
 /// the slot so post-move addresses stay correct.
 fn make_rooted_finreg() {
-    let cb = crate::closure::js_closure_alloc(finreg_test_callback as *const u8, 0);
+    let cb = crate::closure::js_closure_alloc(crate::fn_info!(finreg_test_callback, 1), 0);
     let cb_val = f64::from_bits(ptr_bits(cb as usize));
     let reg = crate::weakref::js_finreg_new(cb_val);
     js_shadow_slot_set(0, object_bits(reg));

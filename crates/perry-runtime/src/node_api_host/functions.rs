@@ -171,11 +171,16 @@ pub unsafe extern "C" fn napi_create_function(
         None => return NapiStatus::InvalidArg,
     };
 
-    let function_pointer = napi_callback_thunk as *const u8;
-    crate::closure::js_register_closure_synthetic_arguments(function_pointer, 0);
-    crate::closure::js_register_closure_arity(function_pointer, 0);
-    crate::closure::js_register_closure_length(function_pointer, 0);
-    let closure = crate::closure::js_closure_alloc(function_pointer, 1);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(
+            napi_callback_thunk,
+            1;
+            with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS),
+            with_declared(0),
+            with_length(0)
+        ),
+        1,
+    );
     crate::closure::js_closure_set_capture_ptr(closure, 0, callback_index as i64);
     let handle = match add_handle(env, JSValue::pointer(closure.cast()).bits()) {
         Ok(handle) => handle,

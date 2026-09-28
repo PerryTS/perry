@@ -942,8 +942,10 @@ mod view_mode_tests {
         assert!(proto_ptr != 0, "the site must have been recorded");
         let proto = proto_ptr as *mut ObjectHeader;
         let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
-        let replacement = crate::closure::js_closure_alloc(patched_test_thunk as *const u8, 0);
-        crate::closure::js_register_closure_arity(patched_test_thunk as *const u8, 0);
+        let replacement = crate::closure::js_closure_alloc(
+            crate::fn_info!(patched_test_thunk, 0; with_declared(0)),
+            0,
+        );
         crate::object::js_object_set_field_by_name(
             proto,
             key,
@@ -1163,9 +1165,11 @@ mod view_mode_tests {
             0.0,
         );
         let method = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::closure::js_closure_alloc(patched_test_thunk as *const u8, 0) as i64,
+            crate::closure::js_closure_alloc(
+                crate::fn_info!(patched_test_thunk, 0; with_declared(0)),
+                0,
+            ) as i64,
         ));
-        crate::closure::js_register_closure_arity(patched_test_thunk as *const u8, 0);
         for name in ["exec", "test"] {
             let key = scope.root_nanbox_f64(js_string(name));
             assert!(crate::proxy::create_data_property(

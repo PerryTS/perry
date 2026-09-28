@@ -57,7 +57,7 @@ pub(crate) extern "C" fn thunk_reporter_lcov(
 
 fn reporter_transform(kind: i32) -> f64 {
     let captures = if kind == REPORTER_SPEC { 2 } else { 1 };
-    let transform = make_closure(reporter_transform_chunk as *const u8, 3, captures);
+    let transform = make_closure(crate::fn_info!(reporter_transform_chunk, 3), 3, captures);
     js_closure_set_capture_f64(transform, 0, kind as f64);
     if kind == REPORTER_SPEC {
         js_closure_set_capture_f64(transform, 1, undefined_value());

@@ -456,8 +456,7 @@ pub extern "C" fn js_perry_tui_use_state_tuple(initial: f64) -> i64 {
     drop(s);
 
     // Allocate the setter closure with 1 capture (the slot index).
-    let trampoline = perry_tui_state_setter_trampoline as *const u8;
-    let setter = js_closure_alloc(trampoline, 1);
+    let setter = js_closure_alloc(crate::fn_info!(perry_tui_state_setter_trampoline, 1), 1);
     js_closure_set_capture_f64(setter, 0, idx as f64);
 
     // Build [value, setter_closure] array.

@@ -140,7 +140,7 @@ fn typeof_classifies_every_value_kind_like_javascript_typeof() {
         },
         NapiStatus::Ok
     );
-    let closure = crate::closure::js_closure_alloc(plain_closure_body as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(crate::fn_info!(plain_closure_body, 0), 0);
     let closure = handle(env, JSValue::pointer(closure.cast()).bits());
     let no_arguments: [f64; 0] = [];
     let bound = unsafe {
@@ -572,8 +572,10 @@ extern "C" fn count_uncaught_callback_error(
 fn listen_for_uncaught_exceptions() {
     crate::os::test_clear_process_event_listeners();
     UNCAUGHT_CALLBACK_ERRORS.with(|count| *count.borrow_mut() = 0);
-    crate::closure::js_register_closure_arity(count_uncaught_callback_error as *const u8, 1);
-    let listener = crate::closure::js_closure_alloc(count_uncaught_callback_error as *const u8, 0);
+    let listener = crate::closure::js_closure_alloc(
+        crate::fn_info!(count_uncaught_callback_error, 1; with_declared(1)),
+        0,
+    );
     let listener = JSValue::pointer(listener.cast()).bits();
     let event = crate::string::js_string_from_bytes(b"uncaughtException".as_ptr(), 17);
     let event = JSValue::string_ptr(event).bits();

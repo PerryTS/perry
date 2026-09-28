@@ -282,12 +282,12 @@ fn invoke_pending_completion(handle: i64, result_code: u64) {
     }
 }
 
-/// Allocate a Perry closure whose func_ptr is the trampoline above and whose
+/// Allocate a Perry closure running the trampoline above, whose
 /// captures are `(handle, result_code)`. The returned pointer is what
 /// `js_promise_then` expects (a `*const ClosureHeader`).
 unsafe fn make_completion_closure(handle: i64, result_code: u64) -> *const u8 {
     let closure = perry_runtime::closure::js_closure_alloc(
-        perry_ios_notification_completion_trampoline as *const u8,
+        perry_runtime::fn_info!(perry_ios_notification_completion_trampoline, 1),
         2,
     );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);

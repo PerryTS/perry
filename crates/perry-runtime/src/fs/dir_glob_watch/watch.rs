@@ -20,8 +20,7 @@ use std::sync::Once;
 use super::watch_backend::{self, Backend, RawEvent, Source, WatchError, WatchEvent};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 
 const WATCH_FILE_DEFAULT_INTERVAL_MS: f64 = 5007.0;
@@ -228,15 +227,11 @@ fn signal_abort_reason(signal: f64) -> f64 {
     }
 }
 
-fn add_abort_listener(
-    signal: f64,
-    id: usize,
-    func: crate::closure::body_call::js_body_fn_ty!(),
-) -> f64 {
+fn add_abort_listener(signal: f64, id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
     let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
         return undefined_value();
     };
-    let closure = js_closure_alloc(func as *const u8, 1);
+    let closure = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     let listener = boxed_ptr(closure as *const u8);
     crate::url::js_abort_signal_add_listener(signal_ptr, string_value(b"abort"), listener);
@@ -1327,155 +1322,198 @@ extern "C" fn promise_watcher_self_impl(
     js_closure_get_capture_f64(closure, 1)
 }
 
-fn ensure_watch_method_arities() {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        js_register_closure_arity(watch_file_poll_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_abort_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_abort_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_close_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_ref_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_unref_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_on_impl as *const u8, 2);
-        js_register_closure_arity(fs_watcher_once_impl as *const u8, 2);
-        js_register_closure_arity(fs_watcher_off_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_ref_impl as *const u8, 0);
-        js_register_closure_arity(stat_watcher_unref_impl as *const u8, 0);
-        js_register_closure_arity(stat_watcher_on_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_once_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_off_impl as *const u8, 2);
-        js_register_closure_arity(promise_watcher_next_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_return_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_self_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_next_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_return_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_self_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_next_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_return_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_self_impl as *const u8, 0);
-    });
-}
-
-fn method_value(func: *const u8, id: usize, self_value: f64) -> f64 {
+fn method_value(func: *const crate::closure::JsFunctionInfo, id: usize, self_value: f64) -> f64 {
     let closure = js_closure_alloc(func, 2);
     js_closure_set_capture_f64(closure, 0, id as f64);
     js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
 }
 
-fn poll_closure_value(func: *const u8, id: usize) -> *mut ClosureHeader {
+fn poll_closure_value(
+    func: *const crate::closure::JsFunctionInfo,
+    id: usize,
+) -> *mut ClosureHeader {
     let closure = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     closure
 }
 
 fn build_fs_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 8);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"close",
-        method_value(fs_watcher_close_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_close_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"ref",
-        method_value(fs_watcher_ref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_ref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"unref",
-        method_value(fs_watcher_unref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_unref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"on",
-        method_value(fs_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"once",
-        method_value(fs_watcher_once_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_once_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"addListener",
-        method_value(fs_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"removeListener",
-        method_value(fs_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"off",
-        method_value(fs_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     self_value
 }
 
 fn build_stat_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 7);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"ref",
-        method_value(stat_watcher_ref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_ref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"unref",
-        method_value(stat_watcher_unref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_unref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"on",
-        method_value(stat_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"once",
-        method_value(stat_watcher_once_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_once_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"addListener",
-        method_value(stat_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"removeListener",
-        method_value(stat_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"off",
-        method_value(stat_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     self_value
 }
 
 fn build_promise_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 2);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
-        method_value(promise_watcher_next_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(promise_watcher_next_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"return",
-        method_value(promise_watcher_return_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(promise_watcher_return_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
         let symbol_value = boxed_ptr(async_iterator as *const u8);
-        let method = method_value(promise_watcher_self_impl as *const u8, id, self_value);
+        let method = method_value(
+            crate::fn_info!(promise_watcher_self_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        );
         unsafe {
             crate::symbol::js_object_set_symbol_property(self_value, symbol_value, method);
         }
@@ -1484,23 +1522,34 @@ fn build_promise_watcher_object(id: usize) -> f64 {
 }
 
 fn build_glob_iterator_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 3);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
-        method_value(glob_iterator_next_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(glob_iterator_next_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"return",
-        method_value(glob_iterator_return_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(glob_iterator_return_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
         let symbol_value = boxed_ptr(async_iterator as *const u8);
-        let method = method_value(glob_iterator_self_impl as *const u8, id, self_value);
+        let method = method_value(
+            crate::fn_info!(glob_iterator_self_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        );
         unsafe {
             crate::symbol::js_object_set_symbol_property(self_value, symbol_value, method);
         }
@@ -1509,14 +1558,13 @@ fn build_glob_iterator_object(id: usize) -> f64 {
 }
 
 fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 3);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
         method_value(
-            bun_glob_sync_iterator_next_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_next_impl, 0; with_declared(0)),
             id,
             self_value,
         ),
@@ -1525,7 +1573,7 @@ fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
         obj,
         b"return",
         method_value(
-            bun_glob_sync_iterator_return_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_return_impl, 0; with_declared(0)),
             id,
             self_value,
         ),
@@ -1534,7 +1582,7 @@ fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
     if !iterator.is_null() {
         let symbol_value = boxed_ptr(iterator as *const u8);
         let method = method_value(
-            bun_glob_sync_iterator_self_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_self_impl, 0; with_declared(0)),
             id,
             self_value,
         );
@@ -1649,7 +1697,7 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     ensure_pump_registered();
     let backend = Backend::start(id, &path, recursive);
     let abort_listener = signal
-        .map(|signal| add_abort_listener(signal, id, fs_watcher_abort_impl))
+        .map(|signal| add_abort_listener(signal, id, crate::fn_info!(fs_watcher_abort_impl, 0)))
         .unwrap_or_else(undefined_value);
     let signal_value = signal.unwrap_or_else(undefined_value);
     let mut listeners = HashMap::new();
@@ -1713,7 +1761,10 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     let interval = option_interval_ms(options_value);
     let persistent = option_bool_default_local(options_value, b"persistent", true);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
-    let timer_callback = poll_closure_value(watch_file_poll_impl as *const u8, id);
+    let timer_callback = poll_closure_value(
+        crate::fn_info!(watch_file_poll_impl, 0; with_declared(0)),
+        id,
+    );
     let timer_id = crate::timer::setInterval(timer_callback as i64, interval);
     if !persistent {
         crate::timer::js_timer_unref(timer_id);
@@ -1795,7 +1846,9 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
     let object_value = build_promise_watcher_object(id);
     let abort_listener = signal
         .filter(|signal| !signal_is_aborted(*signal))
-        .map(|signal| add_abort_listener(signal, id, promise_watcher_abort_impl))
+        .map(|signal| {
+            add_abort_listener(signal, id, crate::fn_info!(promise_watcher_abort_impl, 0))
+        })
         .unwrap_or_else(undefined_value);
     let signal_value = signal.unwrap_or_else(undefined_value);
     let abort_reason = if signal.map(signal_is_aborted).unwrap_or(false) {

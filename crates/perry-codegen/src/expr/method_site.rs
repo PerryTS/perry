@@ -13,13 +13,13 @@
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
 //!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
-//!                       h = site.closure ; f = site.func
+//!                       h = site.closure ; f = site.code
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
 //!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
 //!         own-property object; same checks as own)
-//!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.func      else NEXT WAY
-//!         h = handle(v) ; f = site.func
-//!   CALL: this = recv ; r = f(h, args...) ; restore this
+//!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.info      else NEXT WAY
+//!         h = handle(v) ; f = site.code
+//!   CALL: r = f(h, recv, args...)    (the receiver is the `this` parameter)
 //!   MISS: js_method_site_miss(slot, feedback_site, recv, method_id, args)
 //!   PRIMITIVE: js_typed_feedback_native_call_method_by_id(feedback_site, recv, method_id, args)
 //! ```
@@ -75,7 +75,11 @@ pub(crate) fn emit_method_site(
     };
     let abi_word = crate::runtime_abi::METHOD_SITE_WORD_OFFSET.to_string();
     let abi_slot = crate::runtime_abi::METHOD_SITE_SLOT_OFFSET.to_string();
-    let abi_func = crate::runtime_abi::METHOD_SITE_FUNC_OFFSET.to_string();
+    // An entry memoizes a body as its `JsFunctionInfo` (the identity a
+    // closure's info word is compared with) and its code address (the call
+    // target), so a hit costs no load through the info.
+    let abi_info = crate::runtime_abi::METHOD_SITE_INFO_OFFSET.to_string();
+    let abi_code = crate::runtime_abi::METHOD_SITE_CODE_OFFSET.to_string();
     let abi_closure = crate::runtime_abi::METHOD_SITE_CLOSURE_OFFSET.to_string();
     let abi_gen = crate::runtime_abi::METHOD_SITE_GEN_OFFSET.to_string();
     let ways = crate::runtime_abi::METHOD_SITE_WAYS;
@@ -85,11 +89,11 @@ pub(crate) fn emit_method_site(
     let index_mask = crate::runtime_abi::METHOD_SITE_INDEX_MASK.to_string();
     let entry_size = crate::runtime_abi::METHOD_SITE_ENTRY_SIZE;
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    // `ClosureHeader` (64-bit only here): the code pointer, and the GcHeader
+    // `ClosureHeader` (64-bit only here): the info pointer, and the GcHeader
     // (type, flags) half-word in front of the payload that makes a cell a
     // live function object: type `GC_TYPE_CLOSURE` and not a forwarded stub
     // (`closure::is_closure_ptr`'s kind term; there is no payload magic).
-    let func_offset = crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as i64;
+    let info_offset = crate::runtime_abi::CLOSURE_INFO_OFFSET as i64;
     let props_offset = crate::runtime_abi::CLOSURE_PROPS_OFFSET as i64;
     let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
     let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
@@ -338,11 +342,13 @@ pub(crate) fn emit_method_site(
         let kind = blk.load(crate::types::I16, &kp);
         let kind = blk.and(crate::types::I16, &kind, &kind_mask);
         let is_closure = blk.icmp_eq(crate::types::I16, &kind, &closure_kind);
-        let fpp = emit_field_ptr(blk, &own_ub, func_offset);
-        let fp = blk.load(I64, &fpp);
-        let mf_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_func)]);
+        let ip = emit_field_ptr(blk, &own_ub, info_offset);
+        let info = blk.load(I64, &ip);
+        let mi_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_info)]);
+        let mi = blk.load(I64, &mi_p);
+        let same = blk.icmp_eq(I64, &info, &mi);
+        let mf_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
         let mf = blk.load(I64, &mf_p);
-        let same = blk.icmp_eq(I64, &fp, &mf);
         let hit = blk.and(I1, &is_closure, &same);
         let h = emit_handle(blk, &own_ub);
         let end = blk.label.clone();
@@ -391,7 +397,7 @@ pub(crate) fn emit_method_site(
         let valid = blk.icmp_eq(I64, &g, &mg);
         let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
         let h = blk.load(I64, &hp);
-        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_func)]);
+        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
         let f = blk.load(I64, &fp_p);
         let end = blk.label.clone();
         blk.cond_br(&valid, &call_l, &miss_l);

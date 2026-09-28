@@ -246,9 +246,10 @@ extern "C" fn stream_static_method_thunk(
 }
 
 fn stream_static_method_value(method: &str, kind: f64, exposed_length: u32) -> f64 {
-    let func_ptr = stream_static_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(stream_static_method_thunk, 2; with_declared(2)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(closure, 0, kind);
     set_bound_native_closure_name(closure, method);
     set_builtin_closure_length(closure as usize, exposed_length);

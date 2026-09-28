@@ -192,7 +192,7 @@ pub extern "C" fn js_import_meta_resolve(specifier: f64, parent: f64, fallback: 
 }
 
 extern "C" fn resolve_closure(
-    closure: *mut ClosureHeader,
+    closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
     specifier: f64,
     parent: f64,
@@ -205,7 +205,11 @@ extern "C" fn resolve_closure(
 pub extern "C" fn js_import_meta_resolve_value(fallback: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let fallback = scope.root_nanbox_f64(fallback);
-    let (closure, value) = named_closure(resolve_closure as *const u8, 2, 1, "resolve");
+    let (closure, value) = named_closure(
+        crate::fn_info!(resolve_closure, 2; with_declared(2)),
+        1,
+        "resolve",
+    );
     js_closure_set_capture_f64(closure, 0, fallback.get_nanbox_f64());
     value
 }

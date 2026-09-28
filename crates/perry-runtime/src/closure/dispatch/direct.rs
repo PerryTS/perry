@@ -64,22 +64,23 @@ pub(crate) fn resolve_direct_func_ptr(
     closure: *const ClosureHeader,
     arity: u32,
 ) -> Option<*const u8> {
-    let func_ptr = get_valid_func_ptr(closure);
-    if func_ptr.is_null()
-        || func_ptr == BOUND_METHOD_FUNC_PTR
-        || func_ptr == BOUND_FUNCTION_FUNC_PTR
-    {
-        return None;
-    }
-    if lookup_closure_rest(func_ptr).is_some() {
-        return None;
-    }
-    if let Some(declared) = super::dispatch_arity(func_ptr) {
-        if super::arity_needs_dispatch(declared, arity) {
-            return None;
+    resolve_direct_info(closure, arity).map(|info| info.code)
+}
+
+/// [`resolve_direct_func_ptr`]'s info: `Some` when every call at `arity` can
+/// jump straight to the body's code.
+#[inline]
+pub(crate) fn resolve_direct_info(
+    closure: *const ClosureHeader,
+    arity: u32,
+) -> Option<&'static crate::closure::JsFunctionInfo> {
+    let info = crate::closure::closure_info(closure)?;
+    match resolve_strategy(info).kind() {
+        DispatchKind::Arity(declared) if !super::arity_needs_dispatch(declared, arity) => {
+            Some(info)
         }
+        _ => None,
     }
-    Some(func_ptr)
 }
 
 /// Resolve one callback for PLAIN calls (`f(x)`) at a method boundary: the
@@ -92,10 +93,11 @@ pub extern "C" fn js_closure_resolve_plain_direct_call(
     closure: *const ClosureHeader,
     arity: u32,
 ) -> *const u8 {
-    let Some(func_ptr) = resolve_direct_func_ptr(closure, arity) else {
+    let Some(info) = resolve_direct_info(closure, arity) else {
         return std::ptr::null();
     };
-    let Some(trusted) = super::super::registry::lookup_closure_trusted_direct(func_ptr) else {
+    let func_ptr = info.code;
+    let Some(trusted) = crate::closure::info_trusted_direct(info) else {
         return func_ptr;
     };
     let actual_capture_count = unsafe { real_capture_count((*closure).capture_count) };
@@ -122,14 +124,13 @@ pub extern "C" fn js_closure_resolve_versioned_loop_direct_call(
     closure: *const ClosureHeader,
     arity: u32,
 ) -> *const u8 {
-    let Some(func_ptr) = resolve_direct_func_ptr(closure, arity) else {
+    let Some(info) = resolve_direct_info(closure, arity) else {
         return std::ptr::null();
     };
-    if !resolve_strategy(func_ptr).is_arrow() {
+    if info.flags & crate::closure::FN_ARROW == 0 {
         return std::ptr::null();
     }
-    let Some(target) = super::super::registry::lookup_closure_versioned_loop_direct(func_ptr)
-    else {
+    let Some(target) = crate::closure::info_versioned_loop_direct(info) else {
         return std::ptr::null();
     };
     let actual_capture_count = unsafe { real_capture_count((*closure).capture_count) };
@@ -334,54 +335,59 @@ mod tests {
         value
     }
 
-    fn closure_for(body: *const u8) -> *const ClosureHeader {
-        crate::closure::js_closure_alloc(body, 0)
+    use crate::closure::{JsFunctionInfo, FN_ARROW};
+    use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
+    type C = ClosureHeader;
+
+    const ADD3: JsFunctionInfo = JsFunctionInfo::of(add3 as JsBody3<C>).with_flags(FN_ARROW);
+    static ADD3_ARROW: JsFunctionInfo = ADD3;
+    static ADD3_TRUSTED: JsFunctionInfo = ADD3.with_trusted_direct(trusted_add3 as *const u8, 0, 0);
+    static ORDINARY3: JsFunctionInfo = JsFunctionInfo::of(ordinary3 as JsBody3<C>);
+    static REST_ARROW: JsFunctionInfo = JsFunctionInfo::of(rest_body as JsBody2<C>)
+        .with_rest(1)
+        .with_flags(FN_ARROW);
+    static SUM2: JsFunctionInfo = JsFunctionInfo::of(sum2 as JsBody2<C>);
+    static SUM2_REST: JsFunctionInfo = JsFunctionInfo::of(sum2 as JsBody2<C>).with_rest(1);
+    static BOXED1: JsFunctionInfo = JsFunctionInfo::of(boxed1 as JsBody1<C>)
+        .with_flags(FN_ARROW)
+        .with_trusted_direct(trusted_boxed1 as *const u8, 1, 1);
+    static VERSIONED: JsFunctionInfo = JsFunctionInfo::of(versioned_source as JsBody1<C>)
+        .with_flags(FN_ARROW)
+        .with_versioned_loop(versioned_boxed1 as *const u8, 1, 1);
+
+    fn closure_for(info: &'static JsFunctionInfo) -> *const ClosureHeader {
+        crate::closure::js_closure_alloc(info, 0)
     }
 
     #[test]
     fn exported_resolver_admits_directly_callable_bodies() {
-        let arrow = closure_for(add3 as *const u8);
-        crate::closure::js_register_closure_arity(add3 as *const u8, 3);
-        crate::closure::js_register_closure_arrow_function(add3 as *const u8);
+        let arrow = closure_for(&ADD3_ARROW);
         assert_eq!(
             js_closure_resolve_plain_direct_call(arrow, 3),
             add3 as *const u8
         );
-        crate::closure::js_register_closure_trusted_direct(
-            add3 as *const u8,
-            trusted_add3 as *const u8,
-            0,
-            0,
-        );
+        let trusted = closure_for(&ADD3_TRUSTED);
         assert_eq!(
-            js_closure_resolve_plain_direct_call(arrow, 3),
+            js_closure_resolve_plain_direct_call(trusted, 3),
             trusted_add3 as *const u8
         );
-        assert!(js_closure_resolve_plain_direct_call(arrow, 2).is_null());
+        assert!(js_closure_resolve_plain_direct_call(trusted, 2).is_null());
 
-        let ordinary = closure_for(ordinary3 as *const u8);
-        crate::closure::js_register_closure_arity(ordinary3 as *const u8, 3);
-        crate::closure::js_register_closure_trusted_direct(
-            ordinary3 as *const u8,
-            trusted_add3 as *const u8,
-            0,
-            0,
-        );
         // An ordinary function is as directly callable as an arrow: the
-        // caller passes the plain-call `undefined` receiver itself. Trusted
-        // clones attach to arrow bodies only, so it resolves to its public
-        // body.
+        // caller passes the plain-call `undefined` receiver itself.
+        let ordinary = closure_for(&ORDINARY3);
         assert_eq!(
             js_closure_resolve_plain_direct_call(ordinary, 3),
             ordinary3 as *const u8
         );
 
-        let rest = closure_for(rest_body as *const u8);
-        crate::closure::js_register_closure_rest(rest_body as *const u8, 1);
-        crate::closure::js_register_closure_arrow_function(rest_body as *const u8);
+        let rest = closure_for(&REST_ARROW);
         assert!(js_closure_resolve_plain_direct_call(rest, 3).is_null());
 
-        for sentinel in [BOUND_METHOD_FUNC_PTR, BOUND_FUNCTION_FUNC_PTR] {
+        for sentinel in [
+            &crate::closure::BOUND_METHOD_INFO,
+            &crate::closure::BOUND_FUNCTION_INFO,
+        ] {
             let bound = closure_for(sentinel);
             assert!(js_closure_resolve_plain_direct_call(bound, 3).is_null());
         }
@@ -389,23 +395,14 @@ mod tests {
 
     #[test]
     fn trusted_target_requires_the_registered_capture_layout() {
-        crate::closure::js_register_closure_arity(boxed1 as *const u8, 1);
-        crate::closure::js_register_closure_arrow_function(boxed1 as *const u8);
-        crate::closure::js_register_closure_trusted_direct(
-            boxed1 as *const u8,
-            trusted_boxed1 as *const u8,
-            1,
-            1,
-        );
-
-        let wrong_count = closure_for(boxed1 as *const u8);
+        let wrong_count = closure_for(&BOXED1);
         assert_eq!(
             js_closure_resolve_plain_direct_call(wrong_count, 1),
             boxed1 as *const u8,
             "a wrong capture count must retain the checked public body"
         );
 
-        let non_box = crate::closure::js_closure_alloc(boxed1 as *const u8, 1);
+        let non_box = crate::closure::js_closure_alloc(&BOXED1, 1);
         crate::closure::js_closure_set_capture_bits(non_box, 0, crate::value::TAG_UNDEFINED);
         assert_eq!(
             js_closure_resolve_plain_direct_call(non_box, 1),
@@ -413,7 +410,7 @@ mod tests {
             "a non-box payload must retain the checked public body"
         );
 
-        let valid = crate::closure::js_closure_alloc(boxed1 as *const u8, 1);
+        let valid = crate::closure::js_closure_alloc(&BOXED1, 1);
         let cell = crate::r#box::js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
         crate::closure::js_closure_set_box_capture_ptr(valid, 0, cell as i64);
         assert_eq!(
@@ -425,23 +422,14 @@ mod tests {
 
     #[test]
     fn versioned_target_is_exact_and_fails_closed() {
-        crate::closure::js_register_closure_arity(versioned_source as *const u8, 1);
-        crate::closure::js_register_closure_arrow_function(versioned_source as *const u8);
-        super::super::registry::js_register_closure_versioned_loop_direct(
-            versioned_source as *const u8,
-            versioned_boxed1 as *const u8,
-            1,
-            1,
-        );
-
-        let wrong_count = closure_for(versioned_source as *const u8);
+        let wrong_count = closure_for(&VERSIONED);
         assert!(js_closure_resolve_versioned_loop_direct_call(wrong_count, 1).is_null());
 
-        let non_box = crate::closure::js_closure_alloc(versioned_source as *const u8, 1);
+        let non_box = crate::closure::js_closure_alloc(&VERSIONED, 1);
         crate::closure::js_closure_set_capture_bits(non_box, 0, crate::value::TAG_UNDEFINED);
         assert!(js_closure_resolve_versioned_loop_direct_call(non_box, 1).is_null());
 
-        let valid = crate::closure::js_closure_alloc(versioned_source as *const u8, 1);
+        let valid = crate::closure::js_closure_alloc(&VERSIONED, 1);
         let cell = crate::r#box::js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
         crate::closure::js_closure_set_box_capture_ptr(valid, 0, cell as i64);
         assert_eq!(
@@ -453,16 +441,15 @@ mod tests {
 
     #[test]
     fn a_plain_callback_resolves_and_answers_identically_to_the_slow_path() {
-        let c = closure_for(add3 as *const u8);
+        let c = closure_for(&ADD3_ARROW);
         let site = DirectCall3::resolve(c);
         // ASSERT THE SUBJECT IS LIVE. Without this the test passes just as
         // happily when `resolve` always answers `None` and every call falls
-        // back — a "fast path" nobody can prove ran (CLAUDE.md, the fourth way
-        // a gate cannot fail).
+        // back — a "fast path" nobody can prove ran.
         assert!(
             site.is_direct(),
-            "an unregistered, capture-less, non-bound callback must resolve to \
-             a direct target -- otherwise this whole module is inert"
+            "a capture-less, non-bound callback must resolve to a direct target \
+             -- otherwise this whole module is inert"
         );
         assert_eq!(
             site.call(c, crate::closure::plain_call_receiver(), 1.0, 2.0, 3.0),
@@ -476,11 +463,10 @@ mod tests {
 
     #[test]
     fn a_declared_arity_above_the_call_arity_is_declined() {
-        let c = closure_for(add3 as *const u8);
-        // Same body, asked for at a LOWER arity than it declares: the call
-        // must keep going through `js_closure_call2`, which pads with
-        // undefined via `dispatch_with_arity`.
-        crate::closure::js_register_closure_arity(add3 as *const u8, 3);
+        let c = closure_for(&ADD3_ARROW);
+        // Asked for at a LOWER arity than the body declares: the call must
+        // keep going through `js_closure_call2`, which pads with undefined
+        // via `dispatch_with_arity`.
         assert!(
             !DirectCall2::resolve(c).is_direct(),
             "declared arity 3 > call arity 2 must decline: a direct 2-arg call \
@@ -492,14 +478,12 @@ mod tests {
 
     #[test]
     fn a_rest_closure_is_declined() {
-        let c = closure_for(sum2 as *const u8);
         assert!(
-            DirectCall2::resolve(c).is_direct(),
-            "precondition: it resolves before being registered as rest"
+            DirectCall2::resolve(closure_for(&SUM2)).is_direct(),
+            "precondition: the same body resolves without a rest parameter"
         );
-        crate::closure::js_register_closure_rest(sum2 as *const u8, 1);
         assert!(
-            !DirectCall2::resolve(c).is_direct(),
+            !DirectCall2::resolve(closure_for(&SUM2_REST)).is_direct(),
             "a rest parameter needs `dispatch_rest_bundled` to build the rest \
              array; a direct call would hand the body a bare f64"
         );

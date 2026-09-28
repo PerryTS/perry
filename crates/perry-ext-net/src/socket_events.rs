@@ -531,9 +531,10 @@ mod listener_this_tests {
     }
 
     fn recording_listener() -> i64 {
-        let body = record_this as perry_ffi::JsBody0;
-        perry_ffi::register_closure_arity(body, 0);
-        let closure = perry_ffi::alloc_closure(body, 1);
+        let closure = perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(record_this, 0; with_declared(0)),
+            1,
+        );
         unsafe { perry_ffi::set_closure_capture_f64(closure, 0, NOT_CALLED) };
         closure as i64
     }

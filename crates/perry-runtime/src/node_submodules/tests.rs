@@ -902,8 +902,6 @@ extern "C" fn pipeline_end_capture(
 #[test]
 fn stream_promises_pipeline_transfers_readable_from_chunks() {
     PIPELINE_CAPTURED.with(|captured| captured.borrow_mut().clear());
-    crate::closure::js_register_closure_arity(pipeline_write_capture as *const u8, 2);
-    crate::closure::js_register_closure_arity(pipeline_end_capture as *const u8, 1);
 
     let mut arr = crate::array::js_array_alloc(2);
     arr = crate::array::js_array_push_f64(arr, string_value("await-"));
@@ -911,8 +909,14 @@ fn stream_promises_pipeline_transfers_readable_from_chunks() {
     let source = crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr as *const u8));
 
     let sink = js_object_alloc(0, 2);
-    let write = js_closure_alloc(pipeline_write_capture as *const u8, 0);
-    let end = js_closure_alloc(pipeline_end_capture as *const u8, 0);
+    let write = js_closure_alloc(
+        crate::fn_info!(pipeline_write_capture, 2; with_declared(2)),
+        0,
+    );
+    let end = js_closure_alloc(
+        crate::fn_info!(pipeline_end_capture, 1; with_declared(1)),
+        0,
+    );
     js_object_set_field_by_name(
         sink,
         js_string_from_bytes(b"write".as_ptr(), 5),

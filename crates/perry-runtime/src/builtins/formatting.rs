@@ -283,7 +283,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     // `[Function: ChildProcess]` instead of `[Function (anonymous)]`,
     // matching Node. #1856.
     let registry_name: Option<String> = unsafe {
-        let func_ptr = (*closure_ptr).func_ptr;
+        let func_ptr = (*closure_ptr).code();
         if func_ptr.is_null() {
             None
         } else {
@@ -307,7 +307,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             // Synthesize (and cache) it the same way any other reader of
             // `.name` would.
             unsafe {
-                ((*closure_ptr).func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
+                ((*closure_ptr).code() == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
                     jsvalue_string_content(crate::closure::bound_function_lazy_name(
                         closure_ptr as usize,
                     ))

@@ -373,7 +373,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
                     let mut depth = 0usize;
                     while cid != 0 && depth < 32 {
                         if let Some(getter_ptr) =
-                            reg.get(&cid).and_then(|m| m.get(key_name)).map(|&(g, _)| g)
+                            reg.get(&cid).and_then(|m| m.get(key_name)).map(|d| d.get)
                         {
                             if getter_ptr != 0 {
                                 // A static getter is a BARE body declaring no parameters; the
@@ -623,7 +623,7 @@ mod property_key_tests {
             let obj = js_object_alloc(0, 0);
             let obj_value = crate::value::js_nanbox_pointer(obj as i64);
             let sym = crate::symbol::js_symbol_new_empty();
-            let getter = crate::closure::js_closure_alloc(accessor_getter as *const u8, 0);
+            let getter = crate::closure::js_closure_alloc(crate::fn_info!(accessor_getter, 0), 0);
             let getter_value = crate::value::js_nanbox_pointer(getter as i64);
 
             js_object_define_accessor(

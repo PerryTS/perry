@@ -168,7 +168,11 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
             module_null().to_bits()
         }),
     );
-    let require = scope.root_nanbox_f64(module_function1("require", module_require_thunk, 1));
+    let require = scope.root_nanbox_f64(module_function1(
+        "require",
+        crate::fn_info!(module_require_thunk, 1; with_declared(1), with_length(1)),
+        1,
+    ));
     crate::object::js_object_set_field(
         obj_ptr(),
         7,
@@ -891,9 +895,7 @@ extern "C" fn module_hooks_deregister(
 }
 
 fn module_hooks_deregister_function(id: u64) -> f64 {
-    let func_ptr = module_hooks_deregister as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    crate::closure::js_register_closure_length(func_ptr, 0);
+    let func_ptr = crate::fn_info!(module_hooks_deregister, 0; with_declared(0), with_length(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     crate::object::set_bound_native_closure_name(closure, "deregister");
@@ -992,17 +994,14 @@ extern "C" fn module_loader_next_load(
 fn module_loader_callback(
     slot: &'static std::thread::LocalKey<Cell<*const crate::closure::ClosureHeader>>,
     name: &str,
-    func: crate::closure::body_call::js_body_fn_ty!(a, a),
+    func: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let ptr = slot.with(|cell| {
         let existing = cell.get();
         if !existing.is_null() {
             return existing;
         }
-        let func_ptr = func as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 2);
-        crate::closure::js_register_closure_length(func_ptr, 2);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(func, 0);
         crate::object::set_bound_native_closure_name(closure, name);
         crate::object::set_builtin_closure_length(closure as usize, 2);
         cell.set(closure);
@@ -1058,9 +1057,7 @@ fn module_loader_hook_chain_function(callback: f64, next: f64, name: &str) -> f6
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback);
     let next = scope.root_nanbox_f64(next);
-    let func_ptr = module_loader_hook_chain as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    crate::closure::js_register_closure_length(func_ptr, 2);
+    let func_ptr = crate::fn_info!(module_loader_hook_chain, 2; with_declared(2), with_length(2));
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 2));
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         js_closure_set_capture_f64(c, 0, callback.get_nanbox_f64());
@@ -1127,7 +1124,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let resolve_terminal = module_loader_callback(
         &MODULE_LOADER_NEXT_RESOLVE,
         "nextResolve",
-        module_loader_next_resolve,
+        crate::fn_info!(module_loader_next_resolve, 2; with_declared(2), with_length(2)),
     );
     let resolve_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
         &entries,
@@ -1152,7 +1149,7 @@ pub extern "C" fn js_module_dynamic_import_apply_hooks(specifier: f64) -> f64 {
     let load_terminal = module_loader_callback(
         &MODULE_LOADER_NEXT_LOAD,
         "nextLoad",
-        module_loader_next_load,
+        crate::fn_info!(module_loader_next_load, 2; with_declared(2), with_length(2)),
     );
     let load_chain = scope.root_nanbox_f64(module_loader_build_hook_chain(
         &entries,

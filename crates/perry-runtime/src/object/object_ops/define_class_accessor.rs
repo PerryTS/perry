@@ -56,13 +56,18 @@ pub(super) unsafe fn define_declared_class_accessor(
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc = scope.root_nanbox_f64(descriptor_value);
     if !configurable {
-        // The validator compares accessor halves by closure `func_ptr`, which a
+        // The validator compares accessor halves by closure code address, which a
         // reflected class accessor value carries. Root the getter value across
         // the setter value's allocation; the validator roots both on entry.
         let get = scope.root_nanbox_f64(
-            super::super::class_registry::class_accessor_function_value(getter, false, name),
+            super::super::class_registry::class_accessor_function_value(getter, false, name, None),
         );
-        let set = super::super::class_registry::class_accessor_function_value(setter, true, name);
+        let set = super::super::class_registry::class_accessor_function_value(
+            setter,
+            true,
+            name,
+            super::super::class_registry::class_own_setter_length(class_id, name, true),
+        );
         validate_nonconfigurable_redefine(
             name,
             PropertyAttrs::new(false, enumerable, false),

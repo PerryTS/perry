@@ -224,7 +224,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 + usize::from(*captures_new_target)
                 + usize::from(*captures_this);
 
-            let func_ref = format!("@{}", func_name);
+            // The body's `JsFunctionInfo` (`crate::fn_info`): what every
+            // allocation below names instead of the body.
+            let info_ref = ctx.block().fn_info_ref(&func_name);
             // Issue #450: when `captures_this`, OR in the runtime's
             // `CAPTURES_THIS_FLAG` (0x8000_0000) so the runtime can detect
             // closures whose last capture slot is the reserved `this` slot.
@@ -242,14 +244,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Closures with NO captures (and no `this` to patch) are
             // observationally identical across every call site that
             // produces them, so route through `js_closure_alloc_singleton`
-            // to share a single ClosureHeader cached by func_ptr.
+            // to share a single ClosureHeader cached by body info.
             //
             // Closures WITH captures route through
             // `js_closure_alloc_with_captures_singleton` whenever none of
             // those captures are mutated by the body (the common case
             // for ECS callbacks like `(eid, arch, compId) => { ...
             // changeset ... }` capturing `this._changeset`). The cache
-            // keys on (func_ptr, capture_bits…) so distinct capture
+            // keys on (body info, capture_bits…) so distinct capture
             // values still produce distinct closures; identical
             // (func, captures) at a hot call site re-uses the cached
             // ClosureHeader and skips gc_malloc + gc_check_trigger.
@@ -276,7 +278,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // IDENTITY CAVEAT (#4831 follow-up — Stripe `protoExtend`):
             // the singleton-sharing paths (`js_closure_alloc_singleton` /
             // `js_closure_alloc_with_captures_singleton`) return ONE cached
-            // `ClosureHeader` for a given (func_ptr[, capture-bits]) key, so two
+            // `ClosureHeader` for a given (body info[, capture-bits]) key, so two
             // evaluations of the same closure literal observe the SAME function
             // object — and therefore the SAME `.prototype`. A non-arrow
             // `function` expression that is used as a CONSTRUCTOR must instead
@@ -376,22 +378,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && auto_captures.iter().all(|cap_id| {
                     !ctx.boxed_vars.contains(cap_id) || uncounted_box_capture(cap_id)
                 });
-            // Register an `async function(){}` *expression* closure (one with
-            // no `await` — bodies that await are rewritten to a state machine
-            // upstream and arrive with `is_async: false`) in the async-function
-            // registry so `IsConstructor`/`util.types.isAsyncFunction` recognize
-            // it. Generators are hoisted to top-level and registered elsewhere.
-            // (Test262 subclass/superclass-async-function.) BEFORE the
-            // allocation: the closure's ShapeId names its [[Prototype]]
-            // (%AsyncFunction.prototype%), which the runtime reads off the
-            // body registry at birth.
+            // An `async function(){}` *expression* closure (one with no
+            // `await` — bodies that await are rewritten to a state machine
+            // upstream and arrive with `is_async: false`) is async in its
+            // info, so `IsConstructor`/`util.types.isAsyncFunction` recognize
+            // it and its ShapeId names %AsyncFunction.prototype% at birth.
+            // Generators are hoisted to top-level and described elsewhere.
+            // (Test262 subclass/superclass-async-function.)
             if *is_async {
                 ctx.block()
-                    .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
+                    .note_fn_info(&func_name, |facts| facts.set_async());
             }
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
-                blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &func_ref)])
+                blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info_ref)])
             } else if captured_singleton {
                 // Stack-allocate a `[u64; total_caps]` capture buffer
                 // (auto captures, plus `this` at the reserved slot if
@@ -421,7 +421,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call(
                     I64,
                     "js_closure_alloc_with_captures_singleton",
-                    &[(PTR, &func_ref), (I32, &cap_count), (PTR, &buf)],
+                    &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
             } else if bulk_fresh_init {
                 // Fresh (identity-carrying) closure with plain-bits captures:
@@ -447,14 +447,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call(
                     I64,
                     "js_closure_alloc_init",
-                    &[(PTR, &func_ref), (I32, &cap_count), (PTR, &buf)],
+                    &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
             } else {
                 let blk = ctx.block();
                 blk.call(
                     I64,
                     "js_closure_alloc",
-                    &[(PTR, &func_ref), (I32, &cap_count)],
+                    &[(PTR, &info_ref), (I32, &cap_count)],
                 )
             };
 

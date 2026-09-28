@@ -50,7 +50,7 @@ pub(super) fn wasm_function_external(value: f64) -> *mut c_void {
     if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
         return std::ptr::null_mut();
     }
-    let fp = unsafe { (*closure).func_ptr };
+    let fp = unsafe { (*closure).code() };
     if !is_wasm_export_call_shim(fp) {
         return std::ptr::null_mut();
     }
@@ -238,18 +238,16 @@ pub(super) fn make_table_method(
     inst: *mut c_void,
     name: f64,
     table: f64,
-    func_ptr: *const u8,
-    arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     display_name: &str,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let name = scope.root_nanbox_f64(name);
     let table = scope.root_nanbox_f64(table);
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 4));
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 4));
     if closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| closure.is_null()) {
         return nanbox_undefined();
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
         crate::closure::js_closure_set_capture_f64(closure, 0, external as usize as f64)
     });
@@ -276,14 +274,13 @@ pub(super) fn make_table_function(external: *mut c_void) -> f64 {
         drop_host_extern_handle(external as usize);
         return nanbox_undefined();
     }
-    let (func_ptr, declared_arity) = wasm_export_call_shim_for_arity(arity);
+    let (info, _declared_arity) = wasm_export_call_shim_for_arity(arity);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 7));
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 7));
     if closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| closure.is_null()) {
         drop_host_extern_handle(external as usize);
         return nanbox_undefined();
     }
-    crate::closure::js_register_closure_arity(func_ptr, declared_arity);
     for index in 0..6 {
         closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
             crate::closure::js_closure_set_capture_f64(closure, index, nanbox_undefined())
@@ -349,18 +346,26 @@ pub(super) fn make_table_object(
         as *mut crate::object::ObjectHeader;
     let _ = object_set(table_ptr, b"__wasmValues", values.get_nanbox_f64());
     let methods = [
-        ("get", js_wasm_table_get as *const u8, 1u32),
-        ("grow", js_wasm_table_grow as *const u8, 2u32),
-        ("set", js_wasm_table_set as *const u8, 2u32),
+        (
+            "get",
+            crate::fn_info!(js_wasm_table_get, 1; with_declared(1)),
+        ),
+        (
+            "grow",
+            crate::fn_info!(js_wasm_table_grow, 2; with_declared(2)),
+        ),
+        (
+            "set",
+            crate::fn_info!(js_wasm_table_set, 2; with_declared(2)),
+        ),
     ];
-    for (method_name, func_ptr, arity) in methods {
+    for (method_name, info) in methods {
         let method = scope.root_nanbox_f64(make_table_method(
             external,
             inst,
             name.get_nanbox_f64(),
             table.get_nanbox_f64(),
-            func_ptr,
-            arity,
+            info,
             method_name,
         ));
         let table_ptr = JSValue::from_bits(table.get_nanbox_f64().to_bits())

@@ -16,8 +16,10 @@ unsafe fn check_hidden_fields(mode: u8) {
     let value = crate::json::test_json_parse_direct(source);
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(value.as_pointer::<crate::ObjectHeader>().cast_mut());
-    let replacer =
-        scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(identity as *const u8, 0));
+    let replacer = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(identity, 2),
+        0,
+    ));
     let keys: Vec<String> = [
         "visible",
         "__perry_cap_45m0000331fa678",

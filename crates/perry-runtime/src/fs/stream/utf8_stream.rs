@@ -917,7 +917,10 @@ pub(crate) extern "C" fn utf8_close_events_impl(
 }
 
 fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
-    let closure = js_closure_alloc(utf8_close_events_impl as *const u8, 2);
+    let closure = js_closure_alloc(
+        crate::fn_info!(utf8_close_events_impl, 0; with_declared(0)),
+        2,
+    );
     js_closure_set_capture_ptr(closure, 0, id as i64);
     js_closure_set_capture_ptr(closure, 1, if emit_finish { 1 } else { 0 });
     crate::builtins::js_queue_microtask(closure as i64);
@@ -1419,7 +1422,10 @@ fn utf8_custom_open(id: usize) -> bool {
     if is_undefined_value(custom_fs) || !object_has_callable_field(custom_fs, b"open") {
         return false;
     }
-    let cb = js_closure_alloc(utf8_async_open_done_impl as *const u8, 1);
+    let cb = js_closure_alloc(
+        crate::fn_info!(utf8_async_open_done_impl, 2; with_declared(2)),
+        1,
+    );
     js_closure_set_capture_ptr(cb, 0, id as i64);
     let cb_value = crate::value::js_nanbox_pointer(cb as i64);
     let flags_value = string_value_str(if append { "a" } else { "w" });
@@ -1472,7 +1478,10 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
     let key = js_string_from_bytes(b"recursive".as_ptr(), 9);
     crate::object::js_object_set_field_by_name(options_obj, key, bool_value(true));
     let options_value = object_value(options_obj);
-    let cb = js_closure_alloc(utf8_async_mkdir_done_impl as *const u8, 1);
+    let cb = js_closure_alloc(
+        crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_ptr(cb, 0, id as i64);
     let cb_value = crate::value::js_nanbox_pointer(cb as i64);
     let parent_value = string_value_str(parent_str);
@@ -1499,7 +1508,7 @@ fn utf8_needs_native_mkdir_before_custom_open(id: usize) -> bool {
 
 fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
     let closure = js_closure_alloc(
-        utf8_async_native_mkdir_then_custom_open_impl as *const u8,
+        crate::fn_info!(utf8_async_native_mkdir_then_custom_open_impl, 0),
         1,
     );
     js_closure_set_capture_ptr(closure, 0, id as i64);
@@ -1507,7 +1516,10 @@ fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
 }
 
 fn utf8_schedule_native_open(id: usize) {
-    let closure = js_closure_alloc(utf8_async_open_impl as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(utf8_async_open_impl, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }

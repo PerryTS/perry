@@ -231,7 +231,10 @@ pub(crate) fn alloc_interp_closure(
     let this_idx = root_push(lexical_this.unwrap_or(f64::from_bits(NO_LEXICAL_THIS)));
     let global_idx = root_push(global);
     let intrinsics_idx = root_push(intrinsics);
-    let closure = crate::closure::js_closure_alloc(interp_thunk as *const u8, 7);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(unwind_in_tests interp_thunk, 1; with_rest(0)),
+        7,
+    );
     if closure.is_null() {
         roots_truncate(env_idx);
         bridge::throw_range_error("out of memory allocating dynamic function");
@@ -261,7 +264,6 @@ fn ensure_thunk_registered() {
         if registered.replace(true) {
             return;
         }
-        crate::closure::js_register_closure_rest(interp_thunk as *const u8, 0);
     });
 }
 

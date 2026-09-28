@@ -453,7 +453,7 @@ pub unsafe extern "C" fn js_sqlite_transaction(
         js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     };
 
-    let wrapper = js_closure_alloc(sqlite_tx_wrapper as *const u8, 2);
+    let wrapper = js_closure_alloc(perry_runtime::fn_info!(sqlite_tx_wrapper, 1), 2);
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
     js_closure_set_capture_ptr(wrapper, 1, closure_ptr);
 

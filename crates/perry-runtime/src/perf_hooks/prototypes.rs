@@ -160,9 +160,9 @@ extern "C" fn perf_list_get_by_name_thunk(
     unsafe { current_list_get_by_name(name) }
 }
 
-fn perf_method_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+/// `info` records the method's declared `arity`, which is also its `.length`.
+fn perf_method_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -226,8 +226,7 @@ unsafe fn install_perf_to_string_tag(proto: *mut crate::object::ObjectHeader, ta
 
 unsafe fn perf_field_getter(name: &str) -> f64 {
     let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
-    let func_ptr = perf_entry_field_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let func_ptr = crate::fn_info!(perf_entry_field_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
     crate::closure::js_closure_set_capture_ptr(closure, 0, leaked.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 1, leaked.len() as i64);
@@ -324,50 +323,80 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
     match class_name {
         "Performance" => {
             let methods = [
-                ("clearMarks", clear_marks as *const u8, 0, true),
-                ("clearMeasures", clear_measures as *const u8, 0, true),
                 (
-                    "clearResourceTimings",
-                    clear_resource_timings as *const u8,
+                    "clearMarks",
+                    crate::fn_info!(clear_marks, 1; with_declared(0)),
                     0,
                     true,
                 ),
-                ("getEntries", get_entries as *const u8, 0, true),
+                (
+                    "clearMeasures",
+                    crate::fn_info!(clear_measures, 1; with_declared(0)),
+                    0,
+                    true,
+                ),
+                (
+                    "clearResourceTimings",
+                    crate::fn_info!(clear_resource_timings, 0; with_declared(0)),
+                    0,
+                    true,
+                ),
+                (
+                    "getEntries",
+                    crate::fn_info!(get_entries, 0; with_declared(0)),
+                    0,
+                    true,
+                ),
                 (
                     "getEntriesByName",
-                    get_entries_by_name as *const u8,
+                    crate::fn_info!(get_entries_by_name, 2; with_declared(1)),
                     1,
                     true,
                 ),
                 (
                     "getEntriesByType",
-                    get_entries_by_type as *const u8,
+                    crate::fn_info!(get_entries_by_type, 1; with_declared(1)),
                     1,
                     true,
                 ),
-                ("mark", mark as *const u8, 1, true),
-                ("measure", measure as *const u8, 1, true),
-                ("now", now as *const u8, 0, true),
+                ("mark", crate::fn_info!(mark, 2; with_declared(1)), 1, true),
+                (
+                    "measure",
+                    crate::fn_info!(measure, 3; with_declared(1)),
+                    1,
+                    true,
+                ),
+                ("now", crate::fn_info!(now, 0; with_declared(0)), 0, true),
                 (
                     "setResourceTimingBufferSize",
-                    set_resource_timing_buffer_size as *const u8,
+                    crate::fn_info!(set_resource_timing_buffer_size, 1; with_declared(1)),
                     1,
                     true,
                 ),
-                ("toJSON", to_json as *const u8, 0, true),
+                (
+                    "toJSON",
+                    crate::fn_info!(to_json, 0; with_declared(0)),
+                    0,
+                    true,
+                ),
                 (
                     "eventLoopUtilization",
-                    event_loop_utilization as *const u8,
+                    crate::fn_info!(event_loop_utilization, 2; with_declared(2)),
                     2,
                     false,
                 ),
                 (
                     "markResourceTiming",
-                    mark_resource_timing as *const u8,
+                    crate::fn_info!(mark_resource_timing, 8; with_declared(7)),
                     7,
                     false,
                 ),
-                ("timerify", timerify as *const u8, 1, false),
+                (
+                    "timerify",
+                    crate::fn_info!(timerify, 2; with_declared(1)),
+                    1,
+                    false,
+                ),
             ];
             for (method, thunk, arity, enumerable) in methods {
                 install_perf_method(
@@ -378,7 +407,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 );
             }
             let getter = perf_method_value(
-                perf_time_origin_getter_thunk as *const u8,
+                crate::fn_info!(perf_time_origin_getter_thunk, 0; with_declared(0)),
                 "get timeOrigin",
                 0,
             );
@@ -390,7 +419,11 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 let getter = perf_field_getter(field);
                 install_perf_getter(proto, field, getter, true);
             }
-            let to_json = perf_method_value(perf_entry_to_json_thunk as *const u8, "toJSON", 0);
+            let to_json = perf_method_value(
+                crate::fn_info!(perf_entry_to_json_thunk, 0; with_declared(0)),
+                "toJSON",
+                0,
+            );
             install_perf_method(proto, "toJSON", to_json, true);
         }
         "PerformanceMark" | "PerformanceMeasure" => {
@@ -398,7 +431,11 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             link_perf_class_default_prototype(proto as usize, base.to_bits());
             let getter = perf_field_getter("detail");
             install_perf_getter(proto, "detail", getter, true);
-            let to_json = perf_method_value(perf_entry_to_json_thunk as *const u8, "toJSON", 0);
+            let to_json = perf_method_value(
+                crate::fn_info!(perf_entry_to_json_thunk, 0; with_declared(0)),
+                "toJSON",
+                0,
+            );
             install_perf_method(proto, "toJSON", to_json, false);
             install_perf_to_string_tag(proto, class_name);
         }
@@ -406,20 +443,28 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             install_perf_method(
                 proto,
                 "observe",
-                perf_method_value(perf_observer_observe_thunk as *const u8, "observe", 1),
+                perf_method_value(
+                    crate::fn_info!(perf_observer_observe_thunk, 1; with_declared(1)),
+                    "observe",
+                    1,
+                ),
                 true,
             );
             install_perf_method(
                 proto,
                 "disconnect",
-                perf_method_value(perf_observer_disconnect_thunk as *const u8, "disconnect", 0),
+                perf_method_value(
+                    crate::fn_info!(perf_observer_disconnect_thunk, 0; with_declared(0)),
+                    "disconnect",
+                    0,
+                ),
                 true,
             );
             install_perf_method(
                 proto,
                 "takeRecords",
                 perf_method_value(
-                    perf_observer_take_records_thunk as *const u8,
+                    crate::fn_info!(perf_observer_take_records_thunk, 0; with_declared(0)),
                     "takeRecords",
                     0,
                 ),
@@ -431,14 +476,18 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
             install_perf_method(
                 proto,
                 "getEntries",
-                perf_method_value(perf_list_get_entries_thunk as *const u8, "getEntries", 0),
+                perf_method_value(
+                    crate::fn_info!(perf_list_get_entries_thunk, 0; with_declared(0)),
+                    "getEntries",
+                    0,
+                ),
                 true,
             );
             install_perf_method(
                 proto,
                 "getEntriesByType",
                 perf_method_value(
-                    perf_list_get_by_type_thunk as *const u8,
+                    crate::fn_info!(perf_list_get_by_type_thunk, 1; with_declared(1)),
                     "getEntriesByType",
                     1,
                 ),
@@ -448,7 +497,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 proto,
                 "getEntriesByName",
                 perf_method_value(
-                    perf_list_get_by_name_thunk as *const u8,
+                    crate::fn_info!(perf_list_get_by_name_thunk, 1; with_declared(1)),
                     "getEntriesByName",
                     1,
                 ),
@@ -483,7 +532,11 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 let getter = perf_field_getter(field);
                 install_perf_getter(proto, field, getter, true);
             }
-            let to_json = perf_method_value(perf_entry_to_json_thunk as *const u8, "toJSON", 0);
+            let to_json = perf_method_value(
+                crate::fn_info!(perf_entry_to_json_thunk, 0; with_declared(0)),
+                "toJSON",
+                0,
+            );
             install_perf_method(proto, "toJSON", to_json, true);
             install_perf_to_string_tag(proto, class_name);
         }
@@ -500,7 +553,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     if class_name == "PerformanceObserver" {
         let getter = perf_method_value(
-            perf_supported_entry_types_getter_thunk as *const u8,
+            crate::fn_info!(perf_supported_entry_types_getter_thunk, 0; with_declared(0)),
             "get supportedEntryTypes",
             0,
         );

@@ -25,7 +25,10 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
     let (owner, set_while_alive) = std::thread::spawn(|| {
         use perry_runtime::closure as c;
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(c::js_closure_alloc(probe_thunk as *const u8, 0));
+        let closure = scope.root_raw_mut_ptr(c::js_closure_alloc(
+            perry_runtime::fn_info!(probe_thunk, 0),
+            0,
+        ));
         let proto = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
         // Re-read through the handles: the allocation above may have moved the
         // closure, and the side tables follow a moved owner to its new key.

@@ -10,8 +10,7 @@ use crate::sqlite::*;
 use perry_runtime::{
     closure::{
         closure_set_dynamic_prop, js_closure_alloc, js_closure_call1, js_closure_call2,
-        js_closure_get_capture_f64, js_closure_set_capture_f64, js_register_closure_arity,
-        js_register_closure_rest, ClosureHeader,
+        js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
     },
     exception::{js_call_catching, js_throw},
     gc::RuntimeHandleScope,
@@ -19,7 +18,6 @@ use perry_runtime::{
     promise::{js_promise_reject, js_promise_resolved_catching, js_promise_then},
     ArrayHeader, JSValue, Promise,
 };
-use std::sync::Once;
 
 const CLIENT_HANDLE_CAPTURE: u32 = 0;
 const METHOD_HANDLE_CAPTURE: u32 = 0;
@@ -249,7 +247,7 @@ extern "C" fn bun_sql_begin(
 
         let callback_promise = scope.root_raw_mut_ptr(callback_promise);
         let fulfilled = scope.root_raw_mut_ptr(js_closure_alloc(
-            bun_sql_transaction_fulfilled as *const u8,
+            perry_runtime::fn_info!(bun_sql_transaction_fulfilled, 1; with_declared(1)),
             2,
         ));
         js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, db_handle as f64);
@@ -259,7 +257,7 @@ extern "C" fn bun_sql_begin(
             if nested { 1.0 } else { 0.0 },
         );
         let rejected = scope.root_raw_mut_ptr(js_closure_alloc(
-            bun_sql_transaction_rejected as *const u8,
+            perry_runtime::fn_info!(bun_sql_transaction_rejected, 1; with_declared(1)),
             2,
         ));
         js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, db_handle as f64);
@@ -347,25 +345,13 @@ extern "C" fn bun_sql_close(
     }
 }
 
-static BUN_SQL_CLOSURES_REGISTERED: Once = Once::new();
-
-fn register_closure_shapes() {
-    BUN_SQL_CLOSURES_REGISTERED.call_once(|| {
-        js_register_closure_rest(bun_sql_query_tag as *const u8, 1);
-        js_register_closure_arity(bun_sql_begin as *const u8, 1);
-        js_register_closure_arity(bun_sql_reserve as *const u8, 1);
-        js_register_closure_arity(bun_sql_release as *const u8, 0);
-        js_register_closure_arity(bun_sql_close as *const u8, 1);
-        js_register_closure_arity(bun_sql_transaction_fulfilled as *const u8, 1);
-        js_register_closure_arity(bun_sql_transaction_rejected as *const u8, 1);
-    });
-}
-
 unsafe fn make_client(handle: Handle, onclose: f64) -> f64 {
-    register_closure_shapes();
     let scope = RuntimeHandleScope::new();
     let onclose = scope.root_nanbox_f64(onclose);
-    let client = scope.root_raw_mut_ptr(js_closure_alloc(bun_sql_query_tag as *const u8, 1));
+    let client = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(bun_sql_query_tag, 2; with_rest(1)),
+        1,
+    ));
     js_closure_set_capture_f64(
         client.get_raw_mut_ptr(),
         CLIENT_HANDLE_CAPTURE,
@@ -373,10 +359,22 @@ unsafe fn make_client(handle: Handle, onclose: f64) -> f64 {
     );
 
     for (name, function) in [
-        ("begin", bun_sql_begin as *const u8),
-        ("reserve", bun_sql_reserve as *const u8),
-        ("release", bun_sql_release as *const u8),
-        ("close", bun_sql_close as *const u8),
+        (
+            "begin",
+            perry_runtime::fn_info!(bun_sql_begin, 1; with_declared(1)),
+        ),
+        (
+            "reserve",
+            perry_runtime::fn_info!(bun_sql_reserve, 1; with_declared(1)),
+        ),
+        (
+            "release",
+            perry_runtime::fn_info!(bun_sql_release, 0; with_declared(0)),
+        ),
+        (
+            "close",
+            perry_runtime::fn_info!(bun_sql_close, 1; with_declared(1)),
+        ),
     ] {
         // Allocate first, then re-read every rooted pointer/value. The method
         // allocation itself can move the client and the onclose callback.

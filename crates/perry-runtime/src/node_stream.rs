@@ -36,11 +36,10 @@ mod readable_from_promises;
 mod event_emitter;
 use event_emitter::{
     add_stream_listener_for_event, call_listener_args, emit_stream_event,
-    emit_stream_event_from_array, is_callable_value, ns_capture_rejection, ns_event_names,
-    ns_get_max_listeners, ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2,
-    ns_prepend_listener2, ns_prepend_once_listener2, ns_raw_listeners, ns_remove_all_listeners1,
-    ns_remove_listener2, ns_set_max_listeners, remove_stream_listener_for_event,
-    stream_listener_count_for_event,
+    emit_stream_event_from_array, is_callable_value, ns_event_names, ns_get_max_listeners,
+    ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2, ns_prepend_listener2,
+    ns_prepend_once_listener2, ns_raw_listeners, ns_remove_all_listeners1, ns_remove_listener2,
+    ns_set_max_listeners, remove_stream_listener_for_event, stream_listener_count_for_event,
 };
 
 /// Dispatch `event` to the listeners registered on `stream` through node:stream's
@@ -150,7 +149,7 @@ const STREAM_EMIT_CLOSE_KEY: &[u8] = b"__perryStreamEmitClose";
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
 const STREAM_READABLE_LIVE_PUSH_KEY: &[u8] = b"__perryStreamReadableLivePush";
 
-use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
+use destroy_state::{destroy_stream, ns_destroy1};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
 
 // ─────────────────────────────────────────────────────────────────
@@ -183,21 +182,10 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
     this.as_f64()
 }
 
-extern "C" fn ns_chain0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
-    this_value(closure, this)
-}
 extern "C" fn ns_chain1(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     _a: f64,
-) -> f64 {
-    this_value(closure, this)
-}
-extern "C" fn ns_chain2(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    _a: f64,
-    _b: f64,
 ) -> f64 {
     this_value(closure, this)
 }
@@ -295,14 +283,10 @@ extern "C" fn ns_wrap1(
     old_stream: f64,
 ) -> f64 {
     let stream = this_value(closure, this);
-    crate::closure::js_register_closure_arity(ns_wrap_data as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_wrap_end as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_wrap_error as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_wrap_close as *const u8, 0);
-    let data = js_closure_alloc(ns_wrap_data as *const u8, 1);
-    let end = js_closure_alloc(ns_wrap_end as *const u8, 1);
-    let error = js_closure_alloc(ns_wrap_error as *const u8, 1);
-    let close = js_closure_alloc(ns_wrap_close as *const u8, 1);
+    let data = js_closure_alloc(crate::fn_info!(ns_wrap_data, 1; with_declared(1)), 1);
+    let end = js_closure_alloc(crate::fn_info!(ns_wrap_end, 0; with_declared(0)), 1);
+    let error = js_closure_alloc(crate::fn_info!(ns_wrap_error, 1; with_declared(1)), 1);
+    let close = js_closure_alloc(crate::fn_info!(ns_wrap_close, 0; with_declared(0)), 1);
     js_closure_set_capture_f64(data, 0, stream);
     js_closure_set_capture_f64(end, 0, stream);
     js_closure_set_capture_f64(error, 0, stream);
@@ -551,20 +535,6 @@ extern "C" fn ns_writable_final_callback_done(
         },
     );
     f64::from_bits(TAG_UNDEFINED)
-}
-
-extern "C" fn ns_emit2(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    event: f64,
-    arg: f64,
-) -> f64 {
-    let stream = this_value(closure, this);
-    let mut args = crate::array::js_array_alloc(0);
-    if arg.to_bits() != TAG_UNDEFINED {
-        args = crate::array::js_array_push_f64(args, arg);
-    }
-    emit_stream_event_from_array(stream, event, args)
 }
 
 extern "C" fn ns_emit_rest(
@@ -983,10 +953,16 @@ use pipe_listeners::{
 };
 
 fn install_pipe_destination_listeners(src: f64, dest: f64) {
-    let unpipe = js_closure_alloc(pipe_unpipe_callback as *const u8, 6);
-    let error = js_closure_alloc(pipe_error_callback as *const u8, 6);
-    let close = js_closure_alloc(pipe_close_callback as *const u8, 6);
-    let finish = js_closure_alloc(pipe_finish_callback as *const u8, 6);
+    let unpipe = js_closure_alloc(
+        crate::fn_info!(pipe_unpipe_callback, 1; with_declared(1)),
+        6,
+    );
+    let error = js_closure_alloc(crate::fn_info!(pipe_error_callback, 1; with_declared(1)), 6);
+    let close = js_closure_alloc(crate::fn_info!(pipe_close_callback, 0; with_declared(0)), 6);
+    let finish = js_closure_alloc(
+        crate::fn_info!(pipe_finish_callback, 0; with_declared(0)),
+        6,
+    );
     let unpipe_value = pipe_listener_value(unpipe);
     let error_value = pipe_listener_value(error);
     let close_value = pipe_listener_value(close);
@@ -1034,7 +1010,7 @@ fn install_pipe_destination_listeners(src: f64, dest: f64) {
 }
 
 fn add_pipe_drain_listener(src: f64, dest: f64) {
-    let listener = js_closure_alloc(pipe_drain_callback as *const u8, 3);
+    let listener = js_closure_alloc(crate::fn_info!(pipe_drain_callback, 0; with_declared(0)), 3);
     let value = pipe_listener_value(listener);
     js_closure_set_capture_f64(listener, 0, src);
     js_closure_set_capture_f64(listener, 1, dest);
@@ -1043,13 +1019,19 @@ fn add_pipe_drain_listener(src: f64, dest: f64) {
 }
 
 fn schedule_pipe_destination_finish(dest: f64) {
-    let closure = js_closure_alloc(pipe_finish_destination_callback as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(pipe_finish_destination_callback, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_f64(closure, 0, dest);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
 fn schedule_pipe_destination_finish_check(dest: f64) {
-    let closure = js_closure_alloc(pipe_finish_destination_callback as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(pipe_finish_destination_callback, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_f64(closure, 0, dest);
     crate::timer::js_set_immediate_callback(closure as i64);
 }
@@ -1182,7 +1164,10 @@ extern "C" fn writable_write_callback_noop(
 
 fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     if let Some(write) = writable_hidden_write(stream) {
-        let cb = js_closure_alloc(ns_writable_write_done as *const u8, 3);
+        let cb = js_closure_alloc(
+            crate::fn_info!(ns_writable_write_done, 1; with_declared(1)),
+            3,
+        );
         js_closure_set_capture_f64(cb, 0, stream);
         js_closure_set_capture_f64(cb, 1, len);
         js_closure_set_capture_f64(cb, 2, callback);
@@ -1203,7 +1188,10 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
 
 fn invoke_writable_writev(stream: f64, chunks: f64) {
     if let Some(writev) = writable_hidden_writev(stream) {
-        let cb = js_closure_alloc(writable_write_callback_noop as *const u8, 0);
+        let cb = js_closure_alloc(
+            crate::fn_info!(writable_write_callback_noop, 0; with_declared(0)),
+            0,
+        );
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunks, cb_value];
         unsafe {
@@ -1247,7 +1235,10 @@ fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback:
         return;
     }
     if let Some(transform) = transform_hidden_callback(stream) {
-        let cb = js_closure_alloc(transform_write_callback as *const u8, 3);
+        let cb = js_closure_alloc(
+            crate::fn_info!(transform_write_callback, 2; with_declared(2)),
+            3,
+        );
         js_closure_set_capture_f64(cb, 0, stream);
         js_closure_set_capture_f64(cb, 1, len);
         js_closure_set_capture_f64(cb, 2, callback);

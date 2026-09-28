@@ -172,7 +172,7 @@ fn captureless_some_calls_the_body_directly_and_short_circuits() {
     arr = js_array_push_f64(arr, 3.0);
     DIRECT_SOME_CALLS.store(0, Ordering::Relaxed);
 
-    let answer = js_array_some_captureless(arr, direct_some_is_two as *const u8);
+    let answer = js_array_some_captureless(arr, crate::fn_info!(direct_some_is_two, 3));
     assert_eq!(answer.to_bits(), crate::value::TAG_TRUE);
     assert_eq!(DIRECT_SOME_CALLS.load(Ordering::Relaxed), 2);
 }
@@ -1405,7 +1405,7 @@ fn test_numeric_array_layout_map_fast_path_downgrades_mapped_pointers() {
     arr = js_array_push_f64(arr, 4.0);
     assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
 
-    let callback = crate::closure::js_closure_alloc(test_map_to_string as *const u8, 0);
+    let callback = crate::closure::js_closure_alloc(crate::fn_info!(test_map_to_string, 2), 0);
     let mapped = js_array_map(arr, callback);
 
     assert_eq!(js_array_length(mapped), 4);

@@ -48,13 +48,13 @@ pub use perry_abi::JsThis;
 /// The JS body types (`perry_abi::js_body_fn_ty!`) over perry-ffi's closure
 /// header: `JsBody1` is
 /// `unsafe extern "C" fn(*const RawClosureHeader, JsThis, f64) -> f64`.
-/// [`alloc_closure`] and [`register_closure_arity`] take one of these, so a
-/// body with any other signature — including a bare `*const u8` — does not
-/// compile:
+/// A body's [`JsFunctionInfo`] is built from one of these
+/// ([`js_function_info!`](crate::js_function_info)), so a body with any
+/// other signature — including a bare `*const u8` — does not compile:
 ///
 /// ```ignore
 /// extern "C" fn body(c: *const RawClosureHeader, this: JsThis, a0: f64) -> f64 { .. }
-/// let closure = perry_ffi::alloc_closure(body as perry_ffi::JsBody1, 0);
+/// let closure = perry_ffi::alloc_closure(perry_ffi::js_function_info!(body, 1), 0);
 /// ```
 ///
 /// A JS body declaring 0 JS parameters.
@@ -125,59 +125,95 @@ extern "C" {
         args: *const f64,
         args_len: usize,
     ) -> f64;
-    fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader;
-    fn js_register_closure_arity(func_ptr: *const u8, arity: u32);
-    fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32);
+    fn js_closure_alloc(info: *const JsFunctionInfo, capture_count: u32) -> *mut ClosureHeader;
     fn js_closure_get_capture_f64(closure: *const ClosureHeader, index: u32) -> f64;
     fn js_closure_set_capture_f64(closure: *mut ClosureHeader, index: u32, value: f64);
 }
 
-/// Register the arity the runtime uses when dispatching a native closure
-/// body (a rest-bundling body registers its fixed arity).
-pub fn register_closure_arity<F: JsBody<ClosureHeader>>(func: F, arity: u32) {
-    unsafe { js_register_closure_arity(func.code(), arity) }
-}
+/// Everything the runtime knows about a native body, in one static record
+/// the function object points to (perry-abi): its code address, parameter
+/// count, and facts such as a rest parameter or `.length`. Build one with
+/// [`js_function_info!`](crate::js_function_info) — the only safe
+/// constructor takes the body's typed pointer.
+pub use perry_abi::{JsFunctionInfo, FN_ARROW, FN_BUILTIN, FN_NON_CONSTRUCTOR, FN_STRICT};
 
-/// Register `func` as a rest-parameter body: the runtime bundles every JS
-/// argument from index `fixed_arity` on into one array, passed as the body's
-/// last parameter (so a body with `fixed_arity` fixed parameters is a
-/// `JsBody{fixed_arity + 1}`).
-pub fn register_closure_rest<F: JsBody<ClosureHeader>>(func: F, fixed_arity: u32) {
-    debug_assert_eq!(
-        F::ARITY,
-        fixed_arity + 1,
-        "a rest body takes its fixed parameters and the rest array"
-    );
-    unsafe { js_register_closure_rest(func.code(), fixed_arity) }
-}
-
-/// Allocate a native closure running `func` with `capture_count` f64
-/// capture slots.
+/// A `&'static JsFunctionInfo` for the native body `body` declaring `n` JS
+/// parameters — checked: the cast to [`JsBody0`]..[`JsBody16`] fails to
+/// compile for any other signature. Facts beyond the parameter count follow
+/// as [`JsFunctionInfo`] builder calls:
 ///
-/// `func` must be a JS body pointer type; anything else does not compile.
-/// A body without the receiver:
+/// ```ignore
+/// alloc_closure(js_function_info!(listener, 2), 1);
+/// alloc_closure(js_function_info!(variadic, 1; with_rest(0)), 0);
+/// alloc_closure(js_function_info!(method, 1; with_length(0)), 0);
+/// ```
+///
+/// Each expansion is its own `static`: define one per body where the same
+/// body is allocated from several places.
+#[macro_export]
+macro_rules! js_function_info {
+    (@ty 0) => { $crate::JsBody0 };
+    (@ty 1) => { $crate::JsBody1 };
+    (@ty 2) => { $crate::JsBody2 };
+    (@ty 3) => { $crate::JsBody3 };
+    (@ty 4) => { $crate::JsBody4 };
+    (@ty 5) => { $crate::JsBody5 };
+    (@ty 6) => { $crate::JsBody6 };
+    (@ty 7) => { $crate::JsBody7 };
+    (@ty 8) => { $crate::JsBody8 };
+    (@ty 9) => { $crate::JsBody9 };
+    (@ty 10) => { $crate::JsBody10 };
+    (@ty 11) => { $crate::JsBody11 };
+    (@ty 12) => { $crate::JsBody12 };
+    (@ty 13) => { $crate::JsBody13 };
+    (@ty 14) => { $crate::JsBody14 };
+    (@ty 15) => { $crate::JsBody15 };
+    (@ty 16) => { $crate::JsBody16 };
+    ($body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+        static INFO: $crate::JsFunctionInfo =
+            $crate::JsFunctionInfo::of($body as $crate::js_function_info!(@ty $n))
+                $($(.$m($($a),*))*)?;
+        &INFO
+    }};
+}
+
+/// Allocate a native closure running the body `info` describes, with
+/// `capture_count` f64 capture slots.
+///
+/// `info` comes from [`js_function_info!`](crate::js_function_info), which
+/// takes the body's typed pointer; a body of any other signature does not
+/// compile. A body without the receiver:
 ///
 /// ```compile_fail,E0605
 /// // NOT-A-JS-BODY: the example of a body missing its receiver.
 /// extern "C" fn no_this(_: *const perry_ffi::RawClosureHeader, a: f64) -> f64 { a }
-/// let _ = perry_ffi::alloc_closure(no_this as perry_ffi::JsBody1, 0);
+/// let _ = perry_ffi::alloc_closure(perry_ffi::js_function_info!(no_this, 1), 0);
 /// ```
 ///
 /// an erased pointer:
 ///
 /// ```compile_fail,E0277
 /// extern "C" fn body(_: *const perry_ffi::RawClosureHeader, _: perry_ffi::JsThis) -> f64 { 0.0 }
-/// let _ = perry_ffi::alloc_closure(body as *const u8, 0);
+/// static INFO: perry_ffi::JsFunctionInfo = perry_ffi::JsFunctionInfo::of(body as *const u8);
 /// ```
 ///
 /// a JS argument of the wrong type:
 ///
 /// ```compile_fail,E0605
 /// extern "C" fn body(_: *const perry_ffi::RawClosureHeader, _: perry_ffi::JsThis, a: i64) -> f64 { 0.0 }
-/// let _ = perry_ffi::alloc_closure(body as perry_ffi::JsBody1, 0);
+/// let _ = perry_ffi::alloc_closure(perry_ffi::js_function_info!(body, 1), 0);
 /// ```
-pub fn alloc_closure<F: JsBody<ClosureHeader>>(func: F, capture_count: u32) -> *mut ClosureHeader {
-    unsafe { js_closure_alloc(func.code(), capture_count) }
+///
+/// or an info assembled by hand:
+///
+/// ```compile_fail
+/// let _ = perry_ffi::JsFunctionInfo { code: std::ptr::null(), params: 0, rest_fixed: 0,
+///     flags: 0, length: 0, trusted_captures: 0, trusted_code: std::ptr::null(),
+///     trusted_boxed_mask: 0, versioned_code: std::ptr::null(), versioned_captures: 0,
+///     reserved: 0, versioned_boxed_mask: 0 };
+/// ```
+pub fn alloc_closure(info: &'static JsFunctionInfo, capture_count: u32) -> *mut ClosureHeader {
+    unsafe { js_closure_alloc(info, capture_count) }
 }
 
 /// Read an f64 capture slot from a native closure.
@@ -304,8 +340,7 @@ mod tests {
         unsafe extern "C" fn callback(_: *const ClosureHeader, _this: crate::JsThis) -> f64 {
             0.0
         }
-        register_closure_arity(callback as JsBody0, 0);
-        let closure = alloc_closure(callback as JsBody0, 1);
+        let closure = alloc_closure(crate::js_function_info!(callback, 0), 1);
         unsafe { set_closure_capture_f64(closure, 0, 42.0) };
         assert_eq!(unsafe { closure_capture_f64(closure, 0) }, 42.0);
     }

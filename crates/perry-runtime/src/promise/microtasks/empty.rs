@@ -86,8 +86,8 @@ mod tests {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 0);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 0), 0);
             crate::builtins::js_queue_microtask(callback as i64);
             assert!(!can_skip_callback_phases());
             assert!(js_promise_run_microtasks_event_loop() > 0);
@@ -192,8 +192,8 @@ mod tests {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 1);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 1), 0);
             crate::os::test_set_stdin_data_listener(Some(callback as i64));
             crate::os::stdin_push_bytes(b"input");
             assert!(!crate::timer::timer_phase_work_pending());
@@ -251,8 +251,8 @@ mod tests {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 0);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 0), 0);
             crate::builtins::js_queue_next_tick(callback as i64);
             assert_eq!(js_promise_run_promise_jobs(), 0);
             assert_eq!(CALLED.load(Ordering::Relaxed), 0);

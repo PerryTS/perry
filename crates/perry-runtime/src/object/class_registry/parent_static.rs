@@ -858,12 +858,12 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 .entry(class_id)
                 .or_default()
                 .entry(name)
-                .or_insert((0, 0));
+                .or_default();
             if getter_ptr != 0 {
-                entry.0 = getter_ptr as usize;
+                entry.get = getter_ptr as usize;
             }
             if setter_ptr != 0 {
-                entry.1 = setter_ptr as usize;
+                entry.set = setter_ptr as usize;
             }
         }
     }
@@ -1134,7 +1134,7 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
             return Some(result);
         }
         if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(getter, _)) = accessors.get(name) {
+            if let Some(&AccessorDecl { get: getter, .. }) = accessors.get(name) {
                 if getter == 0 {
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
@@ -1203,7 +1203,7 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
             return applied;
         }
         if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(_, setter)) = accessors.get(name) {
+            if let Some(&AccessorDecl { set: setter, .. }) = accessors.get(name) {
                 if setter != 0 {
                     // Mirror the getter path: the compiled static-accessor
                     // prologue consumes this override and binds `this` to the

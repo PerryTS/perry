@@ -171,7 +171,7 @@ fn group_by_inputs(scope: &RuntimeHandleScope) -> (f64, f64) {
         let grown = crate::array::js_array_push(arr, element);
         items_handle.set_nanbox_f64(f64::from_bits(ptr_bits(grown as usize)));
     }
-    let closure = crate::closure::js_closure_alloc(group_by_moving_callback as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(crate::fn_info!(group_by_moving_callback, 2), 0);
     let callback_handle = scope.root_nanbox_f64(f64::from_bits(ptr_bits(closure as usize)));
     (
         items_handle.get_nanbox_f64(),

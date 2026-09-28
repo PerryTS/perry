@@ -56,6 +56,15 @@ wide_probe!(
     a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35
 );
 
+static PROBE3: JsFunctionInfo =
+    JsFunctionInfo::of(probe3 as crate::codegen_abi::JsBody3<ClosureHeader>).with_declared(3);
+static PROBE_REST: JsFunctionInfo =
+    JsFunctionInfo::of(probe_rest as crate::codegen_abi::JsBody2<ClosureHeader>).with_rest(1);
+// SAFETY: `probe_wide` is a JS body declaring 36 JS parameters (wider than the
+// typed `JsBody16` constructor reaches).
+static PROBE_WIDE: JsFunctionInfo =
+    unsafe { JsFunctionInfo::from_code(probe_wide as *const u8, 36) }.with_declared(36);
+
 const UNDEF: u64 = crate::value::TAG_UNDEFINED;
 
 fn receiver() -> f64 {
@@ -68,8 +77,7 @@ fn this() -> JsThis {
 
 #[test]
 fn an_exact_arity_call_passes_the_receiver_then_the_arguments() {
-    let closure = js_closure_alloc(probe3 as *const u8, 0);
-    js_register_closure_arity(probe3 as *const u8, 3);
+    let closure = js_closure_alloc(&PROBE3, 0);
     let r = js_closure_call3(closure, this(), 1.0, 2.0, 3.0);
     assert_eq!(r, 3.0);
     let (this, args) = seen();
@@ -79,8 +87,7 @@ fn an_exact_arity_call_passes_the_receiver_then_the_arguments() {
 
 #[test]
 fn a_padded_call_passes_the_receiver_and_pads_after_it() {
-    let closure = js_closure_alloc(probe3 as *const u8, 0);
-    js_register_closure_arity(probe3 as *const u8, 3);
+    let closure = js_closure_alloc(&PROBE3, 0);
     js_closure_call1(closure, this(), 9.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
@@ -89,8 +96,7 @@ fn a_padded_call_passes_the_receiver_and_pads_after_it() {
 
 #[test]
 fn a_rest_bundled_call_passes_the_receiver_before_the_fixed_arguments() {
-    let closure = js_closure_alloc(probe_rest as *const u8, 0);
-    js_register_closure_rest(probe_rest as *const u8, 1);
+    let closure = js_closure_alloc(&PROBE_REST, 0);
     js_closure_call4(closure, this(), 5.0, 6.0, 7.0, 8.0);
     let (this, args) = seen();
     assert_eq!(this, receiver().to_bits());
@@ -103,8 +109,7 @@ fn a_rest_bundled_call_passes_the_receiver_before_the_fixed_arguments() {
 
 #[test]
 fn a_wide_call_passes_the_receiver_and_every_argument_slot() {
-    let closure = js_closure_alloc(probe_wide as *const u8, 0);
-    js_register_closure_arity(probe_wide as *const u8, 36);
+    let closure = js_closure_alloc(&PROBE_WIDE, 0);
     let args: Vec<f64> = (0..36).map(f64::from).collect();
     let r =
         unsafe { js_closure_call_array(closure as i64, this(), args.as_ptr(), args.len() as i64) };
@@ -119,8 +124,7 @@ fn a_wide_call_passes_the_receiver_and_every_argument_slot() {
 
 #[test]
 fn a_hoisted_direct_call_passes_the_receiver() {
-    let closure = js_closure_alloc(probe3 as *const u8, 0);
-    js_register_closure_arity(probe3 as *const u8, 3);
+    let closure = js_closure_alloc(&PROBE3, 0);
     let site = DirectCall3::resolve(closure);
     assert!(site.is_direct(), "the probe resolves to a direct call");
     site.call(closure, this(), 1.0, 2.0, 3.0);
@@ -131,8 +135,7 @@ fn a_hoisted_direct_call_passes_the_receiver() {
 
 #[test]
 fn a_plain_call_passes_undefined_even_inside_a_receiver_call() {
-    let closure = js_closure_alloc(probe3 as *const u8, 0);
-    js_register_closure_arity(probe3 as *const u8, 3);
+    let closure = js_closure_alloc(&PROBE3, 0);
     js_closure_call3(closure, this(), 1.0, 2.0, 3.0);
     js_closure_call3(
         closure,

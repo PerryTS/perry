@@ -394,7 +394,7 @@ mod tests {
             let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
             let arr = scope.root_raw_mut_ptr(hdr.with_mut_ptr(|hdr| force_materialize_lazy(hdr)));
             let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-                crate::closure::js_closure_alloc(descriptor_getter as *const u8, 0) as i64,
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
             ));
             let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
             let key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);

@@ -162,9 +162,9 @@ pub(crate) unsafe fn native_call_value_this(
     // from random stack memory, which evaluated truthy and fell into the
     // slow-path `#newResponse` chain that ended in `(number).set is not a
     // function`. Closures with rest params (`(a, ...rest) => …`) have their
-    // own registry path via `lookup_closure_rest` which already pads, so we
-    // skip the arity lookup when the rest registry has an entry.
-    let func_ptr = get_valid_func_ptr(closure);
+    // own path (`dispatch_rest_bundled`) which already pads.
+    let info = crate::closure::closure_info(closure);
+    let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
     // %Function.prototype% is itself callable: it accepts any arguments and
     // returns `undefined` (ECMA-262 20.2.3). It is stored as a plain object,
     // so it lands here with no valid func_ptr — short-circuit before the
@@ -190,13 +190,11 @@ pub(crate) unsafe fn native_call_value_this(
         }
         return crate::object::js_new_function_construct(func_value, args_ptr, args_len);
     }
-    let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
-        match lookup_closure_arity(func_ptr) {
-            Some(declared) if (declared as usize) > args_len => declared as usize,
-            _ => args_len,
+    let dispatch_args_len = match info {
+        Some(info) if crate::closure::info_rest(info).is_none() => {
+            args_len.max(usize::from(info.params))
         }
-    } else {
-        args_len
+        _ => args_len,
     };
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -228,11 +226,9 @@ pub(crate) unsafe fn native_call_value_this(
     // args) would silently drop the overflow. Route through the rest-bundler
     // with the full slice up front. (The arity-specific `js_closure_callN`
     // helpers do their own rest check, but only see the truncated arg list.)
-    if !func_ptr.is_null() {
-        if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
-            let all: Vec<f64> = (0..args_len).map(arg_at).collect();
-            return dispatch_rest_bundled(closure, func_ptr, this, &all, fixed_arity, synth);
-        }
+    if let Some((fixed_arity, synth)) = info.and_then(crate::closure::info_rest) {
+        let all: Vec<f64> = (0..args_len).map(arg_at).collect();
+        return dispatch_rest_bundled(closure, func_ptr, this, &all, fixed_arity, synth);
     }
 
     // Call with the appropriate arity (padded with `undefined` up to the
@@ -323,8 +319,9 @@ unsafe fn call_array_this(
     // affected here — we never see BOUND_METHOD_FUNC_PTR through this
     // entry because `js_closure_call_apply_with_spread`'s caller always
     // resolves a real closure pointer first.
-    let fp_for_rest = get_valid_func_ptr(closure);
-    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(fp_for_rest) {
+    let info_for_rest = crate::closure::closure_info(closure);
+    let fp_for_rest = info_for_rest.map_or(std::ptr::null(), |info| info.code);
+    if let Some((fixed_arity, synth)) = info_for_rest.and_then(crate::closure::info_rest) {
         let mut tmp: Vec<f64> = Vec::with_capacity(n);
         if !args_ptr.is_null() && n > 0 {
             for i in 0..n {
@@ -396,24 +393,21 @@ unsafe fn call_array_this(
         // js_closure_call16(...)` silently dropped args 16.. — breaking
         // qs's recursive `stringify`, which self-calls with 18 args).
         //
-        // #10420: ONE memoized strategy probe decides the route, as in
-        // `js_closure_callN` — the registry helpers this arm used to chain
-        // re-read the body record on every call. A body with a registered
-        // arity is called at exactly that width: padded when it declares
-        // more than `n`, and never handed slots it does not declare (so a
-        // `fn.apply(null, arr)` with thousands of elements costs the body's
-        // own width). An unregistered body is a runtime-provided callee with
-        // a handful of params; clamp it to the widest dynamic call.
+        // #10420: the body's info decides the route, as in
+        // `js_closure_callN`. A body is called at exactly its declared
+        // width: padded when it declares more than `n`, and never handed
+        // slots it does not declare (so a `fn.apply(null, arr)` with
+        // thousands of elements costs the body's own width).
         _ => {
             let mut full: Vec<f64> = Vec::with_capacity(n);
             for i in 0..n {
                 full.push(a(i));
             }
-            let func_ptr = get_valid_func_ptr(closure);
-            if func_ptr.is_null() {
+            let Some(info) = crate::closure::closure_info(closure) else {
                 throw_not_callable();
-            }
-            match resolve_strategy(func_ptr).kind() {
+            };
+            let func_ptr = info.code;
+            match resolve_strategy(info).kind() {
                 DispatchKind::BoundMethod => dispatch_bound_method(closure, this, &full),
                 DispatchKind::BoundFunction => dispatch_bound_function(closure, &full),
                 DispatchKind::Rest(fixed_arity, synth) => {
@@ -421,10 +415,6 @@ unsafe fn call_array_this(
                 }
                 DispatchKind::Arity(declared) => {
                     dispatch_with_arity(closure, func_ptr, this, &full, declared)
-                }
-                DispatchKind::Direct => {
-                    let width = n.min(crate::closure::MAX_DYNAMIC_CALL_WIDTH) as u32;
-                    dispatch_with_arity(closure, func_ptr, this, &full, width)
                 }
             }
         }

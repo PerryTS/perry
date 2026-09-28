@@ -1249,9 +1249,10 @@ pub unsafe extern "C" fn js_tls_client_preflight(
         .unwrap_or_default();
 
     if sni_callback != 0 && !servername.is_empty() {
-        perry_runtime::closure::js_register_closure_arity(tls_sni_completion as *const u8, 2);
-        let completion =
-            perry_runtime::closure::js_closure_alloc(tls_sni_completion as *const u8, 2);
+        let completion = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(tls_sni_completion, 2; with_declared(2)),
+            2,
+        );
         perry_runtime::closure::js_closure_set_capture_ptr(completion, 0, server_handle);
         perry_runtime::closure::js_closure_set_capture_f64(completion, 1, nanbox_str(&servername));
         js_closure_call2(

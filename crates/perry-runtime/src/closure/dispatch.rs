@@ -30,7 +30,9 @@ pub use bound::{dispatch_bound_function, dispatch_bound_method, js_function_bind
 pub(crate) use errors::reset_throw_not_callable_counter;
 pub use errors::throw_not_callable;
 
-pub use validate::{clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr};
+pub use validate::{
+    clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr, get_valid_info,
+};
 
 pub use calln::{
     js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
@@ -63,15 +65,4 @@ pub(crate) const fn arity_needs_dispatch(declared: u32, n: u32) -> bool {
     {
         declared != n
     }
-}
-
-/// The arity to dispatch a body with: its registered arity, or on WASI its
-/// real parameter count (see `registry::wasi_exact_arity`).
-#[inline(always)]
-pub(crate) fn dispatch_arity(func_ptr: *const u8) -> Option<u32> {
-    #[cfg(target_os = "wasi")]
-    if let Some(params) = super::registry::wasi_body_params(func_ptr) {
-        return Some(params);
-    }
-    lookup_closure_arity(func_ptr)
 }

@@ -1842,8 +1842,8 @@ fn full_cycle_step_scanner_covers_promise_overflow_reactions() {
 
     let promise = unsafe { alloc_old_test_promise() };
     js_shadow_slot_set(0, ptr_bits(promise as usize));
-    let cb1 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
-    let cb2 = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let cb1 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
+    let cb2 = crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     // First reaction lands inline in the promise's own fields; the second
     // goes to PROMISE_OVERFLOW_REACTIONS — the table under test.
     let _next1 = crate::promise::js_promise_then(promise, cb1, std::ptr::null());

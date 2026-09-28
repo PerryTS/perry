@@ -24,10 +24,12 @@ fn regex<'s>(scope: &'s RuntimeHandleScope, p: &[u8], f: &[u8]) -> RuntimeHandle
         crate::value::js_get_string_pointer_unified(f.get_nanbox_f64()) as *const StringHeader,
     ) as i64))
 }
-fn function<'s>(scope: &'s RuntimeHandleScope, fp: *const u8, arity: u32) -> RuntimeHandle<'s> {
-    crate::closure::js_register_closure_arity(fp, arity);
+fn function<'s>(
+    scope: &'s RuntimeHandleScope,
+    info: *const crate::closure::JsFunctionInfo,
+) -> RuntimeHandle<'s> {
     scope.root_nanbox_f64(js_nanbox_pointer(
-        crate::closure::js_closure_alloc_singleton(fp) as i64,
+        crate::closure::js_closure_alloc_singleton(info) as i64,
     ))
 }
 fn put(owner: &RuntimeHandle<'_>, name: &[u8], value: &RuntimeHandle<'_>) {
@@ -206,7 +208,10 @@ fn perex_search_restores_negative_zero_and_original_object_across_gc() {
         api::finish(dispatch::get(&re, b"lastIndex")).to_bits(),
         (-0.0f64).to_bits()
     );
-    let method = function(&scope, search_override as *const u8, 1);
+    let method = function(
+        &scope,
+        crate::fn_info!(search_override, 1; with_declared(1)),
+    );
     put(&re, b"exec", &method);
     let answer = text(&scope, b"arbitrary index");
     put(&re, b"index", &answer);
@@ -246,7 +251,7 @@ fn perex_search_throw_order_and_sticky_behavior_follow_public_operations() {
         re.get_nanbox_f64(),
     ));
     assert_eq!(api::finish(dispatch::get(&result, b"index")), 1.0);
-    let method = function(&scope, search_throw as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(search_throw, 1; with_declared(1)));
     put(&re, b"exec", &method);
     api::finish(dispatch::set_last_index(&re, 9.0));
     assert_eq!(
@@ -291,7 +296,10 @@ fn perex_generic_global_match_preserves_output_during_collecting_overrides() {
     let flags = text(&scope, b"gu");
     put(&receiver, b"flags", &flags);
     put_number(&receiver, b"calls", 0.0);
-    let method = function(&scope, global_override as *const u8, 1);
+    let method = function(
+        &scope,
+        crate::fn_info!(global_override, 1; with_declared(1)),
+    );
     put(&receiver, b"exec", &method);
     let input = text(&scope, "😀".as_bytes());
     let before = input.get_nanbox_f64().to_bits();
@@ -316,9 +324,9 @@ fn perex_string_symbol_hooks_preserve_values_before_receiver_coercion() {
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let pattern = object(&scope);
-    let coercion = function(&scope, throw_string as *const u8, 0);
+    let coercion = function(&scope, crate::fn_info!(throw_string, 0; with_declared(0)));
     put(&receiver, b"toString", &coercion);
-    let hook = function(&scope, identity as *const u8, 1);
+    let hook = function(&scope, crate::fn_info!(identity, 1; with_declared(1)));
     for name in ["match", "search"] {
         symbol(&pattern, name, &hook);
         let method = scope.root_nanbox_f64(crate::collection_iter::builtin_prototype_method(
@@ -363,7 +371,10 @@ fn perex_match_reads_overridden_flags_and_global_getters() {
     super::perex_public::register_host_roots();
     let scope = RuntimeHandleScope::new();
     let re = regex(&scope, b"(?:)", b"g");
-    let getter = function(&scope, collecting_flags as *const u8, 0);
+    let getter = function(
+        &scope,
+        crate::fn_info!(collecting_flags, 0; with_declared(0)),
+    );
     let descriptor = object(&scope);
     put(&descriptor, b"get", &getter);
     put_number(
@@ -409,7 +420,7 @@ fn perex_regexp_prototype_ignores_constructor_and_honors_explicit_parent() {
     let original = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
         re.get_nanbox_f64(),
     ));
-    let getter = function(&scope, throw_string as *const u8, 0);
+    let getter = function(&scope, crate::fn_info!(throw_string, 0; with_declared(0)));
     let descriptor = object(&scope);
     put(&descriptor, b"get", &getter);
     let key = crate::string::canonical_key(b"constructor");
@@ -433,7 +444,7 @@ fn perex_regexp_prototype_ignores_constructor_and_honors_explicit_parent() {
         original.get_nanbox_f64().to_bits()
     );
     let parent = object(&scope);
-    let hook = function(&scope, identity as *const u8, 1);
+    let hook = function(&scope, crate::fn_info!(identity, 1; with_declared(1)));
     symbol(&parent, "match", &hook);
     assert_eq!(
         crate::proxy::js_reflect_set_prototype_of(re.get_nanbox_f64(), parent.get_nanbox_f64())

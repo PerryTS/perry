@@ -547,15 +547,16 @@ fn set_object_prototype(obj: *mut perry_runtime::object::ObjectHeader, prototype
     }
 }
 
-fn closure_value(func_ptr: *const u8, arity: u32) -> f64 {
-    perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 0);
+fn closure_value(info: *const perry_runtime::closure::JsFunctionInfo) -> f64 {
+    let closure = perry_runtime::closure::js_closure_alloc(info, 0);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-fn closure_value_with_worker_id(func_ptr: *const u8, arity: u32, worker_id: u64) -> f64 {
-    perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 1);
+fn closure_value_with_worker_id(
+    info: *const perry_runtime::closure::JsFunctionInfo,
+    worker_id: u64,
+) -> f64 {
+    let closure = perry_runtime::closure::js_closure_alloc(info, 1);
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, worker_id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
@@ -650,9 +651,8 @@ extern "C" fn worker_threads_noop0(
 
 /// Build a closure that captures a single f64 (the port id) in capture slot 0.
 /// The bound extern fn reads it back via `js_closure_get_capture_f64`.
-fn port_bound_closure(func_ptr: *const u8, arity: u32, port_id: u64) -> f64 {
-    perry_runtime::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = perry_runtime::closure::js_closure_alloc(func_ptr, 1);
+fn port_bound_closure(info: *const perry_runtime::closure::JsFunctionInfo, port_id: u64) -> f64 {
+    let closure = perry_runtime::closure::js_closure_alloc(info, 1);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(port_id));
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
@@ -747,12 +747,10 @@ fn worker_wait_budget() -> Option<std::time::Duration> {
 }
 
 fn queue_worker_threads_microtask() {
-    perry_runtime::closure::js_register_closure_arity(
-        worker_threads_channels_microtask as *const u8,
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(worker_threads_channels_microtask, 0; with_declared(0)),
         0,
     );
-    let closure =
-        perry_runtime::closure::js_closure_alloc(worker_threads_channels_microtask as *const u8, 0);
     perry_runtime::builtins::js_queue_microtask(closure as i64);
     perry_runtime::event_pump::js_notify_main_thread();
 }

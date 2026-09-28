@@ -96,7 +96,7 @@ extern "C" fn moving_value_getter(
 unsafe fn descriptor_bag_with_moving_value_getter(scope: &RuntimeHandleScope) -> f64 {
     let bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
     let inner = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-    let getter = crate::closure::js_closure_alloc(moving_value_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(moving_value_getter, 0), 0);
     let getter_value = f64::from_bits(ptr_bits(getter as usize));
 
     let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
@@ -276,7 +276,8 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
         let key = scope.root_nanbox_f64(string_value("tag"));
         let bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
         let inner = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-        let getter = crate::closure::js_closure_alloc(moving_writable_getter as *const u8, 0);
+        let getter =
+            crate::closure::js_closure_alloc(crate::fn_info!(moving_writable_getter, 0), 0);
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         crate::object::js_object_set_field_by_name(
             addr_of(inner.get_nanbox_f64()) as *mut crate::object::ObjectHeader,

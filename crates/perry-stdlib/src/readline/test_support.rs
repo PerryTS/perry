@@ -25,7 +25,7 @@ extern "C" fn count_data_callback(
 }
 
 pub(super) fn data_counter_callback() -> i64 {
-    js_closure_alloc(count_data_callback as *const u8, 0) as i64
+    js_closure_alloc(perry_runtime::fn_info!(count_data_callback, 1), 0) as i64
 }
 
 extern "C" fn count_readable_callback(
@@ -37,7 +37,7 @@ extern "C" fn count_readable_callback(
 }
 
 pub(super) fn readable_counter_callback() -> i64 {
-    js_closure_alloc(count_readable_callback as *const u8, 0) as i64
+    js_closure_alloc(perry_runtime::fn_info!(count_readable_callback, 0), 0) as i64
 }
 
 extern "C" fn record_keypress_callback(
@@ -54,7 +54,7 @@ extern "C" fn record_keypress_callback(
 }
 
 pub(super) fn keypress_recorder_callback() -> i64 {
-    js_closure_alloc(record_keypress_callback as *const u8, 0) as i64
+    js_closure_alloc(perry_runtime::fn_info!(record_keypress_callback, 2), 0) as i64
 }
 
 pub(super) fn event_name(name: &str) -> *mut StringHeader {

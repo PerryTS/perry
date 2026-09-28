@@ -25,8 +25,10 @@ signature to the ABI it is called with. Two definition rules close that:
   declares the receiver (`JsThis`) as its second parameter, unless it is a
   call ENTRY (`perry_abi::JS_CALL_ENTRIES`: it takes a closure as an ordinary
   argument) or says `NOT-A-JS-BODY: <why>` on one of the three lines above;
-* a function whose address is handed straight to a closure allocator
-  (`js_closure_alloc*`, `js_register_closure_*`) declares the receiver.
+* a closure allocator (`js_closure_alloc*`) takes the body's static
+  `JsFunctionInfo`, built by `fn_info!` / `JsFunctionInfo::of` from the
+  body's TYPED pointer; handing an allocator a bare `NAME as *const u8` is
+  refused (it can only be a code address where an info is expected).
 
 Every call ENTRY (`perry_abi::JS_CALL_ENTRIES`) takes the receiver after the
 function, and three rules keep native code outside the runtime on that ABI:
@@ -35,11 +37,20 @@ function, and three rules keep native code outside the runtime on that ABI:
   (a `#[link_name]` alias included), declares `JsThis` as its second
   parameter — a stale declaration is otherwise invisible to the compiler;
 * outside the runtime, stdlib and perry-ffi no crate declares a closure
-  allocator or registrar (`js_closure_alloc*`, `js_register_closure_*`):
-  addons register bodies through perry-ffi, whose API is typed;
-* perry-ffi's registration functions (`alloc_closure`, `register_closure_*`)
-  take no `*const u8`: a body is a `JsBody` pointer type, so a wrong
-  signature does not compile.
+  allocator (`js_closure_alloc*`): addons allocate through perry-ffi, whose
+  API is typed; and every declaration of one that does exist takes
+  `*const JsFunctionInfo` first (an extern declaration taking `*const u8`
+  would link and pass a code address as the info);
+* perry-ffi's `alloc_closure` takes `&'static JsFunctionInfo`, never a
+  `*const u8`: a body's info is built from its `JsBody` pointer type, so a
+  wrong signature does not compile.
+
+Every fact about a body lives in its static `JsFunctionInfo`, which the
+function object points to. Nothing is registered by code address: no crate
+may name a closure-body registrar (`js_register_closure_*`) or one of the
+deleted code-keyed tables (`CLOSURE_BODY_REGISTRY`, `TRUSTED_TARGETS`,
+`DISPATCH_RECENT`) — not as a definition, a declaration, a codegen call
+string, or a comment that would send a reader looking for one.
 """
 
 from __future__ import annotations
@@ -142,8 +153,8 @@ CLOSURE_PARAM_RE = re.compile(
 )
 JS_THIS_RE = re.compile(r"^(?:[\w:]*::)?JsThis$")
 ALLOC_RE = re.compile(
-    r"\b(?:js_closure_alloc(?:_singleton|_with_captures_singleton)?|js_register_closure_\w+"
-    r"|alloc_closure|register_closure_arity)\s*\(\s*(\w+)\s+as\s+\*const",
+    r"\b(?:js_closure_alloc(?:_init|_singleton|_with_captures_singleton)?|alloc_closure)"
+    r"\s*\(\s*(\w+)\s+as\s+\*const\s+u8\b",
     re.S,
 )
 
@@ -205,16 +216,10 @@ def definition_violations(root: Path):
                 )
     for rel, text in texts:
         for m in ALLOC_RE.finditer(text):
-            name = m.group(1)
-            found = defs.get(name)
-            if not found:
-                continue  # a typed local; the compiler checked its type
-            if any(len(t) > 1 and JS_THIS_RE.match(t[1]) for _, _, t in found):
-                continue
             line = text.count("\n", 0, m.start()) + 1
             out.append(
-                f"{rel}:{line}: `{name}` is installed as a JS body but does not declare "
-                "the callee and the receiver (perry_abi::JS_BODY_*)"
+                f"{rel}:{line}: `{m.group(1)}` is handed to a closure allocator as a raw "
+                "pointer; allocators take the body's JsFunctionInfo (`fn_info!`)"
             )
     return out
 
@@ -225,7 +230,8 @@ ENTRY_WITHOUT_RECEIVER = {"js_closure_v8_callback"}
 # `#[link_name = "..."]` a few lines above.
 DECL_RE = re.compile(r"\bfn\s+(\w+)\s*\(")
 LINK_NAME_RE = re.compile(r'#\[link_name\s*=\s*"(\w+)"\]')
-REGISTRAR_RE = re.compile(r"^(?:js_closure_alloc\w*|js_register_closure_\w+)$")
+REGISTRAR_RE = re.compile(r"^js_closure_alloc\w*$")
+INFO_PARAM_RE = re.compile(r"^\*const\s+(?:[\w:]*::)?JsFunctionInfo$")
 REGISTRAR_CRATES_ALLOWED = ("crates/perry-runtime/", "crates/perry-stdlib/", "crates/perry-ffi/")
 FFI_CLOSURE = "crates/perry-ffi/src"
 
@@ -266,24 +272,27 @@ def entry_abi_violations(root: Path):
                         f"{rel}:{line}: `{name}` {what} the call entry `{symbol}` without the "
                         "receiver (`this: JsThis` after the function; perry_abi::JS_CALL_ENTRIES)"
                     )
-            if (
-                is_decl
-                and REGISTRAR_RE.match(symbol)
-                and not rel.startswith(REGISTRAR_CRATES_ALLOWED)
-            ):
-                out.append(
-                    f"{rel}:{line}: declares the closure registrar `{symbol}`; register a body "
-                    "through perry-ffi (`alloc_closure` / `register_closure_*`, typed `JsBody`)"
-                )
+            if is_decl and REGISTRAR_RE.match(symbol):
+                if not rel.startswith(REGISTRAR_CRATES_ALLOWED):
+                    out.append(
+                        f"{rel}:{line}: declares the closure allocator `{symbol}`; allocate "
+                        "through perry-ffi (`alloc_closure(js_function_info!(..), n)`)"
+                    )
+                types = param_types(params)
+                if not types or not INFO_PARAM_RE.match(types[0]):
+                    out.append(
+                        f"{rel}:{line}: `{name}` declares the allocator `{symbol}` without "
+                        "`*const JsFunctionInfo` first; it would pass a code address as the info"
+                    )
             if (
                 rel.startswith(FFI_CLOSURE)
                 and not is_decl
-                and re.match(r"^(?:alloc_closure|register_closure_\w+)$", name)
-                and "*const u8" in params
+                and name == "alloc_closure"
+                and "JsFunctionInfo" not in params
             ):
                 out.append(
-                    f"{rel}:{line}: perry-ffi's `{name}` takes an untyped `*const u8` body; "
-                    "take `F: JsBody<ClosureHeader>`"
+                    f"{rel}:{line}: perry-ffi's `alloc_closure` must take the body's "
+                    "`&'static JsFunctionInfo`"
                 )
     return out
 
@@ -329,6 +338,27 @@ def codegen_violations(root: Path):
     return out
 
 
+REGISTRY_RE = re.compile(
+    r"\b(?:js_register_closure_\w+|CLOSURE_BODY_REGISTRY|TRUSTED_TARGETS|DISPATCH_RECENT)\b"
+)
+
+
+def registry_violations(root: Path):
+    """No closure-body registrar or code-keyed body table anywhere in the crates."""
+    out = []
+    for path in sorted((root / "crates").rglob("*.rs")):
+        rel = path.relative_to(root).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for m in REGISTRY_RE.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            out.append(
+                f"{rel}:{line}: `{m.group(0)}` — a body's facts live in its static "
+                "JsFunctionInfo (the function object points to it); nothing is registered "
+                "by code address"
+            )
+    return out
+
+
 def self_test() -> int:
     import tempfile
 
@@ -367,10 +397,22 @@ def self_test() -> int:
                              'macro_rules! m { ($n:ident) => { extern "C" fn $n(c: *const ClosureHeader, _this: JsThis $(, $a: f64)*) -> f64 { 0.0 } }; }', False),
         "def_ffi_no_this": ("crates/perry-ext-zz/src/x.rs",
                             'extern "C" fn cb(_c: *const RawClosureHeader, a: f64) -> f64 { a }', True),
-        "alloc_receiverless": ("crates/perry-runtime/src/x.rs",
-                               'extern "C" fn noop() -> f64 { 0.0 }\nfn f() { js_closure_alloc(noop as *const u8, 0); }', True),
-        "alloc_ok": ("crates/perry-runtime/src/x.rs",
-                     'extern "C" fn b(_c: *const ClosureHeader, _this: JsThis) -> f64 { 0.0 }\nfn f() { js_closure_alloc(b as *const u8, 0); }', False),
+        "alloc_raw_pointer": ("crates/perry-runtime/src/x.rs",
+                              'extern "C" fn b(_c: *const ClosureHeader, _this: JsThis) -> f64 { 0.0 }\nfn f() { js_closure_alloc(b as *const u8, 0); }', True),
+        "alloc_info_ok": ("crates/perry-runtime/src/x.rs",
+                          'extern "C" fn b(_c: *const ClosureHeader, _this: JsThis) -> f64 { 0.0 }\nfn f() { js_closure_alloc(fn_info!(b, 0), 0); }', False),
+        "alloc_decl_code_ptr": ("crates/perry-stdlib/src/x.rs",
+                                'extern "C" {\n    #[link_name = "js_closure_alloc"]\n    fn provider_alloc(f: *const u8, n: u32) -> *mut u8;\n}', True),
+        "alloc_decl_info_ok": ("crates/perry-stdlib/src/x.rs",
+                               'extern "C" {\n    fn js_closure_alloc(info: *const JsFunctionInfo, n: u32) -> *mut u8;\n}', False),
+        "registrar_def": ("crates/perry-runtime/src/x.rs",
+                          'pub extern "C" fn js_register_closure_arity(f: *const u8, n: u32) {}', True),
+        "registrar_codegen_call": ("crates/perry-codegen/src/x.rs",
+                                   'fn f() { blk.call(VOID, "js_register_closure_rest", &[]); }', True),
+        "registry_table": ("crates/perry-runtime/src/x.rs",
+                           "static CLOSURE_BODY_REGISTRY: u8 = 0;", True),
+        "info_alloc_no_registry_ok": ("crates/perry-codegen/src/x.rs",
+                                      'fn f() { blk.call(I64, "js_closure_alloc_singleton", &[]); }', False),
         "cg_funnel_ok": ("crates/perry-codegen/src/expr/body_call.rs", "fn f() { blk.call_indirect(DOUBLE, &p, &a); }", False),
         "entry_def_no_this": ("crates/perry-runtime/src/x.rs",
                               'pub extern "C" fn js_closure_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64 { a }', True),
@@ -380,12 +422,12 @@ def self_test() -> int:
                           'extern "C" {\n    fn js_closure_call2(c: *const u8, this: perry_ffi::JsThis, a: f64, b: f64) -> f64;\n}', False),
         "entry_link_name_no_this": ("crates/perry-stdlib/src/x.rs",
                                     'extern "C" {\n    #[link_name = "js_closure_call2"]\n    fn provider_call2(c: *const ClosureHeader, a: f64, b: f64) -> f64;\n}', True),
-        "ext_registrar_decl": ("crates/perry-ext-zz/src/x.rs",
-                               'extern "C" {\n    fn js_closure_alloc(f: *const u8, n: u32) -> *mut u8;\n}', True),
+        "ext_allocator_decl": ("crates/perry-ext-zz/src/x.rs",
+                               'extern "C" {\n    fn js_closure_alloc(info: *const JsFunctionInfo, n: u32) -> *mut u8;\n}', True),
         "ffi_untyped_alloc": ("crates/perry-ffi/src/closure.rs",
                               'pub fn alloc_closure(func: *const u8, capture_count: u32) -> *mut ClosureHeader { todo!() }', True),
-        "ffi_typed_alloc_ok": ("crates/perry-ffi/src/closure.rs",
-                               'pub fn alloc_closure<F: JsBody<ClosureHeader>>(func: F, capture_count: u32) -> *mut ClosureHeader { todo!() }', False),
+        "ffi_info_alloc_ok": ("crates/perry-ffi/src/closure.rs",
+                              "pub fn alloc_closure(info: &'static JsFunctionInfo, capture_count: u32) -> *mut ClosureHeader { todo!() }", False),
     }
     failed = 0
     for name, (rel, text, expect_red) in cases.items():
@@ -404,6 +446,7 @@ def self_test() -> int:
                 or codegen_violations(root)
                 or definition_violations(root)
                 or entry_abi_violations(root)
+                or registry_violations(root)
             )
             if red != expect_red:
                 print(f"self-test {name}: expected {'red' if expect_red else 'green'}, got {'red' if red else 'green'}")
@@ -425,6 +468,7 @@ def main() -> int:
         + codegen_violations(REPO)
         + definition_violations(REPO)
         + entry_abi_violations(REPO)
+        + registry_violations(REPO)
     )
     if violations:
         print("\n".join(violations))

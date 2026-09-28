@@ -13,7 +13,7 @@ use super::*;
 /// which correctly retain synthesized native source text.
 pub(crate) unsafe fn bound_method_source_func_ptr(closure: *const ClosureHeader) -> Option<usize> {
     if closure.is_null()
-        || (*closure).func_ptr != BOUND_METHOD_FUNC_PTR
+        || (*closure).code() != BOUND_METHOD_FUNC_PTR
         || crate::closure::real_capture_count((*closure).capture_count) < 3
     {
         return None;
@@ -381,7 +381,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
         if closure.is_null() || !is_closure_ptr(closure as usize) {
             return this_arg;
         }
-        if std::ptr::eq(unsafe { (*closure).func_ptr }, BOUND_FUNCTION_FUNC_PTR) {
+        if std::ptr::eq(unsafe { (*closure).code() }, BOUND_FUNCTION_FUNC_PTR) {
             let inner = js_closure_get_capture_f64(closure, 0);
             let ij = crate::value::JSValue::from_bits(inner.to_bits());
             if !ij.is_pointer() {
@@ -392,10 +392,11 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
         }
         break;
     }
-    let func_ptr = get_valid_func_ptr(closure);
-    if func_ptr.is_null()
-        || crate::builtins::function_source_for_ptr(func_ptr as usize).is_none()
-        || crate::closure::is_registered_strict_function(func_ptr)
+    let Some(info) = crate::closure::closure_info(closure) else {
+        return this_arg;
+    };
+    if crate::builtins::function_source_for_ptr(info.code as usize).is_none()
+        || info.flags & crate::closure::FN_STRICT != 0
     {
         return this_arg;
     }
@@ -493,7 +494,7 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
     if target_jv.is_pointer() {
         let target_closure = target_jv.as_pointer::<ClosureHeader>();
         if !target_closure.is_null() && is_closure_ptr(target_closure as usize) {
-            return crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize)
+            return crate::builtins::function_name_for_ptr((*target_closure).code() as usize)
                 .unwrap_or_default();
         }
         return String::new();
@@ -590,7 +591,7 @@ pub(crate) unsafe fn bound_function_length(closure: usize) -> Option<u32> {
         return None;
     }
     let c = closure as *const ClosureHeader;
-    if (*c).func_ptr != BOUND_FUNCTION_FUNC_PTR
+    if (*c).code() != BOUND_FUNCTION_FUNC_PTR
         || crate::closure::real_capture_count((*c).capture_count) < BOUND_FUNCTION_CAPTURES
     {
         return None;
@@ -770,7 +771,10 @@ pub unsafe extern "C" fn js_function_bind(
 
     // Allocate the bound closure with 5 capture slots: target, bound this,
     // partial-args array, the `.name` snapshot above, and the bound length.
-    let bound = crate::closure::js_closure_alloc(BOUND_FUNCTION_FUNC_PTR, BOUND_FUNCTION_CAPTURES);
+    let bound = crate::closure::js_closure_alloc(
+        &crate::closure::BOUND_FUNCTION_INFO,
+        BOUND_FUNCTION_CAPTURES,
+    );
     let bound_h = scope.root_raw_mut_ptr(bound as *mut u8);
     let target_value = target_h.get_nanbox_f64();
     let bound_this = this_h.get_nanbox_f64();
@@ -849,7 +853,7 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
             receiver.get_nanbox_f64(),
         );
     }
-    let closure = js_closure_alloc(BOUND_METHOD_FUNC_PTR, 3);
+    let closure = js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 3);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -880,10 +884,9 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
 mod rebind_predicate_tests {
     use super::*;
 
-    // Distinct bodies on purpose: arrow-ness is registered per func_ptr, and
-    // two `extern "C"` bodies with identical machine code get folded to one
-    // address by the linker — which silently makes every case in this test the
-    // same closure body.
+    // Distinct bodies on purpose: two `extern "C"` bodies with identical
+    // machine code can be folded to one address by the linker, and the test
+    // wants genuinely different bodies.
     extern "C" fn arrow_probe(
         _closure: *const ClosureHeader,
         _this: crate::closure::JsThis,
@@ -898,7 +901,15 @@ mod rebind_predicate_tests {
         2.0
     }
 
-    fn closure_value(body: *const u8, capture_count: u32) -> f64 {
+    static ARROW_PROBE: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        arrow_probe as crate::codegen_abi::JsBody0<ClosureHeader>,
+    )
+    .with_flags(crate::closure::FN_ARROW);
+    static METHOD_PROBE: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        method_probe as crate::codegen_abi::JsBody0<ClosureHeader>,
+    );
+
+    fn closure_value(body: &'static crate::closure::JsFunctionInfo, capture_count: u32) -> f64 {
         let closure = crate::closure::js_closure_alloc(body, capture_count);
         f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
     }
@@ -911,9 +922,8 @@ mod rebind_predicate_tests {
     #[test]
     fn the_predicate_agrees_with_what_the_rebind_actually_does() {
         let receiver = f64::from_bits(crate::value::TAG_UNDEFINED);
-        let method_body = method_probe as *const u8;
-        let arrow_body = arrow_probe as *const u8;
-        crate::closure::js_register_closure_arrow_function(arrow_body);
+        let method_body = &METHOD_PROBE;
+        let arrow_body = &ARROW_PROBE;
 
         // The one shape that clones, and the shapes that look like it but
         // return the target untouched.

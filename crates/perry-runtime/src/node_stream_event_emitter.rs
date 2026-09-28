@@ -759,7 +759,10 @@ fn capture_listener_rejection(stream: f64, result: f64) {
     if promise.is_null() {
         return;
     }
-    let on_rejected = js_closure_alloc(ns_capture_rejection as *const u8, 1);
+    let on_rejected = js_closure_alloc(
+        crate::fn_info!(ns_capture_rejection, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(on_rejected, 0, stream);
     crate::promise::js_promise_then(promise, std::ptr::null(), on_rejected);
 }

@@ -982,8 +982,10 @@ mod tests {
     }
 
     fn make_record_callback() -> f64 {
-        perry_runtime::closure::js_register_closure_arity(record_cb_thunk as *const u8, 2);
-        let closure = perry_runtime::closure::js_closure_alloc(record_cb_thunk as *const u8, 0);
+        let closure = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(record_cb_thunk, 2; with_declared(2)),
+            0,
+        );
         boxed_ptr(closure as *const u8)
     }
 

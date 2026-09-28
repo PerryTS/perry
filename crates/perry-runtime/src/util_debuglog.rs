@@ -9,7 +9,7 @@ use std::cell::Cell;
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_rest, ClosureHeader,
+    ClosureHeader,
 };
 use crate::string::StringHeader;
 use crate::value::{
@@ -75,7 +75,6 @@ fn register_thunks_once() {
         if flag.get() {
             return;
         }
-        js_register_closure_rest(logger_thunk as *const u8, 0);
         flag.set(true);
     });
 }
@@ -256,7 +255,7 @@ pub extern "C" fn js_util_debuglog(section: f64, callback: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let section_handle = scope.root_nanbox_f64(section_value);
     let callback_handle = scope.root_nanbox_f64(callback);
-    let closure = js_closure_alloc(logger_thunk as *const u8, 4);
+    let closure = js_closure_alloc(crate::fn_info!(logger_thunk, 1; with_rest(0)), 4);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

@@ -72,49 +72,73 @@ url_setter!(set_username, "username", js_url_set_username);
 url_setter!(set_password, "password", js_url_set_password);
 
 pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
-    let entries: &[(&str, *const u8, Option<*const u8>)] = &[
-        ("href", get_href as *const u8, Some(set_href as *const u8)),
-        ("origin", get_origin as *const u8, None),
+    type Info = *const crate::closure::JsFunctionInfo;
+    let entries: &[(&str, Info, Option<Info>)] = &[
+        (
+            "href",
+            crate::fn_info!(get_href, 0; with_declared(0)),
+            Some(crate::fn_info!(set_href, 1; with_declared(1))),
+        ),
+        (
+            "origin",
+            crate::fn_info!(get_origin, 0; with_declared(0)),
+            None,
+        ),
         (
             "protocol",
-            get_protocol as *const u8,
-            Some(set_protocol as *const u8),
+            crate::fn_info!(get_protocol, 0; with_declared(0)),
+            Some(crate::fn_info!(set_protocol, 1; with_declared(1))),
         ),
         (
             "username",
-            get_username as *const u8,
-            Some(set_username as *const u8),
+            crate::fn_info!(get_username, 0; with_declared(0)),
+            Some(crate::fn_info!(set_username, 1; with_declared(1))),
         ),
         (
             "password",
-            get_password as *const u8,
-            Some(set_password as *const u8),
+            crate::fn_info!(get_password, 0; with_declared(0)),
+            Some(crate::fn_info!(set_password, 1; with_declared(1))),
         ),
-        ("host", get_host as *const u8, Some(set_host as *const u8)),
+        (
+            "host",
+            crate::fn_info!(get_host, 0; with_declared(0)),
+            Some(crate::fn_info!(set_host, 1; with_declared(1))),
+        ),
         (
             "hostname",
-            get_hostname as *const u8,
-            Some(set_hostname as *const u8),
+            crate::fn_info!(get_hostname, 0; with_declared(0)),
+            Some(crate::fn_info!(set_hostname, 1; with_declared(1))),
         ),
-        ("port", get_port as *const u8, Some(set_port as *const u8)),
+        (
+            "port",
+            crate::fn_info!(get_port, 0; with_declared(0)),
+            Some(crate::fn_info!(set_port, 1; with_declared(1))),
+        ),
         (
             "pathname",
-            get_pathname as *const u8,
-            Some(set_pathname as *const u8),
+            crate::fn_info!(get_pathname, 0; with_declared(0)),
+            Some(crate::fn_info!(set_pathname, 1; with_declared(1))),
         ),
         (
             "search",
-            get_search as *const u8,
-            Some(set_search as *const u8),
+            crate::fn_info!(get_search, 0; with_declared(0)),
+            Some(crate::fn_info!(set_search, 1; with_declared(1))),
         ),
-        ("searchParams", get_search_params as *const u8, None),
-        ("hash", get_hash as *const u8, Some(set_hash as *const u8)),
+        (
+            "searchParams",
+            crate::fn_info!(get_search_params, 0; with_declared(0)),
+            None,
+        ),
+        (
+            "hash",
+            crate::fn_info!(get_hash, 0; with_declared(0)),
+            Some(crate::fn_info!(set_hash, 1; with_declared(1))),
+        ),
     ];
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto as i64));
     for &(name, getter, setter) in entries {
         unsafe {
-            crate::closure::js_register_closure_arity(getter, 0);
             let get = crate::closure::js_closure_alloc(getter, 0);
             let get_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(get as i64));
             crate::object::native_module::set_bound_native_closure_name(
@@ -125,7 +149,6 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
             crate::object::native_module::set_builtin_closure_length(get, 0);
             crate::object::native_module::set_builtin_closure_non_constructable(get);
             let set_h = setter.map(|func| {
-                crate::closure::js_register_closure_arity(func, 1);
                 let set = crate::closure::js_closure_alloc(func, 0);
                 let handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(set as i64));
                 crate::object::native_module::set_bound_native_closure_name(

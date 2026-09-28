@@ -1247,9 +1247,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.pending_declares
                             .push((wrap_name.clone(), DOUBLE, wrap_param_types));
                         let blk = ctx.block();
-                        let wrap_ptr = format!("@{}", wrap_name);
+                        let wrap_info = blk.fn_info_ref(&wrap_name);
                         let closure_handle =
-                            blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                            blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
                         return Ok(nanbox_pointer_inline(blk, &closure_handle));
                     }
                 }

@@ -1008,12 +1008,12 @@ fn build_async_step_thunks(
     // Capture layout: [step_closure_ptr, activation_trap_next_ptr,
     // stable_box_activation_ptr, generation]. Token storage is never freed;
     // pointer + generation rejects a capture after the token is recycled.
-    let fulfill = js_closure_alloc(async_step_fulfill_thunk as *const u8, 4);
+    let fulfill = js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
     js_closure_set_capture_ptr(fulfill, 0, step_closure as i64);
     js_closure_set_capture_ptr(fulfill, 1, trap_next as i64);
     js_closure_set_capture_ptr(fulfill, 2, box_activation as i64);
     js_closure_set_capture_f64(fulfill, 3, box_activation_id as f64);
-    let reject = js_closure_alloc(async_step_reject_thunk as *const u8, 4);
+    let reject = js_closure_alloc(crate::fn_info!(async_step_reject_thunk, 1), 4);
     js_closure_set_capture_ptr(reject, 0, step_closure as i64);
     js_closure_set_capture_ptr(reject, 1, trap_next as i64);
     js_closure_set_capture_ptr(reject, 2, box_activation as i64);
@@ -1314,10 +1314,13 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
         (*result_arr).length = 0;
     }
 
-    let state = js_closure_alloc(array_from_async_step as *const u8, AFA_STATE_CAPTURES);
-    let reject_closure = js_closure_alloc(array_from_async_reject as *const u8, 1);
-    let value_closure = js_closure_alloc(array_from_async_value_step as *const u8, 1);
-    let mapped_closure = js_closure_alloc(array_from_async_mapped_step as *const u8, 1);
+    let state = js_closure_alloc(
+        crate::fn_info!(array_from_async_step, 1),
+        AFA_STATE_CAPTURES,
+    );
+    let reject_closure = js_closure_alloc(crate::fn_info!(array_from_async_reject, 1), 1);
+    let value_closure = js_closure_alloc(crate::fn_info!(array_from_async_value_step, 1), 1);
+    let mapped_closure = js_closure_alloc(crate::fn_info!(array_from_async_mapped_step, 1), 1);
 
     js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
     js_closure_set_capture_ptr(value_closure, 0, state as i64);
@@ -1674,12 +1677,13 @@ mod tests {
             let previous_from = js_promise_new();
             let previous_to = copy_promise_to_old(previous_from);
             let previous_step_from =
-                crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
+                crate::closure::js_closure_alloc(crate::fn_info!(relocating_step, 2), 0);
             let previous_step_to = copy_closure_to_old(previous_step_from);
             let rejected = js_promise_rejected(73.0);
 
-            let step = crate::closure::js_closure_alloc(relocating_step as *const u8, 0);
-            let thunk = crate::closure::js_closure_alloc(async_step_fulfill_thunk as *const u8, 4);
+            let step = crate::closure::js_closure_alloc(crate::fn_info!(relocating_step, 2), 0);
+            let thunk =
+                crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
             crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
             crate::closure::js_closure_set_capture_ptr(thunk, 2, 0);

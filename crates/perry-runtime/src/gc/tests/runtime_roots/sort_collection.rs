@@ -63,7 +63,7 @@ fn indexed_accessor_set_returns_the_relocated_receiver() {
         let scope = RuntimeHandleScope::new();
         let receiver = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(3));
         let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            collecting_index_setter as *const u8,
+            crate::fn_info!(collecting_index_setter, 1),
             0,
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
@@ -125,7 +125,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
     for real_array in [true, false] {
         let scope = RuntimeHandleScope::new();
         let comparator = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            captured_direction as *const u8,
+            crate::fn_info!(captured_direction, 2),
             1,
         ));
         comparator.with_mut_ptr(|ptr| crate::closure::js_closure_set_capture_f64(ptr, 0, -1.0));
@@ -143,7 +143,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
             );
         }
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            collecting_getter as *const u8,
+            crate::fn_info!(collecting_getter, 0),
             1,
         ));
         getter.with_mut_ptr(|getter| {
@@ -156,7 +156,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
             });
         });
         let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            accept_sorted_value as *const u8,
+            crate::fn_info!(accept_sorted_value, 1),
             0,
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));

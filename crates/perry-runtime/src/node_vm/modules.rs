@@ -176,13 +176,12 @@ extern "C" fn module_error_getter(
 fn install_module_accessor(
     module: *mut ObjectHeader,
     name: &str,
-    getter: crate::closure::body_call::js_body_fn_ty!(),
+    getter: *const crate::closure::JsFunctionInfo,
 ) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module = scope.root_raw_mut_ptr(module);
-    let closure = crate::closure::js_closure_alloc(getter as *const u8, 1);
+    let closure = crate::closure::js_closure_alloc(getter, 1);
     let closure = scope.root_raw_mut_ptr(closure);
-    crate::closure::js_register_closure_arity(getter as *const u8, 0);
     with_hmut(&closure, |closure| {
         with_hmut(&module, |module| {
             crate::closure::js_closure_set_capture_f64(closure, 0, object_value(module))
@@ -270,10 +269,18 @@ pub extern "C" fn js_vm_source_text_module_new(code: f64, options: f64) -> f64 {
         set_field(module, FIELD_NAMESPACE, namespace_value)
     });
     with_hmut(&module, |module| {
-        install_module_accessor(module, "namespace", module_namespace_getter)
+        install_module_accessor(
+            module,
+            "namespace",
+            crate::fn_info!(module_namespace_getter, 0; with_declared(0)),
+        )
     });
     with_hmut(&module, |module| {
-        install_module_accessor(module, "error", module_error_getter)
+        install_module_accessor(
+            module,
+            "error",
+            crate::fn_info!(module_error_getter, 0; with_declared(0)),
+        )
     });
     with_hmut(&module, |module| {
         set_field(module, FIELD_CONTEXT, context.get_nanbox_f64())
@@ -357,10 +364,18 @@ pub extern "C" fn js_vm_synthetic_module_new(
         set_field(module, FIELD_NAMESPACE, namespace_value)
     });
     with_hmut(&module, |module| {
-        install_module_accessor(module, "namespace", module_namespace_getter)
+        install_module_accessor(
+            module,
+            "namespace",
+            crate::fn_info!(module_namespace_getter, 0; with_declared(0)),
+        )
     });
     with_hmut(&module, |module| {
-        install_module_accessor(module, "error", module_error_getter)
+        install_module_accessor(
+            module,
+            "error",
+            crate::fn_info!(module_error_getter, 0; with_declared(0)),
+        )
     });
     with_hmut(&module, |module| {
         set_field(module, FIELD_CONTEXT, context.get_nanbox_f64())

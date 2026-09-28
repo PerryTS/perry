@@ -4,13 +4,13 @@ use perry_runtime::{
     closure::{
         js_closure_alloc, js_closure_call_array, js_closure_get_capture_f64,
         js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-        js_register_closure_rest, ClosureHeader,
+        ClosureHeader,
     },
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_nanbox_get_pointer,
     js_nanbox_pointer, js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
 };
 use rusqlite::ffi;
-use std::sync::{atomic::Ordering, Once};
+use std::sync::atomic::Ordering;
 
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_database_call(
@@ -270,8 +270,6 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
     }
 }
 
-static BUN_SQLITE_TRANSACTION_WRAPPER_REGISTERED: Once = Once::new();
-
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_database_transaction(
     db_handle: Handle,
@@ -279,13 +277,13 @@ pub unsafe extern "C" fn js_bun_sqlite_database_transaction(
 ) -> *mut ClosureHeader {
     let callback = closure_ptr_from_value(callback_value)
         .unwrap_or_else(|| throw_plain_type("Expected a function"));
-    BUN_SQLITE_TRANSACTION_WRAPPER_REGISTERED.call_once(|| {
-        // The wrapper has no fixed arguments and receives every invocation
-        // argument in the synthetic rest array. This preserves Bun's
-        // `transaction(fn)(...args)` forwarding for arbitrary callback arity.
-        js_register_closure_rest(bun_sqlite_transaction_wrapper as *const u8, 0);
-    });
-    let wrapper = js_closure_alloc(bun_sqlite_transaction_wrapper as *const u8, 2);
+    // The wrapper has no fixed arguments and receives every invocation
+    // argument in its rest array (its info). This preserves Bun's
+    // `transaction(fn)(...args)` forwarding for arbitrary callback arity.
+    let wrapper = js_closure_alloc(
+        perry_runtime::fn_info!(bun_sqlite_transaction_wrapper, 1; with_rest(0)),
+        2,
+    );
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
     js_closure_set_capture_ptr(wrapper, 1, callback as i64);
     wrapper

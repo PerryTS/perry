@@ -200,8 +200,7 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
     // Accessor getters (0-arg). Reflect as `{ get, set: undefined,
     // enumerable: false, configurable: true }`.
     unsafe {
-        let mk = |f: *const u8| -> u64 {
-            crate::closure::js_register_closure_arity(f, 0);
+        let mk = |f: *const crate::closure::JsFunctionInfo| -> u64 {
             let c = crate::closure::js_closure_alloc(f, 0);
             if c.is_null() {
                 0
@@ -209,15 +208,15 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
                 crate::value::js_nanbox_pointer(c as i64).to_bits()
             }
         };
-        let bl = mk(dataview_byte_length_getter_thunk as *const u8);
+        let bl = mk(crate::fn_info!(dataview_byte_length_getter_thunk, 0; with_declared(0)));
         if bl != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
         }
-        let bo = mk(dataview_byte_offset_getter_thunk as *const u8);
+        let bo = mk(crate::fn_info!(dataview_byte_offset_getter_thunk, 0; with_declared(0)));
         if bo != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
         }
-        let bf = mk(dataview_buffer_getter_thunk as *const u8);
+        let bf = mk(crate::fn_info!(dataview_buffer_getter_thunk, 0; with_declared(0)));
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
         }
@@ -225,38 +224,98 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
 
     // get* methods: spec `.length === 1`, fixed call arity 1 (`byteOffset`),
     // the optional `littleEndian` flag is collected into `rest`.
-    let gets: &[(&str, *const u8)] = &[
-        ("getInt8", dv_get_int8 as *const u8),
-        ("getUint8", dv_get_uint8 as *const u8),
-        ("getInt16", dv_get_int16 as *const u8),
-        ("getUint16", dv_get_uint16 as *const u8),
-        ("getInt32", dv_get_int32 as *const u8),
-        ("getUint32", dv_get_uint32 as *const u8),
-        ("getFloat32", dv_get_float32 as *const u8),
-        ("getFloat64", dv_get_float64 as *const u8),
-        ("getBigInt64", dv_get_bigint64 as *const u8),
-        ("getBigUint64", dv_get_biguint64 as *const u8),
+    let gets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
+        (
+            "getInt8",
+            crate::fn_info!(dv_get_int8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint8",
+            crate::fn_info!(dv_get_uint8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getInt16",
+            crate::fn_info!(dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint16",
+            crate::fn_info!(dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getInt32",
+            crate::fn_info!(dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getUint32",
+            crate::fn_info!(dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getFloat32",
+            crate::fn_info!(dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getFloat64",
+            crate::fn_info!(dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getBigInt64",
+            crate::fn_info!(dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "getBigUint64",
+            crate::fn_info!(dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+        ),
     ];
     for (name, ptr) in gets.iter().copied() {
-        install_proto_method_rest_with_length(proto_obj, name, ptr, 1, 1);
+        install_proto_method_rest_with_length(proto_obj, name, ptr, 1);
     }
 
     // set* methods: spec `.length === 2`, fixed call arity 2
     // (`byteOffset`, `value`), the optional `littleEndian` flag → `rest`.
-    let sets: &[(&str, *const u8)] = &[
-        ("setInt8", dv_set_int8 as *const u8),
-        ("setUint8", dv_set_uint8 as *const u8),
-        ("setInt16", dv_set_int16 as *const u8),
-        ("setUint16", dv_set_uint16 as *const u8),
-        ("setInt32", dv_set_int32 as *const u8),
-        ("setUint32", dv_set_uint32 as *const u8),
-        ("setFloat32", dv_set_float32 as *const u8),
-        ("setFloat64", dv_set_float64 as *const u8),
-        ("setBigInt64", dv_set_bigint64 as *const u8),
-        ("setBigUint64", dv_set_biguint64 as *const u8),
+    let sets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
+        (
+            "setInt8",
+            crate::fn_info!(dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint8",
+            crate::fn_info!(dv_set_uint8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setInt16",
+            crate::fn_info!(dv_set_int16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint16",
+            crate::fn_info!(dv_set_uint16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setInt32",
+            crate::fn_info!(dv_set_int32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setUint32",
+            crate::fn_info!(dv_set_uint32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setFloat32",
+            crate::fn_info!(dv_set_float32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setFloat64",
+            crate::fn_info!(dv_set_float64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setBigInt64",
+            crate::fn_info!(dv_set_bigint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
+        (
+            "setBigUint64",
+            crate::fn_info!(dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+        ),
     ];
     for (name, ptr) in sets.iter().copied() {
-        // `install_proto_method_rest` registers spec_length == call_fixed_arity.
+        // `.length` == the fixed arity (`install_proto_method_rest`).
         install_proto_method_rest(proto_obj, name, ptr, 2);
     }
 }

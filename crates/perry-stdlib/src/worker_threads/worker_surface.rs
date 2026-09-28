@@ -158,77 +158,122 @@ pub(super) fn worker_object(
     set_object_field(
         obj,
         "getHeapStatistics",
-        closure_value_with_worker_id(worker_get_heap_statistics as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_get_heap_statistics, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "cpuUsage",
-        closure_value_with_worker_id(worker_cpu_usage as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_cpu_usage, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "getHeapSnapshot",
-        closure_value_with_worker_id(worker_get_heap_snapshot as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_get_heap_snapshot, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "startCpuProfile",
-        closure_value_with_worker_id(worker_start_cpu_profile as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_start_cpu_profile, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "startHeapProfile",
-        closure_value_with_worker_id(worker_start_heap_profile as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_start_heap_profile, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "postMessage",
-        closure_value_with_worker_id(worker_post_message as *const u8, 1, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_post_message, 1; with_declared(1)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "terminate",
-        closure_value_with_worker_id(worker_terminate as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_terminate, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "reload",
-        closure_value_with_worker_id(worker_reload as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_reload, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        closure_value_with_worker_id(worker_ref as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_ref, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "unref",
-        closure_value_with_worker_id(worker_unref as *const u8, 0, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_unref, 0; with_declared(0)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "on",
-        closure_value_with_worker_id(worker_on as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_on, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "once",
-        closure_value_with_worker_id(worker_once as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_once, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "off",
-        closure_value_with_worker_id(worker_off as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_off, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "addEventListener",
-        closure_value_with_worker_id(worker_add_event_listener as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_add_event_listener, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        closure_value_with_worker_id(worker_remove_event_listener as *const u8, 2, worker_id),
+        closure_value_with_worker_id(
+            perry_runtime::fn_info!(worker_remove_event_listener, 2; with_declared(2)),
+            worker_id,
+        ),
     );
     set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());
@@ -251,26 +296,29 @@ pub(super) fn install_web_worker_globals() {
         return;
     }
     set_object_field(global(), "self", global_h.get_nanbox_f64());
-    let post_message_h =
-        scope.root_nanbox_f64(closure_value(web_worker_post_message as *const u8, 2));
+    let post_message_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_post_message, 2; with_declared(2)),
+    ));
     set_object_field(global(), "postMessage", post_message_h.get_nanbox_f64());
-    let add_event_listener_h =
-        scope.root_nanbox_f64(closure_value(web_worker_add_event_listener as *const u8, 3));
+    let add_event_listener_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_add_event_listener, 3; with_declared(3)),
+    ));
     set_object_field(
         global(),
         "addEventListener",
         add_event_listener_h.get_nanbox_f64(),
     );
     let remove_event_listener_h = scope.root_nanbox_f64(closure_value(
-        web_worker_remove_event_listener as *const u8,
-        2,
+        perry_runtime::fn_info!(web_worker_remove_event_listener, 2; with_declared(2)),
     ));
     set_object_field(
         global(),
         "removeEventListener",
         remove_event_listener_h.get_nanbox_f64(),
     );
-    let close_h = scope.root_nanbox_f64(closure_value(web_worker_close as *const u8, 0));
+    let close_h = scope.root_nanbox_f64(closure_value(
+        perry_runtime::fn_info!(web_worker_close, 0; with_declared(0)),
+    ));
     set_object_field(global(), "close", close_h.get_nanbox_f64());
     set_object_field(global(), "onmessage", js_null());
     set_object_field(global(), "onmessageerror", js_null());
@@ -352,7 +400,7 @@ fn worker_performance_object() -> *mut perry_runtime::object::ObjectHeader {
     set_object_field(
         obj,
         "eventLoopUtilization",
-        closure_value(worker_event_loop_utilization as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_event_loop_utilization, 2; with_declared(2))),
     );
     obj
 }
@@ -530,31 +578,71 @@ pub(super) fn worker_readable_stream_object() -> f64 {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(obj, "readable", js_bool(true));
     set_object_field(obj, "destroyed", js_bool(false));
-    set_object_field(obj, "on", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "once", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "addListener", closure_value(stream_on as *const u8, 2));
+    set_object_field(
+        obj,
+        "on",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "once",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "addListener",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "prependListener",
-        closure_value(stream_on as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
     );
-    set_object_field(obj, "off", closure_value(stream_off as *const u8, 2));
+    set_object_field(
+        obj,
+        "off",
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "removeListener",
-        closure_value(stream_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
     );
-    set_object_field(obj, "emit", closure_value(stream_emit as *const u8, 2));
-    set_object_field(obj, "pause", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "resume", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "destroy", closure_value(stream_this0 as *const u8, 0));
+    set_object_field(
+        obj,
+        "emit",
+        closure_value(perry_runtime::fn_info!(stream_emit, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "pause",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "resume",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "destroy",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
     set_object_field(
         obj,
         "setEncoding",
-        closure_value(stream_this1 as *const u8, 1),
+        closure_value(perry_runtime::fn_info!(stream_this1, 1; with_declared(1))),
     );
-    set_object_field(obj, "read", closure_value(stream_read as *const u8, 1));
-    set_object_field(obj, "pipe", closure_value(stream_pipe as *const u8, 1));
+    set_object_field(
+        obj,
+        "read",
+        closure_value(perry_runtime::fn_info!(stream_read, 1; with_declared(1))),
+    );
+    set_object_field(
+        obj,
+        "pipe",
+        closure_value(perry_runtime::fn_info!(stream_pipe, 1; with_declared(1))),
+    );
     object_value(obj)
 }
 
@@ -562,21 +650,61 @@ fn worker_writable_stream_object() -> f64 {
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(obj, "writable", js_bool(true));
     set_object_field(obj, "destroyed", js_bool(false));
-    set_object_field(obj, "on", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "once", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "addListener", closure_value(stream_on as *const u8, 2));
-    set_object_field(obj, "off", closure_value(stream_off as *const u8, 2));
+    set_object_field(
+        obj,
+        "on",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "once",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "addListener",
+        closure_value(perry_runtime::fn_info!(stream_on, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "off",
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
+    );
     set_object_field(
         obj,
         "removeListener",
-        closure_value(stream_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(stream_off, 2; with_declared(2))),
     );
-    set_object_field(obj, "emit", closure_value(stream_emit as *const u8, 2));
-    set_object_field(obj, "write", closure_value(stream_write as *const u8, 2));
-    set_object_field(obj, "end", closure_value(stream_this1 as *const u8, 1));
-    set_object_field(obj, "destroy", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "cork", closure_value(stream_this0 as *const u8, 0));
-    set_object_field(obj, "uncork", closure_value(stream_this0 as *const u8, 0));
+    set_object_field(
+        obj,
+        "emit",
+        closure_value(perry_runtime::fn_info!(stream_emit, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "write",
+        closure_value(perry_runtime::fn_info!(stream_write, 2; with_declared(2))),
+    );
+    set_object_field(
+        obj,
+        "end",
+        closure_value(perry_runtime::fn_info!(stream_this1, 1; with_declared(1))),
+    );
+    set_object_field(
+        obj,
+        "destroy",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "cork",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
+    set_object_field(
+        obj,
+        "uncork",
+        closure_value(perry_runtime::fn_info!(stream_this0, 0; with_declared(0))),
+    );
     object_value(obj)
 }
 
@@ -603,8 +731,10 @@ extern "C" fn worker_profile_stop(
 }
 
 pub(super) fn worker_profile_handle(kind_bits: i64) -> f64 {
-    perry_runtime::closure::js_register_closure_arity(worker_profile_stop as *const u8, 0);
-    let closure = perry_runtime::closure::js_closure_alloc(worker_profile_stop as *const u8, 1);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(worker_profile_stop, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, kind_bits);
     let obj = perry_runtime::object::js_object_alloc(0, 0);
     set_object_field(

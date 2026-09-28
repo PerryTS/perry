@@ -20,10 +20,9 @@ extern "C" fn deferred_destroy_step(
 }
 
 fn schedule_deferred_destroy_step(async_id: u64, remaining: u32) {
-    crate::closure::js_register_closure_arity(deferred_destroy_step as *const u8, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        deferred_destroy_step as *const u8,
+        crate::fn_info!(deferred_destroy_step, 0; with_declared(0)),
         2,
     ));
     callback.with_mut_ptr(|callback| {

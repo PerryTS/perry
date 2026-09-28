@@ -349,8 +349,10 @@ unsafe fn call_primitive_closure_value(
     // the ToObject wrapper — boxed ONCE up front so writes through `this`
     // land on the wrapper the body later observes. For a string receiver
     // that wrapper costs an own index property per UTF-16 code unit (#11509).
-    let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
-    let this_receiver = if crate::closure::body_receives_primitive_this(func_ptr) {
+    let receives_primitive =
+        crate::closure::closure_info(ptr as *const crate::closure::ClosureHeader)
+            .is_some_and(crate::closure::info_receives_primitive_this);
+    let this_receiver = if receives_primitive {
         receiver_h.get_nanbox_f64()
     } else {
         crate::object::js_object_coerce(receiver_h.get_nanbox_f64())
@@ -510,7 +512,7 @@ unsafe fn builtin_proto_user_value(
     if (value.bits() & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         let ptr = (value.bits() & crate::value::POINTER_MASK) as usize;
         if crate::closure::is_closure_ptr(ptr)
-            && (*(ptr as *const crate::closure::ClosureHeader)).func_ptr
+            && (*(ptr as *const crate::closure::ClosureHeader)).code()
                 == super::global_this::global_this_builtin_noop_thunk as *const u8
         {
             return None;

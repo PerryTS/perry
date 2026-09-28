@@ -122,12 +122,8 @@ extern "C" fn async_local_storage_unbound_method_thunk(
 }
 
 pub(crate) fn unbound_async_local_storage_method(method: &'static [u8]) -> f64 {
-    perry_runtime::closure::js_register_closure_rest(
-        async_local_storage_unbound_method_thunk as *const u8,
-        0,
-    );
     let closure = perry_runtime::closure::js_closure_alloc(
-        async_local_storage_unbound_method_thunk as *const u8,
+        perry_runtime::fn_info!(async_local_storage_unbound_method_thunk, 1; with_rest(0)),
         2,
     );
     if closure.is_null() {

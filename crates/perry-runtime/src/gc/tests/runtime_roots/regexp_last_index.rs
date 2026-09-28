@@ -99,8 +99,7 @@ fn regexp_exec_survives_a_moving_minor_inside_the_lastindex_coercion() {
     // `re.lastIndex = { valueOf() { … } }`.
     let coercer = crate::object::js_object_alloc(0, 1);
     let coercer_handle = scope.root_raw_mut_ptr(coercer);
-    let fp = collect_then_zero as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
+    let fp = crate::fn_info!(collect_then_zero, 0; with_declared(0));
     let value_of = crate::closure::js_closure_alloc_singleton(fp);
     let value_of_value = crate::value::js_nanbox_pointer(value_of as i64);
     let value_of_key = heap_string(b"valueOf");

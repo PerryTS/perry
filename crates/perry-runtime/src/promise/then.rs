@@ -384,13 +384,15 @@ pub extern "C" fn js_promise_resolve_with_promise(outer: *mut Promise, inner: *m
                 let outer_i64 = outer as i64;
 
                 // Create a resolve forwarding closure
-                let resolve_closure =
-                    crate::closure::js_closure_alloc(promise_forward_resolve as *const u8, 1);
+                let resolve_closure = crate::closure::js_closure_alloc(
+                    crate::fn_info!(promise_forward_resolve, 1),
+                    1,
+                );
                 crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, outer_i64);
 
                 // Create a reject forwarding closure
                 let reject_closure =
-                    crate::closure::js_closure_alloc(promise_forward_reject as *const u8, 1);
+                    crate::closure::js_closure_alloc(crate::fn_info!(promise_forward_reject, 1), 1);
                 crate::closure::js_closure_set_capture_ptr(reject_closure, 0, outer_i64);
 
                 // #5437 bug#2: add the forwarding callbacks as an OVERFLOW
@@ -847,12 +849,12 @@ pub extern "C" fn js_promise_finally(
     let next_i64 = next as i64;
 
     // Build the fulfilled wrapper: captures [on_finally, next].
-    let fulfill_wrap = js_closure_alloc(finally_fulfill_wrapper as *const u8, 2);
+    let fulfill_wrap = js_closure_alloc(crate::fn_info!(finally_fulfill_wrapper, 1), 2);
     js_closure_set_capture_ptr(fulfill_wrap, 0, on_finally as i64);
     js_closure_set_capture_ptr(fulfill_wrap, 1, next_i64);
 
     // Build the rejected wrapper: captures [on_finally, next].
-    let reject_wrap = js_closure_alloc(finally_reject_wrapper as *const u8, 2);
+    let reject_wrap = js_closure_alloc(crate::fn_info!(finally_reject_wrapper, 1), 2);
     js_closure_set_capture_ptr(reject_wrap, 0, on_finally as i64);
     js_closure_set_capture_ptr(reject_wrap, 1, next_i64);
 
@@ -1322,11 +1324,11 @@ fn perform_promise_then_with_cap(
     let cap_promise_h = scope.root_nanbox_f64(cap_promise);
 
     let ful_wrap_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        then_cap_fulfill_fn as *const u8,
+        crate::fn_info!(then_cap_fulfill_fn, 1; with_declared(1)),
         3,
     ) as i64));
     let rej_wrap_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
-        then_cap_reject_fn as *const u8,
+        crate::fn_info!(then_cap_reject_fn, 1; with_declared(1)),
         3,
     ) as i64));
 
@@ -1405,7 +1407,10 @@ extern "C" fn spec_then_finally_fn(
     };
 
     // Build valueThunk = () => value
-    let value_thunk_cl = js_closure_alloc(spec_value_return_fn as *const u8, 1);
+    let value_thunk_cl = js_closure_alloc(
+        crate::fn_info!(spec_value_return_fn, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(value_thunk_cl, 0, value);
     let value_thunk =
         f64::from_bits(crate::value::JSValue::pointer(value_thunk_cl as *const u8).bits());
@@ -1442,7 +1447,10 @@ extern "C" fn spec_catch_finally_fn(
     };
 
     // Build thrower = () => { throw reason; }
-    let thrower_cl = js_closure_alloc(spec_reason_thrower_fn as *const u8, 1);
+    let thrower_cl = js_closure_alloc(
+        crate::fn_info!(spec_reason_thrower_fn, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_f64(thrower_cl, 0, reason);
     let thrower = f64::from_bits(crate::value::JSValue::pointer(thrower_cl as *const u8).bits());
 
@@ -1450,25 +1458,6 @@ extern "C" fn spec_catch_finally_fn(
     let c_resolved = crate::promise::spec_combinators::js_promise_resolve_spec(c, result);
     let args = [thrower, undef];
     call_receiver_then(c_resolved, &args)
-}
-
-fn ensure_spec_finally_arities_registered() {
-    crate::perry_thread_local! {
-        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    DONE.with(|d| {
-        if d.get() {
-            return;
-        }
-        d.set(true);
-        use crate::closure::js_register_closure_arity;
-        js_register_closure_arity(then_cap_fulfill_fn as *const u8, 1);
-        js_register_closure_arity(then_cap_reject_fn as *const u8, 1);
-        js_register_closure_arity(spec_then_finally_fn as *const u8, 1);
-        js_register_closure_arity(spec_catch_finally_fn as *const u8, 1);
-        js_register_closure_arity(spec_value_return_fn as *const u8, 1);
-        js_register_closure_arity(spec_reason_thrower_fn as *const u8, 1);
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1481,7 +1470,6 @@ pub(crate) extern "C" fn promise_prototype_then_thunk(
     on_fulfilled: f64,
     on_rejected: f64,
 ) -> f64 {
-    ensure_spec_finally_arities_registered();
     let receiver = this.as_f64();
     let promise = if js_value_is_promise(receiver) != 0 {
         crate::value::js_nanbox_get_pointer(receiver) as *mut Promise
@@ -1552,7 +1540,6 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
     on_finally: f64,
 ) -> f64 {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
-    ensure_spec_finally_arities_registered();
 
     let receiver = this.as_f64();
 
@@ -1569,11 +1556,17 @@ pub(crate) extern "C" fn promise_prototype_finally_thunk(
         (on_finally, on_finally)
     } else {
         // Build spec-compliant thenFinally and catchFinally closures.
-        let tf = js_closure_alloc(spec_then_finally_fn as *const u8, 2);
+        let tf = js_closure_alloc(
+            crate::fn_info!(spec_then_finally_fn, 1; with_declared(1)),
+            2,
+        );
         js_closure_set_capture_f64(tf, 0, c);
         js_closure_set_capture_f64(tf, 1, on_finally);
 
-        let cf = js_closure_alloc(spec_catch_finally_fn as *const u8, 2);
+        let cf = js_closure_alloc(
+            crate::fn_info!(spec_catch_finally_fn, 1; with_declared(1)),
+            2,
+        );
         js_closure_set_capture_f64(cf, 0, c);
         js_closure_set_capture_f64(cf, 1, on_finally);
 
@@ -1711,7 +1704,7 @@ fn finally_wrapper_common(
         let inner = crate::value::js_nanbox_get_pointer(cleanup) as *mut Promise;
         if !inner.is_null() {
             // On cleanup fulfillment: settle `next` with the original outcome.
-            let on_ok = js_closure_alloc(finally_cleanup_fulfill as *const u8, 3);
+            let on_ok = js_closure_alloc(crate::fn_info!(finally_cleanup_fulfill, 1), 3);
             js_closure_set_capture_ptr(on_ok, 0, next as i64);
             js_closure_set_capture_f64(on_ok, 1, orig);
             js_closure_set_capture_f64(
@@ -1724,7 +1717,7 @@ fn finally_wrapper_common(
                 }),
             );
             // On cleanup rejection: reject `next` with the cleanup reason.
-            let on_err = js_closure_alloc(finally_cleanup_reject as *const u8, 1);
+            let on_err = js_closure_alloc(crate::fn_info!(finally_cleanup_reject, 1), 1);
             js_closure_set_capture_ptr(on_err, 0, next as i64);
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
             // `then` property on the cleanup promise (observable-then-calls tests).
@@ -1764,9 +1757,9 @@ fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfille
         return;
     }
     let pass_fn = if is_fulfilled {
-        finally_passthrough_fulfill as *const u8
+        crate::fn_info!(finally_passthrough_fulfill, 1)
     } else {
-        finally_passthrough_reject as *const u8
+        crate::fn_info!(finally_passthrough_reject, 1)
     };
     let pass = js_closure_alloc(pass_fn, 2);
     js_closure_set_capture_ptr(pass, 0, next as i64);

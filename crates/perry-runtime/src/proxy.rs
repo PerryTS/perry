@@ -2507,11 +2507,9 @@ pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
     let proxy = js_proxy_new(target, handler);
 
     // Build the revoke closure capturing the proxy value.
-    let revoke_closure =
-        crate::closure::js_closure_alloc(reflect_misc::proxy_revoke_trampoline as *const u8, 1);
-    crate::closure::js_register_closure_arity(
-        reflect_misc::proxy_revoke_trampoline as *const u8,
-        0,
+    let revoke_closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(reflect_misc::proxy_revoke_trampoline, 0; with_declared(0)),
+        1,
     );
     crate::closure::js_closure_set_capture_f64(revoke_closure, 0, proxy);
     let revoke_boxed = f64::from_bits(POINTER_TAG | ((revoke_closure as u64) & POINTER_MASK));
@@ -2923,7 +2921,7 @@ mod tests {
         ) -> f64 {
             f64::from_bits(TAG_UNDEFINED)
         }
-        let f = crate::closure::js_closure_alloc(dummy_fn as *const u8, 0);
+        let f = crate::closure::js_closure_alloc(crate::fn_info!(dummy_fn, 0), 0);
         let f_val = f64::from_bits(POINTER_TAG | ((f as u64) & POINTER_MASK));
         let handler = obj_value();
 

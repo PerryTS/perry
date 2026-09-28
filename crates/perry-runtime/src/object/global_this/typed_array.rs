@@ -519,8 +519,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
         return;
     }
     unsafe {
-        let f = typed_array_to_string_tag_getter_thunk as *const u8;
-        crate::closure::js_register_closure_arity(f, 0);
+        let f = crate::fn_info!(typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
         let c = crate::closure::js_closure_alloc(f, 0);
         if c.is_null() {
             return;
@@ -546,8 +545,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
 fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     unsafe {
         // 0-arg getters: `.call(this)` forwards 0 user args.
-        let mk = |f: *const u8| -> u64 {
-            crate::closure::js_register_closure_arity(f, 0);
+        let mk = |f: *const crate::closure::JsFunctionInfo| -> u64 {
             let c = crate::closure::js_closure_alloc(f, 0);
             if c.is_null() {
                 0
@@ -558,22 +556,22 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "length",
-            mk(typed_array_length_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteLength",
-            mk(typed_array_byte_length_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_byte_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteOffset",
-            mk(typed_array_byte_offset_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_byte_offset_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "buffer",
-            mk(typed_array_buffer_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_buffer_getter_thunk, 0; with_declared(0))),
         );
     }
 }
@@ -589,8 +587,7 @@ pub(crate) fn install_function_has_instance_symbol(proto_obj: *mut ObjectHeader)
         return;
     }
     unsafe {
-        let func_ptr = super::super::instanceof::function_prototype_has_instance_thunk as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 1);
+        let func_ptr = crate::fn_info!(super::super::instanceof::function_prototype_has_instance_thunk, 1; with_declared(1));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure.is_null() {
             return;
@@ -670,12 +667,15 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // `typedarray_props.rs:812` on the allocation-point route. See
     // `gc::tests::lazy_intrinsic_towers` for the gate.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let ctor = crate::closure::js_closure_alloc(typed_array_constructor_call_thunk as *const u8, 0);
+    let ctor = crate::closure::js_closure_alloc(
+        crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0)),
+        0,
+    );
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
-    crate::closure::js_register_closure_arity(typed_array_constructor_call_thunk as *const u8, 0);
+
     super::super::native_module::set_bound_native_closure_name(ctor, "TypedArray");
     super::super::native_module::set_builtin_closure_length(ctor as usize, 0);
     super::super::set_builtin_property_attrs(
@@ -749,15 +749,18 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // that it captures the final `values` closure (the `%TypedArray%.prototype
     // [@@iterator] === %TypedArray%.prototype.values` identity invariant).
     install_typed_array_iterator_symbol(proto);
-    install_constructor_static_with_call_arity(
+    install_constructor_static(
         ctor,
         "from",
-        typed_array_from_thunk as *const u8,
+        crate::fn_info!(typed_array_from_thunk, 3; with_declared(3)),
         1,
-        3,
-        false,
     );
-    install_constructor_static(ctor, "of", typed_array_of_thunk as *const u8, 0, true);
+    install_constructor_static(
+        ctor,
+        "of",
+        crate::fn_info!(typed_array_of_thunk, 1; with_rest(0)),
+        0,
+    );
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
     (ctor, proto)

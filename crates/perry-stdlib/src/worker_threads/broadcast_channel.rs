@@ -142,32 +142,50 @@ pub extern "C" fn js_worker_threads_broadcast_channel_new(name: f64) -> f64 {
     set_object_field(
         obj,
         "postMessage",
-        port_bound_closure(broadcast_post_message as *const u8, 1, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_post_message, 1; with_declared(1)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "close",
-        port_bound_closure(broadcast_close as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_close, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "unref",
-        port_bound_closure(broadcast_ref_or_unref as *const u8, 0, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_ref_or_unref, 0; with_declared(0)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "addEventListener",
-        port_bound_closure(broadcast_add_event_listener as *const u8, 3, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_add_event_listener, 3; with_declared(3)),
+            id,
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        port_bound_closure(broadcast_remove_event_listener as *const u8, 2, id),
+        port_bound_closure(
+            perry_runtime::fn_info!(broadcast_remove_event_listener, 2; with_declared(2)),
+            id,
+        ),
     );
     set_object_field(obj, "onmessage", js_null());
     set_object_field(obj, "onmessageerror", js_null());

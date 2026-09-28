@@ -813,7 +813,7 @@ pub(super) fn configure_plural_rules(
         install_bound_instance_function(
             obj,
             "select",
-            plural_rules_bound_select_thunk as *const u8,
+            crate::fn_info!(plural_rules_bound_select_thunk, 1; with_declared(1)),
             1,
         )
     });
@@ -821,10 +821,8 @@ pub(super) fn configure_plural_rules(
         install_function(
             obj,
             "selectRange",
-            plural_rules_select_range_thunk as *const u8,
+            crate::fn_info!(plural_rules_select_range_thunk, 2; with_declared(2)),
             2,
-            2,
-            false,
         )
     });
     let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
@@ -832,7 +830,7 @@ pub(super) fn configure_plural_rules(
             install_bound_instance_function(
                 obj,
                 "resolvedOptions",
-                plural_rules_bound_resolved_options_thunk as *const u8,
+                crate::fn_info!(plural_rules_bound_resolved_options_thunk, 0; with_declared(0)),
                 0,
             )
         })

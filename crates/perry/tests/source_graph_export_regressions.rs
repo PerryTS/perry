@@ -342,9 +342,10 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
         "the direct arrow with a mutable capture must get a bounded private body"
     );
     assert!(
-        all_ir.contains("call void @js_register_closure_trusted_direct(")
-            && all_ir.contains("i32 1, i64 1)"),
-        "module init must register the exact one-box capture layout"
+        all_ir.lines().any(|line| line.contains("$info = ")
+            && line.contains("$trusted_boxes, i64 1, ptr")
+            && line.contains("i32 1, ptr @")),
+        "the arrow's info must name its trusted body with the exact one-box capture layout"
     );
     let trusted_callback =
         llvm_function_body_containing(&all_ir, "$trusted_boxes", "trusted_box.tdz");

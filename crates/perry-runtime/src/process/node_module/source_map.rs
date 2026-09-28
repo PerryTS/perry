@@ -85,12 +85,8 @@ pub extern "C" fn js_module_source_map_new(payload: f64, options: f64) -> f64 {
     obj.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| module_object_value(obj))
 }
 
-type SourceMapThunk = crate::closure::body_call::js_body_fn_ty!(a);
-
-fn source_map_method(name: &str, thunk: SourceMapThunk) -> f64 {
-    let func_ptr = thunk as *const u8;
-    let closure = js_closure_alloc(func_ptr, 0);
-    crate::closure::js_register_closure_rest(func_ptr, 0);
+fn source_map_method(name: &str, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, 2);
     crate::object::set_builtin_closure_non_constructable(closure as usize);
@@ -134,10 +130,8 @@ extern "C" fn source_map_line_lengths_getter(
     f64::from_bits(JSValue::array_ptr(cloned).bits())
 }
 
-fn source_map_getter(name: &str, thunk: crate::closure::body_call::js_body_fn_ty!()) -> f64 {
-    let func_ptr = thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = js_closure_alloc(func_ptr, 0);
+fn source_map_getter(name: &str, info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, &format!("get {name}"));
     crate::object::set_builtin_closure_length(closure as usize, 0);
     crate::object::set_builtin_closure_non_constructable(closure as usize);
@@ -173,19 +167,19 @@ fn source_map_prototype() -> f64 {
             0,
             JSValue::from_bits(module_undefined().to_bits()),
         );
-        for (index, name, thunk) in [
+        for (index, name, info) in [
             (
                 1,
                 "findEntry",
-                source_map_find_entry_thunk as SourceMapThunk,
+                crate::fn_info!(source_map_find_entry_thunk, 1; with_rest(0)),
             ),
             (
                 2,
                 "findOrigin",
-                source_map_find_origin_thunk as SourceMapThunk,
+                crate::fn_info!(source_map_find_origin_thunk, 1; with_rest(0)),
             ),
         ] {
-            let value = source_map_method(name, thunk);
+            let value = source_map_method(name, info);
             let proto = module_object_ptr(f64::from_bits(slot.get())).expect("SourceMap prototype");
             crate::object::js_object_set_field(
                 proto as *mut _,
@@ -198,19 +192,19 @@ fn source_map_prototype() -> f64 {
                 crate::object::PropertyAttrs::new(true, false, true),
             );
         }
-        for (index, name, thunk) in [
+        for (index, name, info) in [
             (
                 4,
                 "payload",
-                source_map_payload_getter as crate::closure::body_call::js_body_fn_ty!(),
+                crate::fn_info!(source_map_payload_getter, 0; with_declared(0)),
             ),
             (
                 3,
                 "lineLengths",
-                source_map_line_lengths_getter as crate::closure::body_call::js_body_fn_ty!(),
+                crate::fn_info!(source_map_line_lengths_getter, 0; with_declared(0)),
             ),
         ] {
-            let getter = source_map_getter(name, thunk);
+            let getter = source_map_getter(name, info);
             let proto = module_object_ptr(f64::from_bits(slot.get())).expect("SourceMap prototype");
             crate::object::js_object_set_field(
                 proto as *mut _,

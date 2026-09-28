@@ -22,7 +22,7 @@ fn call_method_depth_drop_is_idempotent_after_exception_restore() {
 
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     let closure_ptr = crate::closure::js_closure_alloc(
-        crate::object::global_this_builtin_noop_thunk as *const u8,
+        crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
         0,
     );
     if closure_ptr.is_null() {
@@ -138,9 +138,10 @@ fn date_to_json_number_hint_honors_symbol_to_primitive() {
         let receiver = js_object_alloc(0, 0);
         let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
 
-        let to_primitive =
-            crate::closure::js_closure_alloc(symbol_to_primitive_nan as *const u8, 0);
-        crate::closure::js_register_closure_arity(symbol_to_primitive_nan as *const u8, 1);
+        let to_primitive = crate::closure::js_closure_alloc(
+            crate::fn_info!(symbol_to_primitive_nan, 1; with_declared(1)),
+            0,
+        );
         let sym = crate::symbol::well_known_symbol("toPrimitive");
         let sym_value =
             f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
@@ -150,8 +151,10 @@ fn date_to_json_number_hint_honors_symbol_to_primitive() {
             crate::value::js_nanbox_pointer(to_primitive as i64),
         );
 
-        let value_of = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
-        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let value_of = crate::closure::js_closure_alloc(
+            crate::fn_info!(value_of_finite, 0; with_declared(0)),
+            0,
+        );
         let value_of_key = crate::string::js_string_from_bytes(b"valueOf".as_ptr(), 7);
         js_object_set_field_by_name(
             receiver,
@@ -179,9 +182,10 @@ fn date_to_json_symbol_to_primitive_object_result_throws() {
         let receiver = js_object_alloc(0, 0);
         let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
 
-        let to_primitive =
-            crate::closure::js_closure_alloc(symbol_to_primitive_this_object as *const u8, 0);
-        crate::closure::js_register_closure_arity(symbol_to_primitive_this_object as *const u8, 1);
+        let to_primitive = crate::closure::js_closure_alloc(
+            crate::fn_info!(symbol_to_primitive_this_object, 1; with_declared(1)),
+            0,
+        );
         let sym = crate::symbol::well_known_symbol("toPrimitive");
         let sym_value =
             f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
@@ -191,8 +195,10 @@ fn date_to_json_symbol_to_primitive_object_result_throws() {
             crate::value::js_nanbox_pointer(to_primitive as i64),
         );
 
-        let to_iso = crate::closure::js_closure_alloc(to_iso_string_sentinel as *const u8, 0);
-        crate::closure::js_register_closure_arity(to_iso_string_sentinel as *const u8, 0);
+        let to_iso = crate::closure::js_closure_alloc(
+            crate::fn_info!(to_iso_string_sentinel, 0; with_declared(0)),
+            0,
+        );
         let to_iso_key = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
         js_object_set_field_by_name(
             receiver,
@@ -246,8 +252,10 @@ fn builtin_prototype_methods_reject_dynamic_new() {
             );
         }
 
-        let ordinary = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
-        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let ordinary = crate::closure::js_closure_alloc(
+            crate::fn_info!(value_of_finite, 0; with_declared(0)),
+            0,
+        );
         let ordinary_value = crate::value::js_nanbox_pointer(ordinary as i64);
         let result = catch_js(|| js_new_function_construct(ordinary_value, std::ptr::null(), 0));
         assert!(result.is_ok(), "ordinary closures remain constructable");
@@ -316,7 +324,7 @@ fn closure_name_and_length_ignore_plain_assignment() {
     crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
-            crate::object::global_this_builtin_noop_thunk as *const u8,
+            crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
             0,
         );
         assert!(!closure.is_null());
@@ -353,7 +361,7 @@ fn closure_name_can_be_redefined_with_define_property() {
     crate::closure::test_clear_closure_side_tables();
     {
         let closure = crate::closure::js_closure_alloc(
-            crate::object::global_this_builtin_noop_thunk as *const u8,
+            crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
             0,
         );
         assert!(!closure.is_null());
@@ -433,11 +441,11 @@ fn closure_accessor_define_property_is_own_and_invoked() {
     let _global = crate::gc::global_side_table_test_lock();
     crate::closure::test_clear_closure_side_tables();
     let closure = crate::closure::js_closure_alloc(
-        crate::object::global_this_builtin_noop_thunk as *const u8,
+        crate::fn_info!(crate::object::global_this_builtin_noop_thunk, 1; with_declared(0)),
         0,
     );
     assert!(!closure.is_null());
-    let getter = crate::closure::js_closure_alloc(closure_accessor_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(closure_accessor_getter, 0), 0);
     assert!(!getter.is_null());
 
     let caller_key = crate::string::js_string_from_bytes(b"caller".as_ptr(), 6);
@@ -596,7 +604,8 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
                 .collect()
         };
         let getter_descriptor = || -> f64 {
-            let getter = crate::closure::js_closure_alloc(closure_accessor_getter as *const u8, 0);
+            let getter =
+                crate::closure::js_closure_alloc(crate::fn_info!(closure_accessor_getter, 0), 0);
             assert!(!getter.is_null());
             let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
             let descriptor = js_object_alloc(0, 0);

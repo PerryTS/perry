@@ -271,7 +271,11 @@ unsafe fn register_closure_name_if_absent(val_bits: u64, name: &str) {
     }
     let val_ptr = val_addr as *const u8;
     let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
-    let func_ptr = (*closure_ptr).func_ptr;
+    // A header whose info word is not yet written (null) names nothing.
+    if (*closure_ptr).info.is_null() {
+        return;
+    }
+    let func_ptr = (*closure_ptr).code();
     if func_ptr.is_null() {
         return;
     }

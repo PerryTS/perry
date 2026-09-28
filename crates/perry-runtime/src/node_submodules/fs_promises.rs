@@ -9,7 +9,7 @@
 
 use crate::closure::{
     get_valid_func_ptr, js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_native_call_value, js_register_closure_arity, ClosureHeader,
+    js_native_call_value, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -662,32 +662,10 @@ fn promise_ptr_from_value(value: f64) -> Option<*mut crate::promise::Promise> {
     raw_ptr_from_value(value).map(|raw| raw as *mut crate::promise::Promise)
 }
 
-fn readline_bound_method0(
-    func: crate::closure::body_call::js_body_fn_ty!(),
-    this_value: f64,
-) -> f64 {
-    js_register_closure_arity(func as *const u8, 0);
-    let closure = js_closure_alloc(func as *const u8, 1);
-    js_closure_set_capture_f64(closure, 0, this_value);
-    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
-}
-
-fn readline_bound_method1(
-    func: crate::closure::body_call::js_body_fn_ty!(a),
-    this_value: f64,
-) -> f64 {
-    js_register_closure_arity(func as *const u8, 1);
-    let closure = js_closure_alloc(func as *const u8, 1);
-    js_closure_set_capture_f64(closure, 0, this_value);
-    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
-}
-
-fn readline_bound_method2(
-    func: crate::closure::body_call::js_body_fn_ty!(a, a),
-    this_value: f64,
-) -> f64 {
-    js_register_closure_arity(func as *const u8, 2);
-    let closure = js_closure_alloc(func as *const u8, 1);
+/// A readline method closure bound to `this_value`; `info` records the
+/// method body's declared arity.
+fn readline_bound_method(info: *const crate::closure::JsFunctionInfo, this_value: f64) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_f64(closure, 0, this_value);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
@@ -791,11 +769,11 @@ fn attach_interface_input(interface: f64, input: f64) {
         return;
     };
 
-    let data = js_closure_alloc(readline_promises_input_data as *const u8, 1);
+    let data = js_closure_alloc(crate::fn_info!(readline_promises_input_data, 1), 1);
     js_closure_set_capture_f64(data, 0, interface);
     let data_value = f64::from_bits(JSValue::pointer(data as *const u8).bits());
 
-    let close = js_closure_alloc(readline_promises_input_close as *const u8, 1);
+    let close = js_closure_alloc(crate::fn_info!(readline_promises_input_close, 0), 1);
     js_closure_set_capture_f64(close, 0, interface);
     let close_value = f64::from_bits(JSValue::pointer(close as *const u8).bits());
 
@@ -836,7 +814,8 @@ extern "C" fn readline_promises_question(
                 return promise_value;
             }
 
-            let listener = js_closure_alloc(readline_promises_abort_question as *const u8, 1);
+            let listener =
+                js_closure_alloc(crate::fn_info!(readline_promises_abort_question, 0), 1);
             js_closure_set_capture_f64(listener, 0, interface);
             let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
             set_value_field(interface, RL_IF_ABORT_SIGNAL, signal);
@@ -877,12 +856,18 @@ fn readline_promises_create_interface(opts: f64) -> f64 {
     set_object_field_value(
         obj,
         b"close",
-        readline_bound_method0(readline_promises_close, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_promises_close, 0; with_declared(0)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"question",
-        readline_bound_method2(readline_promises_question, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_promises_question, 2; with_declared(2)),
+            obj_value,
+        ),
     );
 
     attach_interface_input(obj_value, input);
@@ -955,7 +940,7 @@ fn schedule_readline_auto_commit(value: f64) {
         return;
     }
     set_value_field(value, RL_ACTION_AUTO_PENDING, bool_value(true));
-    let callback = js_closure_alloc(readline_auto_commit_callback as *const u8, 1);
+    let callback = js_closure_alloc(crate::fn_info!(readline_auto_commit_callback, 0), 1);
     js_closure_set_capture_f64(callback, 0, value);
     crate::timer::js_set_immediate_callback(callback as i64);
 }
@@ -1068,32 +1053,50 @@ pub extern "C" fn js_readline_promises_readline_new(output: f64, options: f64) -
     set_object_field_value(
         obj,
         b"clearLine",
-        readline_bound_method1(readline_action_clear_line, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_clear_line, 1; with_declared(1)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"clearScreenDown",
-        readline_bound_method0(readline_action_clear_screen_down, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_clear_screen_down, 0; with_declared(0)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"cursorTo",
-        readline_bound_method2(readline_action_cursor_to, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_cursor_to, 2; with_declared(2)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"moveCursor",
-        readline_bound_method2(readline_action_move_cursor, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_move_cursor, 2; with_declared(2)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"commit",
-        readline_bound_method0(readline_action_commit, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_commit, 0; with_declared(0)),
+            obj_value,
+        ),
     );
     set_object_field_value(
         obj,
         b"rollback",
-        readline_bound_method0(readline_action_rollback, obj_value),
+        readline_bound_method(
+            crate::fn_info!(readline_action_rollback, 0; with_declared(0)),
+            obj_value,
+        ),
     );
     obj_value
 }

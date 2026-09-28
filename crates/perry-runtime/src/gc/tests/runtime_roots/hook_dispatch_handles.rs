@@ -33,7 +33,7 @@ fn test_async_resource_subclass_run_in_scope_roots_inputs_across_a_resolve_gc() 
     // The helper allocates (a key string, and the meta record the backing word
     // lives in), so it can move the receiver; take the address it hands back.
     let receiver = crate::async_hooks::test_link_async_resource_subclass(receiver, backing);
-    let callback = crate::closure::js_closure_alloc(test_current_async_id as *const u8, 0);
+    let callback = crate::closure::js_closure_alloc(crate::fn_info!(test_current_async_id, 0), 0);
 
     crate::async_hooks::test_force_next_async_resource_resolve_gc();
     let before = crate::gc::copying_minor_cycles();
@@ -61,7 +61,8 @@ fn test_async_hook_option_lookup_roots_callbacks_across_copied_minor_gc() {
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    let init = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let init =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
     let original = init as usize;
     let options = hook_options(&[(b"init", init)]);
 
@@ -83,8 +84,10 @@ fn test_closure_rest_dispatch_roots_args_during_rest_array_alloc_gc() {
     let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    crate::closure::js_register_closure_rest(test_rest_first_value as *const u8, 0);
-    let closure = crate::closure::js_closure_alloc(test_rest_first_value as *const u8, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_rest_first_value, 1; with_rest(0)),
+        0,
+    );
     let value = test_string_value(b"rest-dispatch");
     let args = [value];
 
@@ -114,11 +117,14 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
 
-    let init_hook =
-        crate::closure::js_closure_alloc(test_async_hook_init_force_minor_gc as *const u8, 0);
+    let init_hook = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_async_hook_init_force_minor_gc, 4),
+        0,
+    );
     enable_async_hook(&[(b"init", init_hook)]);
 
-    let timer_callback = crate::closure::js_closure_alloc(test_timer_capture_arg as *const u8, 0);
+    let timer_callback =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_timer_capture_arg, 1), 0);
     let timer_callback_original = timer_callback as usize;
     let arg = test_string_value(b"bound-timer-arg");
     let arg_original = (arg.to_bits() & POINTER_MASK) as usize;
@@ -126,7 +132,7 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
     let module_name = b"timers";
     let namespace =
         crate::object::js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
-    let bound = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
+    let bound = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 3);
     crate::closure::js_closure_set_capture_f64(bound, 0, namespace);
     let method = b"setTimeout";
     crate::closure::js_closure_set_capture_ptr(bound, 1, method.as_ptr() as i64);
@@ -166,14 +172,18 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
 
-    let before_hook =
-        crate::closure::js_closure_alloc(test_async_hook_event_force_minor_gc as *const u8, 0);
-    let after_hook =
-        crate::closure::js_closure_alloc(test_async_hook_event_force_minor_gc as *const u8, 0);
+    let before_hook = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_async_hook_event_force_minor_gc, 1),
+        0,
+    );
+    let after_hook = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_async_hook_event_force_minor_gc, 1),
+        0,
+    );
     enable_async_hook(&[(b"before", before_hook), (b"after", after_hook)]);
 
     crate::async_context::clear_store(ALS_HANDLE);
-    let callback = crate::closure::js_closure_alloc(test_timer_capture_arg as *const u8, 0);
+    let callback = crate::closure::js_closure_alloc(crate::fn_info!(test_timer_capture_arg, 1), 0);
     let arg = test_string_value(b"timer-tick-arg");
     let timer_args = [arg];
     let timer_id = unsafe {
@@ -210,8 +220,9 @@ fn test_timer_tick_roots_the_complete_detached_expired_batch() {
     gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
 
     let collecting_callback =
-        crate::closure::js_closure_alloc(test_timer_force_minor_gc as *const u8, 0);
-    let second_callback = crate::closure::js_closure_alloc(test_timer_capture_arg as *const u8, 0);
+        crate::closure::js_closure_alloc(crate::fn_info!(test_timer_force_minor_gc, 0), 0);
+    let second_callback =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_timer_capture_arg, 1), 0);
     let second_callback_original = second_callback as usize;
     let second_arg = test_string_value(b"detached-timer-batch");
     let second_arg_original = (second_arg.to_bits() & POINTER_MASK) as usize;
@@ -259,12 +270,15 @@ fn test_next_tick_previous_context_survives_hook_gc() {
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_queued_microtask_roots_mut);
 
-    let before_hook =
-        crate::closure::js_closure_alloc(test_async_hook_event_force_minor_gc as *const u8, 0);
+    let before_hook = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_async_hook_event_force_minor_gc, 1),
+        0,
+    );
     enable_async_hook(&[(b"before", before_hook)]);
 
     crate::async_context::clear_store(ALS_HANDLE);
-    let callback = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let callback =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
     crate::builtins::js_queue_next_tick(callback as i64);
 
     let previous = test_string_value(b"nexttick-previous-context");
@@ -294,7 +308,7 @@ fn test_array_map_runtime_handles_survive_callback_copied_minor_gc() {
     let input_ptr = (input.to_bits() & POINTER_MASK) as usize;
     let source = test_array_from_values(&[input]);
     let callback =
-        crate::closure::js_closure_alloc(test_array_identity_force_minor_gc as *const u8, 0);
+        crate::closure::js_closure_alloc(crate::fn_info!(test_array_identity_force_minor_gc, 2), 0);
 
     let before = gc_collection_count();
     let result = crate::array::js_array_map(source, callback);

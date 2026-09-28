@@ -29,21 +29,18 @@ enum GeneratorKind {
 }
 
 /// Classify a `GC_TYPE_CLOSURE` pointer as a (plain | async) generator
-/// function, or `None` for any other closure. Async generators register in
-/// BOTH the generator and async registries (the lowering carries `is_async &&
-/// is_generator`), so async-registry membership disambiguates the two.
+/// function, or `None` for any other closure. An async generator's info may
+/// carry both FN_GENERATOR and FN_ASYNC (the lowering carries `is_async &&
+/// is_generator`), so FN_ASYNC_GENERATOR disambiguates the two.
 fn closure_generator_kind(closure_ptr: usize) -> Option<GeneratorKind> {
     let closure = closure_ptr as *const crate::closure::ClosureHeader;
-    let func_ptr = crate::closure::get_valid_func_ptr(closure);
-    if func_ptr.is_null() {
-        return None;
-    }
-    // Async generators are registered in BOTH registries (they share the sync
-    // generator's `{next,return,throw}` lowering), so check the async-generator
-    // registry first — it's the only signal that disambiguates the two.
-    if crate::closure::is_registered_async_generator_function(func_ptr) {
+    let info = crate::closure::closure_info(closure)?;
+    // An async generator's info may carry FN_GENERATOR as well (it shares the
+    // sync generator's `{next,return,throw}` lowering), so check
+    // FN_ASYNC_GENERATOR first — it is the only flag that disambiguates the two.
+    if crate::closure::info_has(info, crate::closure::FN_ASYNC_GENERATOR) {
         Some(GeneratorKind::Async)
-    } else if crate::closure::is_registered_generator_function(func_ptr) {
+    } else if crate::closure::info_has(info, crate::closure::FN_GENERATOR) {
         Some(GeneratorKind::Sync)
     } else {
         None
@@ -55,11 +52,11 @@ fn closure_generator_kind(closure_ptr: usize) -> Option<GeneratorKind> {
 /// async-generator tower classified above.
 fn is_plain_async_function(closure_ptr: usize) -> bool {
     let closure = closure_ptr as *const crate::closure::ClosureHeader;
-    let func_ptr = crate::closure::get_valid_func_ptr(closure);
-    !func_ptr.is_null()
-        && crate::closure::is_registered_async_function(func_ptr)
-        && !crate::closure::is_registered_generator_function(func_ptr)
-        && !crate::closure::is_registered_async_generator_function(func_ptr)
+    crate::closure::closure_info(closure).is_some_and(|info| {
+        crate::closure::info_has(info, crate::closure::FN_ASYNC)
+            && !crate::closure::info_has(info, crate::closure::FN_GENERATOR)
+            && !crate::closure::info_has(info, crate::closure::FN_ASYNC_GENERATOR)
+    })
 }
 
 fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
@@ -106,8 +103,10 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
 /// once the global `Function` constructor has been populated.
 fn build_async_function_tower() {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let noop = global_this_builtin_noop_thunk as *const u8;
-    let ctor = crate::closure::js_closure_alloc(noop, 0);
+    let ctor = crate::closure::js_closure_alloc(
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        0,
+    );
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
         return;
@@ -115,7 +114,6 @@ fn build_async_function_tower() {
     let configurable = super::super::PropertyAttrs::new(false, false, true);
     let fixed = super::super::PropertyAttrs::new(false, false, false);
 
-    crate::closure::js_register_closure_arity(noop, 1);
     super::super::native_module::set_bound_native_closure_name(ctor, "AsyncFunction");
     super::super::native_module::set_builtin_closure_length(ctor as usize, 1);
     super::super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
@@ -477,13 +475,12 @@ fn install_proto_symbol_self_method(
     proto: *mut ObjectHeader,
     symbol_name: &str,
     display_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
 ) {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     super::super::native_module::set_bound_native_closure_name(closure, display_name);
     super::super::native_module::set_builtin_closure_length(closure as usize, 0);
     let configurable = super::super::PropertyAttrs::new(false, false, true);
@@ -699,11 +696,11 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // AsyncGeneratorEnqueue) and `.return(v)` awaits `v`. The non-closure
     // fallback (`js_generator_attach_prototype`) does this when codegen knows
     // the function is async; on the closure-identity path we read the async
-    // brand from the function's registration (the `async function*` wrapper
-    // symbol is recorded via `js_register_closure_async_generator_function`).
-    if crate::closure::is_registered_async_generator_function(crate::closure::get_valid_func_ptr(
-        closure,
-    )) {
+    // brand from the function's info (FN_ASYNC_GENERATOR on the
+    // `async function*` wrapper's info).
+    if crate::closure::closure_info(closure)
+        .is_some_and(|info| crate::closure::info_has(info, crate::closure::FN_ASYNC_GENERATOR))
+    {
         let async_target = handle_object_ptr(&obj_h);
         super::super::async_generator_queue::wrap_async_generator_instance(async_target);
     }
@@ -778,8 +775,10 @@ fn build_generator_tower(
     } else {
         ("GeneratorFunction", "GeneratorFunction", "Generator")
     };
-    let noop = global_this_builtin_noop_thunk as *const u8;
-    let ctor = crate::closure::js_closure_alloc(noop, 0);
+    let ctor = crate::closure::js_closure_alloc(
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        0,
+    );
     let proto = js_object_alloc(0, 0); // %Generator% / %AsyncGenerator%
     let gen_proto = js_object_alloc(0, 0); // %Generator.prototype%
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
@@ -789,7 +788,6 @@ fn build_generator_tower(
     let configurable = super::super::PropertyAttrs::new(false, false, true);
 
     // --- %GeneratorFunction% constructor ---
-    crate::closure::js_register_closure_arity(noop, 1);
     super::super::native_module::set_bound_native_closure_name(ctor, ctor_name);
     super::super::native_module::set_builtin_closure_length(ctor as usize, 1);
     super::super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
@@ -823,22 +821,22 @@ fn build_generator_tower(
         crate::value::js_nanbox_pointer(proto as i64),
         configurable,
     );
-    let (next_thunk, return_thunk, throw_thunk) = if is_async {
+    let (next_info, return_info, throw_info) = if is_async {
         (
-            async_generator_proto_next_thunk as *const u8,
-            async_generator_proto_return_thunk as *const u8,
-            async_generator_proto_throw_thunk as *const u8,
+            crate::fn_info!(async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            generator_proto_next_thunk as *const u8,
-            generator_proto_return_thunk as *const u8,
-            generator_proto_throw_thunk as *const u8,
+            crate::fn_info!(generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
-    install_proto_method(gen_proto, "next", next_thunk, 1);
-    install_proto_method(gen_proto, "return", return_thunk, 1);
-    install_proto_method(gen_proto, "throw", throw_thunk, 1);
+    install_proto_method(gen_proto, "next", next_info, 1);
+    install_proto_method(gen_proto, "return", return_info, 1);
+    install_proto_method(gen_proto, "throw", throw_info, 1);
     // Spec: `%AsyncGenerator.prototype%` inherits `[Symbol.asyncIterator]` from
     // `%AsyncIteratorPrototype%` and `%Generator.prototype%` inherits
     // `[Symbol.iterator]` from `%IteratorPrototype%` — both returning `this`.
@@ -863,13 +861,13 @@ fn build_generator_tower(
         (
             "asyncIterator",
             "[Symbol.asyncIterator]",
-            async_generator_proto_async_iterator_thunk as *const u8,
+            crate::fn_info!(async_generator_proto_async_iterator_thunk, 1; with_declared(0)),
         )
     } else {
         (
             "iterator",
             "[Symbol.iterator]",
-            generator_proto_iterator_thunk as *const u8,
+            crate::fn_info!(generator_proto_iterator_thunk, 1; with_declared(0)),
         )
     };
     if is_async {

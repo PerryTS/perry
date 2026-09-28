@@ -1382,11 +1382,14 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
             }
             // Arrow / async / generator / async-generator function bodies are
             // non-constructors.
-            if crate::closure::is_registered_arrow_function(fp)
-                || crate::closure::is_registered_async_function(fp)
-                || crate::closure::is_registered_generator_function(fp)
-                || crate::closure::is_registered_async_generator_function(fp)
-            {
+            if crate::closure::closure_info(ptr).is_some_and(|info| {
+                info.flags
+                    & (crate::closure::FN_ARROW
+                        | crate::closure::FN_ASYNC
+                        | crate::closure::FN_GENERATOR
+                        | crate::closure::FN_ASYNC_GENERATOR)
+                    != 0
+            }) {
                 return true;
             }
         }

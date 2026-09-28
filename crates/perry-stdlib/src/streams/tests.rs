@@ -447,9 +447,10 @@ extern "C" fn next_recording_this(
 #[test]
 fn iterator_next_is_called_with_the_iterator_as_its_receiver() {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let fn_ptr = next_recording_this as *const u8;
-    js_register_closure_arity(fn_ptr, 0);
-    let next = scope.root_raw_mut_ptr(js_closure_alloc(fn_ptr, 1));
+    let next = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(next_recording_this, 0; with_declared(0)),
+        1,
+    ));
     perry_runtime::closure::js_closure_set_capture_f64(
         next.get_raw_mut_ptr::<ClosureHeader>(),
         0,

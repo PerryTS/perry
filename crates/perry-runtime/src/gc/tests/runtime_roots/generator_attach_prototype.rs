@@ -238,10 +238,15 @@ fn attach_closure_prototype_survives_an_alloc_point_copying_minor_inside_the_cal
     register_runtime_handle_root_scanner_for_tests();
     warm_generator_intrinsics();
 
-    let func_ptr = fake_generator_body as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    crate::closure::js_register_closure_generator_function(func_ptr);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(
+            fake_generator_body,
+            1;
+            with_declared(1),
+            with_flags(crate::closure::FN_GENERATOR)
+        ),
+        0,
+    );
     assert!(!closure.is_null(), "closure allocation failed");
 
     let (obj_value, before) = rooted_instance();

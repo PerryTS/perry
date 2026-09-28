@@ -377,17 +377,15 @@ fn validate_options(options: f64) -> ValidatedOptions {
     }
 }
 
-fn closure_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+fn closure_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-fn closure_rest_value(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_rest(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+fn closure_rest_value(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -405,9 +403,8 @@ fn create_import_function(import_value: f64, name: &str) -> f64 {
     };
     // The native thunk has four ABI arguments; keep dispatch from invoking it
     // through a shorter function pointer while exposing Node's public length.
-    crate::closure::js_register_closure_arity(js_wasi_import_stub as *const u8, 4);
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        js_wasi_import_stub as *const u8,
+        crate::fn_info!(js_wasi_import_stub, 4; with_declared(4)),
         2,
     ));
     let closure_ptr = closure.get_raw_mut_ptr::<ClosureHeader>();
@@ -475,7 +472,7 @@ fn ensure_wasi_prototype() {
     crate::object::class_prototype_object_root_store(CLASS_ID_WASI, proto);
     let method_scope = crate::gc::RuntimeHandleScope::new();
     let method = method_scope.root_nanbox_f64(closure_value(
-        js_wasi_get_import_object as *const u8,
+        crate::fn_info!(js_wasi_get_import_object, 0; with_declared(0)),
         "getImportObject",
         0,
     ));
@@ -484,14 +481,18 @@ fn ensure_wasi_prototype() {
         1,
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
-    method.set_nanbox_f64(closure_value(js_wasi_start as *const u8, "start", 1));
+    method.set_nanbox_f64(closure_value(
+        crate::fn_info!(js_wasi_start, 1; with_declared(1)),
+        "start",
+        1,
+    ));
     crate::object::js_object_set_field(
         crate::object::class_prototype_object(CLASS_ID_WASI),
         2,
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_value(
-        js_wasi_initialize as *const u8,
+        crate::fn_info!(js_wasi_initialize, 1; with_declared(1)),
         "initialize",
         1,
     ));
@@ -501,7 +502,7 @@ fn ensure_wasi_prototype() {
         JSValue::from_bits(method.get_nanbox_f64().to_bits()),
     );
     method.set_nanbox_f64(closure_rest_value(
-        js_wasi_finalize_bindings as *const u8,
+        crate::fn_info!(js_wasi_finalize_bindings, 2; with_rest(1)),
         "finalizeBindings",
         1,
     ));

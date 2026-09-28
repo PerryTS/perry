@@ -215,8 +215,9 @@ pub(super) const THROWER_FROZEN_FLAGS: u16 =
     crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
 
 pub(super) fn thrower_closure_value() -> f64 {
-    let closure =
-        crate::closure::js_closure_alloc_singleton(arguments_throw_type_error as *const u8);
+    let closure = crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(arguments_throw_type_error, 0; with_declared(0)),
+    );
     // #10509: configure the per-thread singleton once, not per strict call.
     // The frozen bits are the last step below and live in the closure's own
     // header; every side table the earlier steps write (closure props,
@@ -230,7 +231,6 @@ pub(super) fn thrower_closure_value() -> f64 {
     {
         return crate::value::js_nanbox_pointer(closure as i64);
     }
-    crate::closure::js_register_closure_arity(arguments_throw_type_error as *const u8, 0);
     super::native_module::set_bound_native_closure_name(closure, "");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
@@ -530,7 +530,7 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
 
 /// #10509: the cold half of [`js_arguments_bundle_index_get`]. Builds the
 /// Arguments object the prologue would have built (`callee_wrapper`, when
-/// non-null, names the function whose singleton closure is `callee`) and
+/// non-null, is the info of the function whose singleton closure is `callee`) and
 /// performs an ordinary `obj[key]` on it, so a non-element key sees the real
 /// object's `callee`, `length`, `Symbol.iterator` and `Object.prototype`
 /// surface. The object is not kept: codegen only takes this path for a
@@ -540,7 +540,7 @@ pub extern "C" fn js_arguments_bundle_get_slow(
     raw_args: f64,
     key: f64,
     callee: f64,
-    callee_wrapper: *const u8,
+    callee_wrapper: *const crate::closure::JsFunctionInfo,
     restricted_callee: i32,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();

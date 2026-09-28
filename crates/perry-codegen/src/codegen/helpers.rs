@@ -1532,20 +1532,14 @@ pub(super) fn emit_namespace_populator(
                 NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. } => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalFunction { wrap_symbol } => {
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrap_symbol))],
-                    );
+                    let info = blk.fn_info_ref(wrap_symbol);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalClass { class_id } => {
@@ -1578,21 +1572,15 @@ pub(super) fn emit_namespace_populator(
                     ctx.pending_declares
                         .push((wrapper_name.clone(), DOUBLE, wrapper_params));
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper_name))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper_name);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { .. } if is_self_namespace => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx

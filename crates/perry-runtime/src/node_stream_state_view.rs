@@ -276,8 +276,6 @@ fn state_proto(kind: usize) -> f64 {
         return f64::from_bits(cached);
     }
     ensure_state_proto_scanner();
-    crate::closure::js_register_closure_arity(stream_state_get as *const u8, 0);
-    crate::closure::js_register_closure_arity(stream_state_set as *const u8, 1);
     let fields = if kind == READABLE_KIND {
         READABLE_FIELDS
     } else {
@@ -295,9 +293,15 @@ fn state_proto(kind: usize) -> f64 {
     for (index, name) in fields.iter().enumerate() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let id = (kind * 64 + index) as f64;
-        let getter = scope.root_raw_mut_ptr(js_closure_alloc(stream_state_get as *const u8, 1));
+        let getter = scope.root_raw_mut_ptr(js_closure_alloc(
+            crate::fn_info!(stream_state_get, 0; with_declared(0)),
+            1,
+        ));
         getter.with_mut_ptr(|g| js_closure_set_capture_f64(g, 0, id));
-        let setter = scope.root_raw_mut_ptr(js_closure_alloc(stream_state_set as *const u8, 1));
+        let setter = scope.root_raw_mut_ptr(js_closure_alloc(
+            crate::fn_info!(stream_state_set, 1; with_declared(1)),
+            1,
+        ));
         setter.with_mut_ptr(|s| js_closure_set_capture_f64(s, 0, id));
         let key = scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(
             name.as_ptr(),

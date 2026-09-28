@@ -73,9 +73,10 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
 
     // FastBuffer itself: named, sharing Buffer.prototype. Node reports
     // `FastBuffer.length === 0`; the thunk still receives three arguments.
-    let fast_ptr = fast_buffer_constructor_thunk as *const u8;
-    crate::closure::js_register_closure_arity(fast_ptr, 3);
-    let fast = crate::closure::js_closure_alloc(fast_ptr, 0);
+    let fast = crate::closure::js_closure_alloc(
+        crate::fn_info!(fast_buffer_constructor_thunk, 3; with_declared(3)),
+        0,
+    );
     if fast.is_null() {
         return;
     }
@@ -100,9 +101,10 @@ pub(super) fn install_buffer_species(buffer_ctor: f64) {
     }
 
     // The getter, holding FastBuffer in capture slot 0.
-    let getter_ptr = buffer_species_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(getter_ptr, 0);
-    let getter = crate::closure::js_closure_alloc(getter_ptr, 1);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(buffer_species_getter_thunk, 0; with_declared(0)),
+        1,
+    );
     if getter.is_null() {
         return;
     }

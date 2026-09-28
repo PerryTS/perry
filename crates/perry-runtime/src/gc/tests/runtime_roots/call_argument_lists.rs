@@ -98,8 +98,11 @@ extern "C" fn record_rest_and_arguments_after_16(
 /// "value is not a function" out of a unit test instead of failing an
 /// assertion. Two minors under a pinned promotion age tenure it into the
 /// non-moving old generation.
-fn tenured_closure(body: *const u8, capture_count: u32) -> *mut crate::closure::ClosureHeader {
-    let closure = crate::closure::js_closure_alloc(body, capture_count);
+fn tenured_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    capture_count: u32,
+) -> *mut crate::closure::ClosureHeader {
+    let closure = crate::closure::js_closure_alloc(info, capture_count);
     let scope = RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(closure);
     {
@@ -149,7 +152,7 @@ fn reflect_apply_roots_receiver_and_arguments_across_the_rebind_allocation() {
     // `this` capture — is the shape whose rebind CLONES, and that clone is the
     // allocation this test collects inside.
     let closure = tenured_closure(
-        record_this_and_six_args as *const u8,
+        crate::fn_info!(record_this_and_six_args, 6),
         crate::closure::CAPTURES_THIS_FLAG | 1,
     );
     let scope = RuntimeHandleScope::new();
@@ -215,7 +218,7 @@ fn array_like_argument_lists_root_the_source_and_the_collected_elements() {
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
 
-    let closure = tenured_closure(record_two_args as *const u8, 0);
+    let closure = tenured_closure(crate::fn_info!(record_two_args, 2), 0);
     let scope = RuntimeHandleScope::new();
     let callee = scope.root_nanbox_f64(f64::from_bits(ptr_bits(closure as usize)));
     let source = crate::object::js_object_alloc(0, 3);
@@ -279,9 +282,10 @@ fn rest_bundling_roots_the_rest_array_across_the_arguments_array() {
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     register_runtime_handle_root_scanner_for_tests();
 
-    let body = record_rest_and_arguments_after_16 as *const u8;
-    crate::closure::js_register_closure_rest_and_arguments(body, 16);
-    let closure = crate::closure::js_closure_alloc(body, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(record_rest_and_arguments_after_16, 18; with_rest_kind(16, crate::closure::FN_REST_USER_AND_ARGUMENTS)),
+        0,
+    );
     let scope = RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_mut_ptr(closure);
     let tail = scope.root_nanbox_f64(test_string_value(b"rest-tail"));
@@ -345,7 +349,7 @@ fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
     let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
 
-    let callee = tenured_closure(record_two_args as *const u8, 0);
+    let callee = tenured_closure(crate::fn_info!(record_two_args, 2), 0);
     let scope = RuntimeHandleScope::new();
     let callee_handle = scope.root_nanbox_f64(f64::from_bits(ptr_bits(callee as usize)));
 
@@ -353,7 +357,7 @@ fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
     // address -- the exact shape `js_promise_new_with_executor` hands a
     // user's executor for `resolve`/`reject` (see proxy.rs's
     // `ValueMoveKind::RawHeapWord` doc comment).
-    let raw_closure = crate::closure::js_closure_alloc(record_two_args as *const u8, 0);
+    let raw_closure = crate::closure::js_closure_alloc(crate::fn_info!(record_two_args, 2), 0);
     let observer = scope.root_raw_mut_ptr(raw_closure);
     let raw_bits_before = raw_closure as usize as u64;
 

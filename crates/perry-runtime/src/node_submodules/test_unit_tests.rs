@@ -109,7 +109,7 @@ fn mock_method_options_survive_an_allocating_getter() {
         boxed_ptr(options),
         "getter",
         crate::object::AccessorDescriptor {
-            get: closure_value(allocating_true_option as *const u8, 0).to_bits(),
+            get: closure_value(crate::fn_info!(allocating_true_option, 0), 0).to_bits(),
             set: 0,
         },
     );

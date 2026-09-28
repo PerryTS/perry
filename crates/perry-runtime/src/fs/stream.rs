@@ -356,8 +356,11 @@ pub(crate) use write_file_input::*;
 
 /// Allocate a fresh ClosureHeader whose func_ptr is `func` and
 /// whose slot 0 holds the given stream id.
-pub(crate) fn make_stream_closure(func: extern "C" fn(), stream_id: usize) -> *mut ClosureHeader {
-    let closure = js_closure_alloc(func as *const u8, 1);
+pub(crate) fn make_stream_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    stream_id: usize,
+) -> *mut ClosureHeader {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, stream_id as i64);
     closure
 }
@@ -366,7 +369,7 @@ pub(crate) fn make_stream_closure(func: extern "C" fn(), stream_id: usize) -> *m
 pub(crate) fn build_stream_object(
     stream_id: usize,
     class_id: u32,
-    method_funcs: &[(&str, extern "C" fn())],
+    method_funcs: &[(&str, *const crate::closure::JsFunctionInfo)],
 ) -> *mut ObjectHeader {
     let mut packed: Vec<u8> = Vec::new();
     for (name, _) in method_funcs {
@@ -850,9 +853,7 @@ fn call_stream_callback1(callback: f64, arg: f64) {
 }
 
 mod write_turn;
-use write_turn::{
-    schedule_next_write_stream_step, schedule_write_stream_turn, write_stream_turn_impl,
-};
+use write_turn::{schedule_next_write_stream_step, schedule_write_stream_turn};
 
 pub(crate) extern "C" fn write_stream_write_impl(
     closure: *const ClosureHeader,
@@ -1100,7 +1101,10 @@ fn finish_read_stream(id: usize) {
 }
 
 fn install_pipe_drain_resume(source_id: usize, dest: f64) {
-    let closure = js_closure_alloc(read_stream_resume_from_drain_impl as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(read_stream_resume_from_drain_impl, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, source_id as i64);
     let listener = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
     let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
@@ -1422,49 +1426,40 @@ pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
 }
 
 fn create_write_stream_with_state(state: StreamState) -> f64 {
-    register_stream_method_arities();
     let id = alloc_stream(state);
-    let method_funcs: [(&str, extern "C" fn()); 8] = [
-        ("write", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a, a), extern "C" fn()>(
-                write_stream_write_impl,
-            )
-        }),
-        ("end", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a, a), extern "C" fn()>(
-                write_stream_end_impl,
-            )
-        }),
-        ("on", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                write_stream_on_impl,
-            )
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                write_stream_once_impl,
-            )
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                write_stream_on_impl,
-            )
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                write_stream_close_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                write_stream_close_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                stream_emit_impl,
-            )
-        }),
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 8] = [
+        (
+            "write",
+            crate::fn_info!(write_stream_write_impl, 3; with_declared(3)),
+        ),
+        (
+            "end",
+            crate::fn_info!(write_stream_end_impl, 3; with_declared(3)),
+        ),
+        (
+            "on",
+            crate::fn_info!(write_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "once",
+            crate::fn_info!(write_stream_once_impl, 2; with_declared(2)),
+        ),
+        (
+            "addListener",
+            crate::fn_info!(write_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "close",
+            crate::fn_info!(write_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(write_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(stream_emit_impl, 2; with_declared(2)),
+        ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_WRITE_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1488,60 +1483,49 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
 }
 
 fn create_read_stream_with_state(state: StreamState) -> f64 {
-    register_stream_method_arities();
     let id = alloc_stream(state);
     store_open_failure(id);
-    let method_funcs: [(&str, extern "C" fn()); 10] = [
-        ("on", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                read_stream_on_impl,
-            )
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                read_stream_once_impl,
-            )
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                read_stream_on_impl,
-            )
-        }),
-        ("pipe", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                read_stream_pipe_impl,
-            )
-        }),
-        ("pause", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                read_stream_pause_impl,
-            )
-        }),
-        ("resume", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                read_stream_resume_impl,
-            )
-        }),
-        ("isPaused", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                read_stream_is_paused_impl,
-            )
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                read_stream_close_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                read_stream_close_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                stream_emit_impl,
-            )
-        }),
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 10] = [
+        (
+            "on",
+            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "once",
+            crate::fn_info!(read_stream_once_impl, 2; with_declared(2)),
+        ),
+        (
+            "addListener",
+            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "pipe",
+            crate::fn_info!(read_stream_pipe_impl, 2; with_declared(2)),
+        ),
+        (
+            "pause",
+            crate::fn_info!(read_stream_pause_impl, 0; with_declared(0)),
+        ),
+        (
+            "resume",
+            crate::fn_info!(read_stream_resume_impl, 0; with_declared(0)),
+        ),
+        (
+            "isPaused",
+            crate::fn_info!(read_stream_is_paused_impl, 0; with_declared(0)),
+        ),
+        (
+            "close",
+            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(stream_emit_impl, 2; with_declared(2)),
+        ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1581,91 +1565,57 @@ fn install_utf8_stream_dispose_symbol(value: f64, method: f64) {
 }
 
 fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
-    register_stream_method_arities();
     let periodic_flush = state.periodic_flush;
     let schedule_open = state.opening;
     let id = alloc_utf8_stream(state);
-    let method_funcs: [(&str, extern "C" fn()); 16] = [
-        ("write", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                utf8_stream_write_impl,
-            )
-        }),
-        ("flush", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                utf8_stream_flush_impl,
-            )
-        }),
-        ("flushSync", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                utf8_stream_flush_sync_impl,
-            )
-        }),
-        ("end", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                utf8_stream_end_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
-        ("reopen", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                utf8_stream_reopen_impl,
-            )
-        }),
-        ("on", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_on_impl,
-            )
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_once_impl,
-            )
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_on_impl,
-            )
-        }),
-        ("off", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_off_impl,
-            )
-        }),
-        ("removeListener", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_off_impl,
-            )
-        }),
-        ("removeAllListeners", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                utf8_stream_remove_all_impl,
-            )
-        }),
-        ("listenerCount", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a), extern "C" fn()>(
-                utf8_stream_listener_count_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(a, a), extern "C" fn()>(
-                utf8_stream_emit_impl,
-            )
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
-        ("@@__perry_wk_dispose", unsafe {
-            std::mem::transmute::<crate::closure::body_call::js_body_fn_ty!(), extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
+    // Aliased methods share one info, so their bodies keep one identity.
+    let destroy = crate::fn_info!(utf8_stream_destroy_impl, 0; with_declared(0));
+    let on = crate::fn_info!(utf8_stream_on_impl, 2; with_declared(2));
+    let off = crate::fn_info!(utf8_stream_off_impl, 2; with_declared(2));
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 16] = [
+        (
+            "write",
+            crate::fn_info!(utf8_stream_write_impl, 1; with_declared(1)),
+        ),
+        (
+            "flush",
+            crate::fn_info!(utf8_stream_flush_impl, 1; with_declared(1)),
+        ),
+        (
+            "flushSync",
+            crate::fn_info!(utf8_stream_flush_sync_impl, 0; with_declared(0)),
+        ),
+        (
+            "end",
+            crate::fn_info!(utf8_stream_end_impl, 0; with_declared(0)),
+        ),
+        ("destroy", destroy),
+        (
+            "reopen",
+            crate::fn_info!(utf8_stream_reopen_impl, 1; with_declared(1)),
+        ),
+        ("on", on),
+        (
+            "once",
+            crate::fn_info!(utf8_stream_once_impl, 2; with_declared(2)),
+        ),
+        ("addListener", on),
+        ("off", off),
+        ("removeListener", off),
+        (
+            "removeAllListeners",
+            crate::fn_info!(utf8_stream_remove_all_impl, 1; with_declared(1)),
+        ),
+        (
+            "listenerCount",
+            crate::fn_info!(utf8_stream_listener_count_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(utf8_stream_emit_impl, 2; with_declared(2)),
+        ),
+        ("close", destroy),
+        ("@@__perry_wk_dispose", destroy),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_UTF8_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1683,7 +1633,10 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
         utf8_start_async_open(id);
     }
     if periodic_flush > 0 {
-        let closure = js_closure_alloc(utf8_periodic_flush_impl as *const u8, 1);
+        let closure = js_closure_alloc(
+            crate::fn_info!(utf8_periodic_flush_impl, 0; with_declared(0)),
+            1,
+        );
         js_closure_set_capture_ptr(closure, 0, id as i64);
         let timer = crate::timer::setInterval(closure as i64, periodic_flush as f64);
         crate::timer::js_timer_unref(timer);

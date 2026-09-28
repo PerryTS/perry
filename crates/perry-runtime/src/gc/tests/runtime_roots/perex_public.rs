@@ -333,9 +333,11 @@ fn perex_public_nonglobal_test_propagates_lastindex_coercion_throw() {
     let input = text(&scope, b"a");
     let coercer = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let key = text(&scope, b"valueOf");
-    let fp = throw_on_coercion as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
-    let closure = crate::closure::js_closure_alloc_singleton(fp);
+    let closure = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
+        throw_on_coercion,
+        0;
+        with_declared(0)
+    ));
     coercer.with_mut_ptr::<ObjectHeader, _>(|coercer| {
         key.with_const_ptr::<StringHeader, _>(|key| {
             crate::object::js_object_set_field_by_name(

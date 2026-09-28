@@ -382,36 +382,40 @@ fn build_prototype(kind: TuiKind) -> *mut crate::object::ObjectHeader {
     if proto.is_null() {
         return std::ptr::null_mut();
     }
-    let methods: &[(&str, *const u8, u32)] = match kind {
-        TuiKind::State => &[
-            ("get", state_proto_get_thunk as *const u8, 0),
-            ("set", state_proto_set_thunk as *const u8, 1),
+    let methods: Vec<(&str, *const crate::closure::JsFunctionInfo, u32)> = match kind {
+        TuiKind::State => vec![
+            ("get", crate::fn_info!(state_proto_get_thunk, 0), 0),
+            ("set", crate::fn_info!(state_proto_set_thunk, 1), 1),
         ],
-        TuiKind::RefBox => &[
-            ("get", ref_proto_get_thunk as *const u8, 0),
-            ("set", ref_proto_set_thunk as *const u8, 1),
+        TuiKind::RefBox => vec![
+            ("get", crate::fn_info!(ref_proto_get_thunk, 0), 0),
+            ("set", crate::fn_info!(ref_proto_set_thunk, 1), 1),
         ],
-        TuiKind::App => &[
-            ("exit", app_proto_exit_thunk as *const u8, 0),
+        TuiKind::App => vec![
+            ("exit", crate::fn_info!(app_proto_exit_thunk, 0), 0),
             (
                 "waitUntilExit",
-                app_proto_wait_until_exit_thunk as *const u8,
+                crate::fn_info!(app_proto_wait_until_exit_thunk, 0),
                 0,
             ),
         ],
-        TuiKind::Stdout => &[
-            ("write", stdout_proto_write_thunk as *const u8, 1),
-            ("columns", stdout_proto_columns_thunk as *const u8, 0),
-            ("rows", stdout_proto_rows_thunk as *const u8, 0),
+        TuiKind::Stdout => vec![
+            ("write", crate::fn_info!(stdout_proto_write_thunk, 1), 1),
+            ("columns", crate::fn_info!(stdout_proto_columns_thunk, 0), 0),
+            ("rows", crate::fn_info!(stdout_proto_rows_thunk, 0), 0),
         ],
-        TuiKind::FocusManager => &[
-            ("focusNext", focus_proto_next_thunk as *const u8, 0),
-            ("focusPrevious", focus_proto_previous_thunk as *const u8, 0),
-            ("focus", focus_proto_focus_thunk as *const u8, 1),
+        TuiKind::FocusManager => vec![
+            ("focusNext", crate::fn_info!(focus_proto_next_thunk, 0), 0),
+            (
+                "focusPrevious",
+                crate::fn_info!(focus_proto_previous_thunk, 0),
+                0,
+            ),
+            ("focus", crate::fn_info!(focus_proto_focus_thunk, 1), 1),
         ],
-        TuiKind::Widget => &[],
+        TuiKind::Widget => vec![],
     };
-    for (name, ptr, arity) in methods {
+    for (name, ptr, arity) in &methods {
         crate::object::install_proto_method(proto, name, *ptr, *arity);
     }
     slot.store(proto as i64, Ordering::Release);

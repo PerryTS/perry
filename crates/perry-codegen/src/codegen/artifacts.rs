@@ -693,11 +693,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // the renamed export as a VALUE and called it via `.apply`/`.call`
     // (`compose`'s `pipe.apply(this, reverse(arguments))` in ramda — `pipe` is
     // `export default function pipe()` with a synthetic `arguments`) reached
-    // `js_native_call_value` with an unregistered wrapper func_ptr, so
-    // `lookup_closure_rest_full` missed and the args were dispatched positionally
-    // instead of bundled — the variadic function saw `arguments.length === 0`.
-    // Register the exported-alias wrapper symbol with the same metadata as the
-    // local one so the runtime bundles correctly through the rename.
+    // `js_native_call_value` with a wrapper that recorded no rest fact, so the
+    // args were dispatched positionally instead of bundled — the variadic
+    // function saw `arguments.length === 0`. Give the exported-alias wrapper's
+    // `JsFunctionInfo` the same facts as the local one so the runtime bundles
+    // correctly through the rename.
     {
         let func_by_local_name: HashMap<&str, &perry_hir::Function> =
             hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
@@ -716,9 +716,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_prefix,
                 sanitize(exported)
             );
-            // The registration loop (`string_pool.rs`) iterates
+            // The fact recorder (`string_pool.rs`) iterates
             // `user_fn_wrapper_rest`; the synthetic/rest_and_arguments sets only
-            // *refine* which runtime fn each entry uses. So the alias must be
+            // *refine* which rest kind each entry gets. So the alias must be
             // added to `user_fn_wrapper_rest` (keyed on the rest param index) in
             // EVERY case, plus the matching refinement set.
             let Some(rest_idx) = f.params.iter().position(|p| p.is_rest) else {

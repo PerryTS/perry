@@ -65,7 +65,7 @@ use streams::{
 };
 mod exec_async;
 pub(super) use exec_async::{cp_defer_exec_callback, cp_exec_async};
-use exec_async::{cp_exec_accumulate, cp_exec_cb_thunk, cp_exec_fire_close};
+use exec_async::{cp_exec_accumulate, cp_exec_fire_close};
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -640,7 +640,7 @@ pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val
         return;
     };
 
-    let listener = js_closure_alloc(cp_abort_listener as *const u8, 1);
+    let listener = js_closure_alloc(crate::fn_info!(cp_abort_listener, 0; with_declared(0)), 1);
     js_closure_set_capture_ptr(listener, 0, handle as i64);
     let listener_val = cp_box_ptr(listener as *const u8);
     let kill_signal = cp_read_abort_kill_signal(opts_val);
@@ -879,9 +879,6 @@ pub extern "C" fn js_child_process_spawn_streams(
     args_ptr: i64,
     opts_ptr: i64,
 ) -> f64 {
-    cp_register_arities();
-    cp_register_reactor_arities();
-
     let (cmd_str, arg_strs) = unsafe {
         (
             cp_read_string_header(cmd_ptr),
@@ -918,20 +915,35 @@ pub extern "C" fn js_child_process_spawn_streams(
     }
 
     let cp_methods: [(&str, CpFn); 11] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("prependListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "prependListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
         (
             "removeAllListeners",
-            cp_cast1(cp_method_remove_all_listeners),
+            crate::fn_info!(cp_method_remove_all_listeners, 1; with_declared(1)),
         ),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_ref)),
-        ("unref", cp_cast0(cp_method_unref)),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
+        ("kill", crate::fn_info!(cp_method_kill, 1; with_declared(1))),
+        ("ref", crate::fn_info!(cp_method_ref, 0; with_declared(0))),
+        (
+            "unref",
+            crate::fn_info!(cp_method_unref, 0; with_declared(0)),
+        ),
     ];
     let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + cp_methods.len() as u32);
     let cp = cp_box_ptr(cp_obj as *const u8);
@@ -1025,7 +1037,7 @@ pub extern "C" fn js_child_process_spawn_streams(
             cp_set_field(cp, b"__cpSpawnErrno", super::cp_errno_number(code));
             cp_set_field(cp, b"exitCode", super::cp_errno_number(code));
             let emit_closure = crate::closure::js_closure_alloc(
-                super::failed_spawn::emit_error_then_close as *const u8,
+                crate::fn_info!(super::failed_spawn::emit_error_then_close, 0; with_declared(0)),
                 1,
             );
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
@@ -1062,17 +1074,6 @@ pub(super) extern "C" fn cp_emit_spawn_close(
     let code = cp_get_field(cp.get_nanbox_f64(), b"exitCode");
     cp_emit(cp.get_nanbox_f64(), "close", &[code, TAG_NULL_F64]);
     cp_undefined()
-}
-
-pub(super) fn cp_register_reactor_arities() {
-    crate::closure::js_register_closure_arity(
-        super::failed_spawn::emit_error_then_close as *const u8,
-        0,
-    );
-    crate::closure::js_register_closure_arity(cp_emit_spawn_error as *const u8, 0);
-    crate::closure::js_register_closure_arity(cp_emit_spawn_close as *const u8, 0);
-    crate::closure::js_register_closure_arity(cp_abort_listener as *const u8, 0);
-    crate::closure::js_register_closure_arity(cp_exec_cb_thunk as *const u8, 0);
 }
 
 // ============================================================================

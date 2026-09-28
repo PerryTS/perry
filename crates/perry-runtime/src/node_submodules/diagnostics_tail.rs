@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::array::{js_array_get_f64, js_array_length};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, js_register_closure_synthetic_arguments, ClosureHeader,
+    ClosureHeader,
 };
 use crate::object::{js_object_alloc, ObjectHeader};
 use crate::value::{js_nanbox_get_pointer, JSValue};
@@ -170,9 +170,11 @@ pub(crate) extern "C" fn diag_channel_with_store_scope(
         );
     });
     let obj = js_object_alloc(0, 3);
-    let dispose = js_closure_alloc(cast0(diag_store_scope_dispose), 1);
+    let dispose = js_closure_alloc(
+        crate::fn_info!(diag_store_scope_dispose, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(dispose, 0, scope_id);
-    js_register_closure_arity(cast0(diag_store_scope_dispose), 0);
     let dispose_value = boxed_ptr(dispose);
     install_dispose(obj, dispose_value);
     boxed_ptr(obj)
@@ -302,21 +304,24 @@ pub(crate) extern "C" fn diag_bounded_with_scope(
     let events = bounded_events(method_id(closure));
     publish_channel(events[0], context);
     let obj = js_object_alloc(0, 3);
-    let dispose = js_closure_alloc(cast0(diag_bounded_scope_dispose), 3);
+    let dispose = js_closure_alloc(
+        crate::fn_info!(diag_bounded_scope_dispose, 0; with_declared(0)),
+        3,
+    );
     js_closure_set_capture_ptr(dispose, 0, events[1]);
     js_closure_set_capture_ptr(dispose, 1, context.to_bits() as i64);
     js_closure_set_capture_ptr(dispose, 2, 0);
-    js_register_closure_arity(cast0(diag_bounded_scope_dispose), 0);
     let dispose_value = boxed_ptr(dispose);
     install_dispose(obj, dispose_value);
     boxed_ptr(obj)
 }
 
 fn bounded_run_method_closure(id: i64) -> f64 {
-    let func = cast1(diag_bounded_run);
-    let c = js_closure_alloc(func, 1);
+    let c = js_closure_alloc(
+        crate::fn_info!(diag_bounded_run, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
+        1,
+    );
     js_closure_set_capture_ptr(c, 0, id);
-    js_register_closure_synthetic_arguments(func, 0);
     boxed_ptr(c)
 }
 
@@ -349,18 +354,27 @@ pub(crate) extern "C" fn thunk_diag_bounded_channel(
     set_field_value(
         obj,
         "subscribe",
-        method_closure(cast1(diag_bounded_subscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_bounded_subscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(
         obj,
         "unsubscribe",
-        method_closure(cast1(diag_bounded_unsubscribe), 1, id),
+        method_closure(
+            crate::fn_info!(diag_bounded_unsubscribe, 1; with_declared(1)),
+            id,
+        ),
     );
     set_field_value(obj, "run", bounded_run_method_closure(id));
     set_field_value(
         obj,
         "withScope",
-        method_closure(cast1(diag_bounded_with_scope), 1, id),
+        method_closure(
+            crate::fn_info!(diag_bounded_with_scope, 1; with_declared(1)),
+            id,
+        ),
     );
     DIAG_BOUNDED_CHANNELS.with(|m| {
         m.borrow_mut().insert(id, DiagBoundedState { obj, events });

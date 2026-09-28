@@ -179,7 +179,7 @@ fn interrupted_species_copy_describes_late_pointer(splice: bool) {
     }
     let late = young_leaf();
     crate::array::js_array_set_f64(source, 10, f64::from_bits(ptr_bits(late)));
-    let species = crate::closure::js_closure_alloc(species_destination as *const u8, 1);
+    let species = crate::closure::js_closure_alloc(crate::fn_info!(species_destination, 1), 1);
     crate::closure::js_closure_set_capture_f64(
         species,
         0,
@@ -196,7 +196,7 @@ fn interrupted_species_copy_describes_late_pointer(splice: bool) {
     }
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     crate::array::js_array_set_string_key(source, key, species_value);
-    let getter = crate::closure::js_closure_alloc(interrupt_species_copy as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(interrupt_species_copy, 0), 0);
     let descriptor = crate::object::js_object_alloc(0, 0);
     let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
     crate::object::js_object_set_field_by_name(

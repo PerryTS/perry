@@ -18,72 +18,114 @@ pub(super) fn message_port_object(port_id: u64) -> *mut perry_runtime::object::O
     set_object_field(
         obj,
         "postMessage",
-        port_bound_closure(port_post_message as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_post_message, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "on",
-        port_bound_closure(port_on as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_on, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "addListener",
-        port_bound_closure(port_on as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_on, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "once",
-        port_bound_closure(port_once as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_once, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "off",
-        port_bound_closure(port_off as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_off, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "removeListener",
-        port_bound_closure(port_off as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_off, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "listenerCount",
-        port_bound_closure(port_listener_count as *const u8, 1, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_listener_count, 1; with_declared(1)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "addEventListener",
-        port_bound_closure(port_add_event_listener as *const u8, 3, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_add_event_listener, 3; with_declared(3)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        port_bound_closure(port_remove_event_listener as *const u8, 2, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_remove_event_listener, 2; with_declared(2)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "close",
-        port_bound_closure(port_close as *const u8, 0, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_close, 0; with_declared(0)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "start",
-        port_bound_closure(port_start as *const u8, 0, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_start, 0; with_declared(0)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        port_bound_closure(port_ref as *const u8, 0, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_ref, 0; with_declared(0)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "unref",
-        port_bound_closure(port_unref as *const u8, 0, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_unref, 0; with_declared(0)),
+            port_id,
+        ),
     );
     set_object_field(
         obj,
         "hasRef",
-        port_bound_closure(port_has_ref as *const u8, 0, port_id),
+        port_bound_closure(
+            perry_runtime::fn_info!(port_has_ref, 0; with_declared(0)),
+            port_id,
+        ),
     );
     set_object_field(obj, "__perryPortId", f64::from_bits(port_id));
     set_object_field(obj, "onmessage", js_null());

@@ -2,7 +2,7 @@
 //! builds cannot install JavaScript module loaders after compilation.
 
 use super::{key_ptr, object_field, undefined};
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::value::{js_nanbox_pointer, JSValue};
@@ -16,8 +16,7 @@ extern "C" fn ignore(
 }
 
 fn noop() -> f64 {
-    js_register_closure_arity(ignore as *const u8, 1);
-    js_nanbox_pointer(js_closure_alloc(ignore as *const u8, 0) as i64)
+    js_nanbox_pointer(js_closure_alloc(crate::fn_info!(ignore, 1; with_declared(1)), 0) as i64)
 }
 
 fn set(scope: &RuntimeHandleScope, object: &RuntimeHandle, name: &[u8], value: f64) {
@@ -135,9 +134,8 @@ mod tests {
     static SETUP_CALLS: AtomicU32 = AtomicU32::new(0);
     static LOADER_CALLS: AtomicU32 = AtomicU32::new(0);
 
-    fn closure(func: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
-        js_register_closure_arity(func as *const u8, 1);
-        js_nanbox_pointer(js_closure_alloc(func as *const u8, 0) as i64)
+    fn closure(info: *const crate::closure::JsFunctionInfo) -> f64 {
+        js_nanbox_pointer(js_closure_alloc(info, 0) as i64)
     }
 
     extern "C" fn loader(
@@ -157,7 +155,7 @@ mod tests {
         SETUP_CALLS.fetch_add(1, Ordering::SeqCst);
         let scope = RuntimeHandleScope::new();
         let build = scope.root_nanbox_f64(build);
-        let callback = scope.root_nanbox_f64(closure(loader));
+        let callback = scope.root_nanbox_f64(closure(crate::fn_info!(loader, 1; with_declared(1))));
         // The builder must remain usable across collection in user setup.
         crate::gc::js_gc_collect();
         for name in [
@@ -201,7 +199,7 @@ mod tests {
         SETUP_CALLS.store(0, Ordering::SeqCst);
         LOADER_CALLS.store(0, Ordering::SeqCst);
         let scope = RuntimeHandleScope::new();
-        let setup = scope.root_nanbox_f64(closure(setup));
+        let setup = scope.root_nanbox_f64(closure(crate::fn_info!(setup, 1; with_declared(1))));
         let object = scope.root_nanbox_f64(js_nanbox_pointer(js_object_alloc(0, 1) as i64));
         set(&scope, &object, b"setup", setup.get_nanbox_f64());
         assert_eq!(
@@ -227,7 +225,9 @@ mod tests {
     #[test]
     fn async_setup_preserves_its_result() {
         let scope = RuntimeHandleScope::new();
-        let result = scope.root_nanbox_f64(js_bun_plugin(closure(async_setup)));
+        let result = scope.root_nanbox_f64(js_bun_plugin(closure(
+            crate::fn_info!(async_setup, 1; with_declared(1)),
+        )));
         assert_eq!(
             crate::promise::js_value_is_promise(result.get_nanbox_f64()),
             1
@@ -242,7 +242,9 @@ mod tests {
     #[test]
     fn clear_all_is_a_callable_noop() {
         let scope = RuntimeHandleScope::new();
-        let value = scope.root_nanbox_f64(decorate_bun_plugin(closure(setup)));
+        let value = scope.root_nanbox_f64(decorate_bun_plugin(closure(
+            crate::fn_info!(setup, 1; with_declared(1)),
+        )));
         let raw = JSValue::from_bits(value.get_nanbox_f64().to_bits()).as_pointer::<u8>();
         let clear = crate::closure::closure_get_dynamic_prop(raw as usize, "clearAll");
         assert!(!crate::fs::extract_closure_ptr(clear).is_null());

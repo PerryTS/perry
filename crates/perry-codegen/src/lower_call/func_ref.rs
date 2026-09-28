@@ -1455,10 +1455,10 @@ pub fn try_lower_func_ref_call(
     //
     arg_group.release(ctx);
     if ctx.local_generator_funcs.contains(fid) {
-        let wrap_ptr = format!("@__perry_wrap_{}", fname);
+        let wrap_info = ctx.block().fn_info_ref(&format!("__perry_wrap_{}", fname));
         let closure_handle =
             ctx.block()
-                .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
         return Ok(Some(ctx.block().call(
             DOUBLE,
             "js_generator_attach_closure_prototype",

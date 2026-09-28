@@ -30,10 +30,14 @@ fn regex<'s>(scope: &'s RuntimeHandleScope) -> RuntimeHandle<'s> {
     });
     scope.root_nanbox_f64(js_nanbox_pointer(re as i64))
 }
-fn function<'s>(scope: &'s RuntimeHandleScope, fp: *const u8, arity: u32) -> RuntimeHandle<'s> {
-    crate::closure::js_register_closure_arity(fp, arity);
+/// A function object running the body `info` describes (its declared arity
+/// included).
+fn function<'s>(
+    scope: &'s RuntimeHandleScope,
+    info: *const crate::closure::JsFunctionInfo,
+) -> RuntimeHandle<'s> {
     scope.root_nanbox_f64(js_nanbox_pointer(
-        crate::closure::js_closure_alloc_singleton(fp) as i64,
+        crate::closure::js_closure_alloc_singleton(info) as i64,
     ))
 }
 fn put(owner: &RuntimeHandle<'_>, name: &[u8], value: &RuntimeHandle<'_>) {
@@ -107,8 +111,7 @@ extern "C" fn collecting_getter(
     _this: crate::closure::JsThis,
 ) -> f64 {
     gc_collect_minor();
-    let fp = collect_and_echo as *const u8;
-    crate::closure::js_register_closure_arity(fp, 1);
+    let fp = crate::fn_info!(collect_and_echo, 1; with_declared(1));
     js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(fp) as i64)
 }
 extern "C" fn collect_missing_apply(
@@ -173,8 +176,7 @@ extern "C" fn ordered_getter(
     _this: crate::closure::JsThis,
 ) -> f64 {
     ORDER.with(|n| n.set(n.get() * 10 + 2));
-    let fp = ordered_exec as *const u8;
-    crate::closure::js_register_closure_arity(fp, 1);
+    let fp = crate::fn_info!(ordered_exec, 1; with_declared(1));
     js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(fp) as i64)
 }
 
@@ -189,8 +191,8 @@ fn perex_dispatch_public_test_honors_exec_and_noncallable_fallback() {
     assert!(crate::object::regex_proto_thunks::is_builtin_regexp_exec(
         api::finish(dispatch::get(&re, b"exec"))
     ));
-    let yes = function(&scope, return_this as *const u8, 1);
-    let no = function(&scope, return_null as *const u8, 1);
+    let yes = function(&scope, crate::fn_info!(return_this, 1; with_declared(1)));
+    let no = function(&scope, crate::fn_info!(return_null, 1; with_declared(1)));
     put(&re, b"exec", &yes);
     assert!(
         test(&re, &subject),
@@ -222,9 +224,9 @@ fn perex_dispatch_generic_prototype_test_coerces_before_getting_exec() {
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let argument = object(&scope);
-    let stringer = function(&scope, ordered_string as *const u8, 0);
+    let stringer = function(&scope, crate::fn_info!(ordered_string, 0; with_declared(0)));
     put(&argument, b"toString", &stringer);
-    let get = function(&scope, ordered_getter as *const u8, 0);
+    let get = function(&scope, crate::fn_info!(ordered_getter, 0; with_declared(0)));
     getter(&receiver, &get);
     let method = scope.root_nanbox_f64(crate::collection_iter::builtin_prototype_method(
         "RegExp", "test",
@@ -269,7 +271,10 @@ fn perex_dispatch_getter_and_callback_reacquire_original_input_after_gc() {
     let receiver = object(&scope);
     let input = text(&scope, b"\xed\xa0\x80-original");
     let before = handle_address::<StringHeader>(&input);
-    let method = function(&scope, collecting_getter as *const u8, 0);
+    let method = function(
+        &scope,
+        crate::fn_info!(collecting_getter, 0; with_declared(0)),
+    );
     getter(&receiver, &method);
     let roots = RuntimeHandleScope::active_len_for_tests();
     let result = api::finish(dispatch::execute(
@@ -307,11 +312,11 @@ fn perex_dispatch_actual_throws_restore_this_roots_and_accounting() {
         let before = handle_address::<StringHeader>(&input);
         let is_getter = mode == 1;
         let fp = if is_getter {
-            throw_getter as *const u8
+            crate::fn_info!(throw_getter, 0; with_declared(0))
         } else {
-            throw_exec as *const u8
+            crate::fn_info!(throw_exec, 1; with_declared(1))
         };
-        let method = function(&scope, fp, u32::from(!is_getter));
+        let method = function(&scope, fp);
         if mode == 2 {
             let handler = object(&scope);
             let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
@@ -347,7 +352,7 @@ fn perex_dispatch_validates_override_results_and_keeps_one_work_allowance() {
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let input = text(&scope, b"x");
-    let method = function(&scope, read_answer as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(read_answer, 1; with_declared(1)));
     put(&receiver, b"exec", &method);
     for value in [
         1.0,
@@ -411,7 +416,10 @@ fn perex_dispatch_callable_proxy_keeps_receiver_and_noncallable_proxy_falls_back
     let receiver = object(&scope);
     let input = text(&scope, b"original-proxy-input");
     let before = handle_address::<StringHeader>(&input);
-    let function = function(&scope, collect_and_echo as *const u8, 1);
+    let function = function(
+        &scope,
+        crate::fn_info!(collect_and_echo, 1; with_declared(1)),
+    );
     let handler = object(&scope);
     let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
         function.get_nanbox_f64(),
@@ -458,10 +466,13 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
         let receiver = object(&scope);
         let input = text(&scope, b"original-apply-input");
         let before = handle_address::<StringHeader>(&input);
-        let target = function(&scope, collect_and_echo as *const u8, 1);
+        let target = function(
+            &scope,
+            crate::fn_info!(collect_and_echo, 1; with_declared(1)),
+        );
         let handler = object(&scope);
         if nested_trap {
-            let trap = function(&scope, echo_apply as *const u8, 3);
+            let trap = function(&scope, crate::fn_info!(echo_apply, 3; with_declared(3)));
             let inner_handler = object(&scope);
             let inner = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
                 trap.get_nanbox_f64(),
@@ -469,7 +480,10 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
             ));
             put(&handler, b"apply", &inner);
         } else {
-            let get = function(&scope, collect_missing_apply as *const u8, 0);
+            let get = function(
+                &scope,
+                crate::fn_info!(collect_missing_apply, 0; with_declared(0)),
+            );
             getter_named(&handler, b"apply", &get);
         }
         let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
@@ -499,7 +513,7 @@ fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
     let miss = text(&scope, b"x");
     let hit = text(&scope, b"NEVER");
     let lookups = || dispatch::EXEC_LOOKUPS.with(Cell::get);
-    let yes = function(&scope, return_this as *const u8, 1);
+    let yes = function(&scope, crate::fn_info!(return_this, 1; with_declared(1)));
 
     // Untouched: the builtin runs with no lookup, and still answers. The
     // realm records RegExp.prototype's canonical site on first use, so the

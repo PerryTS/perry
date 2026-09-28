@@ -856,14 +856,6 @@ fn remove_listener_by_callback(emitter: &mut EventEmitterHandle, callback: i64) 
     }
 }
 
-static RAW_ONCE_WRAPPER_REST_REGISTERED: Once = Once::new();
-
-fn ensure_raw_once_wrapper_rest_registered() {
-    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| {
-        perry_ffi::register_closure_rest(event_emitter_once_wrapper as perry_ffi::JsBody1, 0);
-    });
-}
-
 unsafe fn set_closure_dynamic_prop(closure: *mut RawClosureHeader, name: &[u8], value: f64) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(closure as *mut ObjectHeader, key, value);
@@ -873,9 +865,8 @@ unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i6
     if callback == 0 {
         return 0;
     }
-    ensure_raw_once_wrapper_rest_registered();
 
-    let wrapper = perry_ffi::alloc_closure(event_emitter_once_wrapper as perry_ffi::JsBody1, 4);
+    let wrapper = perry_ffi::alloc_closure(&EVENT_EMITTER_ONCE_WRAPPER_INFO, 4);
     let event_ptr = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
     js_closure_set_capture_ptr(wrapper, 0, handle);
     js_closure_set_capture_ptr(wrapper, 1, event_ptr as i64);
@@ -1187,8 +1178,10 @@ unsafe fn capture_listener_rejection(handle: Handle, result: f64) {
     if promise.is_null() {
         return;
     }
-    let on_rejected =
-        perry_ffi::alloc_closure(events_capture_rejection_handler as perry_ffi::JsBody1, 1);
+    let on_rejected = perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(events_capture_rejection_handler, 1),
+        1,
+    );
     js_closure_set_capture_ptr(on_rejected, 0, handle);
     js_promise_then(promise, std::ptr::null_mut(), on_rejected);
 }
@@ -1813,8 +1806,10 @@ pub unsafe extern "C" fn js_events_once(
         };
         if let Some(signal) = signal {
             if let Some(signal_ptr) = object_ptr_from_value(signal) {
-                let abort_listener =
-                    perry_ffi::alloc_closure(events_once_abort_listener as perry_ffi::JsBody0, 2);
+                let abort_listener = perry_ffi::alloc_closure(
+                    perry_ffi::js_function_info!(events_once_abort_listener, 0),
+                    2,
+                );
                 js_closure_set_capture_ptr(abort_listener, 0, handle);
                 js_closure_set_capture_ptr(abort_listener, 1, raw as i64);
                 js_abort_signal_add_listener(
@@ -1838,8 +1833,10 @@ pub unsafe extern "C" fn js_events_once(
         if event_name_ptr.is_null() {
             return raw;
         }
-        let listener =
-            perry_ffi::alloc_closure(events_once_event_target_listener as perry_ffi::JsBody1, 3);
+        let listener = perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(events_once_event_target_listener, 1),
+            3,
+        );
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, target as i64);
         js_closure_set_capture_ptr(listener, 2, event_name_ptr as i64);
@@ -1855,30 +1852,19 @@ pub unsafe extern "C" fn js_events_once(
         let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
             event_name_ptr as *mut StringHeader,
         )));
-        perry_ffi::register_closure_rest(
-            events_once_stream_resolve_listener as perry_ffi::JsBody1,
-            0,
-        );
-        let listener =
-            perry_ffi::alloc_closure(events_once_stream_resolve_listener as perry_ffi::JsBody1, 4);
+        let listener = perry_ffi::alloc_closure(&EVENTS_ONCE_STREAM_RESOLVE_LISTENER_INFO, 4);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
         let listener = scope.root_addr(listener as i64);
         if event_name != "error" {
-            perry_ffi::register_closure_rest(
-                events_once_stream_reject_listener as perry_ffi::JsBody1,
-                0,
-            );
             let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
             let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
                 error_event_ptr as *mut StringHeader,
             )));
-            let reject_listener = perry_ffi::alloc_closure(
-                events_once_stream_reject_listener as perry_ffi::JsBody1,
-                4,
-            );
+            let reject_listener =
+                perry_ffi::alloc_closure(&EVENTS_ONCE_STREAM_REJECT_LISTENER_INFO, 4);
             let reject_listener = scope.root_addr(reject_listener as i64);
             let event_name_ptr = (event.get().to_bits() & POINTER_MASK) as i64;
             js_closure_set_capture_ptr(
@@ -1926,16 +1912,7 @@ pub unsafe extern "C" fn js_events_once(
         let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
             event_name_ptr as *mut StringHeader,
         )));
-        perry_ffi::register_closure_rest(
-            events_once_stream_resolve_listener as perry_ffi::JsBody1,
-            0,
-        );
-        perry_ffi::register_closure_rest(
-            events_once_stream_reject_listener as perry_ffi::JsBody1,
-            0,
-        );
-        let listener =
-            perry_ffi::alloc_closure(events_once_stream_resolve_listener as perry_ffi::JsBody1, 4);
+        let listener = perry_ffi::alloc_closure(&EVENTS_ONCE_STREAM_RESOLVE_LISTENER_INFO, 4);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
@@ -1946,10 +1923,8 @@ pub unsafe extern "C" fn js_events_once(
             let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
                 error_event_ptr as *mut StringHeader,
             )));
-            let reject_listener = perry_ffi::alloc_closure(
-                events_once_stream_reject_listener as perry_ffi::JsBody1,
-                4,
-            );
+            let reject_listener =
+                perry_ffi::alloc_closure(&EVENTS_ONCE_STREAM_REJECT_LISTENER_INFO, 4);
             let reject_listener = scope.root_addr(reject_listener as i64);
             js_closure_set_capture_ptr(
                 reject_listener.get() as *mut RawClosureHeader,
@@ -1991,3 +1966,14 @@ pub unsafe extern "C" fn js_events_once(
 
 #[cfg(test)]
 mod tests;
+
+static EVENT_EMITTER_ONCE_WRAPPER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(event_emitter_once_wrapper as perry_ffi::JsBody1).with_rest(0);
+
+static EVENTS_ONCE_STREAM_RESOLVE_LISTENER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_once_stream_resolve_listener as perry_ffi::JsBody1)
+        .with_rest(0);
+
+static EVENTS_ONCE_STREAM_REJECT_LISTENER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(events_once_stream_reject_listener as perry_ffi::JsBody1)
+        .with_rest(0);

@@ -324,9 +324,9 @@ fn perex_constructor_coercion_reacquires_original_pattern_before_successful_comp
     let before = pattern.with_const_ptr(|p: *const StringHeader| p as usize);
     let flags = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let key = text(&scope, b"toString");
-    let fp = flags_collect_then_return as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
-    let closure = crate::closure::js_closure_alloc_singleton(fp);
+    let closure = crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(flags_collect_then_return, 0; with_declared(0)),
+    );
     flags.with_mut_ptr(|flags| {
         key.with_const_ptr(|key| {
             crate::object::js_object_set_field_by_name(
@@ -364,9 +364,9 @@ fn perex_constructor_flags_coercion_can_collect_and_throw_without_source_copy() 
     let before = pattern.with_const_ptr(|p: *const StringHeader| p as usize);
     let flags = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let key = text(&scope, b"toString");
-    let fp = flags_collect_then_throw as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
-    let closure = crate::closure::js_closure_alloc_singleton(fp);
+    let closure = crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(flags_collect_then_throw, 0; with_declared(0)),
+    );
     flags.with_mut_ptr(|flags| {
         key.with_const_ptr(|key| {
             crate::object::js_object_set_field_by_name(

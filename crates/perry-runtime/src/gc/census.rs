@@ -585,7 +585,6 @@ pub(crate) fn vec_bytes<T>(v: &Vec<T>) -> usize {
 pub(super) fn side_tables() -> Vec<SideTableRow> {
     let mut rows: Vec<SideTableRow> = Vec::new();
     rows.extend(crate::builtins::function_registries_census());
-    rows.extend(crate::closure::closure_registry_census());
     rows.extend(crate::closure::closure_side_table_census());
     rows.extend(crate::object::shapes::shape_table_census());
     rows.extend(crate::object::class_registry_census());

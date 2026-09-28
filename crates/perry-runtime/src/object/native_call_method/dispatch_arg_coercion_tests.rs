@@ -118,10 +118,11 @@ fn replace_fn_result_is_to_string_coerced() {
     // "gundefineduna" (test262 S15.5.4.11_A1_T5's shape; the old
     // `call_replace_callback` dropped every non-string result to "").
     unsafe {
-        let func_ptr = undef_replacer as *const u8;
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(
+            crate::fn_info!(undef_replacer, 3; with_declared(3)),
+            0,
+        );
         assert!(!closure.is_null());
-        crate::closure::js_register_closure_arity(func_ptr, 3);
         let cb = crate::value::js_nanbox_pointer(closure as i64);
         let r = call_string_method("gnulluna", "replace", &[short(b"null"), cb]);
         assert_string_result(r, "gundefineduna", "\"gnulluna\".replace(\"null\", fn)");

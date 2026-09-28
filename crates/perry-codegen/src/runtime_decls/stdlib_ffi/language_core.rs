@@ -348,7 +348,8 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // ========== Class registration ==========
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
-    module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
+    // The last argument is the setter's default-aware spec `.length`.
+    module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64, I32]);
     module.declare_function(
         "js_register_class_string_member_order",
         VOID,
@@ -374,7 +375,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function(
         "js_register_class_static_setter",
         VOID,
-        &[I64, I64, I64, I64],
+        &[I64, I64, I64, I64, I32],
     );
     module.declare_function(
         "js_register_class_method",
@@ -385,12 +386,14 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64, I64]);
     // Constructor synth/rest flags: (class_id, has_synthetic_arguments,
-    // has_rest) — consulted by the `super(...spread)` apply path so it packs a
-    // pass-through parent ctor's `arguments` / rest slot correctly.
+    // has_rest, rest_fixed) — consulted by the `super(...spread)` apply path
+    // so it packs a pass-through parent ctor's `arguments` / rest slot
+    // correctly, and by the dynamic construct path, which bundles every
+    // argument from `rest_fixed` on into the rest array (-1: no rest bundle).
     module.declare_function(
         "js_register_class_constructor_flags",
         VOID,
-        &[I64, I64, I64],
+        &[I64, I64, I64, I64],
     );
     // #1788: register a class STATIC method + dispatch an inherited static
     // method on a class value (subclass extends a class-expression value).

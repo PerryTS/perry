@@ -700,7 +700,7 @@ fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &s
     let detail_handle = scope.root_nanbox_f64(string_value(detail));
     let hint_handle = scope.root_nanbox_f64(string_value(&hint));
 
-    let callback = js_closure_alloc(process_warning_callback as *const u8, 4);
+    let callback = js_closure_alloc(crate::fn_info!(process_warning_callback, 0), 4);
     if callback.is_null() {
         return;
     }

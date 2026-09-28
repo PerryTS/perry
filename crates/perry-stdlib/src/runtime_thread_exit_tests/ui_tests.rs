@@ -48,7 +48,8 @@ fn thread_exit_releases_the_threads_geisterhand_callbacks_and_queued_actions() {
 
     let (queued_arg, alive) = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(js_closure_alloc(thunk0 as *const u8, 0));
+        let closure =
+            scope.root_raw_mut_ptr(js_closure_alloc(perry_runtime::fn_info!(thunk0, 0), 0));
         let arg = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
         let closure_f64 = f64::from_bits(closure_bits(closure.get_raw_mut_ptr::<ClosureHeader>()));
         let arg_f64 = f64::from_bits(array_bits(arg.get_raw_mut_ptr::<ArrayHeader>()));
@@ -88,7 +89,8 @@ fn thread_exit_releases_the_threads_ui_state_values_and_foreach_bindings() {
 
     let alive = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(js_closure_alloc(thunk0 as *const u8, 0));
+        let closure =
+            scope.root_raw_mut_ptr(js_closure_alloc(perry_runtime::fn_info!(thunk0, 0), 0));
         let value = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
         let value_bits = array_bits(value.get_raw_mut_ptr::<ArrayHeader>());
         let closure_f64 = f64::from_bits(closure_bits(closure.get_raw_mut_ptr::<ClosureHeader>()));
@@ -120,7 +122,8 @@ fn thread_exit_releases_the_threads_frame_callbacks_and_last_fire_entries() {
 
     let (id, closure_addr, alive) = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(js_closure_alloc(thunk2 as *const u8, 0));
+        let closure =
+            scope.root_raw_mut_ptr(js_closure_alloc(perry_runtime::fn_info!(thunk2, 2), 0));
         let addr = || closure.get_raw_mut_ptr::<ClosureHeader>() as i64;
         // Fire once so LAST_FIRE_BY_CLOSURE records this closure, then queue
         // it again so a pending callback is left behind.
@@ -151,7 +154,8 @@ fn thread_exit_clears_the_threads_tui_input_handler() {
 
     let (handler, alive) = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
-        let closure = scope.root_raw_mut_ptr(js_closure_alloc(thunk0 as *const u8, 0));
+        let closure =
+            scope.root_raw_mut_ptr(js_closure_alloc(perry_runtime::fn_info!(thunk0, 0), 0));
         let handler = closure.get_raw_mut_ptr::<ClosureHeader>() as i64;
         i::js_perry_tui_use_input(handler);
         (handler, i::tui_input_handler_for_test() == handler)

@@ -110,7 +110,9 @@ fn stream_event_names_raw_listeners_and_prepend_chainability() {
         0
     );
 
-    let cb = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
     let returned = unsafe {
         crate::closure::js_native_call_value(
             prepend,
@@ -179,9 +181,15 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let add_listener = js_object_get_field_by_name_f64(obj, hidden_key(b"addListener"));
     assert_eq!(on.to_bits(), add_listener.to_bits());
 
-    let cb1 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let cb2 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let cb3 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb1 = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
+    let cb2 = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
+    let cb3 = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
 
     unsafe {
         let _ = crate::closure::js_native_call_value(
@@ -251,8 +259,12 @@ fn stream_listener_count_and_listeners_reflect_data_end_storage() {
 
     let native_stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let native_handle = raw_ptr_from_value(native_stream) as i64;
-    let cb4 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let cb5 = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let cb4 = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
+    let cb5 = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
     let _ = js_node_stream_method_on(native_handle, string_value("data"), cb4);
     let _ = js_node_stream_method_on(native_handle, string_value("data"), cb5);
     assert_eq!(
@@ -281,8 +293,10 @@ fn pipe_and_unpipe_emit_destination_events_with_source() {
         hidden_key(b"unpipe"),
     );
 
-    let pipe_listener = js_closure_alloc(capture_expected_arg_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_expected_arg_listener as *const u8, 1);
+    let pipe_listener = js_closure_alloc(
+        crate::fn_info!(capture_expected_arg_listener, 1; with_declared(1)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(pipe_listener, 0, src);
     let listener = box_pointer(pipe_listener as *const u8);
     let _ = js_node_stream_method_on(dest_handle, string_value("pipe"), listener);
@@ -340,9 +354,13 @@ fn readable_from_pipe_ends_destination() {
         hidden_key(b"pipe"),
     );
 
-    let data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    let data = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
+    let end_closure = js_closure_alloc(
+        crate::fn_info!(capture_end_listener, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(end_closure, 0, dest);
     let end = box_pointer(end_closure as *const u8);
     let _ = js_node_stream_method_on(dest_handle, string_value("data"), data);
@@ -385,9 +403,14 @@ fn readable_from_pipe_chain_ends_tail_destination() {
         hidden_key(b"pipe"),
     );
 
-    let sink_data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
-    let sink_end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    let sink_data = box_pointer(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ) as *const u8);
+    let sink_end_closure = js_closure_alloc(
+        crate::fn_info!(capture_end_listener, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(sink_end_closure, 0, sink);
     let sink_end = box_pointer(sink_end_closure as *const u8);
     let _ = js_node_stream_method_on(sink_handle, string_value("data"), sink_data);
@@ -462,11 +485,13 @@ fn pause_resume_track_readable_flowing_and_events() {
         TAG_FALSE
     );
 
-    let data = box_pointer(js_closure_alloc(noop_listener as *const u8, 0) as *const u8);
+    let data = box_pointer(
+        js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
+    );
     let pause_listener =
-        box_pointer(js_closure_alloc(capture_pause_listener as *const u8, 0) as *const u8);
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_pause_listener, 0), 0) as *const u8);
     let resume_listener =
-        box_pointer(js_closure_alloc(capture_resume_listener as *const u8, 0) as *const u8);
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_resume_listener, 0), 0) as *const u8);
     let _ = js_node_stream_method_on(handle, string_value("pause"), pause_listener);
     let _ = js_node_stream_method_on(handle, string_value("resume"), resume_listener);
     let _ = js_node_stream_method_on(handle, string_value("data"), data);
@@ -543,13 +568,17 @@ fn readable_push_emits_data_with_stream_this_and_deferred_end() {
     test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
 
-    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    let data_closure = js_closure_alloc(
+        crate::fn_info!(capture_data_listener, 1; with_declared(1)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
     let data_listener = box_pointer(data_closure as *const u8);
 
-    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    let end_closure = js_closure_alloc(
+        crate::fn_info!(capture_end_listener, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(end_closure, 0, stream);
     let end_listener = box_pointer(end_closure as *const u8);
 
@@ -598,8 +627,10 @@ fn readable_read_default_size_drains_buffer_as_buffer_then_null() {
 
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
-    let readable_closure = js_closure_alloc(capture_readable_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_readable_listener as *const u8, 0);
+    let readable_closure = js_closure_alloc(
+        crate::fn_info!(capture_readable_listener, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(readable_closure, 0, stream);
 
     let _ = js_node_stream_method_push(handle, string_value("abc"));
@@ -715,8 +746,10 @@ fn destroyed_readable_drops_late_push_data() {
 
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
-    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    let data_closure = js_closure_alloc(
+        crate::fn_info!(capture_data_listener, 1; with_declared(1)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
     let data_listener = box_pointer(data_closure as *const u8);
 
@@ -959,8 +992,10 @@ fn writable_backpressure_tracks_length_need_drain_and_drain_event() {
     PENDING_WRITE_CALLBACK.with(|pending| *pending.borrow_mut() = None);
 
     let opts = crate::object::js_object_alloc(0, 2);
-    let closure = js_closure_alloc(write_capture_pending as *const u8, 0);
-    crate::closure::js_register_closure_arity(write_capture_pending as *const u8, 3);
+    let closure = js_closure_alloc(
+        crate::fn_info!(write_capture_pending, 3; with_declared(3)),
+        0,
+    );
     js_object_set_field_by_name(
         opts,
         hidden_key(b"write"),
@@ -971,7 +1006,8 @@ fn writable_backpressure_tracks_length_need_drain_and_drain_event() {
     let stream = js_node_stream_writable_new(box_pointer(opts as *const u8));
     let handle = raw_ptr_from_value(stream) as i64;
     let undefined = f64::from_bits(TAG_UNDEFINED);
-    let drain = box_pointer(js_closure_alloc(capture_drain_listener as *const u8, 0) as *const u8);
+    let drain =
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_drain_listener, 0), 0) as *const u8);
     let _ = js_node_stream_method_on(handle, string_value("drain"), drain);
 
     assert_eq!(
@@ -1007,8 +1043,7 @@ fn writable_write_returns_false_before_sync_callback_clears_length() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
 
     let opts = crate::object::js_object_alloc(0, 2);
-    let closure = js_closure_alloc(write_capture as *const u8, 0);
-    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    let closure = js_closure_alloc(crate::fn_info!(write_capture, 3; with_declared(3)), 0);
     js_object_set_field_by_name(
         opts,
         hidden_key(b"write"),
@@ -1039,8 +1074,10 @@ fn writable_end_waits_for_pending_write_before_finish() {
     PENDING_WRITE_CALLBACK.with(|pending| *pending.borrow_mut() = None);
 
     let opts = crate::object::js_object_alloc(0, 1);
-    let closure = js_closure_alloc(write_capture_pending as *const u8, 0);
-    crate::closure::js_register_closure_arity(write_capture_pending as *const u8, 3);
+    let closure = js_closure_alloc(
+        crate::fn_info!(write_capture_pending, 3; with_declared(3)),
+        0,
+    );
     js_object_set_field_by_name(
         opts,
         hidden_key(b"write"),
@@ -1051,8 +1088,9 @@ fn writable_end_waits_for_pending_write_before_finish() {
     let handle = raw_ptr_from_value(stream) as i64;
     let undefined = f64::from_bits(TAG_UNDEFINED);
     let finish =
-        box_pointer(js_closure_alloc(capture_finish_listener as *const u8, 0) as *const u8);
-    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_finish_listener, 0), 0) as *const u8);
+    let close =
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_close_listener, 0), 0) as *const u8);
     let _ = js_node_stream_method_on(handle, string_value("finish"), finish);
     let _ = js_node_stream_method_on(handle, string_value("close"), close);
 
@@ -1084,8 +1122,10 @@ fn writable_end_callback_runs_before_finish_and_close_events() {
     PENDING_WRITE_CALLBACK.with(|pending| *pending.borrow_mut() = None);
 
     let opts = crate::object::js_object_alloc(0, 1);
-    let closure = js_closure_alloc(write_capture_pending as *const u8, 0);
-    crate::closure::js_register_closure_arity(write_capture_pending as *const u8, 3);
+    let closure = js_closure_alloc(
+        crate::fn_info!(write_capture_pending, 3; with_declared(3)),
+        0,
+    );
     js_object_set_field_by_name(
         opts,
         hidden_key(b"write"),
@@ -1096,9 +1136,10 @@ fn writable_end_callback_runs_before_finish_and_close_events() {
     let handle = raw_ptr_from_value(stream) as i64;
     let undefined = f64::from_bits(TAG_UNDEFINED);
     let finish =
-        box_pointer(js_closure_alloc(capture_finish_listener as *const u8, 0) as *const u8);
-    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
-    let end_cb = js_closure_alloc(capture_end_callback_state as *const u8, 1);
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_finish_listener, 0), 0) as *const u8);
+    let close =
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_close_listener, 0), 0) as *const u8);
+    let end_cb = js_closure_alloc(crate::fn_info!(capture_end_callback_state, 0), 1);
     js_closure_set_capture_f64(end_cb, 0, stream);
     let end_cb_value = box_pointer(end_cb as *const u8);
     let _ = js_node_stream_method_on(handle, string_value("finish"), finish);
@@ -1134,8 +1175,10 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
-    let closure = scope.root_raw_mut_ptr(js_closure_alloc(write_capture as *const u8, 0));
-    crate::closure::js_register_closure_arity(write_capture as *const u8, 3);
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(write_capture, 3; with_declared(3)),
+        0,
+    ));
     js_object_set_field_by_name(
         opts.get_raw_mut_ptr(),
         hidden_key(b"write"),
@@ -1165,8 +1208,14 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
         TAG_FALSE
     );
 
-    let finish = scope.root_raw_mut_ptr(js_closure_alloc(capture_finish_listener as *const u8, 0));
-    let close = scope.root_raw_mut_ptr(js_closure_alloc(capture_close_listener as *const u8, 0));
+    let finish = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(capture_finish_listener, 0),
+        0,
+    ));
+    let close = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(capture_close_listener, 0),
+        0,
+    ));
     let finish_event = scope.root_nanbox_f64(string_value("finish"));
     let close_event = scope.root_nanbox_f64(string_value("close"));
     let _ = js_node_stream_method_on(
@@ -1220,7 +1269,8 @@ fn readable_emit_close_false_suppresses_destroy_close_event() {
     js_object_set_field_by_name(opts, hidden_key(b"emitClose"), f64::from_bits(TAG_FALSE));
     let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
     let handle = raw_ptr_from_value(stream) as i64;
-    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+    let close =
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_close_listener, 0), 0) as *const u8);
     let _ = js_node_stream_method_on(handle, string_value("close"), close);
 
     let _ = js_node_stream_method_destroy(handle, f64::from_bits(TAG_UNDEFINED));
@@ -1241,13 +1291,18 @@ fn readable_auto_destroy_false_does_not_close_after_end() {
     js_object_set_field_by_name(opts, hidden_key(b"autoDestroy"), f64::from_bits(TAG_FALSE));
     let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
     let handle = raw_ptr_from_value(stream) as i64;
-    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
-    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    let close =
+        box_pointer(js_closure_alloc(crate::fn_info!(capture_close_listener, 0), 0) as *const u8);
+    let data_closure = js_closure_alloc(
+        crate::fn_info!(capture_data_listener, 1; with_declared(1)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
     let data = box_pointer(data_closure as *const u8);
-    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
-    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    let end_closure = js_closure_alloc(
+        crate::fn_info!(capture_end_listener, 0; with_declared(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_f64(end_closure, 0, stream);
     let end = box_pointer(end_closure as *const u8);
 
@@ -1275,7 +1330,10 @@ fn stream_destroy_with_error_marks_errored_state() {
         hidden_key(b"destroy"),
     ));
     let err = scope.root_nanbox_f64(string_value("boom"));
-    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ));
     let error_event = scope.root_nanbox_f64(string_value("error"));
     let handle = || raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
     let _ = js_node_stream_method_on(
@@ -1352,7 +1410,10 @@ fn readable_aborted_reflects_destroy_before_end() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
     let err = scope.root_nanbox_f64(string_value("abort"));
-    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ));
     let error_event = scope.root_nanbox_f64(string_value("error"));
     let handle = || raw_ptr_from_value(stream.get_nanbox_f64()) as i64;
     let _ = js_node_stream_method_on(
@@ -1394,8 +1455,10 @@ fn readable_aborted_reflects_destroy_before_end() {
     );
 
     let ended = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
-    let ended_error_listener =
-        scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let ended_error_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ));
     let ended_handle = || raw_ptr_from_value(ended.get_nanbox_f64()) as i64;
     let _ = js_node_stream_method_on(
         ended_handle(),
@@ -1418,7 +1481,10 @@ fn stream_native_receiver_methods_update_hidden_state() {
     )));
     let err = scope.root_nanbox_f64(string_value("boom"));
     let error_event = scope.root_nanbox_f64(string_value("error"));
-    let emit_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let emit_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ));
     let emitting_handle = || raw_ptr_from_value(emitting.get_nanbox_f64()) as i64;
     let _ = js_node_stream_method_on(
         emitting_handle(),
@@ -1449,7 +1515,10 @@ fn stream_native_receiver_methods_update_hidden_state() {
     let destroyed = scope.root_nanbox_f64(js_node_stream_passthrough_new(f64::from_bits(
         TAG_UNDEFINED,
     )));
-    let destroy_listener = scope.root_raw_mut_ptr(js_closure_alloc(noop_listener as *const u8, 0));
+    let destroy_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(noop_listener, 0; with_declared(0)),
+        0,
+    ));
     let destroyed_handle = || raw_ptr_from_value(destroyed.get_nanbox_f64()) as i64;
     let _ = js_node_stream_method_on(
         destroyed_handle(),
@@ -1460,43 +1529,4 @@ fn stream_native_receiver_methods_update_hidden_state() {
     assert!(readable_hidden_error(destroyed.get_nanbox_f64()).is_none());
     let _ = crate::promise::js_promise_run_microtasks();
     assert!(js_node_stream_hidden_error_after_read(destroyed.get_nanbox_f64()).is_some());
-}
-
-#[test]
-fn stream_stub_arities_are_registered_per_thread() {
-    let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
-    assert_eq!(
-        crate::closure::lookup_closure_arity(ns_end3 as *const u8),
-        Some(3)
-    );
-    assert_eq!(
-        crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),
-        Some(1)
-    );
-    assert_eq!(
-        crate::closure::lookup_closure_arity(ns_destroy_error_microtask as *const u8),
-        Some(0)
-    );
-
-    std::thread::spawn(|| {
-        let _ = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
-        assert_eq!(
-            crate::closure::lookup_closure_arity(ns_end3 as *const u8),
-            Some(3)
-        );
-        assert_eq!(
-            crate::closure::lookup_closure_arity(ns_destroy1 as *const u8),
-            Some(1)
-        );
-        assert_eq!(
-            crate::closure::lookup_closure_arity(ns_destroy_error_microtask as *const u8),
-            Some(0)
-        );
-        assert_eq!(
-            crate::closure::lookup_closure_arity(ns_write3 as *const u8),
-            Some(3)
-        );
-    })
-    .join()
-    .expect("stream arity registration thread should not panic");
 }

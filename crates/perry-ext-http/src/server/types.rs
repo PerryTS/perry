@@ -425,8 +425,8 @@ mod tests {
     fn listen_borrowed_values_preserve_port_host_backlog_and_callback() {
         let scope = perry_ffi::TransientRootScope::enter();
         let callback = scope.root_nanbox(f64::from_bits(
-            JsValue::from_object_ptr(perry_runtime::closure::js_closure_alloc(
-                listen_test_callback as *const u8,
+            JsValue::from_object_ptr(perry_ffi::alloc_closure(
+                perry_ffi::js_function_info!(listen_test_callback, 0),
                 0,
             ))
             .bits(),

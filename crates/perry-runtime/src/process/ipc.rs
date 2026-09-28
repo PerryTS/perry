@@ -9,7 +9,7 @@
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    js_register_closure_arity, js_register_closure_length, ClosureHeader,
+    ClosureHeader,
 };
 use crate::string::js_string_from_bytes;
 #[cfg(any(unix, windows))]
@@ -98,24 +98,10 @@ fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
     crate::object::js_object_set_field_by_name(obj, key, value);
 }
 
-type IpcFunction0 = crate::closure::body_call::js_body_fn_ty!();
-type IpcFunction4 = crate::closure::body_call::js_body_fn_ty!(a, a, a, a);
-
-fn ipc_function0(name: &str, thunk: IpcFunction0, length: u32) -> f64 {
-    let func_ptr = thunk as *const u8;
-    js_register_closure_arity(func_ptr, 0);
-    js_register_closure_length(func_ptr, length);
-    let closure = js_closure_alloc(func_ptr, 0);
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::object::set_builtin_closure_length(closure as usize, length);
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-fn ipc_function4(name: &str, thunk: IpcFunction4, length: u32) -> f64 {
-    let func_ptr = thunk as *const u8;
-    js_register_closure_arity(func_ptr, 4);
-    js_register_closure_length(func_ptr, length);
-    let closure = js_closure_alloc(func_ptr, 0);
+/// A process IPC function value; `info` records the body's declared arity and
+/// `.length`.
+fn ipc_function(name: &str, info: *const crate::closure::JsFunctionInfo, length: u32) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -347,14 +333,22 @@ pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
     Some(match name {
         "send" => {
             if available {
-                ipc_function4("send", process_ipc_send_fn, 4)
+                ipc_function(
+                    "send",
+                    crate::fn_info!(process_ipc_send_fn, 4; with_declared(4), with_length(4)),
+                    4,
+                )
             } else {
                 undefined_value()
             }
         }
         "disconnect" => {
             if available {
-                ipc_function0("disconnect", process_ipc_disconnect_fn, 0)
+                ipc_function(
+                    "disconnect",
+                    crate::fn_info!(process_ipc_disconnect_fn, 0; with_declared(0), with_length(0)),
+                    0,
+                )
             } else {
                 undefined_value()
             }
@@ -381,11 +375,23 @@ pub(crate) fn process_ipc_property(name: &str) -> Option<f64> {
 
 fn process_channel_value() -> f64 {
     let obj = crate::object::js_object_alloc(0, 2);
-    set_field(obj, "ref", ipc_function0("ref", process_channel_ref_fn, 0));
+    set_field(
+        obj,
+        "ref",
+        ipc_function(
+            "ref",
+            crate::fn_info!(process_channel_ref_fn, 0; with_declared(0), with_length(0)),
+            0,
+        ),
+    );
     set_field(
         obj,
         "unref",
-        ipc_function0("unref", process_channel_unref_fn, 0),
+        ipc_function(
+            "unref",
+            crate::fn_info!(process_channel_unref_fn, 0; with_declared(0), with_length(0)),
+            0,
+        ),
     );
     object_value(obj)
 }
@@ -562,9 +568,8 @@ fn json_frame(message: f64) -> Option<Vec<u8>> {
 }
 
 fn defer_send_callback(cb: f64, ok: bool) {
-    let func_ptr = process_ipc_send_callback_thunk as *const u8;
-    js_register_closure_arity(func_ptr, 0);
-    js_register_closure_length(func_ptr, 0);
+    let func_ptr =
+        crate::fn_info!(process_ipc_send_callback_thunk, 0; with_declared(0), with_length(0));
     let deferred = js_closure_alloc(func_ptr, 2);
     js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
     let flag = if ok { TAG_TRUE } else { TAG_FALSE };

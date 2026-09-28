@@ -2,7 +2,7 @@ use super::*;
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    js_register_closure_arity, native_call_value_this, ClosureHeader, JsThis,
+    native_call_value_this, ClosureHeader, JsThis,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
@@ -143,14 +143,6 @@ pub(crate) extern "C" fn cp_method_this0(
 ) -> f64 {
     cp_this(this, closure)
 }
-pub(crate) extern "C" fn cp_method_this1(
-    closure: *const ClosureHeader,
-    this: crate::closure::JsThis,
-    _a: f64,
-) -> f64 {
-    cp_this(this, closure)
-}
-
 /// Keep a live child attached to the event loop. Calls are idempotent, matching
 /// Node and Bun's process-handle contract.
 pub(crate) extern "C" fn cp_method_ref(
@@ -314,10 +306,8 @@ pub(crate) extern "C" fn cp_method_pipe(
     dest: f64,
 ) -> f64 {
     let this = cp_this(_this, closure);
-    js_register_closure_arity(cp_pipe_data_thunk as *const u8, 1);
-    js_register_closure_arity(cp_pipe_end_thunk as *const u8, 0);
 
-    let data_thunk = js_closure_alloc(cp_pipe_data_thunk as *const u8, 1);
+    let data_thunk = js_closure_alloc(crate::fn_info!(cp_pipe_data_thunk, 1; with_declared(1)), 1);
     js_closure_set_capture_ptr(data_thunk, 0, dest.to_bits() as i64);
     cp_register(
         this,
@@ -325,7 +315,7 @@ pub(crate) extern "C" fn cp_method_pipe(
         cp_box_ptr(data_thunk as *const u8),
     );
 
-    let end_thunk = js_closure_alloc(cp_pipe_end_thunk as *const u8, 1);
+    let end_thunk = js_closure_alloc(crate::fn_info!(cp_pipe_end_thunk, 0; with_declared(0)), 1);
     js_closure_set_capture_ptr(end_thunk, 0, dest.to_bits() as i64);
     cp_register(
         this,
@@ -386,8 +376,10 @@ fn cp_stream_callback(arg2: f64, arg3: f64) -> Option<f64> {
 fn cp_defer_stream_callback(callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback);
-    let deferred =
-        scope.root_raw_mut_ptr(js_closure_alloc(cp_stream_callback_thunk as *const u8, 1));
+    let deferred = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(cp_stream_callback_thunk, 0; with_declared(0)),
+        1,
+    ));
     deferred.with_mut_ptr(|deferred: *mut ClosureHeader| {
         js_closure_set_capture_ptr(deferred, 0, callback.get_nanbox_f64().to_bits() as i64);
     });
@@ -544,7 +536,10 @@ pub(crate) extern "C" fn cp_method_send(
 /// `Error [ERR_IPC_CHANNEL_CLOSED]` (`message: "Channel closed"`). The deferred
 /// closure captures the callback in slot 0 and the success flag in slot 1.
 pub(crate) fn cp_defer_send_callback(cb: f64, ok: bool) {
-    let deferred = js_closure_alloc(cp_send_callback_thunk as *const u8, 2);
+    let deferred = js_closure_alloc(
+        crate::fn_info!(cp_send_callback_thunk, 0; with_declared(0)),
+        2,
+    );
     js_closure_set_capture_ptr(deferred, 0, cb.to_bits() as i64);
     let flag = if ok { TAG_TRUE_F64 } else { TAG_FALSE_F64 };
     js_closure_set_capture_ptr(deferred, 1, flag.to_bits() as i64);
@@ -602,8 +597,11 @@ pub(crate) extern "C" fn cp_method_disconnect(
     }
     cp_set_field(this, b"connected", TAG_FALSE_F64);
     cp_set_field(this, b"channel", TAG_NULL_F64);
-    js_register_closure_arity(cp_disconnect_emit_thunk as *const u8, 0);
-    let deferred = js_closure_alloc(cp_disconnect_emit_thunk as *const u8, 1);
+
+    let deferred = js_closure_alloc(
+        crate::fn_info!(cp_disconnect_emit_thunk, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(deferred, 0, this.to_bits() as i64);
     crate::timer::js_set_immediate_callback(deferred as i64);
     cp_undefined()

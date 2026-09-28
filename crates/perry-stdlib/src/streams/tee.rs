@@ -274,9 +274,10 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
     if !TEE_PULLING.lock().unwrap().insert(source) {
         return;
     }
-    let f = tee_pull_microtask as *const u8;
-    perry_runtime::closure::js_register_closure_arity(f, 0);
-    let job = perry_runtime::closure::js_closure_alloc(f, 1);
+    let job = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(tee_pull_microtask, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
     perry_runtime::builtins::js_queue_microtask(job as i64);
 }
@@ -316,9 +317,10 @@ pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
     if !TEE_PULLING.lock().unwrap().insert(source) {
         return;
     }
-    let f = tee_demand_hop as *const u8;
-    perry_runtime::closure::js_register_closure_arity(f, 0);
-    let job = perry_runtime::closure::js_closure_alloc(f, 1);
+    let job = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(tee_demand_hop, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
     perry_runtime::builtins::js_queue_microtask(job as i64);
 }
@@ -440,9 +442,10 @@ extern "C" fn tee_pull_microtask(
                         // the final delivery pair). Each extra hop cedes a
                         // task-generation to racing promise cascades (the
                         // Next.js module-require chain must win that race).
-                        let f = tee_byte_chain_hop as *const u8;
-                        perry_runtime::closure::js_register_closure_arity(f, 0);
-                        let job = perry_runtime::closure::js_closure_alloc(f, 1);
+                        let job = perry_runtime::closure::js_closure_alloc(
+                            perry_runtime::fn_info!(tee_byte_chain_hop, 0; with_declared(0)),
+                            1,
+                        );
                         perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
                         perry_runtime::builtins::js_queue_microtask(job as i64);
                     } else {
@@ -464,9 +467,10 @@ extern "C" fn tee_pull_microtask(
                 // 6/12/20-tick chains), i.e. it travels the nextTick queue,
                 // which runs when the microtask queue exhausts. A plain
                 // (non-tee) stream's close stays prompt. Defer via nextTick.
-                let f = tee_close_tick as *const u8;
-                perry_runtime::closure::js_register_closure_arity(f, 0);
-                let job = perry_runtime::closure::js_closure_alloc(f, 1);
+                let job = perry_runtime::closure::js_closure_alloc(
+                    perry_runtime::fn_info!(tee_close_tick, 0; with_declared(0)),
+                    1,
+                );
                 perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
                 perry_runtime::builtins::js_queue_next_tick(job as i64);
             }

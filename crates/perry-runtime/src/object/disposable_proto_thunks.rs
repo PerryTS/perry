@@ -164,13 +164,15 @@ pub(super) extern "C" fn ads_proto_disposed_getter_thunk(
 }
 
 /// Install a `disposed` accessor (getter only) onto a stack prototype.
-fn install_disposed_getter(proto_obj: *mut ObjectHeader, func_ptr: *const u8) {
+fn install_disposed_getter(
+    proto_obj: *mut ObjectHeader,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -222,27 +224,78 @@ pub(super) fn install_disposable_proto_methods(
             // adding an accessor descriptor onto a prototype that already holds
             // data properties desyncs the accessor/data-field bookkeeping and
             // corrupts a data slot (see the Map arm in `collection_proto_thunks`).
-            install_disposed_getter(proto_obj, ds_proto_disposed_getter_thunk as *const u8);
-            ipm(proto_obj, "use", ds_proto_use_thunk as *const u8, 1);
-            ipm(proto_obj, "adopt", ds_proto_adopt_thunk as *const u8, 2);
-            ipm(proto_obj, "defer", ds_proto_defer_thunk as *const u8, 1);
-            let dispose_value = ipm(proto_obj, "dispose", ds_proto_dispose_thunk as *const u8, 0);
-            ipm(proto_obj, "move", ds_proto_move_thunk as *const u8, 0);
+            install_disposed_getter(
+                proto_obj,
+                crate::fn_info!(ds_proto_disposed_getter_thunk, 0; with_declared(0)),
+            );
+            ipm(
+                proto_obj,
+                "use",
+                crate::fn_info!(ds_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "adopt",
+                crate::fn_info!(ds_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "defer",
+                crate::fn_info!(ds_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            let dispose_value = ipm(
+                proto_obj,
+                "dispose",
+                crate::fn_info!(ds_proto_dispose_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "move",
+                crate::fn_info!(ds_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_symbol_dispose_alias(proto_obj, "dispose", dispose_value);
             install_toplevel_string_tag(proto_obj, "DisposableStack");
         }
         "AsyncDisposableStack" => {
-            install_disposed_getter(proto_obj, ads_proto_disposed_getter_thunk as *const u8);
-            ipm(proto_obj, "use", ads_proto_use_thunk as *const u8, 1);
-            ipm(proto_obj, "adopt", ads_proto_adopt_thunk as *const u8, 2);
-            ipm(proto_obj, "defer", ads_proto_defer_thunk as *const u8, 1);
+            install_disposed_getter(
+                proto_obj,
+                crate::fn_info!(ads_proto_disposed_getter_thunk, 0; with_declared(0)),
+            );
+            ipm(
+                proto_obj,
+                "use",
+                crate::fn_info!(ads_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "adopt",
+                crate::fn_info!(ads_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "defer",
+                crate::fn_info!(ads_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             let dispose_value = ipm(
                 proto_obj,
                 "disposeAsync",
-                ads_proto_dispose_async_thunk as *const u8,
+                crate::fn_info!(ads_proto_dispose_async_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
-            ipm(proto_obj, "move", ads_proto_move_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "move",
+                crate::fn_info!(ads_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_symbol_dispose_alias(proto_obj, "asyncDispose", dispose_value);
             install_toplevel_string_tag(proto_obj, "AsyncDisposableStack");
         }

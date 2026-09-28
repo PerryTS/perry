@@ -89,29 +89,6 @@ pub(super) struct Capability {
 // a per-instance `length` or non-constructable entry.
 // ---------------------------------------------------------------------------
 
-crate::perry_thread_local! {
-    static ARITY_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn ensure_arity_registered() {
-    ARITY_REGISTERED.with(|done| {
-        if done.get() {
-            return;
-        }
-        done.set(true);
-        for (f, arity) in [
-            (capability_executor_fn as *const u8, 2),
-            (all_resolve_element_fn as *const u8, 1),
-            (settled_fulfill_element_fn as *const u8, 1),
-            (settled_reject_element_fn as *const u8, 1),
-            (any_reject_element_fn as *const u8, 1),
-        ] {
-            crate::closure::js_register_closure_arity(f, arity);
-            crate::closure::register_closure_body_non_constructor(f);
-        }
-    });
-}
-
 // ---------------------------------------------------------------------------
 // TypeError helpers
 // ---------------------------------------------------------------------------
@@ -162,6 +139,15 @@ fn is_callable(value: f64) -> bool {
 // NewPromiseCapability(C)
 // ---------------------------------------------------------------------------
 
+/// `capability_executor_fn`'s info: the anonymous built-in `GetCapabilitiesExecutor`
+/// function — declared 2, no `[[Construct]]` (#10521).
+static CAPABILITY_EXECUTOR_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        capability_executor_fn as crate::codegen_abi::JsBody2<crate::closure::ClosureHeader>,
+    )
+    .with_declared(2)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
 /// `GetCapabilitiesExecutor` function. Captures the 2-slot capability storage
 /// array (slot0 = resolve, slot1 = reject, both init `undefined`). Throws a
 /// TypeError if either slot is already set (executor called twice).
@@ -198,9 +184,6 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
     // helper and re-read every address at its point of use.
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor_h = scope.root_nanbox_f64(c);
-    // The generic path's executor takes its `length` and non-constructor bit
-    // from this registration (#10521), whichever entry point got here.
-    ensure_arity_registered();
 
     if !crate::object::js_value_is_constructor(ctor_h.get_nanbox_f64()) {
         throw_type_error("Promise.all called on non-constructor");
@@ -232,10 +215,8 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
     js_array_set_f64(storage, 1, undef());
     let storage_h = scope.root_nanbox_f64(boxed_ptr(storage));
 
-    let executor_h = scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(
-        capability_executor_fn as *const u8,
-        1,
-    )));
+    let executor_h =
+        scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(&CAPABILITY_EXECUTOR_FN_INFO, 1)));
     js_closure_set_capture_ptr(
         unboxed_ptr(executor_h.get_nanbox_f64()),
         0,
@@ -342,7 +323,7 @@ fn take_already_called(guard: *mut crate::array::ArrayHeader) -> bool {
 
 #[inline]
 fn build_element_closure(
-    func: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     guard: *mut crate::array::ArrayHeader,
     index: u32,
     values: *mut crate::array::ArrayHeader,
@@ -363,7 +344,7 @@ fn build_element_closure(
     let cap_resolve_h = scope.root_nanbox_f64(cap_resolve);
     let cap_reject_h = scope.root_nanbox_f64(cap_reject);
 
-    let closure_h = scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(func, 6)));
+    let closure_h = scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(info, 6)));
     let c: *mut crate::closure::ClosureHeader = unboxed_ptr(closure_h.get_nanbox_f64());
     js_closure_set_capture_ptr(c, 0, unboxed_ptr::<u8>(guard_h.get_nanbox_f64()) as i64);
     js_closure_set_capture_f64(c, 1, index as f64);
@@ -373,8 +354,8 @@ fn build_element_closure(
     js_closure_set_capture_f64(c, 5, cap_reject_h.get_nanbox_f64());
     // Spec: the resolve/reject element functions are anonymous built-in
     // functions with `length` 1 and are NOT constructors, so
-    // `new resolveElement()` throws. Both facts come with the function kind
-    // (`ensure_arity_registered`, #10521), not a per-element entry.
+    // `new resolveElement()` throws. Both facts come with the body's static
+    // info (#10521), not a per-element entry.
     unboxed_ptr(closure_h.get_nanbox_f64())
 }
 
@@ -385,6 +366,15 @@ fn dec_remaining(state: *mut crate::array::ArrayHeader) -> bool {
     js_array_set_f64(state, 0, remaining);
     remaining == 0.0
 }
+
+/// `all_resolve_element_fn`'s info: an anonymous built-in element function —
+/// declared 1, no `[[Construct]]` (#10521).
+static ALL_RESOLVE_ELEMENT_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        all_resolve_element_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
 
 /// Promise.all Resolve Element Function.
 extern "C" fn all_resolve_element_fn(
@@ -409,6 +399,15 @@ extern "C" fn all_resolve_element_fn(
     undef()
 }
 
+/// `settled_fulfill_element_fn`'s info: an anonymous built-in element function —
+/// declared 1, no `[[Construct]]` (#10521).
+static SETTLED_FULFILL_ELEMENT_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        settled_fulfill_element_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
 /// Promise.allSettled Resolve Element Function → `{status:"fulfilled", value}`.
 extern "C" fn settled_fulfill_element_fn(
     closure: *const crate::closure::ClosureHeader,
@@ -417,6 +416,15 @@ extern "C" fn settled_fulfill_element_fn(
 ) -> f64 {
     settled_element(closure, value, true)
 }
+
+/// `settled_reject_element_fn`'s info: an anonymous built-in element function —
+/// declared 1, no `[[Construct]]` (#10521).
+static SETTLED_REJECT_ELEMENT_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        settled_reject_element_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
 
 /// Promise.allSettled Reject Element Function → `{status:"rejected", reason}`.
 extern "C" fn settled_reject_element_fn(
@@ -466,6 +474,15 @@ fn settled_element(
     }
     undef()
 }
+
+/// `any_reject_element_fn`'s info: an anonymous built-in element function —
+/// declared 1, no `[[Construct]]` (#10521).
+static ANY_REJECT_ELEMENT_FN_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        any_reject_element_fn as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    )
+    .with_declared(1)
+    .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
 
 /// Promise.any Reject Element Function → collect into errors array; reject with
 /// AggregateError once all reject.
@@ -618,7 +635,7 @@ fn is_intrinsic_promise_resolve(resolve_fn: f64) -> bool {
     if crate::value::addr_class::is_handle_band(raw) || !crate::closure::is_closure_ptr(raw) {
         return false;
     }
-    unsafe { (*(raw as *const crate::closure::ClosureHeader)).func_ptr == intrinsic }
+    unsafe { (*(raw as *const crate::closure::ClosureHeader)).code() == intrinsic }
 }
 
 /// True while any promise-lifecycle observer is installed. Re-checked per
@@ -801,7 +818,7 @@ fn perform(
                 } else {
                     let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
                     let elem_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
-                        all_resolve_element_fn as *const u8,
+                        &ALL_RESOLVE_ELEMENT_FN_INFO,
                         unboxed_ptr(guard_h.get_nanbox_f64()),
                         i,
                         values_ptr(),
@@ -819,7 +836,7 @@ fn perform(
             CombinatorKind::AllSettled => {
                 let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
                 let on_ful_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
-                    settled_fulfill_element_fn as *const u8,
+                    &SETTLED_FULFILL_ELEMENT_FN_INFO,
                     unboxed_ptr(guard_h.get_nanbox_f64()),
                     i,
                     values_ptr(),
@@ -828,7 +845,7 @@ fn perform(
                     cap_reject_h.get_nanbox_f64(),
                 )));
                 let on_rej_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
-                    settled_reject_element_fn as *const u8,
+                    &SETTLED_REJECT_ELEMENT_FN_INFO,
                     unboxed_ptr(guard_h.get_nanbox_f64()),
                     i,
                     values_ptr(),
@@ -846,7 +863,7 @@ fn perform(
             CombinatorKind::Any => {
                 let guard_h = iter.root_nanbox_f64(boxed_ptr(new_guard()));
                 let on_rej_h = iter.root_nanbox_f64(boxed_ptr(build_element_closure(
-                    any_reject_element_fn as *const u8,
+                    &ANY_REJECT_ELEMENT_FN_INFO,
                     unboxed_ptr(guard_h.get_nanbox_f64()),
                     i,
                     values_ptr(),
@@ -924,8 +941,6 @@ fn new_guard() -> *mut crate::array::ArrayHeader {
 /// synchronously for `NewPromiseCapability` failures, otherwise returns the
 /// (possibly already-rejected) result promise.
 pub fn run_combinator(kind: CombinatorKind, c: f64, iterable: f64) -> f64 {
-    ensure_arity_registered();
-
     // #7497: `c`, `iterable` and all three capability slots stay live across
     // `get_promise_resolve` (a property read that can run a getter),
     // `combinator_iterable_to_array_caught` (a full iterator drain) and
@@ -1034,7 +1049,6 @@ fn is_object_value(value: f64) -> bool {
 /// `Call(capability.[[Reject]], undefined, «r»)`.
 #[no_mangle]
 pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
-    ensure_arity_registered();
     // #7497: `is_default_promise_constructor` reaches `globalThis.Promise`, which
     // allocates a key string on every call — so neither argument may be carried
     // across it in a register. See `js_promise_resolve_spec`.
@@ -1060,7 +1074,6 @@ pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
 /// `Call(capability.[[Resolve]], undefined, «x»)`.
 #[no_mangle]
 pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
-    ensure_arity_registered();
     // #7497, and this is THE hot one: `Promise.all` calls this once per element,
     // and `is_default_promise_constructor` below reaches `globalThis.Promise`
     // through a lookup that allocates a fresh key string EVERY time. `value` —
@@ -1108,7 +1121,6 @@ pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
 /// capability flow (test262 `withResolvers/newpromisecapability-this-value`).
 #[no_mangle]
 pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
-    ensure_arity_registered();
     // #7497: see `js_promise_resolve_spec` — `is_default_promise_constructor`
     // allocates, and the three capability slots below outlive the record
     // allocation they are stored into.
@@ -1154,7 +1166,6 @@ pub extern "C" fn js_promise_with_resolvers_spec(this_ctor: f64) -> f64 {
 /// custom constructor `this`; a non-object `this` throws.
 #[no_mangle]
 pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) -> f64 {
-    ensure_arity_registered();
     // #7497: see `js_promise_resolve_spec` — `is_default_promise_constructor`
     // allocates, and `callback` / `rest` are dereferenced after it.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1249,10 +1260,18 @@ mod fast_arm_tests {
             crate::object::promise_static_function_spec("reject").expect("reject spec");
         assert_ne!(resolve_thunk, reject_thunk);
 
-        let good = boxed_ptr(js_closure_alloc(resolve_thunk, 0));
+        // The thunks are private to their module; the spec hands out only
+        // their code, so the test builds a bare info around each.
+        let info_of = |code: *const u8| -> *const crate::closure::JsFunctionInfo {
+            // SAFETY: both statics are one-parameter JS bodies.
+            Box::leak(Box::new(unsafe {
+                crate::closure::JsFunctionInfo::from_code(code, 1)
+            }))
+        };
+        let good = boxed_ptr(js_closure_alloc(info_of(resolve_thunk), 0));
         assert!(is_intrinsic_promise_resolve(good));
 
-        let wrong_static = boxed_ptr(js_closure_alloc(reject_thunk, 0));
+        let wrong_static = boxed_ptr(js_closure_alloc(info_of(reject_thunk), 0));
         assert!(!is_intrinsic_promise_resolve(wrong_static));
 
         // Non-closure values must not be probed as closures.
@@ -1354,7 +1373,7 @@ mod fast_arm_tests {
     fn own_then_expando_forces_the_slow_arm_and_is_invoked() {
         reset();
         let p = settled_promise(1.0);
-        let then = js_closure_alloc(own_then_fn as *const u8, 1);
+        let then = js_closure_alloc(crate::fn_info!(own_then_fn, 2), 1);
         js_closure_set_capture_f64(then, 0, 99.0);
         unsafe {
             crate::object::exotic_expando::exotic_set_property(

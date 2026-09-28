@@ -889,7 +889,7 @@ unsafe extern "C" fn resolve_wasm_import(
             return std::ptr::null_mut();
         }
         let closure = pointer as *const crate::closure::ClosureHeader;
-        let fp = (*closure).func_ptr;
+        let fp = (*closure).code();
         if is_wasm_export_call_shim(fp) {
             return crate::closure::js_closure_get_capture_f64(closure, 6) as usize as *mut c_void;
         }
@@ -1043,7 +1043,7 @@ fn make_export_function(
     let memory = scope.root_nanbox_f64(memory);
     let instance = scope.root_nanbox_f64(instance);
     let imports = scope.root_nanbox_f64(imports);
-    let (func_ptr, declared_arity) = wasm_export_call_shim_for_arity(arity);
+    let (info, _declared_arity) = wasm_export_call_shim_for_arity(arity);
     // Resolve the export ONCE here rather than by name on every call: the
     // per-call `get_func` probe plus `FuncType` clone was the sub-microsecond
     // floor left under the linear-memory copy this binding removed (#9611).
@@ -1053,7 +1053,7 @@ fn make_export_function(
     let external = unsafe {
         perry_wasm_host_instance_export_extern(inst, name.as_ptr() as *const c_char, name.len())
     };
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 7));
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 7));
     if closure
         .get_raw_mut_ptr::<crate::closure::ClosureHeader>()
         .is_null()
@@ -1061,7 +1061,6 @@ fn make_export_function(
         drop_host_extern_handle(external as usize);
         return nanbox_undefined();
     }
-    crate::closure::js_register_closure_arity(func_ptr, declared_arity);
     let name_value = scope.root_nanbox_f64(string_value(name));
     let closure_ptr = closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
     crate::closure::js_closure_set_capture_f64(closure_ptr, 0, inst as usize as f64);
@@ -1153,12 +1152,14 @@ fn make_global_object(external: *mut c_void, receiver: f64) -> f64 {
         placeholder.get_raw_const_ptr::<crate::string::StringHeader>(),
         nanbox_undefined(),
     );
-    let getter_fp = js_wasm_global_get as *const u8;
-    let setter_fp = js_wasm_global_set as *const u8;
-    crate::closure::js_register_closure_arity(getter_fp, 0);
-    crate::closure::js_register_closure_arity(setter_fp, 1);
-    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(getter_fp, 0));
-    let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(setter_fp, 0));
+    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(js_wasm_global_get, 0; with_declared(0)),
+        0,
+    ));
+    let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        crate::fn_info!(js_wasm_global_set, 1; with_declared(1)),
+        0,
+    ));
     let object_ptr = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
     crate::object::set_builtin_accessor_descriptor(
         object_ptr as usize,

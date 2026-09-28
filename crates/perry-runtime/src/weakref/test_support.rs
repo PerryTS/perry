@@ -91,8 +91,8 @@ fn empty_checkpoint_delivers_recorded_finalization_job() {
             0.0
         }
         crate::gc::js_gc_init();
-        crate::closure::js_register_closure_arity(cleanup as *const u8, 1);
-        let closure = crate::closure::js_closure_alloc(cleanup as *const u8, 0);
+        let closure =
+            crate::closure::js_closure_alloc(crate::fn_info!(cleanup, 1; with_declared(1)), 0);
         let scope = crate::gc::RuntimeHandleScope::new();
         let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
         let registry = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_finreg_new(

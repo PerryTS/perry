@@ -29,7 +29,7 @@ extern "C" fn catching_step(
 fn caught_rejected_awaits_have_no_iteration_limit() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let step = crate::closure::js_closure_alloc(catching_step as *const u8, 0);
+    let step = crate::closure::js_closure_alloc(crate::fn_info!(catching_step, 2), 0);
     let step_handle = scope.root_raw_const_ptr(step);
     let rejected = js_promise_new();
     js_promise_reject(rejected, 12_050.0);

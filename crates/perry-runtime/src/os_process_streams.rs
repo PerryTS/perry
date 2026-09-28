@@ -870,6 +870,14 @@ extern "C" fn process_stdin_add_listener_once(
 }
 
 /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
+/// One info for `removeListener` and `off`: both install the same singleton
+/// function object (`off === removeListener`).
+static PROCESS_STDIN_REMOVE_LISTENER_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        process_stdin_remove_listener as crate::codegen_abi::JsBody2<crate::closure::ClosureHeader>,
+    )
+    .with_declared(2);
+
 extern "C" fn process_stdin_remove_listener(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -1552,11 +1560,10 @@ fn maybe_fire_stdin_end() {
     }
 }
 
-/// Make a native-method closure value with the given arity registered, so the
-/// dispatch path forwards the right number of arguments.
-fn stdin_native_method(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+/// Make a native-method closure value (`.length` `arity`) for the body
+/// `info` describes.
+fn stdin_native_method(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc_singleton(info);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -1604,7 +1611,7 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 
 /// Build a stream object with a `write` field bound to the given stub.
 fn build_stream_object_with_write(
-    write_stub: crate::closure::body_call::js_body_fn_ty!(a, a, a),
+    write_info: *const crate::closure::JsFunctionInfo,
     fd: f64,
     writable: f64,
 ) -> *mut crate::object::ObjectHeader {
@@ -1691,15 +1698,14 @@ fn build_stream_object_with_write(
         )
     };
     // `write` takes up to three positional args — `write(chunk[, encoding][,
-    // callback])`. Register its arity so dispatch pads/truncates to exactly the
-    // three the stub declares (Direct dispatch would otherwise size the call to
-    // the call site, dropping the trailing callback — #6672).
-    crate::closure::js_register_closure_arity(write_stub as *const u8, 3);
-    let closure = js_closure_alloc(write_stub as *const u8, 0);
+    // callback])`. The caller's info declares all three, so dispatch
+    // pads/truncates to exactly the three the stub takes; sizing the call to
+    // the call site would drop the trailing callback (#6672).
+    let closure = js_closure_alloc(write_info, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
     js_object_set_field(obj, 1, JSValue::number(fd));
-    let emit = js_closure_alloc(process_stream_emit_stub as *const u8, 0);
+    let emit = js_closure_alloc(crate::fn_info!(process_stream_emit_stub, 1), 0);
     js_object_set_field(obj, 2, JSValue::pointer(emit as *const u8));
     if is_tty && fd_i != 0 {
         js_object_set_field(
@@ -1715,16 +1721,24 @@ fn build_stream_object_with_write(
     } else if is_stdin {
         // Real `on(event, cb)` so `process.stdin.on("data"/"readable", …)`
         // registers a keyboard listener instead of dropping it (#input).
-        let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
+        let on = stdin_native_method(
+            crate::fn_info!(process_stdin_on, 2; with_declared(2)),
+            "on",
+            2,
+        );
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
         // `once` routes through the same registry as `on`/`addListener` so a
         // one-shot listener registered on an aliased binding is not dropped either.
-        let once = stdin_native_method(process_stdin_add_listener_once as *const u8, "once", 2);
+        let once = stdin_native_method(
+            crate::fn_info!(process_stdin_add_listener_once, 2; with_declared(2)),
+            "once",
+            2,
+        );
         js_object_set_field(obj, 4, JSValue::from_bits(once.to_bits()));
     } else {
-        let on = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
+        let on = js_closure_alloc(crate::fn_info!(process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 3, JSValue::pointer(on as *const u8));
-        let once = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
+        let once = js_closure_alloc(crate::fn_info!(process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
     }
     js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
@@ -1778,54 +1792,54 @@ fn build_stream_object_with_write(
     // replaces the stream stubs below with its real listener/flow operations;
     // stdout and stderr retain the stubs.
     if let Some(start) = teardown_start {
-        let set_field_with_stub = |idx: u32, stub: crate::closure::body_call::js_body_fn_ty!(a)| {
-            let c = js_closure_alloc(stub as *const u8, 0);
+        let on_once = crate::fn_info!(process_stream_on_once_stub, 1);
+        let set_field_with_stub = |idx: u32, stub: *const crate::closure::JsFunctionInfo| {
+            let c = js_closure_alloc(stub, 0);
             js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
         };
-        let lifecycle: crate::closure::body_call::js_body_fn_ty!(a) = if is_stdin {
-            process_stdin_detach_stub
+        let lifecycle = if is_stdin {
+            crate::fn_info!(process_stdin_detach_stub, 1)
         } else {
-            process_stream_on_once_stub
+            on_once
         };
         // On stdin these must be REAL: a TUI registers its keyboard through an
         // aliased binding (`stdin.addListener("readable", handler)`), which lands
         // here rather than on codegen's direct `process.stdin.on(...)` extern. As
         // no-op stubs they silently discarded the handler.
         if is_stdin {
-            let add =
-                stdin_native_method(process_stdin_add_listener as *const u8, "addListener", 2);
-            js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
-            let rm = stdin_native_method(
-                process_stdin_remove_listener as *const u8,
-                "removeListener",
+            let add = stdin_native_method(
+                crate::fn_info!(process_stdin_add_listener, 2; with_declared(2)),
+                "addListener",
                 2,
             );
+            js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
+            let rm = stdin_native_method(&PROCESS_STDIN_REMOVE_LISTENER_INFO, "removeListener", 2);
             js_object_set_field(obj, start + 1, JSValue::from_bits(rm.to_bits()));
-            let off = stdin_native_method(process_stdin_remove_listener as *const u8, "off", 2);
+            let off = stdin_native_method(&PROCESS_STDIN_REMOVE_LISTENER_INFO, "off", 2);
             js_object_set_field(obj, start + 2, JSValue::from_bits(off.to_bits()));
         } else {
-            set_field_with_stub(start, process_stream_on_once_stub); // addListener
-            set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
-            set_field_with_stub(start + 2, process_stream_on_once_stub); // off
+            set_field_with_stub(start, on_once); // addListener
+            set_field_with_stub(start + 1, on_once); // removeListener
+            set_field_with_stub(start + 2, on_once); // off
         }
         if is_stdin {
             let remove_all = stdin_native_method(
-                process_stdin_remove_all_listeners as *const u8,
+                crate::fn_info!(process_stdin_remove_all_listeners, 1; with_declared(1)),
                 "removeAllListeners",
                 1,
             );
             js_object_set_field(obj, start + 3, JSValue::from_bits(remove_all.to_bits()));
         } else {
-            set_field_with_stub(start + 3, process_stream_on_once_stub);
+            set_field_with_stub(start + 3, on_once);
         }
         set_field_with_stub(start + 4, lifecycle); // pause
                                                    // resume: real flowing-mode start on stdin, no-op on stdout/stderr.
         set_field_with_stub(
             start + 5,
             if is_stdin {
-                process_stdin_resume
+                crate::fn_info!(process_stdin_resume, 1)
             } else {
-                process_stream_on_once_stub
+                on_once
             },
         ); // resume
            // #9676: on stdin, `unref`/`ref` are a SYMMETRIC pair that only moves
@@ -1833,21 +1847,32 @@ fn build_stream_object_with_write(
         set_field_with_stub(
             start + 6,
             if is_stdin {
-                process_stdin_unref_stub
+                crate::fn_info!(process_stdin_unref_stub, 1)
             } else {
-                process_stream_on_once_stub
+                on_once
             },
         ); // unref
         if is_stdin {
-            set_field_with_stub(start + 7, process_stdin_ref_stub); // ref
+            set_field_with_stub(start + 7, crate::fn_info!(process_stdin_ref_stub, 1)); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
-            let se = stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
+            let se = stdin_native_method(
+                crate::fn_info!(process_stdin_set_encoding, 1; with_declared(1)),
+                "setEncoding",
+                1,
+            );
             js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
             // field 22: Readable.read() returns buffered keyboard input.
-            let read = stdin_native_method(process_stdin_read as *const u8, "read", 1);
+            let read = stdin_native_method(
+                crate::fn_info!(process_stdin_read, 1; with_declared(1)),
+                "read",
+                1,
+            );
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));
-            let listeners =
-                stdin_native_method(process_stdin_listeners as *const u8, "listeners", 1);
+            let listeners = stdin_native_method(
+                crate::fn_info!(process_stdin_listeners, 1; with_declared(1)),
+                "listeners",
+                1,
+            );
             js_object_set_field(obj, 23, JSValue::from_bits(listeners.to_bits()));
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
@@ -1865,7 +1890,7 @@ pub extern "C" fn js_process_stdin() -> f64 {
         let fresh = *slot == 0;
         if fresh {
             *slot = build_stream_object_with_write(
-                process_stdin_write_noop_stub,
+                crate::fn_info!(process_stdin_write_noop_stub, 3),
                 0.0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             ) as usize;
@@ -1903,7 +1928,7 @@ pub extern "C" fn js_process_stdout() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                process_stdout_write_stub,
+                crate::fn_info!(process_stdout_write_stub, 3; with_declared(3)),
                 1.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;
@@ -1921,7 +1946,7 @@ pub extern "C" fn js_process_stderr() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                process_stderr_write_stub,
+                crate::fn_info!(process_stderr_write_stub, 3; with_declared(3)),
                 2.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;

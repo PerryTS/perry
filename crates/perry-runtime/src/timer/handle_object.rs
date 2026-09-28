@@ -359,18 +359,17 @@ fn install_timer_symbol_method(
     proto: *mut crate::object::ObjectHeader,
     symbol_name: &str,
     display_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) {
     let sym = crate::symbol::well_known_symbol(symbol_name);
     if sym.is_null() {
         return;
     }
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     crate::object::native_module::set_bound_native_closure_name(closure, display_name);
     crate::object::native_module::set_builtin_closure_length(closure as usize, arity);
     crate::object::native_module::set_builtin_closure_non_constructable(closure as usize);
@@ -389,11 +388,11 @@ fn install_timer_symbol_method(
 }
 
 fn install_timer_constructor(proto: *mut crate::object::ObjectHeader, name: &str) {
-    let closure = crate::closure::js_closure_alloc(timer_ctor_thunk as *const u8, 0);
+    let closure =
+        crate::closure::js_closure_alloc(crate::fn_info!(timer_ctor_thunk, 1; with_declared(0)), 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(timer_ctor_thunk as *const u8, 0);
     crate::object::native_module::set_bound_native_closure_name(closure, name);
     crate::object::native_module::set_builtin_closure_length(closure as usize, 0);
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
@@ -425,17 +424,22 @@ fn build_timer_prototypes() {
         if proto.is_null() {
             return;
         }
-        crate::object::install_proto_method(proto, "ref", timer_proto_ref_thunk as *const u8, 0);
+        crate::object::install_proto_method(
+            proto,
+            "ref",
+            crate::fn_info!(timer_proto_ref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        );
         crate::object::install_proto_method(
             proto,
             "unref",
-            timer_proto_unref_thunk as *const u8,
+            crate::fn_info!(timer_proto_unref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         );
         crate::object::install_proto_method(
             proto,
             "hasRef",
-            timer_proto_has_ref_thunk as *const u8,
+            crate::fn_info!(timer_proto_has_ref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         );
         // Measured against node 26.8.1: `Timeout.prototype` owns exactly
@@ -448,13 +452,13 @@ fn build_timer_prototypes() {
             crate::object::install_proto_method(
                 proto,
                 "refresh",
-                timer_proto_refresh_thunk as *const u8,
+                crate::fn_info!(timer_proto_refresh_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             crate::object::install_proto_method(
                 proto,
                 "close",
-                timer_proto_close_thunk as *const u8,
+                crate::fn_info!(timer_proto_close_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -463,7 +467,7 @@ fn build_timer_prototypes() {
             proto,
             "dispose",
             "[Symbol.dispose]",
-            timer_proto_dispose_thunk as *const u8,
+            crate::fn_info!(timer_proto_dispose_thunk, 0; with_declared(0)),
             0,
         );
         if !is_immediate {
@@ -471,7 +475,7 @@ fn build_timer_prototypes() {
                 proto,
                 "toPrimitive",
                 "[Symbol.toPrimitive]",
-                timer_proto_to_primitive_thunk as *const u8,
+                crate::fn_info!(timer_proto_to_primitive_thunk, 1; with_declared(1)),
                 1,
             );
         }

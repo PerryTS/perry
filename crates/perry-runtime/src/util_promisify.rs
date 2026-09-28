@@ -30,8 +30,7 @@ use std::cell::Cell;
 use crate::array::{js_array_alloc, js_array_length, js_array_push_f64, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, js_register_closure_arity,
-    js_register_closure_rest, ClosureHeader,
+    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::promise::{
     js_promise_attach_handlers, js_promise_new, js_promise_reject, js_promise_resolve,
@@ -152,19 +151,11 @@ fn register_thunks_once() {
         // Outer thunk: fixed_arity = 0 with a rest param, so dispatch
         // bundles ALL forwarded args into one array and we receive them
         // as `(closure, rest_array_nanbox)`.
-        js_register_closure_rest(outer_thunk as *const u8, 0);
         // Inner callback: declared arity 2 — `(err, value)`. Registering
         // the arity lets dispatch pad with `undefined` when callers
         // invoke it as `cb(err)` only, matching Node's contract.
-        js_register_closure_arity(inner_callback_thunk as *const u8, 2);
-        js_register_closure_rest(callbackify_outer_thunk as *const u8, 0);
-        js_register_closure_arity(callbackify_fulfilled_thunk as *const u8, 1);
-        js_register_closure_arity(callbackify_rejected_thunk as *const u8, 1);
-        js_register_closure_rest(deprecate_outer_thunk as *const u8, 0);
         // crypto.generateKeyPair promisify wrapper: outer is a rest function;
         // inner callback takes `(err, publicKey, privateKey)`.
-        js_register_closure_rest(gkp_outer_thunk as *const u8, 0);
-        js_register_closure_arity(gkp_inner_callback_thunk as *const u8, 3);
         crate::builtins::register_function_name_if_absent(
             deprecate_outer_thunk as *const () as usize,
             "deprecated",
@@ -203,7 +194,7 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
             register_thunks_once();
             let scope = crate::gc::RuntimeHandleScope::new();
             let fn_handle = scope.root_nanbox_f64(fn_value);
-            let closure = js_closure_alloc(gkp_outer_thunk as *const u8, 1);
+            let closure = js_closure_alloc(crate::fn_info!(gkp_outer_thunk, 1; with_rest(0)), 1);
             if closure.is_null() {
                 return TAG_UNDEFINED_F64;
             }
@@ -221,7 +212,7 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let fn_handle = scope.root_nanbox_f64(fn_value);
-    let closure = js_closure_alloc(outer_thunk as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(outer_thunk, 1; with_rest(0)), 1);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -264,7 +255,7 @@ pub extern "C" fn js_util_deprecate(fn_value: f64, msg: f64, code: f64) -> f64 {
     let fn_handle = scope.root_nanbox_f64(fn_value);
     let msg_handle = scope.root_nanbox_f64(msg);
     let code_handle = scope.root_nanbox_f64(code);
-    let closure = js_closure_alloc(deprecate_outer_thunk as *const u8, 4);
+    let closure = js_closure_alloc(crate::fn_info!(deprecate_outer_thunk, 1; with_rest(0)), 4);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -301,7 +292,7 @@ pub extern "C" fn js_util_callbackify(fn_value: f64) -> f64 {
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let fn_handle = scope.root_nanbox_f64(fn_value);
-    let closure = js_closure_alloc(callbackify_outer_thunk as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(callbackify_outer_thunk, 1; with_rest(0)), 1);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -345,8 +336,12 @@ extern "C" fn outer_thunk(
     // Allocate the inner (err, value) callback that captures the promise.
     // #7341: the alloc and the re-read are one step, so the pre-alloc promise
     // address is never nameable on the early-return path.
-    let (cb_closure, promise_after_alloc) = promise_handle
-        .across_mut::<Promise, _>(|| js_closure_alloc(inner_callback_thunk as *const u8, 1));
+    let (cb_closure, promise_after_alloc) = promise_handle.across_mut::<Promise, _>(|| {
+        js_closure_alloc(
+            crate::fn_info!(inner_callback_thunk, 2; with_declared(2)),
+            1,
+        )
+    });
     if cb_closure.is_null() {
         return nanbox_promise(promise_after_alloc);
     }
@@ -488,8 +483,12 @@ extern "C" fn gkp_outer_thunk(
 
     // Inner `(err, publicKey, privateKey)` callback capturing the promise.
     // #7341: as above — alloc and re-read as one step.
-    let (cb_closure, promise_after_alloc) = promise_handle
-        .across_mut::<Promise, _>(|| js_closure_alloc(gkp_inner_callback_thunk as *const u8, 1));
+    let (cb_closure, promise_after_alloc) = promise_handle.across_mut::<Promise, _>(|| {
+        js_closure_alloc(
+            crate::fn_info!(gkp_inner_callback_thunk, 3; with_declared(3)),
+            1,
+        )
+    });
     if cb_closure.is_null() {
         return nanbox_promise(promise_after_alloc);
     }
@@ -767,7 +766,10 @@ extern "C" fn callbackify_outer_thunk(
     let returned_handle = scope.root_nanbox_f64(returned);
 
     // Build the onFulfilled / onRejected closures (bound to the user callback).
-    let fulfilled = js_closure_alloc(callbackify_fulfilled_thunk as *const u8, 1);
+    let fulfilled = js_closure_alloc(
+        crate::fn_info!(callbackify_fulfilled_thunk, 1; with_declared(1)),
+        1,
+    );
     if fulfilled.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -778,7 +780,10 @@ extern "C" fn callbackify_outer_thunk(
         callback_handle.get_nanbox_f64(),
     );
 
-    let rejected = js_closure_alloc(callbackify_rejected_thunk as *const u8, 1);
+    let rejected = js_closure_alloc(
+        crate::fn_info!(callbackify_rejected_thunk, 1; with_declared(1)),
+        1,
+    );
     if rejected.is_null() {
         return TAG_UNDEFINED_F64;
     }

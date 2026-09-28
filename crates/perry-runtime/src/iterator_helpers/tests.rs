@@ -149,16 +149,9 @@ extern "C" fn add(
     f64::from_bits(JSValue::number(sum).bits())
 }
 
-unsafe fn closure1(f: crate::closure::body_call::js_body_fn_ty!(a)) -> f64 {
-    let p = f as *const u8;
-    crate::closure::js_register_closure_arity(p, 1);
-    crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(p, 0) as i64)
-}
-
-unsafe fn closure2(f: crate::closure::body_call::js_body_fn_ty!(a, a)) -> f64 {
-    let p = f as *const u8;
-    crate::closure::js_register_closure_arity(p, 2);
-    crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(p, 0) as i64)
+/// A capture-less function object over `info`'s body.
+unsafe fn closure(info: *const crate::closure::JsFunctionInfo) -> f64 {
+    crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(info, 0) as i64)
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +272,11 @@ fn helper_created_from_a_raw_iterator_inherits_the_same_next() {
     unsafe {
         let array = number_array(&[1.0]);
         let array_iter = crate::array::array_values_iter(array);
-        let helper = tower(array_iter, "map", &[closure1(double_it)]);
+        let helper = tower(
+            array_iter,
+            "map",
+            &[closure(crate::fn_info!(double_it, 1; with_declared(1)))],
+        );
         let obj = crate::value::js_nanbox_get_pointer(helper) as *const ObjectHeader;
         assert_eq!((*obj).class_id, ITERATOR_HELPER_CLASS_ID);
 
@@ -336,7 +333,11 @@ fn helper_next_rejects_a_non_helper_iterator_receiver() {
 #[test]
 fn map_returns_a_helper_and_transforms_lazily() {
     unsafe {
-        let m = tower(helper_over(&[1.0, 2.0, 3.0]), "map", &[closure1(double_it)]);
+        let m = tower(
+            helper_over(&[1.0, 2.0, 3.0]),
+            "map",
+            &[closure(crate::fn_info!(double_it, 1; with_declared(1)))],
+        );
         let p = crate::value::js_nanbox_get_pointer(m);
         assert_ne!(p, 0, "`.map()` must return a helper OBJECT, not undefined");
         assert_eq!(
@@ -353,7 +354,7 @@ fn filter_returns_a_helper_and_keeps_matching_values() {
         let f = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0]),
             "filter",
-            &[closure1(is_even)],
+            &[closure(crate::fn_info!(is_even, 1; with_declared(1)))],
         );
         assert_ne!(crate::value::js_nanbox_get_pointer(f), 0);
         assert_eq!(drain(f), vec![2.0, 4.0]);
@@ -392,7 +393,9 @@ fn flat_map_returns_a_helper_and_flattens_one_level() {
         let f = tower(
             helper_over(&[1.0, 2.0]),
             "flatMap",
-            &[closure1(pair_with_ten_times)],
+            &[closure(
+                crate::fn_info!(pair_with_ten_times, 1; with_declared(1)),
+            )],
         );
         assert_ne!(crate::value::js_nanbox_get_pointer(f), 0);
         assert_eq!(drain(f), vec![1.0, 10.0, 2.0, 20.0]);
@@ -409,7 +412,13 @@ fn map_iterator_inherits_flat_map_and_to_array_through_the_tower() {
         let raw_iter = crate::collection_iter_object::js_map_values_iter_obj(map);
         let iter = crate::value::js_nanbox_pointer(raw_iter);
 
-        let flattened = tower(iter, "flatMap", &[closure1(pair_with_ten_times)]);
+        let flattened = tower(
+            iter,
+            "flatMap",
+            &[closure(
+                crate::fn_info!(pair_with_ten_times, 1; with_declared(1)),
+            )],
+        );
         let helper_ptr = crate::value::js_nanbox_get_pointer(flattened);
         assert_ne!(
             helper_ptr, 0,
@@ -433,9 +442,13 @@ fn chained_helpers_compose() {
         let m = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
             "map",
-            &[closure1(double_it)],
+            &[closure(crate::fn_info!(double_it, 1; with_declared(1)))],
         );
-        let f = tower(m, "filter", &[closure1(is_even)]);
+        let f = tower(
+            m,
+            "filter",
+            &[closure(crate::fn_info!(is_even, 1; with_declared(1)))],
+        );
         let t = tower(f, "take", &[f64::from_bits(JSValue::number(2.0).bits())]);
         assert_eq!(drain(t), vec![2.0, 4.0]);
     }
@@ -446,7 +459,11 @@ fn to_array_drains_the_chain() {
     unsafe {
         let a = tower(helper_over(&[1.0, 2.0, 3.0]), "toArray", &[]);
         assert_eq!(array_numbers(a), vec![1.0, 2.0, 3.0]);
-        let mapped = tower(helper_over(&[1.0, 2.0]), "map", &[closure1(double_it)]);
+        let mapped = tower(
+            helper_over(&[1.0, 2.0]),
+            "map",
+            &[closure(crate::fn_info!(double_it, 1; with_declared(1)))],
+        );
         assert_eq!(array_numbers(tower(mapped, "toArray", &[])), vec![2.0, 4.0]);
     }
 }
@@ -457,14 +474,17 @@ fn reduce_with_and_without_an_initial_value() {
         let with_init = tower(
             helper_over(&[1.0, 2.0, 3.0]),
             "reduce",
-            &[closure2(add), f64::from_bits(JSValue::number(10.0).bits())],
+            &[
+                closure(crate::fn_info!(add, 2; with_declared(2))),
+                f64::from_bits(JSValue::number(10.0).bits()),
+            ],
         );
         assert_eq!(f64::from_bits(with_init.to_bits()), 16.0);
 
         let no_init = tower(
             helper_over(&[1.0, 2.0, 3.0, 4.0]),
             "reduce",
-            &[closure2(add)],
+            &[closure(crate::fn_info!(add, 2; with_declared(2)))],
         );
         assert_eq!(f64::from_bits(no_init.to_bits()), 10.0);
     }
@@ -474,24 +494,52 @@ fn reduce_with_and_without_an_initial_value() {
 fn some_every_find_short_circuit() {
     unsafe {
         assert_eq!(
-            tower(helper_over(&[1.0, 2.0, 3.0]), "some", &[closure1(is_even)]).to_bits(),
+            tower(
+                helper_over(&[1.0, 2.0, 3.0]),
+                "some",
+                &[closure(crate::fn_info!(is_even, 1; with_declared(1)))]
+            )
+            .to_bits(),
             crate::value::TAG_TRUE
         );
         assert_eq!(
-            tower(helper_over(&[1.0, 3.0, 5.0]), "some", &[closure1(is_even)]).to_bits(),
+            tower(
+                helper_over(&[1.0, 3.0, 5.0]),
+                "some",
+                &[closure(crate::fn_info!(is_even, 1; with_declared(1)))]
+            )
+            .to_bits(),
             crate::value::TAG_FALSE
         );
         assert_eq!(
-            tower(helper_over(&[2.0, 4.0]), "every", &[closure1(is_even)]).to_bits(),
+            tower(
+                helper_over(&[2.0, 4.0]),
+                "every",
+                &[closure(crate::fn_info!(is_even, 1; with_declared(1)))]
+            )
+            .to_bits(),
             crate::value::TAG_TRUE
         );
         assert_eq!(
-            tower(helper_over(&[2.0, 3.0]), "every", &[closure1(is_even)]).to_bits(),
+            tower(
+                helper_over(&[2.0, 3.0]),
+                "every",
+                &[closure(crate::fn_info!(is_even, 1; with_declared(1)))]
+            )
+            .to_bits(),
             crate::value::TAG_FALSE
         );
-        let found = tower(helper_over(&[1.0, 2.0, 3.0]), "find", &[closure1(is_even)]);
+        let found = tower(
+            helper_over(&[1.0, 2.0, 3.0]),
+            "find",
+            &[closure(crate::fn_info!(is_even, 1; with_declared(1)))],
+        );
         assert_eq!(f64::from_bits(found.to_bits()), 2.0);
-        let missing = tower(helper_over(&[1.0, 3.0]), "find", &[closure1(is_even)]);
+        let missing = tower(
+            helper_over(&[1.0, 3.0]),
+            "find",
+            &[closure(crate::fn_info!(is_even, 1; with_declared(1)))],
+        );
         assert!(JSValue::from_bits(missing.to_bits()).is_undefined());
     }
 }
@@ -535,9 +583,10 @@ fn an_own_next_method_is_called_with_the_iterator_as_this() {
         // A bare `{ next() {...} }` object: one own field named `next`.
         let obj = crate::object::js_object_alloc(0, 1);
         let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
-        let p = next_recording_this as *const u8;
-        crate::closure::js_register_closure_arity(p, 0);
-        let closure = crate::closure::js_closure_alloc(p, 0);
+        let closure = crate::closure::js_closure_alloc(
+            crate::fn_info!(next_recording_this, 1; with_declared(0)),
+            0,
+        );
         crate::object::js_object_set_field_by_name(
             obj,
             key,

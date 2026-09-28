@@ -13,7 +13,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 
 use crate::array::ArrayHeader;
 use crate::closure::{js_closure_get_capture_f64, ClosureHeader};
@@ -55,7 +55,6 @@ thread_local! {
     static CLUSTER_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
 }
 
-static CLUSTER_INIT: Once = Once::new();
 static CLUSTER_WORKER_ID: OnceLock<Option<String>> = OnceLock::new();
 
 fn cluster_worker_id() -> Option<&'static str> {
@@ -652,9 +651,6 @@ fn ensure_cluster_runtime() {
         crate::gc::gc_register_mutable_root_scanner_named("node_cluster", cluster_root_scanner);
         registered.set(true);
     });
-    CLUSTER_INIT.call_once(|| {
-        register_cluster_arities();
-    });
 }
 
 fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -673,32 +669,66 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     cluster_emitter_scan(visitor);
 }
 
-fn register_cluster_arities() {
-    let arities: [(*const u8, u32); 3] = [
-        (cluster_internal_online as *const u8, 0),
-        (cluster_internal_disconnect as *const u8, 0),
-        (cluster_internal_exit as *const u8, 2),
-    ];
-    for (func, arity) in arities {
-        crate::closure::js_register_closure_arity(func, arity);
-    }
-    for (func, arity, length) in [
-        (cluster_worker_send as *const u8, 4, 0),
-        (cluster_worker_kill as *const u8, 1, 0),
-        (cluster_worker_destroy as *const u8, 1, 1),
-        (cluster_worker_disconnect as *const u8, 0, 0),
-        (cluster_worker_is_connected as *const u8, 0, 0),
-        (cluster_worker_is_dead as *const u8, 0, 0),
-        (cluster_setup_emit_thunk as *const u8, 0, 0),
-        (cluster_fork_emit_thunk as *const u8, 0, 0),
-        (cluster_callback_thunk as *const u8, 0, 0),
-        (cluster_disconnect_emit_thunk as *const u8, 0, 0),
-        (cluster_exit_emit_thunk as *const u8, 0, 0),
-        (cluster_internal_message as *const u8, 1, 1),
-    ] {
-        crate::closure::js_register_closure_arity(func, arity);
-        crate::closure::js_register_closure_length(func, length);
-    }
+/// The cluster bodies' infos, one per body (each is allocated from several
+/// places).
+mod infos {
+    use super::*;
+    use crate::closure::{ClosureHeader, JsFunctionInfo};
+    use crate::codegen_abi::{JsBody0, JsBody1, JsBody2, JsBody4};
+    pub(super) static CLUSTER_INTERNAL_ONLINE: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_internal_online as JsBody0<ClosureHeader>).with_declared(0);
+    pub(super) static CLUSTER_INTERNAL_DISCONNECT: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_internal_disconnect as JsBody0<ClosureHeader>).with_declared(0);
+    pub(super) static CLUSTER_INTERNAL_EXIT: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_internal_exit as JsBody2<ClosureHeader>).with_declared(2);
+    pub(super) static CLUSTER_WORKER_SEND: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_send as JsBody4<ClosureHeader>)
+            .with_declared(4)
+            .with_length(0);
+    pub(super) static CLUSTER_WORKER_KILL: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_kill as JsBody1<ClosureHeader>)
+            .with_declared(1)
+            .with_length(0);
+    pub(super) static CLUSTER_WORKER_DESTROY: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_destroy as JsBody1<ClosureHeader>)
+            .with_declared(1)
+            .with_length(1);
+    pub(super) static CLUSTER_WORKER_DISCONNECT: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_disconnect as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_WORKER_IS_CONNECTED: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_is_connected as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_WORKER_IS_DEAD: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_worker_is_dead as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_SETUP_EMIT_THUNK: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_setup_emit_thunk as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_FORK_EMIT_THUNK: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_fork_emit_thunk as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_CALLBACK_THUNK: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_callback_thunk as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_DISCONNECT_EMIT_THUNK: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_disconnect_emit_thunk as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_EXIT_EMIT_THUNK: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_exit_emit_thunk as JsBody0<ClosureHeader>)
+            .with_declared(0)
+            .with_length(0);
+    pub(super) static CLUSTER_INTERNAL_MESSAGE: JsFunctionInfo =
+        JsFunctionInfo::of(cluster_internal_message as JsBody1<ClosureHeader>)
+            .with_declared(1)
+            .with_length(1);
 }
 
 pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
@@ -721,12 +751,12 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         crate::object::PropertyAttrs::new(true, false, true),
     );
     for (name, func, length) in [
-        ("send", cluster_worker_send as *const u8, 0),
-        ("kill", cluster_worker_kill as *const u8, 0),
-        ("destroy", cluster_worker_destroy as *const u8, 1),
-        ("disconnect", cluster_worker_disconnect as *const u8, 0),
-        ("isConnected", cluster_worker_is_connected as *const u8, 0),
-        ("isDead", cluster_worker_is_dead as *const u8, 0),
+        ("send", &infos::CLUSTER_WORKER_SEND, 0),
+        ("kill", &infos::CLUSTER_WORKER_KILL, 0),
+        ("destroy", &infos::CLUSTER_WORKER_DESTROY, 1),
+        ("disconnect", &infos::CLUSTER_WORKER_DISCONNECT, 0),
+        ("isConnected", &infos::CLUSTER_WORKER_IS_CONNECTED, 0),
+        ("isDead", &infos::CLUSTER_WORKER_IS_DEAD, 0),
     ] {
         let method = crate::closure::js_closure_alloc(func, 0);
         crate::object::set_bound_native_closure_name(method, name);
@@ -963,7 +993,7 @@ fn apply_setup_primary(settings_arg: f64) {
         state.setup_called = true;
         state.settings_bits = next.to_bits();
     });
-    let deferred = crate::closure::js_closure_alloc(cluster_setup_emit_thunk as *const u8, 1);
+    let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_SETUP_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, next);
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
@@ -978,7 +1008,7 @@ extern "C" fn cluster_setup_emit_thunk(
 }
 
 fn defer_cluster_fork_event(worker: f64) {
-    let deferred = crate::closure::js_closure_alloc(cluster_fork_emit_thunk as *const u8, 1);
+    let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_FORK_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
@@ -1157,22 +1187,22 @@ fn decorate_worker(worker: f64, id: u32) {
     register_listener(
         worker,
         "spawn",
-        closure_value(cluster_internal_online as *const u8, worker),
+        closure_value(&infos::CLUSTER_INTERNAL_ONLINE, worker),
     );
     register_listener(
         worker,
         "disconnect",
-        closure_value(cluster_internal_disconnect as *const u8, worker),
+        closure_value(&infos::CLUSTER_INTERNAL_DISCONNECT, worker),
     );
     register_listener(
         worker,
         "exit",
-        closure_value(cluster_internal_exit as *const u8, worker),
+        closure_value(&infos::CLUSTER_INTERNAL_EXIT, worker),
     );
     register_listener(
         worker,
         "message",
-        closure_value(cluster_internal_message as *const u8, worker),
+        closure_value(&infos::CLUSTER_INTERNAL_MESSAGE, worker),
     );
 }
 
@@ -1334,7 +1364,7 @@ fn drain_disconnect_callbacks_if_idle() {
     });
 
     for bits in callbacks {
-        let deferred = crate::closure::js_closure_alloc(cluster_callback_thunk as *const u8, 1);
+        let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_CALLBACK_THUNK, 1);
         crate::closure::js_closure_set_capture_ptr(deferred, 0, bits as i64);
         crate::timer::js_set_immediate_callback(deferred as i64);
     }
@@ -1392,7 +1422,7 @@ fn mark_worker_disconnected(worker: f64) {
     }
     set_field(worker, b"__clusterDisconnectEmitted", TAG_TRUE_F64);
     set_field(worker, b"state", box_string("disconnected"));
-    let deferred = crate::closure::js_closure_alloc(cluster_disconnect_emit_thunk as *const u8, 1);
+    let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_DISCONNECT_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
     crate::timer::js_set_immediate_callback(deferred as i64);
 }
@@ -1425,7 +1455,7 @@ extern "C" fn cluster_internal_exit(
         crate::cluster_sched::primary_remove_worker(handle);
     }
     remove_worker(worker);
-    let deferred = crate::closure::js_closure_alloc(cluster_exit_emit_thunk as *const u8, 3);
+    let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_EXIT_EMIT_THUNK, 3);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
     crate::closure::js_closure_set_capture_f64(deferred, 1, code);
     crate::closure::js_closure_set_capture_f64(deferred, 2, signal);
@@ -1501,7 +1531,7 @@ fn closure_this(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-fn closure_value(func: *const u8, captured: f64) -> f64 {
+fn closure_value(func: *const crate::closure::JsFunctionInfo, captured: f64) -> f64 {
     let closure = crate::closure::js_closure_alloc(func, 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, captured);
     box_ptr(closure as *const u8)

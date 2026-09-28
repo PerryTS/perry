@@ -42,6 +42,7 @@ fn borrowed_class_mutators_read_and_write_length_once() {
             b"length".as_ptr(),
             6,
             length_setter as *const () as i64,
+            1,
         );
     }
     let scope = crate::gc::RuntimeHandleScope::new();

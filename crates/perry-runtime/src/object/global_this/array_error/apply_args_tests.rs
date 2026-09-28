@@ -41,9 +41,8 @@ fn function_apply_reads_proxy_wrapped_arrays() {
             vec![3.0, 4.0]
         );
 
-        crate::closure::js_register_closure_arity(add as *const u8, 2);
         let callee = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::closure::js_closure_alloc(add as *const u8, 0) as i64,
+            crate::closure::js_closure_alloc(crate::fn_info!(add, 2; with_declared(2)), 0) as i64,
         ));
         for arguments in [&proxy, &nested] {
             let args = [

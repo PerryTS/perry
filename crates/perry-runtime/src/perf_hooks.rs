@@ -1680,8 +1680,10 @@ fn schedule_flush() {
         // the timer phase instead, i.e. before an immediate the test awaits —
         // which is why `await new Promise(r => setImmediate(r))` saw
         // "not delivered".
-        let closure =
-            crate::closure::js_closure_alloc_singleton(js_perf_observer_flush_all as *const u8);
+        let closure = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
+            js_perf_observer_flush_all,
+            0
+        ));
         crate::timer::js_set_immediate_callback(closure as i64);
     }
 }

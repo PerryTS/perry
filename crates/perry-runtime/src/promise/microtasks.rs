@@ -919,7 +919,7 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
                     // but AFTER those calls preserves an address that is already
                     // stale, which is what the first attempt at this fix did:
                     // the instrument still faulted at `call_async_step_direct`'s
-                    // `(*step_closure).func_ptr`, on a value re-read from a
+                    // `(*step_closure).code()`, on a value re-read from a
                     // handle that had been seeded too late.
                     let trap_scope = crate::gc::RuntimeHandleScope::new();
                     let step_handle = trap_scope.root_nanbox_f64(boxed_closure(step_closure));
@@ -1195,7 +1195,7 @@ fn call_async_step_direct(
     // closure strategy lookup for every await continuation; direct-call
     // the stored function pointer instead.
     unsafe {
-        let func_ptr = (*step_closure).func_ptr;
+        let func_ptr = (*step_closure).code();
         crate::closure::body_call::js_body_call!(
             func_ptr,
             step_closure,

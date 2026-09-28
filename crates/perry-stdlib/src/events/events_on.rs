@@ -74,12 +74,7 @@ fn events_resolved_iter_promise(value: f64, done: bool) -> f64 {
     f64::from_bits(JSValue::pointer(p as *const u8).bits())
 }
 
-fn register_events_on_arities() {
-    perry_runtime::closure::js_register_closure_arity(events_on_next as *const u8, 0);
-    perry_runtime::closure::js_register_closure_arity(events_on_return as *const u8, 0);
-    perry_runtime::closure::js_register_closure_arity(events_on_aiter_self as *const u8, 0);
-    perry_runtime::closure::js_register_closure_arity(events_on_async_iterator as *const u8, 0);
-}
+fn register_events_on_arities() {}
 
 /// The queue listener fired for each emitted event. Resolves a blocked `next()`
 /// Promise immediately if one is waiting, otherwise buffers the `[arg]` array.
@@ -226,17 +221,26 @@ extern "C" fn events_on_async_iterator(
         packed.as_ptr(),
         packed.len() as u32,
     );
-    let next_cl = js_closure_alloc(events_on_next as *const u8, 1);
+    let next_cl = js_closure_alloc(
+        perry_runtime::fn_info!(events_on_next, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(next_cl, 0, state as i64);
     perry_runtime::object::js_object_set_field(obj, 0, JSValue::pointer(next_cl as *const u8));
-    let ret_cl = js_closure_alloc(events_on_return as *const u8, 1);
+    let ret_cl = js_closure_alloc(
+        perry_runtime::fn_info!(events_on_return, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(ret_cl, 0, state as i64);
     perry_runtime::object::js_object_set_field(obj, 1, JSValue::pointer(ret_cl as *const u8));
 
     let iter_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     let async_iterator = perry_runtime::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
-        let self_cl = js_closure_alloc(events_on_aiter_self as *const u8, 1);
+        let self_cl = js_closure_alloc(
+            perry_runtime::fn_info!(events_on_aiter_self, 0; with_declared(0)),
+            1,
+        );
         perry_runtime::closure::js_closure_set_capture_f64(self_cl, 0, iter_val);
         unsafe {
             perry_runtime::symbol::js_object_set_symbol_property(
@@ -257,7 +261,10 @@ unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader, state: *mut 
     if async_iterator.is_null() {
         return;
     }
-    let closure = js_closure_alloc(events_on_async_iterator as *const u8, 1);
+    let closure = js_closure_alloc(
+        perry_runtime::fn_info!(events_on_async_iterator, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, state as i64);
     perry_runtime::symbol::js_object_set_symbol_property(
         js_nanbox_pointer(queue as i64),
@@ -370,7 +377,7 @@ pub unsafe extern "C" fn js_events_on(
         perry_runtime::exception::js_throw(perry_runtime::url::js_abort_error_value());
     }
 
-    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 1);
+    let listener = js_closure_alloc(perry_runtime::fn_info!(events_on_queue_listener, 1), 1);
     js_closure_set_capture_ptr(listener, 0, state as i64);
 
     let handle = match target {
@@ -418,7 +425,8 @@ pub unsafe extern "C" fn js_events_on(
 
     if let Some(signal) = signal {
         if let Some(signal_ptr) = object_ptr_from_value(signal) {
-            let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 5);
+            let abort_listener =
+                js_closure_alloc(perry_runtime::fn_info!(events_on_abort_listener, 0), 5);
             js_closure_set_capture_ptr(abort_listener, 0, handle);
             js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
             js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);

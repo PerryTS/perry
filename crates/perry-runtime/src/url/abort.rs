@@ -90,11 +90,10 @@ extern "C" fn abort_signal_remove_event_listener_method(
 
 fn abort_signal_listener_method_value(signal: *mut ObjectHeader, add: bool) -> f64 {
     let func = if add {
-        abort_signal_add_event_listener_method as *const u8
+        crate::fn_info!(abort_signal_add_event_listener_method, 2; with_declared(2))
     } else {
-        abort_signal_remove_event_listener_method as *const u8
+        crate::fn_info!(abort_signal_remove_event_listener_method, 2; with_declared(2))
     };
-    crate::closure::js_register_closure_arity(func, 2);
     let closure = crate::closure::js_closure_alloc(func, 1);
     crate::closure::js_closure_set_capture_ptr(closure, 0, signal as i64);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -113,8 +112,7 @@ extern "C" fn abort_controller_abort_method(
 }
 
 fn abort_controller_abort_value(controller: *mut ObjectHeader) -> f64 {
-    let func = abort_controller_abort_method as *const u8;
-    crate::closure::js_register_closure_arity(func, 1);
+    let func = crate::fn_info!(abort_controller_abort_method, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func, 1);
     let controller_value = crate::value::js_nanbox_pointer(controller as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 0, controller_value.to_bits() as i64);
@@ -284,8 +282,7 @@ extern "C" fn abort_error_constructor_thunk(
 }
 
 fn abort_error_constructor_value() -> f64 {
-    let func = abort_error_constructor_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func, 0);
+    let func = crate::fn_info!(abort_error_constructor_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func, 0);
     crate::object::set_bound_native_closure_name(closure, "AbortError");
     crate::value::js_nanbox_pointer(closure as i64)
@@ -475,13 +472,18 @@ extern "C" fn abort_signal_throw_if_aborted_thunk(
 /// as its NaN-boxed bits (the `aborted_resolve_listener` idiom) so the GC's
 /// closure scan keeps it alive and relocates it.
 pub(crate) fn abort_signal_method_bind(signal: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
-    let (fp, arity): (*const u8, u32) = match name {
-        b"addEventListener" => (abort_signal_add_event_listener_thunk as *const u8, 3),
-        b"removeEventListener" => (abort_signal_remove_event_listener_thunk as *const u8, 3),
-        b"throwIfAborted" => (abort_signal_throw_if_aborted_thunk as *const u8, 0),
+    let fp = match name {
+        b"addEventListener" => {
+            crate::fn_info!(abort_signal_add_event_listener_thunk, 3; with_declared(3))
+        }
+        b"removeEventListener" => {
+            crate::fn_info!(abort_signal_remove_event_listener_thunk, 3; with_declared(3))
+        }
+        b"throwIfAborted" => {
+            crate::fn_info!(abort_signal_throw_if_aborted_thunk, 0; with_declared(0))
+        }
         _ => return None,
     };
-    crate::closure::js_register_closure_arity(fp, arity);
     let closure = crate::closure::js_closure_alloc(fp, 1);
     let signal_f64 = f64::from_bits(crate::value::js_nanbox_pointer(signal as i64).to_bits());
     crate::closure::js_closure_set_capture_ptr(closure, 0, signal_f64.to_bits() as i64);
@@ -580,8 +582,7 @@ extern "C" fn abort_signal_timeout_fire(
 #[no_mangle]
 pub extern "C" fn js_abort_signal_timeout(ms: f64) -> *mut ObjectHeader {
     let signal = alloc_abort_signal();
-    let func = abort_signal_timeout_fire as *const u8;
-    crate::closure::js_register_closure_arity(func, 0);
+    let func = crate::fn_info!(abort_signal_timeout_fire, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func, 1);
     let signal_value = crate::value::js_nanbox_pointer(signal as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 0, signal_value.to_bits() as i64);
@@ -682,8 +683,7 @@ pub extern "C" fn js_abort_signal_any(
         }
         // Register a propagation listener that adopts this source's reason
         // when it later aborts.
-        let func = abort_any_propagate_thunk as *const u8;
-        crate::closure::js_register_closure_arity(func, 1);
+        let func = crate::fn_info!(abort_any_propagate_thunk, 1; with_declared(1));
         let closure = crate::closure::js_closure_alloc(func, 2);
         crate::closure::js_closure_set_capture_ptr(closure, 0, combined_box.to_bits() as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 1, elem.to_bits() as i64);

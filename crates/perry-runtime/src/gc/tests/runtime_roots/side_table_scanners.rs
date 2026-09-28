@@ -551,6 +551,12 @@ fn test_builtin_closure_metadata_follows_forwarded_owner() {
         GC_TYPE_CLOSURE,
     ) as usize;
 
+    // The arena hands back uninitialized memory. A closure's `info` word is
+    // read as a pointer by `builtin_closure_length`'s bound-function probe,
+    // so a raw owner must carry the null (no-body) info, not stale bytes.
+    for owner in [nursery_owner, relocated_owner] {
+        unsafe { (*(owner as *mut crate::closure::ClosureHeader)).info = std::ptr::null() };
+    }
     crate::object::set_builtin_closure_length(nursery_owner, 3);
     crate::object::set_builtin_closure_non_constructable(nursery_owner);
 

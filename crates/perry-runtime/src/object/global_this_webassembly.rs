@@ -337,7 +337,7 @@ fn webassembly_error_ctor_expected_name(type_ref: f64) -> Option<&'static [u8]> 
         if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
-        let func_ptr = (*ptr).func_ptr as usize;
+        let func_ptr = (*ptr).code() as usize;
         if func_ptr == webassembly_compile_error_ctor_thunk as *const u8 as usize {
             Some(b"CompileError")
         } else if func_ptr == webassembly_link_error_ctor_thunk as *const u8 as usize {
@@ -409,7 +409,7 @@ fn webassembly_value_ctor_expected_kind(type_ref: f64) -> Option<&'static [u8]> 
         if !crate::closure::closure_kind_probe(ptr as usize) {
             return None;
         }
-        let func_ptr = (*ptr).func_ptr as usize;
+        let func_ptr = (*ptr).code() as usize;
         if func_ptr == webassembly_module_ctor_thunk as *const u8 as usize {
             Some(b"module")
         } else {
@@ -984,27 +984,27 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     let module_ctor = install_webassembly_constructor(
         ns_obj,
         "Module",
-        webassembly_module_ctor_thunk as *const u8,
+        crate::fn_info!(webassembly_module_ctor_thunk, 1; with_declared(1)),
     );
     if !module_ctor.is_null() {
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "exports",
-            webassembly_module_exports_thunk as *const u8,
+            crate::fn_info!(webassembly_module_exports_thunk, 1; with_declared(1)),
             1,
             true,
         );
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "imports",
-            webassembly_module_imports_thunk as *const u8,
+            crate::fn_info!(webassembly_module_imports_thunk, 1; with_declared(1)),
             1,
             true,
         );
         install_webassembly_static_fn(
             module_ctor as *mut ObjectHeader,
             "customSections",
-            webassembly_module_custom_sections_thunk as *const u8,
+            crate::fn_info!(webassembly_module_custom_sections_thunk, 2; with_declared(2)),
             2,
             true,
         );
@@ -1013,57 +1013,87 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     let instance_ctor = install_webassembly_constructor(
         ns_obj,
         "Instance",
-        webassembly_instance_ctor_thunk as *const u8,
+        crate::fn_info!(webassembly_instance_ctor_thunk, 2; with_declared(2)),
     );
-    // The optional imports object is a real second call argument, while the
-    // standard constructor metadata remains `WebAssembly.Instance.length ===
-    // 1`. Keep the dispatch arity separate from the public length.
-    crate::closure::js_register_closure_arity(webassembly_instance_ctor_thunk as *const u8, 2);
+    // The optional imports object is a real second call argument (declared 2),
+    // while the standard constructor metadata remains
+    // `WebAssembly.Instance.length === 1`.
     install_webassembly_proto_data(instance_ctor, "exports", undefined());
 
     let memory_ctor = install_webassembly_constructor(
         ns_obj,
         "Memory",
-        webassembly_memory_ctor_thunk as *const u8,
+        crate::fn_info!(webassembly_memory_ctor_thunk, 1; with_declared(1)),
     );
     install_webassembly_proto_data(memory_ctor, "buffer", undefined());
     install_webassembly_proto_fn(
         memory_ctor,
         "grow",
-        webassembly_memory_grow_thunk as *const u8,
+        crate::fn_info!(webassembly_memory_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
 
-    let table_ctor =
-        install_webassembly_constructor(ns_obj, "Table", webassembly_table_ctor_thunk as *const u8);
-    install_webassembly_proto_method(table_ctor, "get", 1);
-    install_webassembly_proto_method(table_ctor, "grow", 1);
+    let table_ctor = install_webassembly_constructor(
+        ns_obj,
+        "Table",
+        crate::fn_info!(webassembly_table_ctor_thunk, 1; with_declared(1)),
+    );
+    install_webassembly_proto_fn(
+        table_ctor,
+        "get",
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
+    install_webassembly_proto_fn(
+        table_ctor,
+        "grow",
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
     install_webassembly_proto_data(table_ctor, "length", undefined());
-    install_webassembly_proto_method(table_ctor, "set", 2);
+    install_webassembly_proto_fn(
+        table_ctor,
+        "set",
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        2,
+    );
 
     let global_ctor = install_webassembly_constructor(
         ns_obj,
         "Global",
-        webassembly_global_ctor_thunk as *const u8,
+        crate::fn_info!(webassembly_global_ctor_thunk, 2; with_declared(2)),
     );
-    crate::closure::js_register_closure_arity(webassembly_global_ctor_thunk as *const u8, 2);
     install_webassembly_proto_data(global_ctor, "value", undefined());
-    install_webassembly_proto_method(global_ctor, "valueOf", 0);
+    install_webassembly_proto_fn(
+        global_ctor,
+        "valueOf",
+        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        0,
+    );
 
-    for (name, func_ptr) in [
+    for (name, info) in [
         (
             "CompileError",
-            webassembly_compile_error_ctor_thunk as *const u8,
+            crate::fn_info!(webassembly_compile_error_ctor_thunk, 1; with_declared(1)),
         ),
-        ("LinkError", webassembly_link_error_ctor_thunk as *const u8),
+        (
+            "LinkError",
+            crate::fn_info!(webassembly_link_error_ctor_thunk, 1; with_declared(1)),
+        ),
         (
             "RuntimeError",
-            webassembly_runtime_error_ctor_thunk as *const u8,
+            crate::fn_info!(webassembly_runtime_error_ctor_thunk, 1; with_declared(1)),
         ),
-        ("Exception", global_this_builtin_noop_thunk as *const u8),
-        ("Tag", global_this_builtin_noop_thunk as *const u8),
+        (
+            "Exception",
+            crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        ),
+        (
+            "Tag",
+            crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(1)),
+        ),
     ] {
-        let ctor = install_webassembly_constructor(ns_obj, name, func_ptr);
+        let ctor = install_webassembly_constructor(ns_obj, name, info);
         if matches!(name, "CompileError" | "LinkError" | "RuntimeError") {
             install_webassembly_error_proto_data(ctor, name);
         }
@@ -1078,45 +1108,42 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     install_webassembly_static_fn(
         ns_obj,
         "compile",
-        webassembly_compile_thunk as *const u8,
+        crate::fn_info!(webassembly_compile_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "validate",
-        webassembly_validate_thunk as *const u8,
+        crate::fn_info!(webassembly_validate_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "instantiate",
-        webassembly_instantiate_thunk as *const u8,
+        crate::fn_info!(webassembly_instantiate_thunk, 2; with_declared(2)),
         1,
         true,
     );
-    // The optional imports object is a real second call argument, while
-    // `WebAssembly.instantiate.length` stays 1.
-    crate::closure::js_register_closure_arity(webassembly_instantiate_thunk as *const u8, 2);
     install_webassembly_static_fn(
         ns_obj,
         "compileStreaming",
-        webassembly_compile_streaming_thunk as *const u8,
+        crate::fn_info!(webassembly_compile_streaming_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "instantiateStreaming",
-        webassembly_instantiate_streaming_thunk as *const u8,
+        crate::fn_info!(webassembly_instantiate_streaming_thunk, 1; with_declared(1)),
         1,
         true,
     );
     install_webassembly_static_fn(
         ns_obj,
         "promising",
-        webassembly_unsupported_static_thunk as *const u8,
+        crate::fn_info!(webassembly_unsupported_static_thunk, 1; with_declared(1)),
         1,
         true,
     );
@@ -1127,16 +1154,15 @@ pub(super) fn create_webassembly_namespace() -> f64 {
 fn install_webassembly_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
 ) -> *mut crate::closure::ClosureHeader {
     if ns_obj.is_null() {
         return std::ptr::null_mut();
     }
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return std::ptr::null_mut();
     }
-    crate::closure::js_register_closure_arity(func_ptr, 1);
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, 1);
     super::super::set_builtin_property_attrs(
@@ -1188,18 +1214,17 @@ fn install_webassembly_constructor(
 fn install_webassembly_static_fn(
     obj: *mut ObjectHeader,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
     enumerable: bool,
 ) {
     if obj.is_null() {
         return;
     }
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, arity);
     super::super::set_builtin_property_attrs(
@@ -1241,30 +1266,17 @@ fn webassembly_constructor_proto(ctor: *mut crate::closure::ClosureHeader) -> *m
     }
 }
 
-fn install_webassembly_proto_method(
-    ctor: *mut crate::closure::ClosureHeader,
-    name: &str,
-    arity: u32,
-) {
-    install_webassembly_proto_fn(
-        ctor,
-        name,
-        global_this_builtin_noop_thunk as *const u8,
-        arity,
-    );
-}
-
 fn install_webassembly_proto_fn(
     ctor: *mut crate::closure::ClosureHeader,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) {
     let proto = webassembly_constructor_proto(ctor);
     if proto.is_null() {
         return;
     }
-    install_proto_method(proto, name, func_ptr, arity);
+    install_proto_method(proto, name, info, arity);
 }
 
 fn install_webassembly_proto_data(
@@ -1476,10 +1488,11 @@ mod tests {
         let grow = js_object_get_field_by_name_f64(memory_proto, named_key(b"grow"));
         let grow_jv = crate::value::JSValue::from_bits(grow.to_bits());
         assert!(grow_jv.is_pointer(), "Memory.prototype.grow must exist");
+        let instantiate = closure_ptr(ns_field(ns, b"instantiate"));
         assert_eq!(
-            crate::closure::lookup_closure_arity(webassembly_instantiate_thunk as *const u8),
+            crate::closure::closure_arity(instantiate),
             Some(2),
-            "the install helper must not overwrite instantiate's two-argument dispatch"
+            "instantiate's info must carry its two-argument declared arity"
         );
     }
 

@@ -919,15 +919,10 @@ unsafe fn invoke_create_socket(
     }
     let scope = perry_ffi::TransientRootScope::enter();
     let cs = scope.root_addr(cs);
-    // Register the continuation's arity as 2 so a 1-arg `cb(err)` pads the
-    // socket slot with `undefined` (via the runtime's arity dispatch) instead
-    // of reading an uninitialized register for the second parameter.
-    static REGISTER_ARITY: Once = Once::new();
-    REGISTER_ARITY.call_once(|| {
-        perry_ffi::register_closure_arity(http_create_socket_cb as perry_ffi::JsBody2, 2);
-    });
-
-    let cb = perry_ffi::alloc_closure(http_create_socket_cb as perry_ffi::JsBody2, 1);
+    // The continuation declares 2 parameters (its info), so a 1-arg
+    // `cb(err)` pads the socket slot with `undefined` instead of reading an
+    // uninitialized register for the second parameter.
+    let cb = perry_ffi::alloc_closure(&HTTP_CREATE_SOCKET_CB_INFO, 1);
     if cb.is_null() {
         return;
     }
@@ -1821,3 +1816,6 @@ fn _force_link() -> Option<*mut ArrayHeader> {
 
 // Retain server exports through release LTO/staticlib emission.
 mod force_link;
+
+static HTTP_CREATE_SOCKET_CB_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(http_create_socket_cb as perry_ffi::JsBody2).with_declared(2);

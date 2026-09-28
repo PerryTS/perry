@@ -366,10 +366,8 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         install_function(
             segments,
             "containing",
-            segmenter_containing_thunk as *const u8,
+            crate::fn_info!(segmenter_containing_thunk, 1; with_declared(1)),
             1,
-            1,
-            false,
         )
     });
     install_segments_iterator(&segments);
@@ -384,13 +382,13 @@ fn install_segments_iterator(segments: &crate::gc::RuntimeHandle<'_>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let symbol = scope.root_raw_mut_ptr(symbol);
     let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        segments_iterator_thunk as *const u8,
+        crate::fn_info!(segments_iterator_thunk, 0; with_declared(0)),
         0,
     ));
     if closure.with_mut_ptr(|closure: *mut ClosureHeader| closure.is_null()) {
         return;
     }
-    crate::closure::js_register_closure_arity(segments_iterator_thunk as *const u8, 0);
+
     closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
         crate::object::set_bound_native_closure_name(ptr, "[Symbol.iterator]")
     });

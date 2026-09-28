@@ -424,11 +424,10 @@ pub fn try_lower_closure_typed_local_call(
                 lowered_args.push(lower_expr(ctx, a)?);
             }
 
-            // Issue #493: rest-bundling is now handled inside js_closure_callN
-            // via the runtime closure-rest registry — see
-            // `js_register_closure_rest` (registered for every closure body
-            // with `...rest` at module init) and `dispatch_rest_bundled` in
-            // `crates/perry-runtime/src/closure.rs`. Bundling at the static
+            // Issue #493: rest-bundling is handled inside js_closure_callN from
+            // the body's `JsFunctionInfo` (every body with `...rest` records
+            // it, `crate::fn_info`) — see `dispatch_rest_bundled` in
+            // `crates/perry-runtime/src/closure/registry.rs`. Bundling at the static
             // call site here would double-wrap (the runtime would re-bundle
             // the already-bundled array into `[[a,b,c]]`), so the call site
             // now passes the raw args through and lets the runtime
@@ -581,14 +580,15 @@ pub fn try_lower_closure_typed_local_call(
                     // dynamic question is "is the value still the closure
                     // whose body is `@closure_fn`", and two compare-only loads
                     // answer it: the GcHeader's (type, flags) halfword is exactly
-                    // (CLOSURE, not FORWARDED) and `func_ptr == @closure_fn`. A
+                    // (CLOSURE, not FORWARDED) and its info word is
+                    // `@closure_fn$info` (`crate::fn_info`). A
                     // forwarded (moved) closure fails the header compare and
                     // takes the guard, which resolves forwarding as it always
                     // did. A non-closure heap cell fails the header compare —
                     // the kind is the GC type byte, not payload bytes; the
                     // runtime's volatile-ordering
                     // ceremony guards a transmute-and-call of an ARBITRARY
-                    // func_ptr, which this compare-only probe never does.
+                    // code pointer, which this compare-only probe never does.
                     // #7170 R1 single-binding fact: identity holds with
                     // FuncRef strength, so the runtime guard AND the probe
                     // are both unnecessary — the value cannot be anything but
@@ -618,10 +618,9 @@ pub fn try_lower_closure_typed_local_call(
                         }
                         ctx.current_block = probe_idx;
                         {
-                            let fp_offset = crate::target_layout::closure_func_ptr_offset_bytes(
-                                ctx.target_triple,
-                            )
-                            .to_string();
+                            let info_offset =
+                                crate::target_layout::closure_info_offset_bytes(ctx.target_triple)
+                                    .to_string();
                             let blk = ctx.block();
                             let bits = blk.bitcast_double_to_i64(&recv_box);
                             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
@@ -643,24 +642,27 @@ pub fn try_lower_closure_typed_local_call(
                                 &masked,
                                 &crate::runtime_abi::GC_TYPE_CLOSURE.to_string(),
                             );
-                            let fp_addr = blk.add(I64, &handle, &fp_offset);
-                            let fp_ptr = blk.inttoptr(I64, &fp_addr);
-                            let fp = blk.load(I64, &fp_ptr);
-                            let expected_fp = blk.ptrtoint(&format!("@{}", closure_fn), I64);
-                            let fp_ok = blk.icmp_eq(I64, &fp, &expected_fp);
-                            let hit = blk.and(I1, &kind_ok, &fp_ok);
+                            let info_addr = blk.add(I64, &handle, &info_offset);
+                            let info_ptr = blk.inttoptr(I64, &info_addr);
+                            let info = blk.load(I64, &info_ptr);
+                            let expected_info = blk.fn_info_ref(&closure_fn);
+                            let expected_info = blk.ptrtoint(&expected_info, I64);
+                            let info_ok = blk.icmp_eq(I64, &info, &expected_info);
+                            let hit = blk.and(I1, &kind_ok, &info_ok);
                             blk.cond_br(&hit, &fast_label, &guard_call_label);
                         }
                         ctx.current_block = guard_call_idx;
                     }
                     if !guard_free {
+                        // The guard compares the value's info with the body's.
+                        let expected_info = ctx.block().fn_info_ref(&closure_fn);
                         let guard_ok = ctx.block().call(
                             I32,
                             "js_typed_feedback_closure_direct_call_guard",
                             &[
                                 (I64, &site_id),
                                 (DOUBLE, &recv_box),
-                                (crate::types::PTR, &format!("@{}", closure_fn)),
+                                (crate::types::PTR, &expected_info),
                                 (I32, &expected_arity),
                                 (I32, &call_arity),
                             ],

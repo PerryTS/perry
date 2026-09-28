@@ -480,8 +480,7 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
 mod tests {
     use super::*;
     use perry_ffi::{
-        alloc_closure, alloc_string, read_buffer_bytes, register_closure_arity, JsString, JsValue,
-        RawClosureHeader,
+        alloc_closure, alloc_string, read_buffer_bytes, JsString, JsValue, RawClosureHeader,
     };
     use std::cell::Cell;
 
@@ -570,8 +569,10 @@ mod tests {
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         DISPATCH_CALLBACK_OK.with(|ok| ok.set(false));
 
-        register_closure_arity(record_dispatch_callback as perry_ffi::JsBody2, 2);
-        let callback = alloc_closure(record_dispatch_callback as perry_ffi::JsBody2, 0);
+        let callback = alloc_closure(
+            perry_ffi::js_function_info!(record_dispatch_callback, 2; with_declared(2)),
+            0,
+        );
         assert!(!callback.is_null());
 
         let input = alloc_buffer(b"captured zlib export");
@@ -614,9 +615,12 @@ mod tests {
         }
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         let scope = perry_ffi::TransientRootScope::enter();
-        register_closure_arity(callback as perry_ffi::JsBody2, 2);
         let callback = scope.root_nanbox(f64::from_bits(
-            JsValue::from_object_ptr(alloc_closure(callback as perry_ffi::JsBody2, 0)).bits(),
+            JsValue::from_object_ptr(alloc_closure(
+                perry_ffi::js_function_info!(callback, 2; with_declared(2)),
+                0,
+            ))
+            .bits(),
         ));
         let data = scope.root_nanbox(f64::from_bits(
             JsValue::from_object_ptr(alloc_buffer(&vec![b'A'; 4096])).bits(),

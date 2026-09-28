@@ -36,8 +36,8 @@ mod width_tables;
 mod wyhash;
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
+    JsFunctionInfo,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
@@ -159,16 +159,9 @@ fn set_field(obj: *mut crate::object::ObjectHeader, key: &[u8], value: f64) {
     js_object_set_field_by_name(obj, key_ptr(key), value);
 }
 
-fn bound_method0(func: crate::closure::body_call::js_body_fn_ty!(), capture: f64) -> f64 {
-    js_register_closure_arity(func as *const u8, 0);
-    let closure = js_closure_alloc(func as *const u8, 1);
-    js_closure_set_capture_f64(closure, 0, capture);
-    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
-}
-
-fn bound_method1(func: crate::closure::body_call::js_body_fn_ty!(a), capture: f64) -> f64 {
-    js_register_closure_arity(func as *const u8, 1);
-    let closure = js_closure_alloc(func as *const u8, 1);
+/// A method closure over `info`'s body capturing `capture` in slot 0.
+fn bound_method(info: *const JsFunctionInfo, capture: f64) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_f64(closure, 0, capture);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
@@ -417,15 +410,46 @@ pub extern "C" fn js_bun_file(path: f64) -> f64 {
         b"type",
         boxed_str(mime_type_for_path(&path_string).as_bytes()),
     );
-    set_field(obj, b"text", bound_method0(bun_file_text, path_value));
-    set_field(obj, b"json", bound_method0(bun_file_json, path_value));
+    set_field(
+        obj,
+        b"text",
+        bound_method(
+            crate::fn_info!(bun_file_text, 0; with_declared(0)),
+            path_value,
+        ),
+    );
+    set_field(
+        obj,
+        b"json",
+        bound_method(
+            crate::fn_info!(bun_file_json, 0; with_declared(0)),
+            path_value,
+        ),
+    );
     set_field(
         obj,
         b"arrayBuffer",
-        bound_method0(bun_file_array_buffer, path_value),
+        bound_method(
+            crate::fn_info!(bun_file_array_buffer, 0; with_declared(0)),
+            path_value,
+        ),
     );
-    set_field(obj, b"bytes", bound_method0(bun_file_bytes, path_value));
-    set_field(obj, b"exists", bound_method0(bun_file_exists, path_value));
+    set_field(
+        obj,
+        b"bytes",
+        bound_method(
+            crate::fn_info!(bun_file_bytes, 0; with_declared(0)),
+            path_value,
+        ),
+    );
+    set_field(
+        obj,
+        b"exists",
+        bound_method(
+            crate::fn_info!(bun_file_exists, 0; with_declared(0)),
+            path_value,
+        ),
+    );
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
@@ -524,12 +548,29 @@ pub extern "C" fn js_bun_stdin() -> f64 {
     set_field(obj, BUN_STD_FD_KEY, 0.0);
     set_field(obj, b"size", f64::INFINITY);
     set_field(obj, b"type", boxed_str(b"application/octet-stream"));
-    set_field(obj, b"text", bound_method0(bun_stdin_text, undefined()));
-    set_field(obj, b"json", bound_method0(bun_stdin_json, undefined()));
+    set_field(
+        obj,
+        b"text",
+        bound_method(
+            crate::fn_info!(bun_stdin_text, 0; with_declared(0)),
+            undefined(),
+        ),
+    );
+    set_field(
+        obj,
+        b"json",
+        bound_method(
+            crate::fn_info!(bun_stdin_json, 0; with_declared(0)),
+            undefined(),
+        ),
+    );
     set_field(
         obj,
         b"arrayBuffer",
-        bound_method0(bun_stdin_array_buffer, undefined()),
+        bound_method(
+            crate::fn_info!(bun_stdin_array_buffer, 0; with_declared(0)),
+            undefined(),
+        ),
     );
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }

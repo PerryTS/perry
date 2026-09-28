@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call2, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, js_register_closure_arity, ClosureHeader,
+    js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::promise::Promise;
@@ -163,7 +163,6 @@ fn register_stop_trampoline_once() {
         if registered.get() {
             return;
         }
-        js_register_closure_arity(promise_hook_stop_trampoline as *const u8, 0);
         registered.set(true);
     });
 }
@@ -182,7 +181,10 @@ extern "C" fn promise_hook_stop_trampoline(
 
 fn make_stop_function(index: usize) -> f64 {
     register_stop_trampoline_once();
-    let closure = js_closure_alloc(promise_hook_stop_trampoline as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(promise_hook_stop_trampoline, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, index as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }

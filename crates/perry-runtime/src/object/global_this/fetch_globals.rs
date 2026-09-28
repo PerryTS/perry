@@ -1286,7 +1286,7 @@ mod dynamic_super_new_target_tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
             let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-                read_new_target as *const u8,
+                crate::fn_info!(read_new_target, 0),
                 0,
             ));
             let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(f64::from_bits(
@@ -1314,7 +1314,7 @@ mod dynamic_super_new_target_tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
             let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-                read_new_target as *const u8,
+                crate::fn_info!(read_new_target, 0),
                 0,
             ));
             let explicit = crate::object::class_constructor_ref_value(61_148);

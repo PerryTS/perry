@@ -38,9 +38,8 @@ pub(crate) use alloc::{
 pub use body_call::{call_value, plain_call_receiver, JsThis};
 pub use shape::closure_kind_probe;
 
-pub(crate) use registry::closure_registry_census;
 pub(crate) use registry::DispatchKind;
-pub(crate) use wide_call::{dispatch_wide_abi, MAX_DYNAMIC_CALL_WIDTH};
+pub(crate) use wide_call::dispatch_wide_abi;
 
 /// `PERRY_GC_CENSUS`: every closure-keyed side table outside the registries.
 pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow> {
@@ -48,23 +47,19 @@ pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow
     rows.extend(dynamic_props::dynamic_props_census());
     rows
 }
-pub(crate) use registry::{
-    body_receives_primitive_this, closure_body_is_non_constructor, register_closure_body_builtin,
-    register_closure_body_non_constructor,
-};
 pub use registry::{
-    build_rest_array, build_rest_array_rooted, closure_arity, closure_is_arrow,
+    build_rest_array, build_rest_array_rooted, closure_arity, closure_info, closure_is_arrow,
     closure_is_bound_method, closure_length, dispatch_rest_bundled, dispatch_with_arity,
-    is_registered_arrow_function, is_registered_async_function,
-    is_registered_async_generator_function, is_registered_generator_function,
-    is_registered_strict_function, js_register_closure_arity, js_register_closure_arrow_function,
-    js_register_closure_async_function, js_register_closure_async_generator_function,
-    js_register_closure_generator_function, js_register_closure_length, js_register_closure_rest,
-    js_register_closure_rest_and_arguments, js_register_closure_strict_function,
-    js_register_closure_synthetic_arguments, js_register_closure_trusted_direct,
-    lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
-    real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
-    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, NO_THIS_REBIND_FLAG,
+    info_arity, info_has, info_length, info_rest, real_capture_count, resolve_strategy,
+    DispatchStrategy, JsFunctionInfo, RestDispatchKind, BOUND_FUNCTION_FUNC_PTR,
+    BOUND_FUNCTION_INFO, BOUND_METHOD_FUNC_PTR, BOUND_METHOD_INFO, CAPTURES_THIS_FLAG, FN_ARROW,
+    FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_GENERATOR, FN_HAS_DECLARED, FN_HAS_LENGTH,
+    FN_NON_CONSTRUCTOR, FN_REST_MASK, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
+    FN_REST_USER_AND_ARGUMENTS, FN_STRICT, NO_THIS_REBIND_FLAG,
+};
+pub(crate) use registry::{
+    closure_body_is_non_constructor, info_receives_primitive_this, info_trusted_direct,
+    info_versioned_loop_direct,
 };
 
 pub(crate) use dispatch::native_call_value_this;
@@ -75,12 +70,12 @@ pub(crate) use dispatch::{
 };
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
-    js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
-    js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2,
-    js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7,
-    js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread, js_closure_call_array,
-    js_function_bind, js_native_call_value, throw_not_callable, DirectCall1, DirectCall2,
-    DirectCall3, DirectCall4,
+    get_valid_info, js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11,
+    js_closure_call12, js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16,
+    js_closure_call2, js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6,
+    js_closure_call7, js_closure_call8, js_closure_call9, js_closure_call_apply_with_spread,
+    js_closure_call_array, js_function_bind, js_native_call_value, throw_not_callable, DirectCall1,
+    DirectCall2, DirectCall3, DirectCall4,
 };
 pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked_rebind};
 

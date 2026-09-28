@@ -247,9 +247,11 @@ mod tests {
         }
         unsafe {
             let iter = set_iter_with_10_20_30();
-            let closure = crate::closure::js_closure_alloc(patched_next as *const u8, 0);
+            let closure = crate::closure::js_closure_alloc(
+                crate::fn_info!(patched_next, 1; with_declared(0)),
+                0,
+            );
             assert!(!closure.is_null());
-            crate::closure::js_register_closure_arity(patched_next as *const u8, 0);
             js_object_set_field_by_name(
                 iter,
                 key("next"),

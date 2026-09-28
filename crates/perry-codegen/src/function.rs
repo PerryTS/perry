@@ -870,6 +870,11 @@ impl LlFunction {
         self.reg_counter.set_preserve_none_fns(fns);
     }
 
+    /// Install the module's `JsFunctionInfo` state (`crate::fn_info`).
+    pub(crate) fn set_fn_infos(&self, infos: Rc<RefCell<crate::fn_info::FnInfoState>>) {
+        self.reg_counter.set_fn_infos(infos);
+    }
+
     /// Point this function's null-guard loads at the module's (possibly
     /// module-prefixed) null-guard global. See `RegCounter::null_guard_symbol`.
     pub(crate) fn set_null_guard_global(&self, global: &str) {

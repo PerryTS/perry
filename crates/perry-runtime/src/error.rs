@@ -1218,9 +1218,12 @@ extern "C" fn callsite_to_string(
     crate::value::js_nanbox_string(s as i64)
 }
 
-fn attach_call_site_method(obj: *mut crate::object::ObjectHeader, name: &str, fp: *const u8) {
-    crate::closure::js_register_closure_arity(fp, 0);
-    // Singleton (func_ptr-keyed, permanent) closure — never collected/moved, so
+fn attach_call_site_method(
+    obj: *mut crate::object::ObjectHeader,
+    name: &str,
+    fp: *const crate::closure::JsFunctionInfo,
+) {
+    // Singleton (per body, permanent) closure — never collected/moved, so
     // the CallSite's method field stays valid across GC cycles.
     let closure = crate::closure::js_closure_alloc_singleton(fp);
     if closure.is_null() {
@@ -1233,11 +1236,11 @@ fn attach_call_site_method(obj: *mut crate::object::ObjectHeader, name: &str, fp
 
 fn make_call_site() -> f64 {
     let obj = crate::object::js_object_alloc(0, 20);
-    let undef = callsite_undefined as *const u8;
-    let null = callsite_null as *const u8;
-    let zero = callsite_zero as *const u8;
-    let f = callsite_false as *const u8;
-    let t = callsite_true as *const u8;
+    let undef = crate::fn_info!(callsite_undefined, 0; with_declared(0));
+    let null = crate::fn_info!(callsite_null, 0; with_declared(0));
+    let zero = crate::fn_info!(callsite_zero, 0; with_declared(0));
+    let f = crate::fn_info!(callsite_false, 0; with_declared(0));
+    let t = crate::fn_info!(callsite_true, 0; with_declared(0));
     attach_call_site_method(obj, "getFileName", undef);
     attach_call_site_method(obj, "getScriptNameOrSourceURL", undef);
     attach_call_site_method(obj, "getLineNumber", zero);
@@ -1257,7 +1260,11 @@ fn make_call_site() -> f64 {
     attach_call_site_method(obj, "isConstructor", f);
     attach_call_site_method(obj, "isAsync", f);
     attach_call_site_method(obj, "isPromiseAll", f);
-    attach_call_site_method(obj, "toString", callsite_to_string as *const u8);
+    attach_call_site_method(
+        obj,
+        "toString",
+        crate::fn_info!(callsite_to_string, 0; with_declared(0)),
+    );
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
@@ -1294,7 +1301,7 @@ fn error_prepare_stack_trace_override() -> Option<f64> {
     if !crate::closure::is_closure_ptr(ptr) {
         return None;
     }
-    let fp = unsafe { (*(ptr as *const crate::closure::ClosureHeader)).func_ptr } as usize;
+    let fp = unsafe { (*(ptr as *const crate::closure::ClosureHeader)).code() } as usize;
     if fp == crate::object::default_prepare_stack_trace_func_ptr() {
         return None;
     }
@@ -1336,8 +1343,7 @@ extern "C" fn error_stack_lazy_getter(
 
 /// Install the lazy `stack` getter accessor on `target`.
 unsafe fn install_lazy_stack_accessor(target_ptr: *mut crate::object::ObjectHeader) {
-    let fp = error_stack_lazy_getter as *const u8;
-    crate::closure::js_register_closure_arity(fp, 0);
+    let fp = crate::fn_info!(error_stack_lazy_getter, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(fp, 0);
     if closure.is_null() {
         return;

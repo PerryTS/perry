@@ -207,14 +207,12 @@ extern "C" fn event_stop_immediate_propagation_thunk(
 fn install_event_method(
     event: *mut ObjectHeader,
     name: &str,
-    func: crate::closure::body_call::js_body_fn_ty!(),
+    info: *const crate::closure::JsFunctionInfo,
 ) {
-    let func_ptr = func as *const u8;
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     crate::closure::closure_set_dynamic_prop(
         closure as usize,
@@ -289,12 +287,20 @@ fn init_event_fields(
         constructor_name.len(),
     );
     set_event_field(event, b"constructor", ctor);
-    install_event_method(event, "preventDefault", event_prevent_default_thunk);
-    install_event_method(event, "stopPropagation", event_stop_propagation_thunk);
+    install_event_method(
+        event,
+        "preventDefault",
+        crate::fn_info!(event_prevent_default_thunk, 0; with_declared(0)),
+    );
+    install_event_method(
+        event,
+        "stopPropagation",
+        crate::fn_info!(event_stop_propagation_thunk, 0; with_declared(0)),
+    );
     install_event_method(
         event,
         "stopImmediatePropagation",
-        event_stop_immediate_propagation_thunk,
+        crate::fn_info!(event_stop_immediate_propagation_thunk, 0; with_declared(0)),
     );
 }
 
@@ -912,9 +918,10 @@ pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
         js_object_set_field_by_name(bag, event_name_ptr, boxed_ptr(updated));
     }
     if let Some(signal) = listener_signal(options) {
-        let func = event_target_abort_remove_listener as *const u8;
-        crate::closure::js_register_closure_arity(func, 0);
-        let abort_listener = crate::closure::js_closure_alloc(func, 4);
+        let abort_listener = crate::closure::js_closure_alloc(
+            crate::fn_info!(event_target_abort_remove_listener, 0; with_declared(0)),
+            4,
+        );
         crate::closure::js_closure_set_capture_ptr(abort_listener, 0, target as i64);
         crate::closure::js_closure_set_capture_ptr(abort_listener, 1, event_name_ptr as i64);
         crate::closure::js_closure_set_capture_ptr(abort_listener, 2, callback_ptr);
@@ -1284,8 +1291,11 @@ pub(crate) fn install_web_event_proto_methods(name: &str, proto_obj: *mut Object
     let proto_h = scope.root_nanbox_f64(boxed_ptr(proto_obj));
     let proto =
         || crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
-    let install = |method: &str, func: *const u8, call_arity: u32, spec_length: u32| {
-        let value = install_proto_method(proto(), method, func, call_arity);
+    let install = |method: &str,
+                   info: *const crate::closure::JsFunctionInfo,
+                   call_arity: u32,
+                   spec_length: u32| {
+        let value = install_proto_method(proto(), method, info, call_arity);
         let closure = crate::value::js_nanbox_get_pointer(value) as usize;
         if closure != 0 {
             crate::object::native_module::set_builtin_closure_length(closure, spec_length);
@@ -1310,46 +1320,51 @@ pub(crate) fn install_web_event_proto_methods(name: &str, proto_obj: *mut Object
         "EventTarget" => {
             install(
                 "addEventListener",
-                event_target_add_event_listener_thunk as *const u8,
+                crate::fn_info!(event_target_add_event_listener_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
                 3,
                 2,
             );
             install(
                 "removeEventListener",
-                event_target_remove_event_listener_thunk as *const u8,
+                crate::fn_info!(event_target_remove_event_listener_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
                 3,
                 2,
             );
             install(
                 "dispatchEvent",
-                event_target_dispatch_event_thunk as *const u8,
+                crate::fn_info!(event_target_dispatch_event_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 1,
             );
         }
         "Event" => {
-            install("initEvent", event_proto_init_event_thunk as *const u8, 3, 1);
+            install(
+                "initEvent",
+                crate::fn_info!(event_proto_init_event_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN)),
+                3,
+                1,
+            );
             install(
                 "stopImmediatePropagation",
-                event_proto_stop_immediate_propagation_thunk as *const u8,
+                crate::fn_info!(event_proto_stop_immediate_propagation_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
             );
             install(
                 "preventDefault",
-                event_proto_prevent_default_thunk as *const u8,
+                crate::fn_info!(event_proto_prevent_default_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
             );
             install(
                 "composedPath",
-                event_proto_composed_path_thunk as *const u8,
+                crate::fn_info!(event_proto_composed_path_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
             );
             install(
                 "stopPropagation",
-                event_proto_stop_propagation_thunk as *const u8,
+                crate::fn_info!(event_proto_stop_propagation_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
                 0,
             );
@@ -1437,20 +1452,22 @@ pub(crate) fn is_event_target_method_name(name: &[u8]) -> bool {
 /// Returns `None` for any other name or receiver, so an unknown property still
 /// reads as `undefined` and a non-target object keeps its existing dispatch.
 pub(crate) fn event_target_method_bind(target: *mut ObjectHeader, name: &[u8]) -> Option<f64> {
-    let (func, arity): (*const u8, u32) = match name {
-        b"addEventListener" => (event_target_add_event_listener_thunk as *const u8, 3),
-        b"removeEventListener" => (event_target_remove_event_listener_thunk as *const u8, 3),
-        b"dispatchEvent" => (event_target_dispatch_event_thunk as *const u8, 1),
+    use crate::fn_info;
+    let info = match name {
+        b"addEventListener" => fn_info!(event_target_add_event_listener_thunk, 3; with_declared(3)),
+        b"removeEventListener" => {
+            fn_info!(event_target_remove_event_listener_thunk, 3; with_declared(3))
+        }
+        b"dispatchEvent" => fn_info!(event_target_dispatch_event_thunk, 1; with_declared(1)),
         _ => return None,
     };
     if !unsafe { is_event_target(target) } {
         return None;
     }
-    crate::closure::js_register_closure_arity(func, arity);
     // `js_closure_alloc` can GC-move the receiver — root it and re-read.
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_raw_mut_ptr(target);
-    let closure = crate::closure::js_closure_alloc(func, 1);
+    let closure = crate::closure::js_closure_alloc(info, 1);
     let target_bits = boxed_ptr(target_handle.get_raw_mut_ptr::<ObjectHeader>()).to_bits();
     crate::closure::js_closure_set_capture_ptr(closure, 0, target_bits as i64);
     Some(boxed_ptr(closure))

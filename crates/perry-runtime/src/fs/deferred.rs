@@ -140,7 +140,7 @@ fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64) {
     let data_handle = scope.root_nanbox_f64(data);
     let options_handle = scope.root_nanbox_f64(options);
     let sink_handle = scope.root_nanbox_f64(sink);
-    let closure = js_closure_alloc(perform_deferred_fs_op as *const u8, CAPTURE_COUNT);
+    let closure = js_closure_alloc(crate::fn_info!(perform_deferred_fs_op, 0), CAPTURE_COUNT);
     js_closure_set_capture_f64(closure, CAP_PATH, path_handle.get_nanbox_f64());
     js_closure_set_capture_f64(closure, CAP_DATA, data_handle.get_nanbox_f64());
     js_closure_set_capture_f64(closure, CAP_OPTIONS, options_handle.get_nanbox_f64());

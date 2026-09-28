@@ -114,9 +114,9 @@ fn restoring_a_mock_preserves_calls_and_scheduled_implementations() {
 #[test]
 fn reentrant_dispatch_uses_completed_call_indices_like_node() {
     MOCK_STATES.with(|states| states.borrow_mut().clear());
-    let outer = closure_value(reentrant_implementation as *const u8, 0);
-    let explicit_once = closure_value(return_twenty as *const u8, 0);
-    let scheduled_inside = closure_value(return_thirty as *const u8, 0);
+    let outer = closure_value(crate::fn_info!(reentrant_implementation, 0), 0);
+    let explicit_once = closure_value(crate::fn_info!(return_twenty, 0), 0);
+    let scheduled_inside = closure_value(crate::fn_info!(return_thirty, 0), 0);
     let mock = create_mock_function(outer, outer, None, MockRestoreTarget::None);
     let mock_ptr = raw_ptr_from_value(mock) as *const ClosureHeader;
     let id = closure_id(mock_ptr);

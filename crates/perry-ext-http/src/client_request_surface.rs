@@ -26,8 +26,6 @@ extern "C" {
     fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64);
 }
 
-static CLIENT_ONCE_WRAPPER_REGISTERED: Once = Once::new();
-
 pub(crate) fn create_client_once_wrapper(
     handle: Handle,
     event: &str,
@@ -37,15 +35,12 @@ pub(crate) fn create_client_once_wrapper(
     if callback == 0 {
         return 0;
     }
-    CLIENT_ONCE_WRAPPER_REGISTERED.call_once(|| {
-        perry_ffi::register_closure_rest(client_once_wrapper as perry_ffi::JsBody1, 0);
-    });
     let scope = perry_ffi::TransientRootScope::enter();
     let callback = scope.root_addr(callback);
     let event = scope.root_nanbox(f64::from_bits(
         JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
     ));
-    let wrapper = perry_ffi::alloc_closure(client_once_wrapper as perry_ffi::JsBody1, 5);
+    let wrapper = perry_ffi::alloc_closure(&CLIENT_ONCE_WRAPPER_INFO, 5);
     let wrapper = scope.root_addr(wrapper as i64);
     let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
     unsafe {
@@ -878,3 +873,6 @@ pub unsafe extern "C" fn js_ext_http_client_request_dispatch_method(
     };
     dispatch_method(handle, &method, args).unwrap_or_else(undefined_value)
 }
+
+static CLIENT_ONCE_WRAPPER_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(client_once_wrapper as perry_ffi::JsBody1).with_rest(0);

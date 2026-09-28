@@ -48,7 +48,7 @@ extern "C" fn ns_destroy_option_done(
 }
 
 fn queue_destroy_events(stream: f64, err: f64) {
-    let closure = js_closure_alloc(ns_destroy_error_microtask as *const u8, 2);
+    let closure = js_closure_alloc(crate::fn_info!(ns_destroy_error_microtask, 0), 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_f64(closure, 1, err);
     crate::builtins::js_queue_microtask(closure as i64);
@@ -62,8 +62,10 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     super::refresh_readable_aborted_flag(stream);
     if let Some(destroy) = get_hidden_value(stream, hidden_key(b"__perryStreamDestroy")) {
         if super::is_callable_value(destroy) {
-            crate::closure::js_register_closure_arity(ns_destroy_option_done as *const u8, 1);
-            let cb = js_closure_alloc(ns_destroy_option_done as *const u8, 2);
+            let cb = js_closure_alloc(
+                crate::fn_info!(ns_destroy_option_done, 1; with_declared(1)),
+                2,
+            );
             js_closure_set_capture_f64(cb, 0, stream);
             js_closure_set_capture_f64(cb, 1, err);
             let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());

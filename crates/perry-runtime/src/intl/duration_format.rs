@@ -309,26 +309,20 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     super::install_function_from_handle(
         &obj_handle,
         "format",
-        format_thunk as *const u8,
+        crate::fn_info!(format_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     super::install_function_from_handle(
         &obj_handle,
         "formatToParts",
-        to_parts_thunk as *const u8,
+        crate::fn_info!(to_parts_thunk, 1; with_declared(1)),
         1,
-        1,
-        false,
     );
     super::install_function_from_handle(
         &obj_handle,
         "resolvedOptions",
-        resolved_options_thunk as *const u8,
+        crate::fn_info!(resolved_options_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
 }
 

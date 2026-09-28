@@ -30,9 +30,8 @@ fn set(obj: *mut ObjectHeader, name: &str, value: f64) {
     crate::object::js_object_set_field_by_name(obj, key(name), value);
 }
 
-fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func, arity);
-    let closure = crate::closure::js_closure_alloc(func, 0);
+fn fn_value(info: *const crate::closure::JsFunctionInfo, name: &str) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return undefined();
     }
@@ -73,29 +72,42 @@ fn mock_context_object() -> *mut ObjectHeader {
     set(
         obj,
         "callCount",
-        fn_value(zero0 as *const u8, "callCount", 0),
+        fn_value(crate::fn_info!(zero0, 0; with_declared(0)), "callCount"),
     );
     set(
         obj,
         "resetCalls",
-        fn_value(noop0 as *const u8, "resetCalls", 0),
+        fn_value(crate::fn_info!(noop0, 0; with_declared(0)), "resetCalls"),
     );
     set(
         obj,
         "mockImplementation",
-        fn_value(noop1 as *const u8, "mockImplementation", 1),
+        fn_value(
+            crate::fn_info!(noop1, 1; with_declared(1)),
+            "mockImplementation",
+        ),
     );
     set(
         obj,
         "mockImplementationOnce",
-        fn_value(noop1 as *const u8, "mockImplementationOnce", 1),
+        fn_value(
+            crate::fn_info!(noop1, 1; with_declared(1)),
+            "mockImplementationOnce",
+        ),
     );
-    set(obj, "restore", fn_value(noop0 as *const u8, "restore", 0));
+    set(
+        obj,
+        "restore",
+        fn_value(crate::fn_info!(noop0, 0; with_declared(0)), "restore"),
+    );
     obj
 }
 
 fn mock_function_value() -> f64 {
-    let value = fn_value(noop3 as *const u8, "mockConstructor", 3);
+    let value = fn_value(
+        crate::fn_info!(noop3, 3; with_declared(3)),
+        "mockConstructor",
+    );
     let closure_ptr = crate::value::js_nanbox_get_pointer(value) as usize;
     let context = object_value(mock_context_object());
     crate::closure::closure_set_dynamic_prop(closure_ptr, "mock", context);
@@ -130,7 +142,11 @@ pub fn property(property: &str) -> Option<f64> {
 fn test_assert_object() -> f64 {
     let obj = crate::object::js_object_alloc(0, 0);
     // `assert.register(name, fn)` — length 2 in Node; stubbed (shape parity).
-    set(obj, "register", fn_value(noop3 as *const u8, "register", 2));
+    set(
+        obj,
+        "register",
+        fn_value(crate::fn_info!(noop3, 3; with_declared(2)), "register"),
+    );
     object_value(obj)
 }
 

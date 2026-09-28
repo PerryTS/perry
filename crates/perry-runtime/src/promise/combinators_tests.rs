@@ -10,7 +10,7 @@ fn reset_promise_test_state() {
     PROMISE_ALL_STATES.with(|s| s.borrow_mut().clear());
 }
 
-fn thenable_value(func: *const u8, captured: f64) -> f64 {
+fn thenable_value(func: *const crate::closure::JsFunctionInfo, captured: f64) -> f64 {
     let obj = js_object_alloc(0, 0);
     let then = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(then, 0, captured);
@@ -114,7 +114,7 @@ fn promise_all_assimilates_thenable_and_guards_double_resolve() {
         js_array_set_f64(
             arr,
             0,
-            thenable_value(test_thenable_resolve_twice as *const u8, 7.0),
+            thenable_value(crate::fn_info!(test_thenable_resolve_twice, 2), 7.0),
         );
 
         let all = js_promise_all(arr);
@@ -138,7 +138,7 @@ fn promise_all_rejects_from_thenable_job() {
         js_array_set_f64(
             arr,
             0,
-            thenable_value(test_thenable_reject as *const u8, 13.0),
+            thenable_value(crate::fn_info!(test_thenable_reject, 2), 13.0),
         );
 
         let all = js_promise_all(arr);
@@ -160,12 +160,12 @@ fn promise_all_settled_assimilates_thenables_in_input_order() {
         js_array_set_f64(
             arr,
             0,
-            thenable_value(test_thenable_reject as *const u8, 1.0),
+            thenable_value(crate::fn_info!(test_thenable_reject, 2), 1.0),
         );
         js_array_set_f64(
             arr,
             1,
-            thenable_value(test_thenable_resolve_twice as *const u8, 2.0),
+            thenable_value(crate::fn_info!(test_thenable_resolve_twice, 2), 2.0),
         );
 
         let settled = js_promise_all_settled(arr);
@@ -192,7 +192,7 @@ fn promise_result_resolution_assimilates_thenable_objects() {
         let promise = js_promise_new();
         promise_resolve_assimilating(
             promise,
-            thenable_value(test_thenable_resolve_twice as *const u8, 21.0),
+            thenable_value(crate::fn_info!(test_thenable_resolve_twice, 2), 21.0),
         );
         assert_eq!((*promise).state, PromiseState::Pending);
 

@@ -19,7 +19,10 @@ extern "C" fn webcrypto_digest_settle(
     // completion), so re-arm one more time before resolving.
     let remaining = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
     if remaining > 1 {
-        let cl = perry_runtime::closure::js_closure_alloc(webcrypto_digest_settle as *const u8, 3);
+        let cl = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(webcrypto_digest_settle, 0),
+            3,
+        );
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 0, promise_bits as i64);
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 1, value_bits as i64);
         perry_runtime::closure::js_closure_set_capture_ptr(cl, 2, remaining - 1);
@@ -58,7 +61,10 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(buf as *const u8).bits()));
     let promise = scope.root_raw_mut_ptr(perry_runtime::promise::js_promise_new());
-    let cl = perry_runtime::closure::js_closure_alloc(webcrypto_digest_settle as *const u8, 3);
+    let cl = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(webcrypto_digest_settle, 0),
+        3,
+    );
     let cl = scope.root_raw_mut_ptr(cl);
     let promise_val = promise.with_mut_ptr(|promise: *mut Promise| {
         f64::from_bits(JSValue::pointer(promise as *const u8).bits())

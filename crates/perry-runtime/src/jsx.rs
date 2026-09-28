@@ -415,7 +415,7 @@ mod tests {
 
     /// Allocate `span_component` as a real capture-free closure value.
     fn span_component_value() -> f64 {
-        let c = crate::closure::js_closure_alloc(span_component as *const u8, 0);
+        let c = crate::closure::js_closure_alloc(crate::fn_info!(span_component, 1), 0);
         f64::from_bits(JSValue::pointer(c as *const u8).bits())
     }
 

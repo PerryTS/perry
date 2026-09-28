@@ -24,13 +24,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toExponential",
-                number_proto_to_exponential_thunk as *const u8,
+                crate::fn_info!(number_proto_to_exponential_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "toFixed",
-                number_proto_to_fixed_thunk as *const u8,
+                crate::fn_info!(number_proto_to_fixed_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // `.length` is 0 (both params are optional), but the thunk needs
@@ -40,26 +40,25 @@ pub(super) fn install_primitive_proto_methods(
             super::global_this::install_proto_method_rest_with_length(
                 proto_obj,
                 "toLocaleString",
-                number_proto_to_locale_string_thunk as *const u8,
-                0,
+                crate::fn_info!(number_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "toPrecision",
-                number_proto_to_precision_thunk as *const u8,
+                crate::fn_info!(number_proto_to_precision_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "toString",
-                number_proto_to_string_thunk as *const u8,
+                crate::fn_info!(number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                number_proto_value_of_thunk as *const u8,
+                crate::fn_info!(number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -67,13 +66,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                boolean_proto_to_string_thunk as *const u8,
+                crate::fn_info!(boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                boolean_proto_value_of_thunk as *const u8,
+                crate::fn_info!(boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -81,13 +80,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                symbol_proto_to_string_thunk as *const u8,
+                crate::fn_info!(symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                symbol_proto_value_of_thunk as *const u8,
+                crate::fn_info!(symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -95,7 +94,7 @@ pub(super) fn install_primitive_proto_methods(
             let to_string = ipm(
                 proto_obj,
                 "toString",
-                bigint_proto_to_string_thunk as *const u8,
+                crate::fn_info!(bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // The optional radix does not contribute to the observable
@@ -108,7 +107,7 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "valueOf",
-                bigint_proto_value_of_thunk as *const u8,
+                crate::fn_info!(bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             // `.length` is 0 despite the optional `(locales?, options?)`
@@ -119,8 +118,7 @@ pub(super) fn install_primitive_proto_methods(
             super::global_this::install_proto_method_rest_with_length(
                 proto_obj,
                 "toLocaleString",
-                bigint_proto_to_locale_string_thunk as *const u8,
-                0,
+                crate::fn_info!(bigint_proto_to_locale_string_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -130,30 +128,61 @@ pub(super) fn install_primitive_proto_methods(
 }
 
 pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str) -> Option<f64> {
-    let (func_ptr, arity) = match (builtin_name, method_name) {
-        ("Number", "toExponential") => (number_proto_to_exponential_thunk as *const u8, 1),
-        ("Number", "toFixed") => (number_proto_to_fixed_thunk as *const u8, 1),
+    let (info, arity) = match (builtin_name, method_name) {
+        ("Number", "toExponential") => (
+            crate::fn_info!(number_proto_to_exponential_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        ("Number", "toFixed") => (
+            crate::fn_info!(number_proto_to_fixed_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
         // #9414: rest-based (see `install_primitive_proto_methods`), so the
         // reified `Number.prototype.toLocaleString` function value must be
         // registered the same way or its `(locales, options)` never arrive.
-        ("Number", "toLocaleString") => {
-            let func_ptr = number_proto_to_locale_string_thunk as *const u8;
-            let value = primitive_proto_method_closure_value(method_name, func_ptr, 0);
-            crate::closure::js_register_closure_rest(func_ptr, 0);
-            return Some(value);
-        }
-        ("Number", "toPrecision") => (number_proto_to_precision_thunk as *const u8, 1),
-        ("Number", "toString") => (number_proto_to_string_thunk as *const u8, 1),
-        ("Number", "valueOf") => (number_proto_value_of_thunk as *const u8, 0),
-        ("Boolean", "toString") => (boolean_proto_to_string_thunk as *const u8, 0),
-        ("Boolean", "valueOf") => (boolean_proto_value_of_thunk as *const u8, 0),
-        ("Symbol", "toString") => (symbol_proto_to_string_thunk as *const u8, 0),
-        ("Symbol", "valueOf") => (symbol_proto_value_of_thunk as *const u8, 0),
-        ("BigInt", "toString") => (bigint_proto_to_string_thunk as *const u8, 1),
-        ("BigInt", "valueOf") => (bigint_proto_value_of_thunk as *const u8, 0),
+        ("Number", "toLocaleString") => (
+            crate::fn_info!(number_proto_to_locale_string_thunk, 1; with_declared(0), with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("Number", "toPrecision") => (
+            crate::fn_info!(number_proto_to_precision_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        ("Number", "toString") => (
+            crate::fn_info!(number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        ("Number", "valueOf") => (
+            crate::fn_info!(number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("Boolean", "toString") => (
+            crate::fn_info!(boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("Boolean", "valueOf") => (
+            crate::fn_info!(boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("Symbol", "toString") => (
+            crate::fn_info!(symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("Symbol", "valueOf") => (
+            crate::fn_info!(symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        ("BigInt", "toString") => (
+            crate::fn_info!(bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        ("BigInt", "valueOf") => (
+            crate::fn_info!(bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
         _ => return None,
     };
-    let value = primitive_proto_method_closure_value(method_name, func_ptr, arity);
+    let value = primitive_proto_method_closure_value(method_name, info, arity);
     if builtin_name == "BigInt" && method_name == "toString" {
         super::native_module::set_builtin_closure_length(
             crate::value::js_nanbox_get_pointer(value) as usize,
@@ -163,13 +192,15 @@ pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str
     Some(value)
 }
 
-fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+fn primitive_proto_method_closure_value(
+    method_name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    crate::closure::register_closure_body_builtin(func_ptr);
     super::native_module::set_bound_native_closure_name(closure, method_name);
     super::native_module::set_builtin_closure_length(closure as usize, arity);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);

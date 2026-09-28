@@ -365,26 +365,18 @@ unsafe fn finish_pipe(
         js_writable_stream_close(writable_id as f64)
     };
     let fulfilled = pipe_closure(
-        readable_stream_pipe_to_close_fulfilled as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_close_fulfilled, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_write_rejected as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_write_rejected, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_close_fulfilled as *const u8,
-        1,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_write_rejected as *const u8,
-        1,
     );
     let _ = perry_runtime::promise::js_promise_then(close_promise, fulfilled, rejected);
 }
@@ -500,7 +492,7 @@ unsafe fn wait_for_shutdown_actions(
         perry_runtime::promise::js_promise_all(values)
     };
     let fulfilled = pipe_closure_with_reason(
-        readable_stream_pipe_to_shutdown_fulfilled as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_shutdown_fulfilled, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
@@ -508,20 +500,12 @@ unsafe fn wait_for_shutdown_actions(
         reason,
     );
     let rejected = pipe_closure_with_reason(
-        readable_stream_pipe_to_shutdown_rejected as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_shutdown_rejected, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
         reason,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_shutdown_fulfilled as *const u8,
-        1,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_shutdown_rejected as *const u8,
-        1,
     );
     let _ = perry_runtime::promise::js_promise_then(action, fulfilled, rejected);
 }
@@ -573,15 +557,11 @@ unsafe fn schedule_pipe_step(
     state: PipeState,
 ) {
     let closure = pipe_closure(
-        readable_stream_pipe_to_microtask as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_microtask, 0; with_declared(0)),
         readable_id,
         writable_id,
         promise,
         state,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_microtask as *const u8,
-        0,
     );
     perry_runtime::builtins::js_queue_microtask(closure as i64);
 }
@@ -625,26 +605,18 @@ unsafe fn pipe_write_then_continue(
         return;
     }
     let fulfilled = pipe_closure(
-        readable_stream_pipe_to_write_fulfilled as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_write_fulfilled, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_write_rejected as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_write_rejected, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_write_fulfilled as *const u8,
-        1,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_write_rejected as *const u8,
-        1,
     );
     let _ = perry_runtime::promise::js_promise_then(write_promise, fulfilled, rejected);
 }
@@ -672,26 +644,18 @@ unsafe fn wait_for_next_read(
     maybe_pull(readable_id);
 
     let fulfilled = pipe_closure(
-        readable_stream_pipe_to_read_fulfilled as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_read_fulfilled, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
     );
     let rejected = pipe_closure(
-        readable_stream_pipe_to_read_rejected as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_read_rejected, 1; with_declared(1)),
         readable_id,
         writable_id,
         promise,
         state,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_read_fulfilled as *const u8,
-        1,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_read_rejected as *const u8,
-        1,
     );
     let _ = perry_runtime::promise::js_promise_then(read_promise, fulfilled, rejected);
 }
@@ -733,28 +697,28 @@ unsafe fn pipe_iter_result_object(value_bits: u64, done: bool) -> u64 {
 }
 
 fn pipe_closure(
-    func: *const u8,
+    info: *const perry_runtime::closure::JsFunctionInfo,
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
     state: PipeState,
 ) -> *mut perry_runtime::ClosureHeader {
-    pipe_closure_with_extra(func, readable_id, writable_id, promise, state, None)
+    pipe_closure_with_extra(info, readable_id, writable_id, promise, state, None)
 }
 
 fn pipe_closure_with_reason(
-    func: *const u8,
+    info: *const perry_runtime::closure::JsFunctionInfo,
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
     state: PipeState,
     reason: u64,
 ) -> *mut perry_runtime::ClosureHeader {
-    pipe_closure_with_extra(func, readable_id, writable_id, promise, state, Some(reason))
+    pipe_closure_with_extra(info, readable_id, writable_id, promise, state, Some(reason))
 }
 
 fn pipe_closure_with_extra(
-    func: *const u8,
+    info: *const perry_runtime::closure::JsFunctionInfo,
     readable_id: usize,
     writable_id: usize,
     promise: *mut Promise,
@@ -762,7 +726,7 @@ fn pipe_closure_with_extra(
     reason: Option<u64>,
 ) -> *mut perry_runtime::ClosureHeader {
     let closure =
-        perry_runtime::closure::js_closure_alloc(func, if reason.is_some() { 11 } else { 10 });
+        perry_runtime::closure::js_closure_alloc(info, if reason.is_some() { 11 } else { 10 });
     perry_runtime::closure::js_closure_set_capture_ptr(
         closure,
         0,
@@ -858,15 +822,11 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
 
     if let Some(signal_ptr) = pipe_signal_ptr(signal) {
         let listener = pipe_closure(
-            readable_stream_pipe_to_aborted as *const u8,
+            perry_runtime::fn_info!(readable_stream_pipe_to_aborted, 0; with_declared(0)),
             r_id,
             w_id,
             promise,
             state,
-        );
-        perry_runtime::closure::js_register_closure_arity(
-            readable_stream_pipe_to_aborted as *const u8,
-            0,
         );
         state.abort_listener = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
         perry_runtime::closure::js_closure_set_capture_ptr(
@@ -888,15 +848,11 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
     }
 
     let closure = pipe_closure(
-        readable_stream_pipe_to_microtask as *const u8,
+        perry_runtime::fn_info!(readable_stream_pipe_to_microtask, 0; with_declared(0)),
         r_id,
         w_id,
         promise,
         state,
-    );
-    perry_runtime::closure::js_register_closure_arity(
-        readable_stream_pipe_to_microtask as *const u8,
-        0,
     );
     perry_runtime::builtins::js_queue_microtask(closure as i64);
 
@@ -1035,9 +991,10 @@ mod tests {
     fn pipe_keeps_locks_until_async_abort_settles() {
         let _serial = crate::streams::tests::serial_guard();
         let action = js_promise_new();
-        let callback =
-            perry_runtime::closure::js_closure_alloc(pending_abort_action as *const u8, 1);
-        perry_runtime::closure::js_register_closure_arity(pending_abort_action as *const u8, 1);
+        let callback = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(pending_abort_action, 1; with_declared(1)),
+            1,
+        );
         perry_runtime::closure::js_closure_set_capture_ptr(callback, 0, action as i64);
         let readable = alloc_readable(0, 0, 0, 1.0);
         let writable = alloc_writable(0, 0, callback as i64, 1.0);

@@ -39,7 +39,7 @@ fn take_foreach_delete_visits() -> Vec<f64> {
     FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().drain(..).map(f64::from_bits).collect())
 }
 
-fn foreach_callback(func: *const u8) -> f64 {
+fn foreach_callback(func: *const crate::closure::JsFunctionInfo) -> f64 {
     FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().clear());
     let callback = crate::closure::js_closure_alloc(func, 0);
     crate::value::js_nanbox_pointer(callback as i64)
@@ -54,7 +54,7 @@ fn foreach_survives_delete_compaction_threshold() {
     }
     js_set_foreach(
         set,
-        foreach_callback(delete_current_set_value as *const u8),
+        foreach_callback(crate::fn_info!(delete_current_set_value, 3)),
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
     assert_eq!(take_foreach_delete_visits(), expected);
@@ -73,7 +73,7 @@ fn foreach_survives_delete_compaction_threshold() {
     }
     js_set_foreach(
         set,
-        foreach_callback(delete_earlier_set_value as *const u8),
+        foreach_callback(crate::fn_info!(delete_earlier_set_value, 3)),
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
     assert_eq!(take_foreach_delete_visits(), expected);
@@ -435,7 +435,7 @@ fn a_live_index_read_inside_foreach_defers_the_squeeze_and_skips_nothing() {
     }
     js_set_foreach(
         set,
-        foreach_callback(delete_earlier_then_live_read as *const u8),
+        foreach_callback(crate::fn_info!(delete_earlier_then_live_read, 3)),
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
     assert_eq!(

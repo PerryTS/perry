@@ -354,17 +354,36 @@ fn build_iterator_prototypes() {
     }
     install_symbol_iterator(shared);
 
-    let array_proto = build_family_proto(array_iterator_next_thunk, "Array Iterator", shared);
-    let map_proto = build_family_proto(map_iterator_next_thunk, "Map Iterator", shared);
-    let set_proto = build_family_proto(set_iterator_next_thunk, "Set Iterator", shared);
-    let string_proto = build_family_proto(string_iterator_next_thunk, "String Iterator", shared);
+    let array_proto = build_family_proto(
+        crate::fn_info!(array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Array Iterator",
+        shared,
+    );
+    let map_proto = build_family_proto(
+        crate::fn_info!(map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Map Iterator",
+        shared,
+    );
+    let set_proto = build_family_proto(
+        crate::fn_info!(set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Set Iterator",
+        shared,
+    );
+    let string_proto = build_family_proto(
+        crate::fn_info!(string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "String Iterator",
+        shared,
+    );
     let regexp_string_proto = build_family_proto(
-        regexp_string_iterator_next_thunk,
+        crate::fn_info!(regexp_string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         "RegExp String Iterator",
         shared,
     );
-    let iterator_helper_proto =
-        build_family_proto(iterator_helper_next_thunk, "Iterator Helper", shared);
+    let iterator_helper_proto = build_family_proto(
+        crate::fn_info!(iterator_helper_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        "Iterator Helper",
+        shared,
+    );
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
@@ -378,12 +397,13 @@ fn build_iterator_prototypes() {
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
 /// `name`/`length` own props match the spec (`"[Symbol.iterator]"`, length 0).
 fn install_symbol_iterator(shared: *mut ObjectHeader) {
-    let func_ptr = iterator_proto_symbol_iterator_thunk as *const u8;
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(iterator_proto_symbol_iterator_thunk, 1; with_declared(0)),
+        0,
+    );
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     super::native_module::set_bound_native_closure_name(closure, "[Symbol.iterator]");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     set_builtin_property_attrs(
@@ -417,7 +437,7 @@ fn install_symbol_iterator(shared: *mut ObjectHeader) {
 /// Allocate one family prototype with an own `next` method (spec descriptor),
 /// a `[Symbol.toStringTag]`, and `[[Prototype]] === shared %IteratorPrototype%`.
 fn build_family_proto(
-    next_thunk: crate::closure::body_call::js_body_fn_ty!(a),
+    next_info: *const crate::closure::JsFunctionInfo,
     tag: &str,
     shared: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
@@ -429,7 +449,7 @@ fn build_family_proto(
     // configurable:true }` and the closure's `name`/`length` as
     // `{ writable:false, enumerable:false, configurable:true }` — exactly the
     // spec descriptor shape test262 verifies. `.length` 0 (next takes no args).
-    install_proto_method(proto, "next", next_thunk as *const u8, 0);
+    install_proto_method(proto, "next", next_info, 0);
     set_to_string_tag(proto, tag);
     chain_to(proto, shared);
     proto
@@ -808,8 +828,10 @@ mod override_probe_allocation_tests {
                 "premise: the prototype carries an own `next` closure"
             );
 
-            let patched = crate::closure::js_closure_alloc(patched_next_thunk as *const u8, 0);
-            crate::closure::js_register_closure_arity(patched_next_thunk as *const u8, 0);
+            let patched = crate::closure::js_closure_alloc(
+                crate::fn_info!(patched_next_thunk, 0; with_declared(0)),
+                0,
+            );
             let patched_h = scope.root_nanbox_f64(js_nanbox_pointer(patched as i64));
             set_proto_next(patched_h.get_nanbox_f64());
             assert!(
@@ -851,8 +873,10 @@ mod override_probe_allocation_tests {
                 "premise: unpatched prototype passes the proof"
             );
 
-            let getter = crate::closure::js_closure_alloc(accessor_getter_thunk as *const u8, 0);
-            crate::closure::js_register_closure_arity(accessor_getter_thunk as *const u8, 0);
+            let getter = crate::closure::js_closure_alloc(
+                crate::fn_info!(accessor_getter_thunk, 0; with_declared(0)),
+                0,
+            );
             let getter_h = scope.root_nanbox_f64(js_nanbox_pointer(getter as i64));
             let key =
                 scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));

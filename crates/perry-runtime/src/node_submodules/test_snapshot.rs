@@ -159,12 +159,12 @@ pub(super) fn snapshot_object_value() -> f64 {
         set_field(
             obj,
             "setDefaultSnapshotSerializers",
-            closure_value(snapshot_set_default_serializers as *const u8, 1),
+            closure_value(crate::fn_info!(snapshot_set_default_serializers, 1), 1),
         );
         set_field(
             obj,
             "setResolveSnapshotPath",
-            closure_value(snapshot_set_resolve_snapshot_path as *const u8, 1),
+            closure_value(crate::fn_info!(snapshot_set_resolve_snapshot_path, 1), 1),
         );
         *slot.borrow_mut() = Some(obj);
         boxed_ptr(obj)

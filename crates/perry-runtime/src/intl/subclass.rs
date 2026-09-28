@@ -109,7 +109,8 @@ fn intl_constructor_kind(parent_val: f64) -> Option<&'static str> {
     if closure.is_null() {
         return None;
     }
-    let fp = unsafe { (*closure).func_ptr };
+    // Validated: `parent_val` may be any heap object, not a function.
+    let fp = crate::closure::get_valid_func_ptr(closure);
     intl_constructor_entries()
         .iter()
         .find(|(p, _)| *p == fp)

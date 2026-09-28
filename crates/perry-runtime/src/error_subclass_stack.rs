@@ -244,16 +244,18 @@ pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
         }
         let frame_handle = scope.root_string_ptr(frame_ptr);
 
-        let getter_fn = error_subclass_stack_getter as *const u8;
-        let setter_fn = error_subclass_stack_setter as *const u8;
-        crate::closure::js_register_closure_arity(getter_fn, 0);
-        crate::closure::js_register_closure_arity(setter_fn, 1);
-        let getter = crate::closure::js_closure_alloc(getter_fn, 1);
+        let getter = crate::closure::js_closure_alloc(
+            crate::fn_info!(error_subclass_stack_getter, 0; with_declared(0)),
+            1,
+        );
         if getter.is_null() {
             return;
         }
         let getter_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(getter as i64));
-        let setter = crate::closure::js_closure_alloc(setter_fn, 0);
+        let setter = crate::closure::js_closure_alloc(
+            crate::fn_info!(error_subclass_stack_setter, 1; with_declared(1)),
+            0,
+        );
         if setter.is_null() {
             return;
         }

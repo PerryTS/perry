@@ -8,8 +8,7 @@ use sync_run::{
 };
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -497,8 +496,11 @@ fn cp_promisified_run(
     // promisify(exec)/promisify(execFile) yield string stdout/stderr (utf8).
     let mode = cp_read_output_mode(opts, true);
     let promise = crate::promise::js_promise_new();
-    js_register_closure_arity(cp_promise_settle_cb as *const u8, 3);
-    let cb = js_closure_alloc(cp_promise_settle_cb as *const u8, 1);
+
+    let cb = js_closure_alloc(
+        crate::fn_info!(cp_promise_settle_cb, 3; with_declared(3)),
+        1,
+    );
     js_closure_set_capture_ptr(cb, 0, cp_box_ptr(promise as *const u8).to_bits() as i64);
     let cb_val = crate::value::js_nanbox_pointer(cb as i64);
     let child = reactor::cp_exec_async(
@@ -583,12 +585,10 @@ extern "C" fn cp_promisified_exec_file(
 /// can't reproduce; `util_promisify::js_util_promisify` detects the bound
 /// export and delegates here. #1857.
 pub(crate) fn make_promisified_child_process(method: &str) -> f64 {
-    let func: *const u8 = if method == "execFile" {
-        js_register_closure_arity(cp_promisified_exec_file as *const u8, 2);
-        cp_promisified_exec_file as *const u8
+    let func = if method == "execFile" {
+        crate::fn_info!(cp_promisified_exec_file, 2; with_declared(2))
     } else {
-        js_register_closure_arity(cp_promisified_exec as *const u8, 2);
-        cp_promisified_exec as *const u8
+        crate::fn_info!(cp_promisified_exec, 2; with_declared(2))
     };
     let closure = js_closure_alloc(func, 0);
     crate::value::js_nanbox_pointer(closure as i64)

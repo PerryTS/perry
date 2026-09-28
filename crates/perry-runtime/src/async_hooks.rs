@@ -13,7 +13,7 @@ use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_get_capture_f64,
     js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    js_register_closure_rest, ClosureHeader,
+    ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -1400,9 +1400,10 @@ extern "C" fn async_resource_bind_method_trampoline(
 }
 
 fn async_resource_bind_method_value(handle: i64) -> f64 {
-    let trampoline = async_resource_bind_method_trampoline as *const u8;
-    js_register_closure_rest(trampoline, 0);
-    let closure = js_closure_alloc(trampoline, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(async_resource_bind_method_trampoline, 1; with_rest(0)),
+        1,
+    );
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -1689,7 +1690,6 @@ fn register_bind_trampoline_once() {
         if !flag.get() {
             // fixed_arity=0 → dispatch_rest_bundled calls
             // `f(closure, rest_array)` regardless of forwarded arity.
-            js_register_closure_rest(async_resource_bind_trampoline as *const u8, 0);
             flag.set(true);
         }
     });
@@ -1708,7 +1708,10 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_
         return 0;
     };
     register_bind_trampoline_once();
-    let closure = js_closure_alloc(async_resource_bind_trampoline as *const u8, 3);
+    let closure = js_closure_alloc(
+        crate::fn_info!(async_resource_bind_trampoline, 1; with_rest(0)),
+        3,
+    );
     if closure.is_null() {
         return 0;
     }
@@ -1780,7 +1783,7 @@ pub extern "C" fn js_async_resource_static_bind_value(
                 let name = js_string_value_to_string(f64::from_bits(own_name.bits()));
                 (!name.is_empty()).then_some(name)
             } else {
-                unsafe { crate::builtins::function_name_for_ptr((*callback).func_ptr as usize) }
+                unsafe { crate::builtins::function_name_for_ptr((*callback).code() as usize) }
                     .filter(|name| !name.is_empty())
             }
         };
@@ -1848,23 +1851,6 @@ mod context_snapshots;
 pub use context_snapshots::{
     js_async_local_storage_static_snapshot_direct, js_async_local_storage_static_snapshot_method,
 };
-
-// Stays beside the module's root scanner: its registration flag is
-// per-thread state (`scripts/gc_runtime_root_holders.py`).
-fn register_snapshot_trampoline_once() {
-    thread_local! {
-        static REGISTERED: Cell<bool> = const { Cell::new(false) };
-    }
-    REGISTERED.with(|flag| {
-        if !flag.get() {
-            js_register_closure_rest(
-                context_snapshots::async_local_storage_snapshot_trampoline as *const u8,
-                1,
-            );
-            flag.set(true);
-        }
-    });
-}
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);

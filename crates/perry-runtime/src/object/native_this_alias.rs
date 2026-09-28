@@ -578,10 +578,9 @@ pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f
             PropertyAttrs::new(true, false, true),
         );
     });
-    let func_ptr = server_response_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 3);
+    let info = crate::fn_info!(server_response_prototype_method_thunk, 3; with_declared(3));
     for method in SERVER_RESPONSE_PROTOTYPE_METHODS {
-        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+        let method_closure = crate::closure::js_closure_alloc(info, 2);
         if method_closure.is_null() {
             continue;
         }

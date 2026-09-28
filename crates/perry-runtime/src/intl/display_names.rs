@@ -148,11 +148,16 @@ pub(super) fn configure(obj: *mut ObjectHeader, options_arg: f64) {
         );
     }
 
-    install_bound_instance_function_from_handle(&obj_handle, "of", bound_of_thunk as *const u8, 1);
+    install_bound_instance_function_from_handle(
+        &obj_handle,
+        "of",
+        crate::fn_info!(bound_of_thunk, 1; with_declared(1)),
+        1,
+    );
     install_bound_instance_function_from_handle(
         &obj_handle,
         "resolvedOptions",
-        bound_resolved_options_thunk as *const u8,
+        crate::fn_info!(bound_resolved_options_thunk, 0; with_declared(0)),
         0,
     );
 }

@@ -364,8 +364,10 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
         perry_ext_net::js_ext_net_socket_emit_abort_error(socket);
         return;
     }
-    let listener =
-        perry_ffi::alloc_closure(agent_connection_abort_listener as perry_ffi::JsBody0, 2);
+    let listener = perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(agent_connection_abort_listener, 0),
+        2,
+    );
     if listener.is_null() {
         return;
     }

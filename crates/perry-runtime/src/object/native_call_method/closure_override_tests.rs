@@ -20,15 +20,14 @@ extern "C" fn own_method(
 fn check_own_method_dispatch(proxy: bool) {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = RuntimeHandleScope::new();
-    closure::js_register_closure_arity(original as *const u8, 1);
-    closure::js_register_closure_arity(own_method as *const u8, 1);
+
     for method in ["bind", "call", "apply", "toString"] {
         let receiver = scope.root_nanbox_f64(value::js_nanbox_pointer(closure::js_closure_alloc(
-            original as *const u8,
+            crate::fn_info!(original, 1; with_declared(1)),
             0,
         ) as i64));
         let implementation = scope.root_nanbox_f64(value::js_nanbox_pointer(
-            closure::js_closure_alloc(own_method as *const u8, 0) as i64,
+            closure::js_closure_alloc(crate::fn_info!(own_method, 1; with_declared(1)), 0) as i64,
         ));
         if proxy {
             let handler = scope.root_nanbox_f64(value::js_nanbox_pointer(

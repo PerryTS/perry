@@ -30,23 +30,28 @@ pub(super) fn install_string_proto_methods(
         return false;
     }
     use super::global_this::install_proto_method as ipm;
-    ipm(proto_obj, "at", string_proto_at_thunk as *const u8, 1);
+    ipm(
+        proto_obj,
+        "at",
+        crate::fn_info!(string_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
     ipm(
         proto_obj,
         "charAt",
-        string_proto_char_at_thunk as *const u8,
+        crate::fn_info!(string_proto_char_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "charCodeAt",
-        string_proto_char_code_at_thunk as *const u8,
+        crate::fn_info!(string_proto_char_code_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     ipm(
         proto_obj,
         "codePointAt",
-        string_proto_code_point_at_thunk as *const u8,
+        crate::fn_info!(string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         1,
     );
     install_string_iterator_symbol(proto_obj);
@@ -119,12 +124,24 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             "match" | "search" | "matchAll" | "replace" | "replaceAll" | "split"
         ) {
             let fp = match name {
-                "match" => string_proto_match_thunk as *const u8,
-                "matchAll" => string_proto_match_all_thunk as *const u8,
-                "replace" => string_proto_replace_thunk as *const u8,
-                "replaceAll" => string_proto_replace_all_thunk as *const u8,
-                "split" => string_proto_split_thunk as *const u8,
-                _ => string_proto_search_thunk as *const u8,
+                "match" => {
+                    crate::fn_info!(string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "matchAll" => {
+                    crate::fn_info!(string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "replace" => {
+                    crate::fn_info!(string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "replaceAll" => {
+                    crate::fn_info!(string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                "split" => {
+                    crate::fn_info!(string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                }
+                _ => {
+                    crate::fn_info!(string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                }
             };
             super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
             continue;
@@ -134,9 +151,8 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         super::global_this::install_proto_method_rest_with_length(
             proto_obj,
             name,
-            string_proto_generic_thunk as *const u8,
+            crate::fn_info!(string_proto_generic_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             spec_length,
-            0,
         );
     }
     // Annex B: `trimLeft`/`trimRight` are the SAME function objects as
@@ -206,12 +222,11 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = string_proto_symbol_iterator_thunk as *const u8;
+    let func_ptr = crate::fn_info!(string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
     super::native_module::set_bound_native_closure_name(closure, "[Symbol.iterator]");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
     super::native_module::set_builtin_closure_non_constructable(closure as usize);

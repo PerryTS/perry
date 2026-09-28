@@ -226,12 +226,20 @@ pub(crate) fn process_permission_value() -> Option<f64> {
     module_set_field(
         obj,
         "has",
-        module_function2("has", process_permission_has_thunk, 2),
+        module_function2(
+            "has",
+            crate::fn_info!(process_permission_has_thunk, 2; with_declared(2), with_length(2)),
+            2,
+        ),
     );
     module_set_field(
         obj,
         "drop",
-        module_function2("drop", process_permission_drop_thunk, 2),
+        module_function2(
+            "drop",
+            crate::fn_info!(process_permission_drop_thunk, 2; with_declared(2), with_length(2)),
+            2,
+        ),
     );
     let value = module_object_value(obj);
     CACHED_PERMISSION.with(|c| c.set(value));

@@ -299,9 +299,6 @@ pub(crate) fn module_set_field_rooted(
     handle.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| module_set_field(obj, name, value));
 }
 
-pub(crate) type ModuleFunction1 = crate::closure::body_call::js_body_fn_ty!(a);
-pub(crate) type ModuleFunction2 = crate::closure::body_call::js_body_fn_ty!(a, a);
-
 #[derive(Clone, Copy)]
 pub(crate) struct ModuleLoaderHookEntry {
     pub(crate) id: u64,
@@ -350,11 +347,14 @@ thread_local! {
         const { Cell::new(std::ptr::null()) };
 }
 
-pub(crate) fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) -> f64 {
-    let func_ptr = thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 1);
-    crate::closure::js_register_closure_length(func_ptr, length);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+/// A 1-parameter module function; `info` is its body's
+/// (`fn_info!(thunk, 1; with_declared(1), with_length(length))`).
+pub(crate) fn module_function1(
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    length: u32,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure);
     closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
@@ -368,11 +368,14 @@ pub(crate) fn module_function1(name: &str, thunk: ModuleFunction1, length: u32) 
     })
 }
 
-pub(crate) fn module_function2(name: &str, thunk: ModuleFunction2, length: u32) -> f64 {
-    let func_ptr = thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 2);
-    crate::closure::js_register_closure_length(func_ptr, length);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+/// A 2-parameter module function; `info` is its body's
+/// (`fn_info!(thunk, 2; with_declared(2), with_length(length))`).
+pub(crate) fn module_function2(
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    length: u32,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, length);
     crate::value::js_nanbox_pointer(closure as i64)

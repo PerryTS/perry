@@ -78,7 +78,7 @@ fn non_constructor_kind_is_keyed_by_body_not_blanket() {
     // Register the kinds, then show a closure over a different body and a
     // plain object are still not answered as non-constructors by it.
     let _ = make_resolving_functions(js_promise_new());
-    let other = crate::closure::js_closure_alloc(unrelated_native_body as *const u8, 0);
+    let other = crate::closure::js_closure_alloc(crate::fn_info!(unrelated_native_body, 1), 0);
     assert!(!crate::object::builtin_closure_is_non_constructable(
         other as usize
     ));

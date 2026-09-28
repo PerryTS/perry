@@ -46,17 +46,26 @@ pub extern "C-unwind" fn js_bun_glob_new(pattern: f64) -> f64 {
     set_field(
         obj,
         b"scan",
-        bound_method1(bun_glob_scan, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_scan, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     set_field(
         obj,
         b"scanSync",
-        bound_method1(bun_glob_scan_sync, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_scan_sync, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     set_field(
         obj,
         b"match",
-        bound_method1(bun_glob_match, pattern.get_nanbox_f64()),
+        bound_method(
+            crate::fn_info!(bun_glob_match, 1; with_declared(1)),
+            pattern.get_nanbox_f64(),
+        ),
     );
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }

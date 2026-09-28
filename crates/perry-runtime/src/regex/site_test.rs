@@ -669,7 +669,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             object,
             string("test"),
-            closure_with_arity(patched_test as *const u8, 1),
+            closure(crate::fn_info!(patched_test, 1; with_declared(1))),
         );
         crate::value::js_nanbox_pointer(object as i64)
     }
@@ -685,13 +685,8 @@ mod tests {
         exact_factory(std::ptr::null(), this)
     }
 
-    fn closure(function: *const u8) -> f64 {
-        closure_with_arity(function, 0)
-    }
-
-    fn closure_with_arity(function: *const u8, arity: usize) -> f64 {
-        crate::closure::js_register_closure_arity(function, arity as u32);
-        crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(function, 0) as i64)
+    fn closure(info: *const crate::closure::JsFunctionInfo) -> f64 {
+        crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(info, 0) as i64)
     }
 
     fn dispatch_test(site: i64, receiver: f64, input: &str) -> f64 {
@@ -710,7 +705,7 @@ mod tests {
         test_reset();
         ensure_regexp_builtins();
         let site = key(&FACTORY_CALL);
-        let callee = closure(exact_factory as *const u8);
+        let callee = closure(crate::fn_info!(exact_factory, 0; with_declared(0)));
         let first = js_regexp_site_factory_call_value(site, callee);
         let second = js_regexp_site_factory_call_value(site, callee);
         assert_eq!(
@@ -720,7 +715,7 @@ mod tests {
         );
         assert_eq!(TEST_NO_ALLOC.with(std::cell::Cell::get), 1);
 
-        let replacement = closure(replacement_factory as *const u8);
+        let replacement = closure(crate::fn_info!(replacement_factory, 0; with_declared(0)));
         let receiver = js_regexp_site_factory_call_value(site, replacement);
         let result = dispatch_test(site, receiver, "does not contain the pattern");
         assert_eq!(result.to_bits(), crate::value::TAG_TRUE);
@@ -739,7 +734,7 @@ mod tests {
         ensure_regexp_builtins();
         NESTED_WRAPPER_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         let site = key(&NESTED_FACTORY_CALL);
-        let wrapper = closure(nested_factory_wrapper as *const u8);
+        let wrapper = closure(crate::fn_info!(nested_factory_wrapper, 0; with_declared(0)));
         let scope = crate::gc::RuntimeHandleScope::new();
         let first = scope.root_nanbox_f64(js_regexp_site_factory_call_value(site, wrapper));
         let second = js_regexp_site_factory_call_value(site, wrapper);
@@ -786,7 +781,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             namespace,
             name,
-            closure(exact_factory as *const u8),
+            closure(crate::fn_info!(exact_factory, 0; with_declared(0))),
         );
         let namespace_object = namespace;
         let namespace = crate::value::js_nanbox_pointer(namespace_object as i64);
@@ -803,7 +798,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             namespace_object,
             name,
-            closure(replacement_factory as *const u8),
+            closure(crate::fn_info!(replacement_factory, 0; with_declared(0))),
         );
         let replacement = unsafe { js_regexp_site_factory_call_method(site, namespace, member) };
         assert_eq!(
@@ -843,7 +838,7 @@ mod tests {
         crate::object::js_object_set_field_by_name(
             proto,
             test_key,
-            closure_with_arity(patched_test as *const u8, 1),
+            closure(crate::fn_info!(patched_test, 1; with_declared(1))),
         );
 
         let receiver = js_regexp_site_test_new(string("x"), string("g"), site);

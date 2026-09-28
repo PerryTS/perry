@@ -912,6 +912,28 @@ pub(crate) extern "C" fn typed_array_of_thunk(
     typed_array_create_from_values(this, kind_opt, arr)
 }
 
+/// The body info and spec `.length` of the `Promise.<name>` static function
+/// (the same table as [`promise_static_function_spec`]).
+pub(crate) fn promise_static_function_info(
+    name: &str,
+) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
+    use crate::fn_info;
+    Some(match name {
+        "resolve" => (fn_info!(promise_resolve_static, 1; with_declared(1)), 1),
+        "reject" => (fn_info!(promise_reject_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(promise_all_static, 1; with_declared(1)), 1),
+        "race" => (fn_info!(promise_race_static, 1; with_declared(1)), 1),
+        "allSettled" => (fn_info!(promise_all_settled_static, 1; with_declared(1)), 1),
+        "any" => (fn_info!(promise_any_static, 1; with_declared(1)), 1),
+        "withResolvers" => (
+            fn_info!(promise_with_resolvers_static, 0; with_declared(0)),
+            0,
+        ),
+        "try" => (fn_info!(promise_try_static, 2; with_rest(1)), 1),
+        _ => return None,
+    })
+}
+
 pub(crate) fn promise_static_function_spec(name: &str) -> Option<(*const u8, u32, u32, bool)> {
     // All eight statics use the spec-aware `*_static` thunks, which honor the
     // `this` constructor via `NewPromiseCapability(this)` — so a `Promise`

@@ -4,7 +4,7 @@ use super::*;
 use std::cell::RefCell;
 
 crate::perry_thread_local! {
-    /// Singleton cache keyed by `func_ptr` for non-capturing closures.
+    /// Singleton cache keyed by body info for non-capturing closures.
     /// See `js_closure_alloc_singleton` and `scan_singleton_closure_roots_mut`.
     /// Pointer-keyed; uses `PtrHasher` (Fibonacci-multiplicative) to
     /// skip SipHash's per-byte cost — the function-pointer keys never
@@ -12,7 +12,7 @@ crate::perry_thread_local! {
     static SINGLETON_CLOSURES: RefCell<crate::fast_hash::PtrHashMap<usize, *mut ClosureHeader>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
-    /// Per-`func_ptr` small-LRU cache. Each value holds up to
+    /// Per-body small-LRU cache. Each value holds up to
     /// `MAX_CAPTURED_CLOSURE_SLOTS` (captures-bits, ClosureHeader)
     /// pairs. Multiple slots are critical for the parallel-instance
     /// async-await pattern (e.g. `Promise.all` of N async closures
@@ -219,8 +219,13 @@ mod captured_closure_cache_tests {
         }
         test_clear_singleton_closure_caches();
         let _guard = ClearCaches;
-        extern "C" fn literal() {}
-        let func = literal as *const u8;
+        extern "C" fn literal(_: *const ClosureHeader, _: crate::closure::JsThis) -> f64 {
+            0.0
+        }
+        static LITERAL: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+            literal as crate::codegen_abi::JsBody0<ClosureHeader>,
+        );
+        let func: *const crate::closure::JsFunctionInfo = &LITERAL;
         let key = func as usize;
         let root_count = || {
             let mut count = 0;
@@ -365,12 +370,30 @@ pub struct ClosureHeader {
     /// The function object's ShapeId (`closure::shape`): a
     /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
     pub shape_id: u32,
-    /// Function pointer (the actual compiled function).
-    pub func_ptr: *const u8,
+    /// The body's static [`JsFunctionInfo`](crate::closure::JsFunctionInfo):
+    /// its code address and every fact a caller needs about the body.
+    pub info: *const crate::closure::JsFunctionInfo,
     /// The function object's own-property bag (`closure::props`, D1): null
     /// until the first own property, then a traced, rewritten raw-pointer
     /// child edge (`gc::layout`'s `ClosureCaptures` arm).
     pub props: *mut crate::object::ObjectHeader,
+}
+
+impl ClosureHeader {
+    /// The body's code address (a sentinel for bound values), or null when
+    /// `self` is not a live function object with a body.
+    ///
+    /// The info word is dereferenced, so the cell is proven first
+    /// ([`get_valid_func_ptr`](crate::closure::get_valid_func_ptr)): callers
+    /// compare an arbitrary receiver's code against a known body, and the
+    /// word at this offset of any other heap cell is not an info.
+    ///
+    /// # Safety
+    /// `self` points into mapped memory (the proof reads its GC header).
+    #[inline(always)]
+    pub unsafe fn code(&self) -> *const u8 {
+        crate::closure::get_valid_func_ptr(self)
+    }
 }
 
 const _: () = {
@@ -381,8 +404,7 @@ const _: () = {
     #[cfg(target_pointer_width = "64")]
     {
         assert!(
-            std::mem::offset_of!(ClosureHeader, func_ptr)
-                == crate::codegen_abi::CLOSURE_FUNC_PTR_OFFSET
+            std::mem::offset_of!(ClosureHeader, info) == crate::codegen_abi::CLOSURE_INFO_OFFSET
         );
         assert!(
             std::mem::offset_of!(ClosureHeader, props) == crate::codegen_abi::CLOSURE_PROPS_OFFSET
@@ -448,14 +470,14 @@ fn closure_alloc_storage_no_collect(actual_count: usize) -> Option<*mut u8> {
 /// codegen and never reach this entry.
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_init(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
     let actual_count = real_capture_count(capture_count) as usize;
     if actual_count == 0 || captures_ptr.is_null() {
-        return js_closure_alloc(func_ptr, capture_count);
+        return js_closure_alloc(info, capture_count);
     }
     // The no-collect arm keeps `captures_ptr`'s VALUES valid raw: nothing on
     // the heap moved. The collecting fallback may have moved what those bits
@@ -463,11 +485,11 @@ pub extern "C" fn js_closure_alloc_init(
     // per-setter path's contract, kept by taking that path.
     // Resolved BEFORE the storage exists: minting a base shape touches only
     // the shape table, never the GC heap.
-    let shape_id = super::shape::birth_shape_for_body(func_ptr);
+    let shape_id = super::shape::birth_shape_for_body(info);
     let raw = match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => raw,
         None => {
-            let closure = js_closure_alloc(func_ptr, capture_count);
+            let closure = js_closure_alloc(info, capture_count);
             for i in 0..actual_count {
                 js_closure_set_capture_bits(closure, i as u32, unsafe { *captures_ptr.add(i) });
             }
@@ -478,7 +500,7 @@ pub extern "C" fn js_closure_alloc_init(
     unsafe {
         (*ptr).capture_count = capture_count;
         (*ptr).shape_id = shape_id;
-        (*ptr).func_ptr = func_ptr;
+        (*ptr).info = info;
         // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
         (*ptr).props = std::ptr::null_mut();
         let slots = closure_capture_slots_mut(ptr);
@@ -606,10 +628,13 @@ pub(crate) unsafe fn gc_capture_slot_range(
 /// (`real_capture_count`).
 /// Returns pointer to ClosureHeader
 #[no_mangle]
-pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *mut ClosureHeader {
+pub extern "C" fn js_closure_alloc(
+    info: *const crate::closure::JsFunctionInfo,
+    capture_count: u32,
+) -> *mut ClosureHeader {
     crate::promise::bump(&CLOSURE_ALLOC_COUNT);
     let actual_count = real_capture_count(capture_count) as usize;
-    let shape_id = super::shape::birth_shape_for_body(func_ptr);
+    let shape_id = super::shape::birth_shape_for_body(info);
 
     let raw = closure_alloc_storage(actual_count);
     let ptr = raw as *mut ClosureHeader;
@@ -617,7 +642,7 @@ pub extern "C" fn js_closure_alloc(func_ptr: *const u8, capture_count: u32) -> *
     unsafe {
         (*ptr).capture_count = capture_count; // Preserve flag in high bit
         (*ptr).shape_id = shape_id;
-        (*ptr).func_ptr = func_ptr;
+        (*ptr).info = info;
         // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
         (*ptr).props = std::ptr::null_mut();
         // #7154: a fresh closure's capture slots are raw recycled arena bytes.
@@ -645,7 +670,7 @@ pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Singleton-cached closure allocation for non-capturing closures and FuncRef
-/// wrappers. The same `func_ptr` always yields the SAME ClosureHeader, so a
+/// wrappers. The same body info always yields the SAME ClosureHeader, so a
 /// hot loop like `arr.filter(x => x.kind === 'foo')` doesn't allocate (and
 /// trigger GC against) a fresh closure on every iteration.
 ///
@@ -659,27 +684,30 @@ pub static CLOSURE_CAP_SINGLETON_MISS: std::sync::atomic::AtomicU64 =
 /// to allocating fresh. The closure is GC-rooted by the singleton table's
 /// mutable scanner so it stays live across collections.
 #[no_mangle]
-pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut ClosureHeader {
+pub extern "C" fn js_closure_alloc_singleton(
+    info: *const crate::closure::JsFunctionInfo,
+) -> *mut ClosureHeader {
     // Fast path: already cached. Drop the borrow before any potential
     // alloc so allocation/GC can re-enter SINGLETON_CLOSURES if needed.
-    if let Some(cached) = SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
-    {
+    if let Some(cached) = SINGLETON_CLOSURES.with(|s| s.borrow().get(&(info as usize)).copied()) {
         return cached;
     }
-    let allocated = js_closure_alloc(func_ptr, 0);
+    let allocated = js_closure_alloc(info, 0);
     SINGLETON_CLOSURES.with(|s| {
-        s.borrow_mut().insert(func_ptr as usize, allocated);
+        s.borrow_mut().insert(info as usize, allocated);
     });
     crate::gc::runtime_write_barrier_root_heap_word(allocated as u64);
     allocated
 }
 
 /// The no-capture singleton `js_closure_alloc_singleton` already minted for
-/// `func_ptr`, without minting one. Lets a caller that decorates the singleton
+/// `info`, without minting one. Lets a caller that decorates the singleton
 /// (name, length) do so once rather than on every lookup. The table's slot is
 /// GC-rewritten, so a value read here is current until the next allocation.
-pub(crate) fn singleton_closure_if_cached(func_ptr: *const u8) -> Option<*mut ClosureHeader> {
-    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
+pub(crate) fn singleton_closure_if_cached(
+    info: *const crate::closure::JsFunctionInfo,
+) -> Option<*mut ClosureHeader> {
+    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(info as usize)).copied())
 }
 
 /// Mutable GC scanner for singleton closure caches.
@@ -725,21 +753,24 @@ pub(crate) fn test_clear_singleton_closure_caches() {
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_singleton_closure_cache(func_ptr: *const u8, closure: *mut ClosureHeader) {
+pub(crate) fn test_seed_singleton_closure_cache(
+    info: *const crate::closure::JsFunctionInfo,
+    closure: *mut ClosureHeader,
+) {
     SINGLETON_CLOSURES.with(|s| {
-        s.borrow_mut().insert(func_ptr as usize, closure);
+        s.borrow_mut().insert(info as usize, closure);
     });
 }
 
 #[cfg(test)]
 pub(crate) fn test_seed_captured_singleton_closure_cache(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     capture_key: Vec<u64>,
     closure: *mut ClosureHeader,
 ) {
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         s.borrow_mut()
-            .entry(func_ptr as usize)
+            .entry(info as usize)
             .or_insert_with(CapturedClosureCache::new)
             .insert(capture_fingerprint(&capture_key), capture_key, closure);
     });
@@ -747,18 +778,18 @@ pub(crate) fn test_seed_captured_singleton_closure_cache(
 
 #[cfg(test)]
 pub(crate) fn test_singleton_closure_cache_entry(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
 ) -> Option<*mut ClosureHeader> {
-    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
+    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(info as usize)).copied())
 }
 
 #[cfg(test)]
 pub(crate) fn test_captured_singleton_closure_cache_entries(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
 ) -> Vec<(Vec<u64>, *mut ClosureHeader)> {
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         s.borrow()
-            .get(&(func_ptr as usize))
+            .get(&(info as usize))
             .map(|cache| {
                 cache
                     .entries
@@ -792,11 +823,11 @@ const _: () = assert!(
     "hint_indices_plus_one stores an entry index plus one in a u8"
 );
 
-/// Per-`func_ptr` cache miss-streak counter for the adaptive bypass.
+/// Per-body cache miss-streak counter for the adaptive bypass.
 /// Closures whose captures change every call (per-call boxes for
 /// `__step` / `__gen_state`, etc.) miss 100% of the time on the
 /// captures-tuple cache; after `CAPTURED_MISS_STREAK_DISABLE` consecutive
-/// misses we mark the `func_ptr` as "cache-disabled" and route it to a
+/// misses we mark the body as "cache-disabled" and route it to a
 /// direct `js_closure_alloc + memcpy` with no HashMap touch, no Vec scan,
 /// no Vec::to_vec capture-tuple allocation. Disabling drops the cache and
 /// its roots; bypass remains permanent for this literal. Hits before the
@@ -809,7 +840,7 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-/// Per-`func_ptr` bounded LRU cache for closures with captures. Exact capture
+/// Per-body bounded LRU cache for closures with captures. Exact capture
 /// bits select a cached closure; misses allocate a fresh closure. After a
 /// sustained miss streak, drop the cache and bypass it for this literal.
 ///
@@ -817,7 +848,7 @@ crate::perry_thread_local! {
 /// matching the layout `js_closure_set_capture_f64` writes.
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_with_captures_singleton(
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     capture_count: u32,
     captures_ptr: *const u64,
 ) -> *mut ClosureHeader {
@@ -829,13 +860,13 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     };
     let fingerprint = capture_fingerprint(captures_slice);
 
-    // Adaptive bypass: if this func_ptr has missed the cache N times in
+    // Adaptive bypass: if this body has missed the cache N times in
     // a row, skip the cache entirely. Async-step closures (`__step` /
     // `next` / `throw` / `__then_v` / `__then_e`) all capture a fresh
     // box pointer per invocation so they miss 100% of the time; the
     // bypass turns cache-lookup overhead into a direct allocation + memcpy.
     let streak =
-        CAPTURED_MISS_STREAK.with(|m| m.borrow().get(&(func_ptr as usize)).copied().unwrap_or(0));
+        CAPTURED_MISS_STREAK.with(|m| m.borrow().get(&(info as usize)).copied().unwrap_or(0));
     if streak == CAPTURED_DISABLED_SENTINEL {
         crate::promise::bump(&CLOSURE_CAP_SINGLETON_MISS);
         let capture_scope = crate::gc::RuntimeHandleScope::new();
@@ -843,7 +874,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
             .iter()
             .map(|bits| capture_scope.root_heap_word_u64(*bits))
             .collect();
-        let allocated = js_closure_alloc(func_ptr, capture_count);
+        let allocated = js_closure_alloc(info, capture_count);
         if n > 0 && !captures_ptr.is_null() {
             let rewritten_captures: Vec<u64> = capture_handles
                 .iter()
@@ -866,14 +897,14 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     // eviction preserves the same least-recently-used policy.
     if let Some(cached) = SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
-        s.get_mut(&(func_ptr as usize))
+        s.get_mut(&(info as usize))
             .and_then(|cache| cache.lookup(fingerprint, captures_slice))
     }) {
         crate::promise::bump(&CLOSURE_CAP_SINGLETON_HIT);
         // Cache hit — reset the streak so a workload that briefly
         // thrashed then settled into stable captures gets caching back.
         CAPTURED_MISS_STREAK.with(|m| {
-            m.borrow_mut().insert(func_ptr as usize, 0);
+            m.borrow_mut().insert(info as usize, 0);
         });
         return cached;
     }
@@ -886,7 +917,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         .iter()
         .map(|bits| capture_scope.root_heap_word_u64(*bits))
         .collect();
-    let allocated = js_closure_alloc(func_ptr, capture_count);
+    let allocated = js_closure_alloc(info, capture_count);
     let rewritten_captures: Vec<u64> = capture_handles
         .iter()
         .map(|handle| handle.get_heap_word_u64())
@@ -905,7 +936,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
-        s.entry(func_ptr as usize)
+        s.entry(info as usize)
             .or_insert_with(CapturedClosureCache::new)
             .insert(
                 capture_fingerprint(&rewritten_captures),
@@ -917,7 +948,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     // hit the threshold.
     CAPTURED_MISS_STREAK.with(|m| {
         let mut m = m.borrow_mut();
-        let entry = m.entry(func_ptr as usize).or_insert(0);
+        let entry = m.entry(info as usize).or_insert(0);
         if *entry < CAPTURED_DISABLED_SENTINEL - 1 {
             *entry += 1;
             if *entry >= CAPTURED_MISS_STREAK_DISABLE {
@@ -926,7 +957,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
                 // hints, and removes every GC root owned by this literal.
                 // The returned closure remains owned by the caller.
                 SINGLETON_CAPTURED_CLOSURES.with(|s| {
-                    s.borrow_mut().remove(&(func_ptr as usize));
+                    s.borrow_mut().remove(&(info as usize));
                 });
             }
         }
@@ -937,7 +968,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
 /// Get the function pointer from a closure
 #[no_mangle]
 pub extern "C" fn js_closure_get_func(closure: *const ClosureHeader) -> *const u8 {
-    unsafe { (*closure).func_ptr }
+    crate::closure::get_valid_func_ptr(closure)
 }
 
 /// Get a captured value (as f64) by index

@@ -25,9 +25,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::closure::{
     js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
-    js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_register_closure_arity,
-    ClosureHeader,
+    js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader, JsFunctionInfo,
 };
+use crate::codegen_abi::{JsBody1, JsBody2, JsBody3};
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
     PropertyAttrs,
@@ -41,33 +41,11 @@ pub use diagnostics::*;
 pub(crate) mod diagnostics_tail;
 pub(crate) use diagnostics_tail::*;
 
-/// One entry per named export of one submodule.
+/// One entry per named export of one submodule: its name and its thunk's
+/// info (the declared arity, or the rest parameter of a variadic export).
 struct ExportSpec {
     name: &'static str,
-    thunk: ExportThunk,
-}
-
-enum ExportThunk {
-    Fn1(crate::closure::body_call::js_body_fn_ty!(a)),
-    Fn2(crate::closure::body_call::js_body_fn_ty!(a, a)),
-    Fn3(crate::closure::body_call::js_body_fn_ty!(a, a, a)),
-}
-
-impl ExportThunk {
-    fn as_ptr(&self) -> *const u8 {
-        match self {
-            ExportThunk::Fn1(f) => *f as *const u8,
-            ExportThunk::Fn2(f) => *f as *const u8,
-            ExportThunk::Fn3(f) => *f as *const u8,
-        }
-    }
-    fn arity(&self) -> u32 {
-        match self {
-            ExportThunk::Fn1(_) => 1,
-            ExportThunk::Fn2(_) => 2,
-            ExportThunk::Fn3(_) => 3,
-        }
-    }
+    info: JsFunctionInfo,
 }
 
 /// One entry per submodule. `exports` lists every named export the
@@ -212,7 +190,8 @@ static SUBMOD_VM: SubmoduleSpec = SubmoduleSpec {
     key: "vm",
     exports: &[ExportSpec {
         name: "createContext",
-        thunk: ExportThunk::Fn2(thunk_vm_create_context),
+        info: JsFunctionInfo::of(thunk_vm_create_context as JsBody2<ClosureHeader>)
+            .with_declared(2),
     }],
 };
 
@@ -223,27 +202,31 @@ static SUBMOD_TIMERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "setTimeout",
-            thunk: ExportThunk::Fn3(timers_ns_set_timeout),
+            info: JsFunctionInfo::of(timers_ns_set_timeout as JsBody3<ClosureHeader>).with_rest(2),
         },
         ExportSpec {
             name: "setInterval",
-            thunk: ExportThunk::Fn3(timers_ns_set_interval),
+            info: JsFunctionInfo::of(timers_ns_set_interval as JsBody3<ClosureHeader>).with_rest(2),
         },
         ExportSpec {
             name: "setImmediate",
-            thunk: ExportThunk::Fn2(timers_ns_set_immediate),
+            info: JsFunctionInfo::of(timers_ns_set_immediate as JsBody2<ClosureHeader>)
+                .with_rest(1),
         },
         ExportSpec {
             name: "clearTimeout",
-            thunk: ExportThunk::Fn1(timers_ns_clear_timeout),
+            info: JsFunctionInfo::of(timers_ns_clear_timeout as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "clearInterval",
-            thunk: ExportThunk::Fn1(timers_ns_clear_interval),
+            info: JsFunctionInfo::of(timers_ns_clear_interval as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "clearImmediate",
-            thunk: ExportThunk::Fn1(timers_ns_clear_immediate),
+            info: JsFunctionInfo::of(timers_ns_clear_immediate as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -253,19 +236,23 @@ static SUBMOD_TIMERS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "setTimeout",
-            thunk: ExportThunk::Fn3(timers_promises_set_timeout),
+            info: JsFunctionInfo::of(timers_promises_set_timeout as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "setImmediate",
-            thunk: ExportThunk::Fn2(timers_promises_set_immediate),
+            info: JsFunctionInfo::of(timers_promises_set_immediate as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "setInterval",
-            thunk: ExportThunk::Fn3(timers_promises_set_interval),
+            info: JsFunctionInfo::of(timers_promises_set_interval as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "scheduler",
-            thunk: ExportThunk::Fn1(timers_promises_scheduler),
+            info: JsFunctionInfo::of(timers_promises_scheduler as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -275,135 +262,168 @@ static SUBMOD_FS_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "readFile",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_readFile),
+            info: JsFunctionInfo::of(thunk_fs_promises_readFile as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "open",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_open),
+            info: JsFunctionInfo::of(thunk_fs_promises_open as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "writeFile",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_writeFile),
+            info: JsFunctionInfo::of(thunk_fs_promises_writeFile as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "appendFile",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_appendFile),
+            info: JsFunctionInfo::of(thunk_fs_promises_appendFile as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "chmod",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_chmod),
+            info: JsFunctionInfo::of(thunk_fs_promises_chmod as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "chown",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_chown),
+            info: JsFunctionInfo::of(thunk_fs_promises_chown as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "lchown",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_lchown),
+            info: JsFunctionInfo::of(thunk_fs_promises_lchown as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "lchmod",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_lchmod),
+            info: JsFunctionInfo::of(thunk_fs_promises_lchmod as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "mkdir",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdir),
+            info: JsFunctionInfo::of(thunk_fs_promises_mkdir as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "readdir",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_readdir),
+            info: JsFunctionInfo::of(thunk_fs_promises_readdir as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "stat",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_stat),
+            info: JsFunctionInfo::of(thunk_fs_promises_stat as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "statfs",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_statfs),
+            info: JsFunctionInfo::of(thunk_fs_promises_statfs as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "lstat",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_lstat),
+            info: JsFunctionInfo::of(thunk_fs_promises_lstat as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "rm",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_rm),
+            info: JsFunctionInfo::of(thunk_fs_promises_rm as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "rmdir",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_rmdir),
+            info: JsFunctionInfo::of(thunk_fs_promises_rmdir as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "unlink",
-            thunk: ExportThunk::Fn1(thunk_fs_promises_unlink),
+            info: JsFunctionInfo::of(thunk_fs_promises_unlink as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "rename",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_rename),
+            info: JsFunctionInfo::of(thunk_fs_promises_rename as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "copyFile",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_copyFile),
+            info: JsFunctionInfo::of(thunk_fs_promises_copyFile as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "cp",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_cp),
+            info: JsFunctionInfo::of(thunk_fs_promises_cp as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "truncate",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_truncate),
+            info: JsFunctionInfo::of(thunk_fs_promises_truncate as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "utimes",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_utimes),
+            info: JsFunctionInfo::of(thunk_fs_promises_utimes as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "lutimes",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_lutimes),
+            info: JsFunctionInfo::of(thunk_fs_promises_lutimes as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "link",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_link),
+            info: JsFunctionInfo::of(thunk_fs_promises_link as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "symlink",
-            thunk: ExportThunk::Fn3(thunk_fs_promises_symlink),
+            info: JsFunctionInfo::of(thunk_fs_promises_symlink as JsBody3<ClosureHeader>)
+                .with_declared(3),
         },
         ExportSpec {
             name: "readlink",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_readlink),
+            info: JsFunctionInfo::of(thunk_fs_promises_readlink as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "realpath",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_realpath),
+            info: JsFunctionInfo::of(thunk_fs_promises_realpath as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "mkdtemp",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtemp),
+            info: JsFunctionInfo::of(thunk_fs_promises_mkdtemp as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "mkdtempDisposable",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_mkdtempDisposable),
+            info: JsFunctionInfo::of(thunk_fs_promises_mkdtempDisposable as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "opendir",
-            thunk: ExportThunk::Fn1(thunk_fs_promises_opendir),
+            info: JsFunctionInfo::of(thunk_fs_promises_opendir as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "glob",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_glob),
+            info: JsFunctionInfo::of(thunk_fs_promises_glob as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "watch",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_watch),
+            info: JsFunctionInfo::of(thunk_fs_promises_watch as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "access",
-            thunk: ExportThunk::Fn2(thunk_fs_promises_access),
+            info: JsFunctionInfo::of(thunk_fs_promises_access as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "constants",
-            thunk: ExportThunk::Fn1(thunk_fs_promises_constants),
+            info: JsFunctionInfo::of(thunk_fs_promises_constants as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -413,15 +433,18 @@ static SUBMOD_READLINE_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "createInterface",
-            thunk: ExportThunk::Fn1(thunk_readline_createInterface),
+            info: JsFunctionInfo::of(thunk_readline_createInterface as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "Interface",
-            thunk: ExportThunk::Fn1(thunk_readline_Interface),
+            info: JsFunctionInfo::of(thunk_readline_Interface as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "Readline",
-            thunk: ExportThunk::Fn2(thunk_readline_Readline),
+            info: JsFunctionInfo::of(thunk_readline_Readline as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
     ],
 };
@@ -431,11 +454,12 @@ static SUBMOD_STREAM_PROMISES: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "pipeline",
-            thunk: ExportThunk::Fn3(thunk_streamP_pipeline),
+            info: JsFunctionInfo::of(thunk_streamP_pipeline as JsBody3<ClosureHeader>).with_rest(2),
         },
         ExportSpec {
             name: "finished",
-            thunk: ExportThunk::Fn2(thunk_streamP_finished),
+            info: JsFunctionInfo::of(thunk_streamP_finished as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
     ],
 };
@@ -445,27 +469,33 @@ static SUBMOD_STREAM_CONSUMERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "text",
-            thunk: ExportThunk::Fn1(thunk_consumers_text),
+            info: JsFunctionInfo::of(thunk_consumers_text as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "json",
-            thunk: ExportThunk::Fn1(thunk_consumers_json),
+            info: JsFunctionInfo::of(thunk_consumers_json as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "buffer",
-            thunk: ExportThunk::Fn1(thunk_consumers_buffer),
+            info: JsFunctionInfo::of(thunk_consumers_buffer as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "arrayBuffer",
-            thunk: ExportThunk::Fn1(thunk_consumers_arrayBuffer),
+            info: JsFunctionInfo::of(thunk_consumers_arrayBuffer as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "bytes",
-            thunk: ExportThunk::Fn1(thunk_consumers_bytes),
+            info: JsFunctionInfo::of(thunk_consumers_bytes as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "blob",
-            thunk: ExportThunk::Fn1(thunk_consumers_blob),
+            info: JsFunctionInfo::of(thunk_consumers_blob as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -475,71 +505,88 @@ static SUBMOD_STREAM_WEB: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "ReadableStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ReadableStreamDefaultReader",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ReadableStreamBYOBReader",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ReadableStreamDefaultController",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ReadableByteStreamController",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ReadableStreamBYOBRequest",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "WritableStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "WritableStreamDefaultWriter",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "WritableStreamDefaultController",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "TransformStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "TransformStreamDefaultController",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "ByteLengthQueuingStrategy",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "CountQueuingStrategy",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "TextEncoderStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "TextDecoderStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "CompressionStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "DecompressionStream",
-            thunk: ExportThunk::Fn1(thunk_stream_web_ctor),
+            info: JsFunctionInfo::of(thunk_stream_web_ctor as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -549,19 +596,20 @@ static SUBMOD_HONO_JSX_SERVER: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "jsx",
-            thunk: ExportThunk::Fn2(thunk_hono_jsx),
+            info: JsFunctionInfo::of(thunk_hono_jsx as JsBody2<ClosureHeader>).with_declared(2),
         },
         ExportSpec {
             name: "jsxs",
-            thunk: ExportThunk::Fn2(thunk_hono_jsxs),
+            info: JsFunctionInfo::of(thunk_hono_jsxs as JsBody2<ClosureHeader>).with_declared(2),
         },
         ExportSpec {
             name: "Fragment",
-            thunk: ExportThunk::Fn1(thunk_hono_fragment),
+            info: JsFunctionInfo::of(thunk_hono_fragment as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "JSXNode",
-            thunk: ExportThunk::Fn1(thunk_hono_jsxnode),
+            info: JsFunctionInfo::of(thunk_hono_jsxnode as JsBody1<ClosureHeader>).with_declared(1),
         },
     ],
 };
@@ -571,11 +619,15 @@ static SUBMOD_HONO_JSX_STREAMING: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "renderToReadableStream",
-            thunk: ExportThunk::Fn2(thunk_hono_render_to_readable_stream),
+            info: JsFunctionInfo::of(
+                thunk_hono_render_to_readable_stream as JsBody2<ClosureHeader>,
+            )
+            .with_declared(2),
         },
         ExportSpec {
             name: "Suspense",
-            thunk: ExportThunk::Fn1(thunk_hono_suspense),
+            info: JsFunctionInfo::of(thunk_hono_suspense as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -585,31 +637,34 @@ static SUBMOD_SYS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "format",
-            thunk: ExportThunk::Fn1(thunk_sys_format),
+            info: JsFunctionInfo::of(thunk_sys_format as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "inspect",
-            thunk: ExportThunk::Fn1(thunk_sys_inspect),
+            info: JsFunctionInfo::of(thunk_sys_inspect as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "debuglog",
-            thunk: ExportThunk::Fn1(thunk_sys_debuglog),
+            info: JsFunctionInfo::of(thunk_sys_debuglog as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "deprecate",
-            thunk: ExportThunk::Fn1(thunk_sys_deprecate),
+            info: JsFunctionInfo::of(thunk_sys_deprecate as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "promisify",
-            thunk: ExportThunk::Fn1(thunk_sys_promisify),
+            info: JsFunctionInfo::of(thunk_sys_promisify as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "callbackify",
-            thunk: ExportThunk::Fn1(thunk_sys_callbackify),
+            info: JsFunctionInfo::of(thunk_sys_callbackify as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "isArray",
-            thunk: ExportThunk::Fn1(thunk_sys_isArray),
+            info: JsFunctionInfo::of(thunk_sys_isArray as JsBody1<ClosureHeader>).with_declared(1),
         },
     ],
 };
@@ -619,35 +674,41 @@ static SUBMOD_DIAGNOSTICS_CHANNEL: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "tracingChannel",
-            thunk: ExportThunk::Fn1(thunk_diag_tracing_channel),
+            info: JsFunctionInfo::of(thunk_diag_tracing_channel as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "boundedChannel",
-            thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
+            info: JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "channel",
-            thunk: ExportThunk::Fn1(thunk_diag_channel),
+            info: JsFunctionInfo::of(thunk_diag_channel as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "subscribe",
-            thunk: ExportThunk::Fn2(thunk_diag_subscribe),
+            info: JsFunctionInfo::of(thunk_diag_subscribe as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "unsubscribe",
-            thunk: ExportThunk::Fn2(thunk_diag_unsubscribe),
+            info: JsFunctionInfo::of(thunk_diag_unsubscribe as JsBody2<ClosureHeader>)
+                .with_declared(2),
         },
         ExportSpec {
             name: "hasSubscribers",
-            thunk: ExportThunk::Fn1(thunk_diag_has_subscribers),
+            info: JsFunctionInfo::of(thunk_diag_has_subscribers as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "Channel",
-            thunk: ExportThunk::Fn1(thunk_diag_noop),
+            info: JsFunctionInfo::of(thunk_diag_noop as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "BoundedChannel",
-            thunk: ExportThunk::Fn1(thunk_diag_bounded_channel),
+            info: JsFunctionInfo::of(thunk_diag_bounded_channel as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -657,11 +718,15 @@ static SUBMOD_TRACE_EVENTS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "createTracing",
-            thunk: ExportThunk::Fn1(thunk_trace_events_createTracing),
+            info: JsFunctionInfo::of(thunk_trace_events_createTracing as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "getEnabledCategories",
-            thunk: ExportThunk::Fn1(thunk_trace_events_getEnabledCategories),
+            info: JsFunctionInfo::of(
+                thunk_trace_events_getEnabledCategories as JsBody1<ClosureHeader>,
+            )
+            .with_rest(0),
         },
     ],
 };
@@ -672,64 +737,66 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "default",
-            thunk: ExportThunk::Fn3(thunk_test),
+            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "test",
-            thunk: ExportThunk::Fn3(thunk_test),
+            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "skip",
-            thunk: ExportThunk::Fn3(thunk_test_skip),
+            info: JsFunctionInfo::of(thunk_test_skip as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "todo",
-            thunk: ExportThunk::Fn3(thunk_test_todo),
+            info: JsFunctionInfo::of(thunk_test_todo as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "only",
-            thunk: ExportThunk::Fn3(thunk_test_only),
+            info: JsFunctionInfo::of(thunk_test_only as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "suite",
-            thunk: ExportThunk::Fn3(thunk_test_suite),
+            info: JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "describe",
-            thunk: ExportThunk::Fn3(thunk_test_suite),
+            info: JsFunctionInfo::of(thunk_test_suite as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "it",
-            thunk: ExportThunk::Fn3(thunk_test),
+            info: JsFunctionInfo::of(thunk_test as JsBody3<ClosureHeader>).with_declared(3),
         },
         ExportSpec {
             name: "before",
-            thunk: ExportThunk::Fn1(thunk_test_before),
+            info: JsFunctionInfo::of(thunk_test_before as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "after",
-            thunk: ExportThunk::Fn1(thunk_test_after),
+            info: JsFunctionInfo::of(thunk_test_after as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "beforeEach",
-            thunk: ExportThunk::Fn1(thunk_test_before_each),
+            info: JsFunctionInfo::of(thunk_test_before_each as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "afterEach",
-            thunk: ExportThunk::Fn1(thunk_test_after_each),
+            info: JsFunctionInfo::of(thunk_test_after_each as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "run",
-            thunk: ExportThunk::Fn1(thunk_test_run),
+            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
         },
         // Object-valued exports are handled by `special_export_value`.
         ExportSpec {
             name: "mock",
-            thunk: ExportThunk::Fn1(thunk_test_run),
+            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "snapshot",
-            thunk: ExportThunk::Fn1(thunk_test_run),
+            info: JsFunctionInfo::of(thunk_test_run as JsBody1<ClosureHeader>).with_declared(1),
         },
     ],
 };
@@ -740,23 +807,26 @@ static SUBMOD_TEST_REPORTERS: SubmoduleSpec = SubmoduleSpec {
     exports: &[
         ExportSpec {
             name: "spec",
-            thunk: ExportThunk::Fn1(thunk_reporter_spec),
+            info: JsFunctionInfo::of(thunk_reporter_spec as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "tap",
-            thunk: ExportThunk::Fn1(thunk_reporter_tap),
+            info: JsFunctionInfo::of(thunk_reporter_tap as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "dot",
-            thunk: ExportThunk::Fn1(thunk_reporter_dot),
+            info: JsFunctionInfo::of(thunk_reporter_dot as JsBody1<ClosureHeader>).with_declared(1),
         },
         ExportSpec {
             name: "junit",
-            thunk: ExportThunk::Fn1(thunk_reporter_junit),
+            info: JsFunctionInfo::of(thunk_reporter_junit as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
         ExportSpec {
             name: "lcov",
-            thunk: ExportThunk::Fn1(thunk_reporter_lcov),
+            info: JsFunctionInfo::of(thunk_reporter_lcov as JsBody1<ClosureHeader>)
+                .with_declared(1),
         },
     ],
 };
@@ -1113,16 +1183,22 @@ fn timers_promises_scheduler_value() -> f64 {
 
         let obj = js_object_alloc(0, 2);
 
-        let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
-        crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);
+        let wait = js_closure_alloc(
+            crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
+            0,
+        );
+
         set_named_value(
             obj,
             "wait",
             f64::from_bits(JSValue::pointer(wait as *const u8).bits()),
         );
 
-        let yield_fn = js_closure_alloc(timers_promises_scheduler_yield as *const u8, 0);
-        crate::closure::js_register_closure_arity(timers_promises_scheduler_yield as *const u8, 0);
+        let yield_fn = js_closure_alloc(
+            crate::fn_info!(timers_promises_scheduler_yield, 0; with_declared(0)),
+            0,
+        );
+
         set_named_value(
             obj,
             "yield",
@@ -1220,27 +1296,24 @@ fn ensure_export_singleton(
     if let Some(cached) = EXPORT_SINGLETONS.with(|m| m.borrow().get(&key).copied()) {
         return cached;
     }
-    let thunk_ptr = export.thunk.as_ptr();
-    let allocated = js_closure_alloc(thunk_ptr, 0);
-    if let Some(fixed_arity) = export_rest_fixed_arity(submod.key, export.name) {
-        crate::closure::js_register_closure_rest(thunk_ptr, fixed_arity);
-    } else {
-        // Arity is encoded in the ExportThunk variant, so the closure dispatch
-        // pads missing args with undefined for variadic-friendly thunks. This
-        // replaces the per-submodule arity tables in earlier revisions.
-        crate::closure::js_register_closure_arity(thunk_ptr, export.thunk.arity());
-    }
+    let allocated = js_closure_alloc(&export.info, 0);
     if submod.key == "timers_promises" && export.name == "scheduler" {
-        let wait = js_closure_alloc(timers_promises_scheduler_wait as *const u8, 0);
-        crate::closure::js_register_closure_arity(timers_promises_scheduler_wait as *const u8, 2);
+        let wait = js_closure_alloc(
+            crate::fn_info!(timers_promises_scheduler_wait, 2; with_declared(2)),
+            0,
+        );
+
         crate::closure::closure_set_dynamic_prop(
             allocated as usize,
             "wait",
             f64::from_bits(JSValue::pointer(wait as *const u8).bits()),
         );
 
-        let yield_fn = js_closure_alloc(timers_promises_scheduler_yield as *const u8, 0);
-        crate::closure::js_register_closure_arity(timers_promises_scheduler_yield as *const u8, 0);
+        let yield_fn = js_closure_alloc(
+            crate::fn_info!(timers_promises_scheduler_yield, 0; with_declared(0)),
+            0,
+        );
+
         crate::closure::closure_set_dynamic_prop(
             allocated as usize,
             "yield",
@@ -1256,7 +1329,7 @@ fn ensure_export_singleton(
         );
         crate::object::set_builtin_closure_length(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            export_rest_fixed_arity(submod.key, export.name).unwrap_or(export.thunk.arity()),
+            crate::closure::info_arity(&export.info).unwrap_or(0),
         );
         crate::object::set_builtin_closure_non_constructable(
             allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
@@ -1273,16 +1346,6 @@ fn ensure_export_singleton(
     });
     ANY_SINGLETON_ALLOCATED.store(1, Ordering::Release);
     allocated
-}
-
-fn export_rest_fixed_arity(submod_key: &str, export_name: &str) -> Option<u32> {
-    match (submod_key, export_name) {
-        ("stream_promises", "pipeline") => Some(2),
-        ("timers", "setTimeout" | "setInterval") => Some(2),
-        ("timers", "setImmediate") => Some(1),
-        ("trace_events", "getEnabledCategories") => Some(0),
-        _ => None,
-    }
 }
 
 fn submodule_has_default_object(submod_key: &str) -> bool {

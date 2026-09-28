@@ -150,17 +150,17 @@ pub(super) fn emit_string_pool(
     versioned_loop_callbacks: &std::collections::HashSet<u32>,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
-    // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
-    // underlying user function, because that's what `js_closure_alloc_singleton`
-    // stores in the ClosureHeader. Without this registration, calling a user
+    // — a fact of the WRAPPER's `JsFunctionInfo`, NOT the underlying user
+    // function's, because the wrapper is what a function value runs. Without
+    // it, calling a user
     // function as a value through `js_closure_call_apply_with_spread` fed the
     // raw spread elements into the wrapper's flat `(this, a0, a1)` signature
     // instead of bundling args[fixed_arity..] into a real array — the rest
     // param then read a single element's bits as if it were the rest array.
     user_fn_wrapper_rest: &[(String, usize)],
     // Refs #915 (gap 1 from #899): subset of `closure_rest_params` whose
-    // rest param is the HIR-synthesized `arguments` array. These need
-    // `js_register_closure_synthetic_arguments` so the runtime bundles
+    // rest param is the HIR-synthesized `arguments` array. Their infos say so,
+    // so the runtime bundles
     // ALL passed args (not just the trailing tail) into the rest slot —
     // matching JS spec semantics for `arguments.length`.
     closure_synthetic_arguments: &std::collections::HashSet<u32>,
@@ -173,30 +173,28 @@ pub(super) fn emit_string_pool(
     closure_rest_and_arguments: &std::collections::HashSet<u32>,
     user_fn_wrapper_rest_and_arguments: &std::collections::HashSet<String>,
     // ABI param count for every top-level user-function wrapper
-    // (`__perry_wrap_<original_name>`) — used to register the wrapper's
-    // declared arity in the runtime's closure body registry so dynamic
-    // dispatch can pad missing trailing args before invoking the wrapper.
-    // Entries for wrappers also present in `user_fn_wrapper_rest` are skipped
-    // (those go through the rest registry which already controls dispatch).
+    // (`__perry_wrap_<original_name>`): the declared arity in the wrapper's
+    // `JsFunctionInfo` (`.length`'s fallback). Entries for wrappers also
+    // present in `user_fn_wrapper_rest` are skipped (their rest fact rules).
     user_fn_wrapper_arity: &[(String, u32)],
     // ECMAScript-visible `.length` for every top-level user-function wrapper.
     user_fn_wrapper_length: &[(String, u32)],
-    // Wrapper symbols for top-level async functions. Registered by function
-    // pointer so `util.types.isAsyncFunction` keeps working when the value is
+    // Wrapper symbols for top-level async functions. Async in their infos so
+    // `util.types.isAsyncFunction` keeps working when the value is
     // observed through a runtime alias instead of direct HIR.
     user_fn_wrapper_async: &std::collections::HashSet<String>,
     // Wrapper/closure symbols whose original source form was a generator
-    // function. Registered so util.types.isGeneratorFunction can distinguish
+    // function. Marked in their infos so util.types.isGeneratorFunction can distinguish
     // lowered generator state-machine closures from ordinary functions.
     user_fn_wrapper_generator: &std::collections::HashSet<String>,
     // #3664: wrapper/closure symbols whose source form was `async function*`.
-    // Registered in the runtime's async-generator registry so the
+    // Marked in their infos so the
     // `%AsyncGeneratorFunction%`/`%AsyncGenerator%` intrinsic chain (and
     // `util.types.isAsyncFunction`) resolve correctly for them.
     user_fn_wrapper_async_generator: &std::collections::HashSet<String>,
     // Strict-mode user functions (wrapper or inline-closure symbols).
-    // Each entry produces one `js_register_closure_strict_function` call so
-    // call/apply/bind can apply spec OrdinaryCallBindThis (#4850).
+    // Strict in their infos so call/apply/bind can apply spec
+    // OrdinaryCallBindThis (#4850).
     user_fn_wrapper_strict: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
@@ -881,20 +879,18 @@ pub(super) fn emit_string_pool(
     // user/cap boundary from this (signature truth), not the decl-site snapshot
     // length, which mis-split dynamic-parent (capless-sig-with-snapshot) ctors.
     let mut ctor_triples: Vec<(u32, String, u32, u32)> = Vec::new();
-    // #wall3: class ctors with a rest param (`constructor(...args)`) need their
-    // standalone `_constructor` func_ptr registered as rest-bearing in the closure body registry so
-    // a member-new (`new ns.Sub(opts)` → js_new_function_construct →
-    // js_native_call_value) BUNDLES trailing args into the rest array. Without
-    // this the rest param binds to the first arg as a scalar (a=opts, not
-    // [opts]) and `super(...args)` spreads a bare object → 0x400000000 mis-box →
-    // crash (Next.js `new c.AppPageRouteModule({...})`). Mirrors the
-    // closure-rest registration but keyed by the `_constructor` symbol.
-    let mut ctor_rest_regs: Vec<(String, usize)> = Vec::new();
-    // Per-class-id ctor synth/rest flags (has_synthetic_arguments, has_rest) so
-    // the `super(...spread)` runtime apply path packs a pass-through parent
+    // Per-class-id ctor synth/rest flags (has_synthetic_arguments, has_rest)
+    // so the `super(...spread)` runtime apply path packs a pass-through parent
     // ctor's `arguments` / rest slot correctly (a zero-declared-param parent
-    // that reads `arguments`, e.g. tsc's emitted pass-through ctor).
-    let mut ctor_flag_regs: Vec<(u32, bool, bool)> = Vec::new();
+    // that reads `arguments`, e.g. tsc's emitted pass-through ctor), plus the
+    // rest param's position (in USER params, -1 when none) so a member-new
+    // (`new ns.Sub(opts)` → js_new_function_construct → js_native_call_value)
+    // BUNDLES trailing args into the rest array (#wall3). Without that the
+    // rest param binds to the first arg as a scalar (a=opts, not [opts]) and
+    // `super(...args)` spreads a bare object → 0x400000000 mis-box → crash
+    // (Next.js `new c.AppPageRouteModule({...})`). A fact of the class's
+    // constructor table, keyed by class id like every other one.
+    let mut ctor_flag_regs: Vec<(u32, bool, bool, i64)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -1022,13 +1018,11 @@ pub(super) fn emit_string_pool(
         // to that ctor unchanged, so it takes the same layout (#10484: a dynamic
         // `new Sub(x)` must put all args in the ancestor's `arguments` slot).
         let shape_params = constructor_layout_params(class, classes, ctor_params);
-        // #wall3: record the rest-param position (in USER params) so the runtime
-        // bundles trailing args at the dynamic member-new dispatch path.
-        if let Some(rest_idx) =
-            shape_params.and_then(|params| params.iter().position(|p| p.is_rest))
-        {
-            ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
-        }
+        // #wall3: the rest-param position (in USER params), registered with
+        // the flags below.
+        let ctor_rest_fixed = shape_params
+            .and_then(|params| params.iter().position(|p| p.is_rest))
+            .map_or(-1, |rest_idx| rest_idx as i64);
         // Record the ctor's trailing-param shape so the `super(...spread)`
         // apply path forwards the flat spread args and packs the trailing slot:
         // a synthesized `arguments` slot receives ALL args (from index 0), a
@@ -1049,8 +1043,8 @@ pub(super) fn emit_string_pool(
                         .any(|p| p.is_rest && p.arguments_object.is_none())
                 })
                 .unwrap_or(false);
-            if ctor_has_synth || ctor_has_rest {
-                ctor_flag_regs.push((cid, ctor_has_synth, ctor_has_rest));
+            if ctor_has_synth || ctor_has_rest || ctor_rest_fixed >= 0 {
+                ctor_flag_regs.push((cid, ctor_has_synth, ctor_has_rest, ctor_rest_fixed));
             }
         }
         // #5957: count the ctor's trailing `__perry_cap_*` signature params.
@@ -1208,24 +1202,10 @@ pub(super) fn emit_string_pool(
             ],
         );
     }
-    // #wall3: register rest-bearing class ctors' func_ptrs in the closure-rest
-    // side table so the dynamic member-new dispatch (js_native_call_value via
-    // js_new_function_construct) bundles trailing args into the rest array,
-    // matching the static `new` path. See `ctor_rest_regs` above.
-    ctor_rest_regs.sort_unstable();
-    for (ctor_symbol, rest_idx) in ctor_rest_regs {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", ctor_symbol);
-        blk.call_void(
-            "js_register_closure_rest",
-            &[(PTR, &func_ref), (I32, &rest_idx.to_string())],
-        );
-    }
     // Register ctor synth/rest flags so `super(...spread)` packs the parent
     // ctor's trailing `arguments` / rest slot correctly.
     ctor_flag_regs.sort_unstable();
-    for (cid, has_synth, has_rest) in ctor_flag_regs {
+    for (cid, has_synth, has_rest, rest_fixed) in ctor_flag_regs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         blk.call_void(
@@ -1234,6 +1214,7 @@ pub(super) fn emit_string_pool(
                 (I64, &cid.to_string()),
                 (I64, if has_synth { "1" } else { "0" }),
                 (I64, if has_rest { "1" } else { "0" }),
+                (I64, &rest_fixed.to_string()),
             ],
         );
     }
@@ -1536,15 +1517,9 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        // Register the setter's spec `.length` keyed by its func_ptr so
+        // The setter's spec `.length` rides with its registration, so
         // `Object.getOwnPropertyDescriptor(proto, prop).set.length` reports
-        // the default-aware count instead of the raw ABI arity. Static
-        // accessors are emitted under a no-`this` `perry_static_…` symbol, so
-        // the same func_ptr is what a value-read of `.set` binds.
-        blk.call_void(
-            "js_register_closure_length",
-            &[(PTR, &func_ref), (I32, &spec_length.to_string())],
-        );
+        // the default-aware count instead of the raw ABI arity.
         let register_fn = if is_static {
             "js_register_class_static_setter"
         } else {
@@ -1557,6 +1532,7 @@ pub(super) fn emit_string_pool(
                 (I64, &bytes_i64),
                 (I64, &len_str),
                 (I64, &func_i64),
+                (I32, &spec_length.to_string()),
             ],
         );
         blk.call_void(
@@ -1571,239 +1547,30 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Issue #493: register each rest-bearing closure body's func_ptr ->
-    // fixed_arity in the runtime's closure-rest side table. `js_closure_callN`
-    // consults it to bundle trailing args at call sites where codegen
-    // doesn't know the closure's arity statically (e.g. `obj.cb(a, b, c)`
-    // where `cb` is a class field holding `(...args) => …`). Without this
-    // entry the closure body sees the first arg as the rest param itself,
-    // not the bundled array — `args.length` reads `1` against the string
-    // value, and trailing args are dropped. Static call sites (named fns,
-    // `Expr::FuncRef`, `let f = (...args)=>…; f(a,b,c)`) keep their
-    // existing call-site bundling and never enter this dispatch path.
-    let mut sorted_rest: Vec<(u32, usize)> = closure_rest_params
-        .iter()
-        .map(|(fid, ri)| (*fid, *ri))
-        .collect();
-    sorted_rest.sort_unstable();
-    for (fid, fixed_arity) in sorted_rest {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
-        let func_ref = format!("@{}", closure_sym);
-        // Refs #915 (gap 1 from #899): closures whose rest param is the
-        // synthesized `arguments` use the synthetic-arguments registration
-        // so the runtime bundles ALL args into the rest slot.
-        let runtime_fn = if closure_rest_and_arguments.contains(&fid) {
-            "js_register_closure_rest_and_arguments"
-        } else if closure_synthetic_arguments.contains(&fid) {
-            "js_register_closure_synthetic_arguments"
-        } else {
-            "js_register_closure_rest"
-        };
-        blk.call_void(
-            runtime_fn,
-            &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
-        );
-    }
-
-    // Refs #421: register every non-rest closure's declared param count so
-    // `js_native_call_value` can pad missing trailing args with TAG_UNDEFINED
-    // when a closure stored as a class field is invoked method-style on an
-    // any-typed receiver with fewer args than declared. Rest-bearing closures
-    // are already handled by the closure-rest registry above (which pads
-    // internally via `dispatch_rest_bundled`).
-    let mut sorted_arities: Vec<(u32, u32)> = closure_arities
-        .iter()
-        .map(|(fid, arity)| (*fid, *arity))
-        .collect();
-    sorted_arities.sort_unstable();
-    for (fid, arity) in sorted_arities {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
-        let func_ref = format!("@{}", closure_sym);
-        blk.call_void(
-            "js_register_closure_arity",
-            &[(PTR, &func_ref), (I32, &arity.to_string())],
-        );
-    }
-
-    // Register ECMAScript-visible `.length` for all closures. This is
-    // intentionally separate from declared arity: default parameters lower
-    // into body prologues, so dispatch still needs the full ABI arity, while
-    // `fn.length` stops at the first default/rest parameter.
-    let mut sorted_lengths: Vec<(u32, u32)> = closure_lengths
-        .iter()
-        .map(|(fid, length)| (*fid, *length))
-        .collect();
-    sorted_lengths.sort_unstable();
-    for (fid, length) in sorted_lengths {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
-        let func_ref = format!("@{}", closure_sym);
-        blk.call_void(
-            "js_register_closure_length",
-            &[(PTR, &func_ref), (I32, &length.to_string())],
-        );
-    }
-
-    let mut sorted_arrows: Vec<u32> = closure_arrow_functions.iter().copied().collect();
-    sorted_arrows.sort_unstable();
-    for fid in sorted_arrows {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
-        let func_ref = format!("@{}", closure_sym);
-        blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
-    }
-
-    let mut sorted_trusted: Vec<(u32, super::closure_collect::TrustedBoxClosure)> =
-        trusted_box_closures
-            .iter()
-            .map(|(func_id, plan)| (*func_id, *plan))
-            .collect();
-    sorted_trusted.sort_unstable_by_key(|(func_id, _)| *func_id);
-    for (fid, plan) in sorted_trusted {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let public_ref = format!("@perry_closure_{}__{}", module_prefix, fid);
-        let trusted_ref = format!("{}$trusted_boxes", public_ref);
-        blk.call_void(
-            "js_register_closure_trusted_direct",
-            &[
-                (PTR, &public_ref),
-                (PTR, &trusted_ref),
-                (I32, &plan.capture_count.to_string()),
-                (I64, &plan.boxed_capture_mask.to_string()),
-            ],
-        );
-        if versioned_loop_callbacks.contains(&fid) {
-            let versioned_ref = format!("{}$trusted_boxes$versioned_loop", public_ref);
-            blk.call_void(
-                "js_register_closure_versioned_loop_direct",
-                &[
-                    (PTR, &public_ref),
-                    (PTR, &versioned_ref),
-                    (I32, &plan.capture_count.to_string()),
-                    (I64, &plan.boxed_capture_mask.to_string()),
-                ],
-            );
-        }
-    }
-
-    // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user
-    // functions whose source signature includes a rest param. Mirrors the
-    // closure-rest loop above but keyed on the wrapper's symbol rather than
-    // the closure body. See `user_fn_wrapper_rest` doc on this fn's signature.
-    let mut sorted_wrappers: Vec<(String, usize)> = user_fn_wrapper_rest.to_vec();
-    sorted_wrappers.sort();
-    let rest_wrapper_names: std::collections::HashSet<String> =
-        sorted_wrappers.iter().map(|(s, _)| s.clone()).collect();
-    for (wrap_sym, fixed_arity) in sorted_wrappers {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        // Refs #915 (gap 1 from #899): wrappers whose underlying function
-        // declared a synthesized `arguments` rest param need the
-        // synthetic-arguments registration.
-        let runtime_fn = if user_fn_wrapper_rest_and_arguments.contains(&wrap_sym) {
-            "js_register_closure_rest_and_arguments"
-        } else if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
-            "js_register_closure_synthetic_arguments"
-        } else {
-            "js_register_closure_rest"
-        };
-        blk.call_void(
-            runtime_fn,
-            &[(PTR, &func_ref), (I32, &fixed_arity.to_string())],
-        );
-    }
-
-    // Register declared ABI param count for `__perry_wrap_<name>` wrappers of
-    // every non-rest top-level user function. Mirrors the closure-arity loop
-    // above; `.length` is registered separately below.
-    let mut sorted_wrapper_arities: Vec<(String, u32)> = user_fn_wrapper_arity
-        .iter()
-        .filter(|(name, _)| !rest_wrapper_names.contains(name))
-        .cloned()
-        .collect();
-    sorted_wrapper_arities.sort();
-    for (wrap_sym, arity) in sorted_wrapper_arities {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void(
-            "js_register_closure_arity",
-            &[(PTR, &func_ref), (I32, &arity.to_string())],
-        );
-    }
-
-    // Register spec `.length` for all top-level user-function wrappers,
-    // including rest wrappers. Ramda's `converge` / `juxt` / `useWith`
-    // chains read `fn.length` from function values to compute curry arities.
-    let mut sorted_wrapper_lengths: Vec<(String, u32)> = user_fn_wrapper_length.to_vec();
-    sorted_wrapper_lengths.sort();
-    for (wrap_sym, length) in sorted_wrapper_lengths {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void(
-            "js_register_closure_length",
-            &[(PTR, &func_ref), (I32, &length.to_string())],
-        );
-    }
-
-    let mut sorted_async_wrappers: Vec<String> = user_fn_wrapper_async.iter().cloned().collect();
-    sorted_async_wrappers.sort();
-    for wrap_sym in sorted_async_wrappers {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
-    }
-
-    let mut sorted_generator_wrappers: Vec<String> =
-        user_fn_wrapper_generator.iter().cloned().collect();
-    sorted_generator_wrappers.sort();
-    for wrap_sym in sorted_generator_wrappers {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void(
-            "js_register_closure_generator_function",
-            &[(PTR, &func_ref)],
-        );
-    }
-
-    // #3664: async-generator wrappers. These are ALSO in
-    // `user_fn_wrapper_generator` above (they share the sync generator
-    // lowering); this extra registration is what lets the runtime tell an
-    // `async function*` apart from a `function*`.
-    let mut sorted_async_generator_wrappers: Vec<String> =
-        user_fn_wrapper_async_generator.iter().cloned().collect();
-    sorted_async_generator_wrappers.sort();
-    for wrap_sym in sorted_async_generator_wrappers {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void(
-            "js_register_closure_async_generator_function",
-            &[(PTR, &func_ref)],
-        );
-    }
-
-    let mut sorted_strict_wrappers: Vec<String> = user_fn_wrapper_strict.iter().cloned().collect();
-    sorted_strict_wrappers.sort();
-    for wrap_sym in sorted_strict_wrappers {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let func_ref = format!("@{}", wrap_sym);
-        blk.call_void("js_register_closure_strict_function", &[(PTR, &func_ref)]);
-    }
-
     let chunk_names = chunker.finish();
+    record_fn_info_facts(
+        llmod,
+        module_prefix,
+        FnInfoFactSources {
+            closure_rest_params,
+            closure_arities,
+            closure_lengths,
+            closure_arrow_functions,
+            trusted_box_closures,
+            versioned_loop_callbacks,
+            user_fn_wrapper_rest,
+            closure_synthetic_arguments,
+            user_fn_wrapper_synthetic_arguments,
+            closure_rest_and_arguments,
+            user_fn_wrapper_rest_and_arguments,
+            user_fn_wrapper_arity,
+            user_fn_wrapper_length,
+            user_fn_wrapper_async,
+            user_fn_wrapper_generator,
+            user_fn_wrapper_async_generator,
+            user_fn_wrapper_strict,
+        },
+    );
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     let _ = init_fn.create_block("entry");
@@ -1812,6 +1579,127 @@ pub(super) fn emit_string_pool(
         blk.call_void(cname, &[]);
     }
     blk.ret_void();
+}
+
+/// The codegen metadata a module's `JsFunctionInfo` facts come from
+/// (`crate::fn_info`), keyed by closure func-id or wrapper symbol.
+struct FnInfoFactSources<'a> {
+    closure_rest_params: &'a HashMap<u32, usize>,
+    closure_arities: &'a HashMap<u32, u32>,
+    closure_lengths: &'a HashMap<u32, u32>,
+    closure_arrow_functions: &'a std::collections::HashSet<u32>,
+    trusted_box_closures:
+        &'a std::collections::HashMap<u32, super::closure_collect::TrustedBoxClosure>,
+    versioned_loop_callbacks: &'a std::collections::HashSet<u32>,
+    user_fn_wrapper_rest: &'a [(String, usize)],
+    closure_synthetic_arguments: &'a std::collections::HashSet<u32>,
+    user_fn_wrapper_synthetic_arguments: &'a std::collections::HashSet<String>,
+    closure_rest_and_arguments: &'a std::collections::HashSet<u32>,
+    user_fn_wrapper_rest_and_arguments: &'a std::collections::HashSet<String>,
+    user_fn_wrapper_arity: &'a [(String, u32)],
+    user_fn_wrapper_length: &'a [(String, u32)],
+    user_fn_wrapper_async: &'a std::collections::HashSet<String>,
+    user_fn_wrapper_generator: &'a std::collections::HashSet<String>,
+    user_fn_wrapper_async_generator: &'a std::collections::HashSet<String>,
+    user_fn_wrapper_strict: &'a std::collections::HashSet<String>,
+}
+
+/// Record every fact the module knows about its own closure bodies and
+/// value wrappers in their `JsFunctionInfo`s (`crate::fn_info`):
+///
+/// * rest kind + fixed arity (#493, #653; #915's synthesized `arguments`
+///   bundles ALL args; rest-and-arguments passes both arrays) — dynamic
+///   dispatch bundles trailing args for call sites that cannot see the
+///   body's signature (`obj.cb(a, b, c)` with `cb` a `(...args) => …` field);
+/// * declared arity of non-rest bodies (#421) — `fn.length`'s fallback;
+/// * ECMAScript `.length` (default-aware; Ramda's `converge` / `juxt` read
+///   it from function values);
+/// * arrow, strict (#4850 OrdinaryCallBindThis), async, generator and
+///   async-generator (#3664) bits;
+/// * the trusted direct-call and versioned-loop clones of eligible arrows.
+fn record_fn_info_facts(llmod: &LlModule, module_prefix: &str, src: FnInfoFactSources<'_>) {
+    use crate::fn_info::RestKind;
+    let closure = |fid: u32| format!("perry_closure_{}__{}", module_prefix, fid);
+    for (&fid, &fixed) in src.closure_rest_params {
+        let kind = if src.closure_rest_and_arguments.contains(&fid) {
+            RestKind::UserAndArguments
+        } else if src.closure_synthetic_arguments.contains(&fid) {
+            RestKind::SyntheticArguments
+        } else {
+            RestKind::User
+        };
+        llmod.note_fn_info(&closure(fid), |f| f.set_rest(fixed, kind));
+    }
+    for (&fid, &arity) in src.closure_arities {
+        llmod.note_fn_info(&closure(fid), |f| f.set_declared(arity));
+    }
+    for (&fid, &length) in src.closure_lengths {
+        llmod.note_fn_info(&closure(fid), |f| f.set_length(length));
+    }
+    for &fid in src.closure_arrow_functions {
+        llmod.note_fn_info(&closure(fid), |f| f.set_arrow());
+    }
+    // The clones hang off arrow bodies only (the runtime's resolvers take
+    // them from an arrow's info).
+    for (&fid, plan) in src.trusted_box_closures {
+        if !src.closure_arrow_functions.contains(&fid) {
+            continue;
+        }
+        let public = closure(fid);
+        let trusted = format!("{public}$trusted_boxes");
+        let versioned = src
+            .versioned_loop_callbacks
+            .contains(&fid)
+            .then(|| format!("{trusted}$versioned_loop"));
+        llmod.note_fn_info(&public, |f| {
+            f.trusted = Some(crate::fn_info::CloneTarget {
+                symbol: trusted,
+                captures: plan.capture_count,
+                boxed_mask: plan.boxed_capture_mask,
+            });
+            f.versioned = versioned.map(|symbol| crate::fn_info::CloneTarget {
+                symbol,
+                captures: plan.capture_count,
+                boxed_mask: plan.boxed_capture_mask,
+            });
+        });
+    }
+    let rest_wrappers: std::collections::HashSet<&str> = src
+        .user_fn_wrapper_rest
+        .iter()
+        .map(|(s, _)| s.as_str())
+        .collect();
+    for (wrap_sym, fixed) in src.user_fn_wrapper_rest {
+        let kind = if src.user_fn_wrapper_rest_and_arguments.contains(wrap_sym) {
+            RestKind::UserAndArguments
+        } else if src.user_fn_wrapper_synthetic_arguments.contains(wrap_sym) {
+            RestKind::SyntheticArguments
+        } else {
+            RestKind::User
+        };
+        llmod.note_fn_info(wrap_sym, |f| f.set_rest(*fixed, kind));
+    }
+    for (wrap_sym, arity) in src.user_fn_wrapper_arity {
+        if rest_wrappers.contains(wrap_sym.as_str()) {
+            continue;
+        }
+        llmod.note_fn_info(wrap_sym, |f| f.set_declared(*arity));
+    }
+    for (wrap_sym, length) in src.user_fn_wrapper_length {
+        llmod.note_fn_info(wrap_sym, |f| f.set_length(*length));
+    }
+    for wrap_sym in src.user_fn_wrapper_async {
+        llmod.note_fn_info(wrap_sym, |f| f.set_async());
+    }
+    for wrap_sym in src.user_fn_wrapper_generator {
+        llmod.note_fn_info(wrap_sym, |f| f.set_generator());
+    }
+    for wrap_sym in src.user_fn_wrapper_async_generator {
+        llmod.note_fn_info(wrap_sym, |f| f.set_async_generator());
+    }
+    for wrap_sym in src.user_fn_wrapper_strict {
+        llmod.note_fn_info(wrap_sym, |f| f.set_strict());
+    }
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
         let child = crate::object::js_object_get_field(parent.as_pointer(), 1);
         let child = scope.root_nanbox_u64(child.bits());
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            array_getter_collects as *const u8,
+            crate::fn_info!(array_getter_collects, 0),
             0,
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
@@ -96,7 +96,7 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
     let scope = RuntimeHandleScope::new();
     let array = scope.root_nanbox_u64(value.bits());
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        array_getter_collects as *const u8,
+        crate::fn_info!(array_getter_collects, 0),
         0,
     ));
     let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
@@ -165,7 +165,7 @@ fn json_grown_array_getter_flags_live_head_and_survives_movement() {
         "the descriptor must be defined through a forwarding alias"
     );
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        array_getter_collects as *const u8,
+        crate::fn_info!(array_getter_collects, 0),
         0,
     ));
     let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));

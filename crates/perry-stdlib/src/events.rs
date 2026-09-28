@@ -654,12 +654,7 @@ fn validate_event_listener(listener_bits: i64) -> i64 {
 static RAW_ONCE_WRAPPER_REST_REGISTERED: std::sync::Once = std::sync::Once::new();
 
 fn ensure_raw_once_wrapper_rest_registered() {
-    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| {
-        perry_runtime::closure::js_register_closure_rest(
-            event_emitter_once_wrapper as *const u8,
-            0,
-        );
-    });
+    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| {});
 }
 
 unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i64) -> i64 {
@@ -668,8 +663,10 @@ unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i6
     }
     ensure_raw_once_wrapper_rest_registered();
 
-    let wrapper =
-        perry_runtime::closure::js_closure_alloc(event_emitter_once_wrapper as *const u8, 4);
+    let wrapper = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(event_emitter_once_wrapper, 1; with_rest(0)),
+        4,
+    );
     let event_ptr = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
     perry_runtime::closure::js_closure_set_capture_ptr(wrapper, 0, handle);
     perry_runtime::closure::js_closure_set_capture_ptr(wrapper, 1, event_ptr as i64);
@@ -1089,7 +1086,10 @@ unsafe fn capture_listener_rejection(handle: Handle, result: f64) {
     if promise.is_null() {
         return;
     }
-    let on_rejected = js_closure_alloc(events_capture_rejection_handler as *const u8, 1);
+    let on_rejected = js_closure_alloc(
+        perry_runtime::fn_info!(events_capture_rejection_handler, 1),
+        1,
+    );
     js_closure_set_capture_ptr(on_rejected, 0, handle);
     perry_runtime::promise::js_promise_then(promise, std::ptr::null(), on_rejected);
 }

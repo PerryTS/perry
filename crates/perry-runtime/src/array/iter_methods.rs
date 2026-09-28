@@ -990,15 +990,15 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
 /// `Array.prototype.some` for a compiler-proved captureless inline arrow.
 ///
 /// The callback literal is consumed only by `some`, has no observable
-/// function identity, and cannot read a closure environment. Passing its code
-/// pointer directly avoids the singleton-closure TLS lookup and lets the loop
+/// function identity, and cannot read a closure environment. Passing its
+/// body's info directly avoids the singleton-closure TLS lookup and lets the loop
 /// call the body without rebuilding closure dispatch state. Non-Array
 /// receivers retain the generic path so Buffer, TypedArray, and array-like
 /// semantics remain centralized in [`js_array_some`].
 #[no_mangle]
 pub extern "C" fn js_array_some_captureless(
     original_arr: *const ArrayHeader,
-    callback_func: *const u8,
+    callback_info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -1012,11 +1012,12 @@ pub extern "C" fn js_array_some_captureless(
         || super::header::receiver_may_be_registered_exotic(arr)
             && crate::buffer::is_registered_buffer(arr as usize)
     {
-        let callback = crate::closure::js_closure_alloc_singleton(callback_func);
+        let callback = crate::closure::js_closure_alloc_singleton(callback_info);
         return js_array_some(original_arr, callback);
     }
 
-    // `callback_func` is a captureless compiled closure body.
+    // `callback_info` is a captureless compiled closure body's static info.
+    let callback_func = unsafe { (*callback_info).code };
     let callback: crate::closure::body_call::js_body_fn_ty!(value, index, array) =
         unsafe { crate::closure::body_call::js_body_fn!(callback_func; value, index, array) };
     unsafe {

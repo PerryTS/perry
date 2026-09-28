@@ -26,9 +26,6 @@ pub(in crate::child_process) fn cp_exec_async(
     run_options: CpRunOptions,
     mode: CpOutput,
 ) -> f64 {
-    cp_register_arities();
-    cp_register_reactor_arities();
-
     // The program actually launched (`sh` for exec, the file for execFile) —
     // Node's spawn-failure error keys `syscall`/`path`/message off this, not
     // off the display command string.
@@ -54,20 +51,35 @@ pub(in crate::child_process) fn cp_exec_async(
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let methods: [(&str, CpFn); 11] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("prependListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "prependListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
         (
             "removeAllListeners",
-            cp_cast1(cp_method_remove_all_listeners),
+            crate::fn_info!(cp_method_remove_all_listeners, 1; with_declared(1)),
         ),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_ref)),
-        ("unref", cp_cast0(cp_method_unref)),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
+        ("kill", crate::fn_info!(cp_method_kill, 1; with_declared(1))),
+        ("ref", crate::fn_info!(cp_method_ref, 0; with_declared(0))),
+        (
+            "unref",
+            crate::fn_info!(cp_method_unref, 0; with_declared(0)),
+        ),
     ];
     let cp = cp_box_ptr(cp_build_object(&methods, CP_SHAPE_ID + methods.len() as u32) as *const u8);
     cp_set_field(cp, b"stdout", stdout_obj);
@@ -305,8 +317,7 @@ pub(in crate::child_process) fn cp_defer_exec_callback(
     stdout: f64,
     stderr: f64,
 ) {
-    cp_register_reactor_arities();
-    let deferred = js_closure_alloc(cp_exec_cb_thunk as *const u8, 4);
+    let deferred = js_closure_alloc(crate::fn_info!(cp_exec_cb_thunk, 0; with_declared(0)), 4);
     js_closure_set_capture_ptr(deferred, 0, cb_val.to_bits() as i64);
     js_closure_set_capture_ptr(deferred, 1, err.to_bits() as i64);
     js_closure_set_capture_ptr(deferred, 2, stdout.to_bits() as i64);

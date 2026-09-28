@@ -123,27 +123,62 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                map_proto_size_getter_thunk as *const u8,
+                crate::fn_info!(map_proto_size_getter_thunk, 0; with_declared(0)),
             );
-            ipm(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
-            ipm(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "clear",
+                crate::fn_info!(map_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "delete",
+                crate::fn_info!(map_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             let entries_value = ipm(
                 proto_obj,
                 "entries",
-                map_proto_entries_thunk as *const u8,
+                crate::fn_info!(map_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                map_proto_foreach_thunk as *const u8,
+                crate::fn_info!(map_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "get", map_proto_get_thunk as *const u8, 1);
-            ipm(proto_obj, "has", map_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
-            let set_value = ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
-            ipm(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "get",
+                crate::fn_info!(map_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(map_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "keys",
+                crate::fn_info!(map_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            let set_value = ipm(
+                proto_obj,
+                "set",
+                crate::fn_info!(map_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "values",
+                crate::fn_info!(map_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_collection_iterator_symbol(proto_obj, entries_value);
             remember_builtin_collection_method(
                 proto_obj,
@@ -157,26 +192,56 @@ pub(super) fn install_collection_proto_methods(
             install_collection_size_getter(
                 proto_obj,
                 "size",
-                set_proto_size_getter_thunk as *const u8,
+                crate::fn_info!(set_proto_size_getter_thunk, 0; with_declared(0)),
             );
-            let add_value = ipm(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
-            ipm(proto_obj, "clear", set_proto_clear_thunk as *const u8, 0);
-            ipm(proto_obj, "delete", set_proto_delete_thunk as *const u8, 1);
+            let add_value = ipm(
+                proto_obj,
+                "add",
+                crate::fn_info!(set_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "clear",
+                crate::fn_info!(set_proto_clear_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "delete",
+                crate::fn_info!(set_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             ipm(
                 proto_obj,
                 "entries",
-                set_proto_entries_thunk as *const u8,
+                crate::fn_info!(set_proto_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "forEach",
-                set_proto_foreach_thunk as *const u8,
+                crate::fn_info!(set_proto_foreach_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
-            let values_value = ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(set_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "keys",
+                crate::fn_info!(set_proto_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            let values_value = ipm(
+                proto_obj,
+                "values",
+                crate::fn_info!(set_proto_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             // ECMA-262 specifies these as the same function object, not merely
             // two functions with equivalent behavior.
             let keys_key = crate::string::js_string_from_bytes(b"keys".as_ptr(), 4);
@@ -193,22 +258,47 @@ pub(super) fn install_collection_proto_methods(
             ipm(
                 proto_obj,
                 "delete",
-                weakmap_proto_delete_thunk as *const u8,
+                crate::fn_info!(weakmap_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "get", weakmap_proto_get_thunk as *const u8, 1);
-            ipm(proto_obj, "has", weakmap_proto_has_thunk as *const u8, 1);
-            ipm(proto_obj, "set", weakmap_proto_set_thunk as *const u8, 2);
+            ipm(
+                proto_obj,
+                "get",
+                crate::fn_info!(weakmap_proto_get_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(weakmap_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "set",
+                crate::fn_info!(weakmap_proto_set_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
         }
         "WeakSet" => {
-            ipm(proto_obj, "add", weakset_proto_add_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "add",
+                crate::fn_info!(weakset_proto_add_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             ipm(
                 proto_obj,
                 "delete",
-                weakset_proto_delete_thunk as *const u8,
+                crate::fn_info!(weakset_proto_delete_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
-            ipm(proto_obj, "has", weakset_proto_has_thunk as *const u8, 1);
+            ipm(
+                proto_obj,
+                "has",
+                crate::fn_info!(weakset_proto_has_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
         }
         _ => return false,
     }
@@ -237,13 +327,16 @@ fn install_collection_iterator_symbol(proto_obj: *mut ObjectHeader, method_value
     );
 }
 
-fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+fn install_collection_size_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }

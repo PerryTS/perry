@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::array::{js_array_get_f64, js_array_length, ArrayHeader};
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{js_object_alloc, AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::JSValue;
@@ -179,9 +179,8 @@ fn set_function_name(closure: *mut ClosureHeader, name: &str) {
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", string_value(name));
 }
 
-fn function_value(func: *const u8, arity: u32, name: &str) -> f64 {
-    let closure = js_closure_alloc(func, 0);
-    js_register_closure_arity(func, arity);
+fn function_value(info: *const crate::closure::JsFunctionInfo, name: &str) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     set_function_name(closure, name);
     boxed_ptr(closure)
 }
@@ -358,11 +357,26 @@ fn ensure_trace_prototype() -> *mut ObjectHeader {
     }
 
     let proto = js_object_alloc(0, 5);
-    let ctor = function_value(trace_tracing_constructor as *const u8, 1, "Tracing");
-    let enable = function_value(trace_tracing_enable as *const u8, 0, "enable");
-    let disable = function_value(trace_tracing_disable as *const u8, 0, "disable");
-    let categories = function_value(trace_categories_getter as *const u8, 0, "get categories");
-    let enabled = function_value(trace_enabled_getter as *const u8, 0, "get enabled");
+    let ctor = function_value(
+        crate::fn_info!(trace_tracing_constructor, 1; with_declared(1)),
+        "Tracing",
+    );
+    let enable = function_value(
+        crate::fn_info!(trace_tracing_enable, 0; with_declared(0)),
+        "enable",
+    );
+    let disable = function_value(
+        crate::fn_info!(trace_tracing_disable, 0; with_declared(0)),
+        "disable",
+    );
+    let categories = function_value(
+        crate::fn_info!(trace_categories_getter, 0; with_declared(0)),
+        "get categories",
+    );
+    let enabled = function_value(
+        crate::fn_info!(trace_enabled_getter, 0; with_declared(0)),
+        "get enabled",
+    );
 
     define_non_enum_data(proto, "constructor", ctor, true);
     define_non_enum_data(proto, "enable", enable, true);

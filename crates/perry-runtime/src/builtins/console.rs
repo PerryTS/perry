@@ -157,7 +157,8 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
                 release_console_log_singleton_in_freed_ranges,
             );
         });
-        let fresh = crate::closure::js_closure_alloc(console_log_callable_thunk as *const u8, 0);
+        let fresh =
+            crate::closure::js_closure_alloc(crate::fn_info!(console_log_callable_thunk, 1), 0);
         // CAS so concurrent first-use callers don't leak a closure.
         // The loser's allocation is unreachable by any user code path
         // and will be reclaimed by the next GC sweep. The winner is
@@ -528,12 +529,10 @@ unsafe fn console_string_len(value: f64) -> Option<usize> {
 fn console_make_named_function(
     scope: &crate::gc::RuntimeHandleScope,
     name: &str,
-    func_ptr: *const u8,
-    call_arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     exposed_length: u32,
 ) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, call_arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let closure_handle = scope.root_raw_mut_ptr(closure);
     crate::object::set_bound_native_closure_name(
         closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
@@ -620,8 +619,7 @@ pub extern "C" fn js_console_context(name: f64) -> f64 {
         let func = console_make_named_function(
             &scope,
             method,
-            console_context_method_noop as *const u8,
-            0,
+            crate::fn_info!(console_context_method_noop, 0; with_declared(0)),
             1,
         );
         let func_handle = scope.root_nanbox_f64(func);
@@ -650,7 +648,12 @@ pub extern "C" fn js_console_create_task(name: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = crate::object::js_object_alloc(0, 0);
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    let run = console_make_named_function(&scope, "run", console_task_run as *const u8, 1, 0);
+    let run = console_make_named_function(
+        &scope,
+        "run",
+        crate::fn_info!(console_task_run, 1; with_declared(1)),
+        0,
+    );
     let run_handle = scope.root_nanbox_f64(run);
     console_set_field(
         obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),

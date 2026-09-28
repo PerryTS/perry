@@ -179,7 +179,7 @@ pub const OBJECT_META_SPILL_OFFSET_BYTES: u64 = 32;
 pub const ARRAY_HEADER_SIZE_BYTES: u64 = 8;
 
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
-/// target: `{capture_count: u32, shape_id: u32, func_ptr, props}` — 24 bytes
+/// target: `{capture_count: u32, shape_id: u32, info, props}` — 24 bytes
 /// on LP64 and 16 on ILP32 (`perry_abi::CLOSURE_HEADER_SIZE` is the LP64
 /// value the runtime asserts). Trusted exact-arrow bodies use this offset to
 /// read compiler-installed raw box capture pointers directly from their
@@ -194,10 +194,11 @@ pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
     }
 }
 
-/// Byte offset of `ClosureHeader::func_ptr` (8 on every target: the u32
-/// capture count and u32 ShapeId precede it).
-pub fn closure_func_ptr_offset_bytes(_target_triple: &str) -> u64 {
-    crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as u64
+/// Byte offset of `ClosureHeader::info`, the function object's
+/// `JsFunctionInfo` pointer (8 on every target: the u32 capture count and u32
+/// ShapeId precede it).
+pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
+    crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY

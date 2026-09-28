@@ -72,7 +72,7 @@ mod tests {
     }
 
     fn enable_throwing_lifecycle_hook(before_phase: bool) {
-        let callback = js_closure_alloc(throwing_lifecycle_hook as *const u8, 0);
+        let callback = js_closure_alloc(crate::fn_info!(throwing_lifecycle_hook, 1), 0);
         let mut callbacks = HookCallbacks::empty();
         if before_phase {
             callbacks.before = callback;

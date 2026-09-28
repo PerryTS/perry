@@ -52,7 +52,12 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         } else if raw == have_raw && have != 0 {
             have
         } else {
-            class_accessor_function_value(raw, is_setter, name).to_bits()
+            let set_length = if is_setter {
+                class_own_setter_length(class_id, name, false)
+            } else {
+                None
+            };
+            class_accessor_function_value(raw, is_setter, name, set_length).to_bits()
         }
     };
     let get = scope.root_nanbox_u64(half(raw_get, existing.raw_get, existing.get, false));

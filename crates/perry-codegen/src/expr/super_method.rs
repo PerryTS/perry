@@ -334,8 +334,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the symbol. Push into `pending_declares` — `declare_function`
             // dedupes against any later same-TU `define` (`module.rs:67-69`
             // comment) so this is safe for the same-module case too. The
-            // signature is informational only (runtime dispatches via
-            // ClosureHeader's func_ptr); use the JS body ABI with 0 doubles,
+            // signature is informational only (the runtime dispatches by the
+            // body's `JsFunctionInfo`); use the JS body ABI with 0 doubles,
             // the shape the imported-function-ref sites use for
             // unknown-arity imports.
             let wrap_name = format!("__perry_wrap_{}", fn_name);
@@ -345,8 +345,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 crate::expr::body_call::js_body_param_types(0),
             ));
             let blk = ctx.block();
-            let wrap_ptr = format!("@{}", wrap_name);
-            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+            let wrap_info = blk.fn_info_ref(&wrap_name);
+            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 

@@ -61,6 +61,7 @@ unsafe fn register_class() -> (f64, f64) {
         ACCESSOR.as_ptr(),
         ACCESSOR.len() as i64,
         record_setter_11201 as *const () as usize as i64,
+        1,
     );
     let proto_ref = super::native_module::class_prototype_ref_value(RECEIVER_TEST_CLASS_ID);
     let method =

@@ -335,12 +335,10 @@ unsafe fn attach_writable_write_handlers(
     write_promise: *mut Promise,
     sink_promise: *mut Promise,
 ) {
-    let fulfilled_fn = writable_write_fulfilled as *const u8;
-    let rejected_fn = writable_write_rejected as *const u8;
-    perry_runtime::closure::js_register_closure_arity(fulfilled_fn, 1);
-    perry_runtime::closure::js_register_closure_arity(rejected_fn, 1);
-
-    let on_fulfilled = perry_runtime::closure::js_closure_alloc(fulfilled_fn, 3);
+    let on_fulfilled = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(writable_write_fulfilled, 1; with_declared(1)),
+        3,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(
         on_fulfilled,
         0,
@@ -353,7 +351,10 @@ unsafe fn attach_writable_write_handlers(
     );
     perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 2, write_promise as i64);
 
-    let on_rejected = perry_runtime::closure::js_closure_alloc(rejected_fn, 3);
+    let on_rejected = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(writable_write_rejected, 1; with_declared(1)),
+        3,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(
         on_rejected,
         0,
@@ -421,12 +422,10 @@ unsafe fn attach_writable_close_handlers(
     close_promise: *mut Promise,
     sink_promise: *mut Promise,
 ) {
-    let fulfilled_fn = writable_close_fulfilled as *const u8;
-    let rejected_fn = writable_close_rejected as *const u8;
-    perry_runtime::closure::js_register_closure_arity(fulfilled_fn, 1);
-    perry_runtime::closure::js_register_closure_arity(rejected_fn, 1);
-
-    let on_fulfilled = perry_runtime::closure::js_closure_alloc(fulfilled_fn, 2);
+    let on_fulfilled = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(writable_close_fulfilled, 1; with_declared(1)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(
         on_fulfilled,
         0,
@@ -434,7 +433,10 @@ unsafe fn attach_writable_close_handlers(
     );
     perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 1, close_promise as i64);
 
-    let on_rejected = perry_runtime::closure::js_closure_alloc(rejected_fn, 2);
+    let on_rejected = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(writable_close_rejected, 1; with_declared(1)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(
         on_rejected,
         0,
@@ -627,9 +629,10 @@ pub(super) unsafe fn writable_stream_write(
         install_writable_backpressure_ready(stream_id, writer_id);
     }
     if let Some((cb, chunk, write_promise)) = start_write {
-        let job_fn = writable_write_start_microtask as *const u8;
-        perry_runtime::closure::js_register_closure_arity(job_fn, 0);
-        let job = perry_runtime::closure::js_closure_alloc(job_fn, 5);
+        let job = perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(writable_write_start_microtask, 0; with_declared(0)),
+            5,
+        );
         perry_runtime::closure::js_closure_set_capture_ptr(
             job,
             0,

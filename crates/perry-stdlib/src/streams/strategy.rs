@@ -39,7 +39,7 @@ extern "C" fn byte_length_queuing_strategy_size(
 /// is the raw JSValue bits read from the caller's options object.
 unsafe fn build_queuing_strategy(
     hwm_bits: u64,
-    size_fn: extern "C" fn(*const ClosureHeader, perry_runtime::closure::JsThis, f64) -> f64,
+    size_info: *const perry_runtime::closure::JsFunctionInfo,
 ) -> f64 {
     let obj = js_object_alloc(0, 2);
     let keys = js_array_alloc(2);
@@ -48,11 +48,9 @@ unsafe fn build_queuing_strategy(
     js_array_push(keys, JSValue::string_ptr(k_hwm));
     js_array_push(keys, JSValue::string_ptr(k_size));
     js_object_set_field(obj, 0, JSValue::from_bits(hwm_bits));
-    // `size` is a 1-arg native function value. Register the arity so closure
-    // dispatch pads/forwards the single `chunk` argument correctly.
-    let fn_ptr = size_fn as *const u8;
-    perry_runtime::closure::js_register_closure_arity(fn_ptr, 1);
-    let closure = perry_runtime::closure::js_closure_alloc(fn_ptr, 0);
+    // `size` is a 1-arg native function value (its info declares the one
+    // `chunk` parameter).
+    let closure = perry_runtime::closure::js_closure_alloc(size_info, 0);
     js_object_set_field(obj, 1, JSValue::pointer(closure as *const u8));
     js_object_set_keys(obj, keys);
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
@@ -100,12 +98,18 @@ pub unsafe extern "C" fn js_streams_strategy_high_water_mark(strategy: f64) -> f
 #[no_mangle]
 pub unsafe extern "C" fn js_count_queuing_strategy_new(opts: f64) -> f64 {
     let hwm = read_high_water_mark(opts);
-    build_queuing_strategy(hwm, count_queuing_strategy_size)
+    build_queuing_strategy(
+        hwm,
+        perry_runtime::fn_info!(count_queuing_strategy_size, 1; with_declared(1)),
+    )
 }
 
 /// `new ByteLengthQueuingStrategy({ highWaterMark })`.
 #[no_mangle]
 pub unsafe extern "C" fn js_byte_length_queuing_strategy_new(opts: f64) -> f64 {
     let hwm = read_high_water_mark(opts);
-    build_queuing_strategy(hwm, byte_length_queuing_strategy_size)
+    build_queuing_strategy(
+        hwm,
+        perry_runtime::fn_info!(byte_length_queuing_strategy_size, 1; with_declared(1)),
+    )
 }

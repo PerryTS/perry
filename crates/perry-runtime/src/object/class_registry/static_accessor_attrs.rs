@@ -84,8 +84,13 @@ pub(crate) unsafe fn static_accessor_descriptor(
     setter: usize,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let get = scope.root_nanbox_f64(class_accessor_function_value(getter, false, name));
-    let set = class_accessor_function_value(setter, true, name);
+    let get = scope.root_nanbox_f64(class_accessor_function_value(getter, false, name, None));
+    let set = class_accessor_function_value(
+        setter,
+        true,
+        name,
+        class_own_setter_length(class_id, name, true),
+    );
     let (enumerable, configurable) = static_accessor_attrs(class_id, name);
     crate::object::descriptors::build_accessor_descriptor(
         get.get_nanbox_f64(),
@@ -145,6 +150,7 @@ mod tests {
                 name.as_ptr(),
                 name.len() as i64,
                 setter as *const () as usize as i64,
+                1,
             );
         }
         js_register_class_string_member_order(

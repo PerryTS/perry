@@ -369,10 +369,14 @@ fn lower_captureless_some_inline(
         let fallback_value = {
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box0);
+            // The runtime takes the body's static info (it may have to
+            // materialize the function object for a TypedArray / Buffer
+            // receiver), never its code address.
+            let callback_info = blk.fn_info_ref(callback_func.trim_start_matches('@'));
             let value = blk.call(
                 DOUBLE,
                 "js_array_some_captureless",
-                &[(I64, &arr_handle), (PTR, callback_func)],
+                &[(I64, &arr_handle), (PTR, &callback_info)],
             );
             blk.br(&merge_l);
             value

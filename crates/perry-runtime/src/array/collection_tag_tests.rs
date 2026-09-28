@@ -375,7 +375,7 @@ fn take_visits() -> Vec<f64> {
 
 fn recording_callback() -> *const ClosureHeader {
     take_visits();
-    js_closure_alloc(record_first_arg as *const u8, 0)
+    js_closure_alloc(crate::fn_info!(record_first_arg, 3), 0)
 }
 
 #[test]

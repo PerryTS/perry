@@ -20,7 +20,10 @@ pub(super) fn schedule_read_stream_turn(id: usize) {
         true
     });
     if should_schedule {
-        let closure = js_closure_alloc(read_stream_turn_impl as *const u8, 1);
+        let closure = js_closure_alloc(
+            crate::fn_info!(read_stream_turn_impl, 0; with_declared(0)),
+            1,
+        );
         js_closure_set_capture_ptr(closure, 0, id as i64);
         let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
     }

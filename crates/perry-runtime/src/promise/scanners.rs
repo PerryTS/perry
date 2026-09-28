@@ -1005,14 +1005,14 @@ pub extern "C" fn js_promise_with_resolvers() -> *mut crate::object::ObjectHeade
 
     // Create resolve closure that resolves this promise.
     let resolve_fn = js_closure_alloc(
-        with_resolvers_resolve_handler as *const u8,
+        crate::fn_info!(with_resolvers_resolve_handler, 1),
         1, // 1 capture: the promise pointer
     );
     crate::closure::js_closure_set_capture_f64(resolve_fn, 0, promise_box);
     let resolve_box = crate::value::js_nanbox_pointer(resolve_fn as i64);
 
     // Create reject closure.
-    let reject_fn = js_closure_alloc(with_resolvers_reject_handler as *const u8, 1);
+    let reject_fn = js_closure_alloc(crate::fn_info!(with_resolvers_reject_handler, 1), 1);
     crate::closure::js_closure_set_capture_f64(reject_fn, 0, promise_box);
     let reject_box = crate::value::js_nanbox_pointer(reject_fn as i64);
 

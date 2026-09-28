@@ -74,7 +74,6 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     if obj.is_null() {
         return;
     }
-    register_wrapper_arities();
 
     let Some(next) = own_closure(obj, b"next") else {
         return;
@@ -117,20 +116,24 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     let obj_now = || js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
 
     for (name, original_h, func) in [
+        (b"next".as_slice(), &next_h, &ASYNC_GENERATOR_NEXT_WRAPPER),
         (
-            b"next".as_slice(),
-            &next_h,
-            async_generator_next_wrapper as crate::closure::body_call::js_body_fn_ty!(a),
+            b"return".as_slice(),
+            &ret_h,
+            &ASYNC_GENERATOR_RETURN_WRAPPER,
         ),
-        (b"return".as_slice(), &ret_h, async_generator_return_wrapper),
-        (b"throw".as_slice(), &throw_h, async_generator_throw_wrapper),
+        (
+            b"throw".as_slice(),
+            &throw_h,
+            &ASYNC_GENERATOR_THROW_WRAPPER,
+        ),
     ] {
         // Inlined rather than routed through `make_method_wrapper` for one
         // reason: that helper takes `original` as a parameter, so the caller
         // would have to bind it BEFORE `js_closure_alloc` runs and the capture
         // store would write a pre-collection address. Reading it from the
         // handle after the allocation is the whole fix.
-        let wrapper = js_closure_alloc(func as *const u8, 2);
+        let wrapper = js_closure_alloc(func, 2);
         js_closure_set_capture_f64(wrapper, 0, state_id as f64);
         js_closure_set_capture_ptr(wrapper, 1, closure_now(original_h) as i64);
         // `set_method` roots both of its pointer arguments before it allocates
@@ -186,24 +189,24 @@ fn set_method(obj: *mut ObjectHeader, name: &[u8], closure: *mut ClosureHeader) 
 }
 
 /// #4547: the queue wrappers each take a single `arg` (the value passed to
-/// `next`/`return`/`throw`). Without a registered arity, dispatch padding has
-/// no declared count, so a 0-arg `gen.return()` / `gen.throw()` read an
-/// uninitialized stack slot for `arg` instead of `undefined`. Record arity 1
-/// for all three func pointers so the call path pads the missing argument.
-fn register_wrapper_arities() {
-    crate::perry_thread_local! {
-        static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    REGISTERED.with(|done| {
-        if done.get() {
-            return;
-        }
-        done.set(true);
-        crate::closure::js_register_closure_arity(async_generator_next_wrapper as *const u8, 1);
-        crate::closure::js_register_closure_arity(async_generator_return_wrapper as *const u8, 1);
-        crate::closure::js_register_closure_arity(async_generator_throw_wrapper as *const u8, 1);
-    });
-}
+/// `next`/`return`/`throw`); their infos record it, so a 0-arg
+/// `gen.return()` / `gen.throw()` pads the missing argument with
+/// `undefined` instead of reading an uninitialized slot.
+static ASYNC_GENERATOR_NEXT_WRAPPER: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        async_generator_next_wrapper as crate::codegen_abi::JsBody1<ClosureHeader>,
+    )
+    .with_declared(1);
+static ASYNC_GENERATOR_RETURN_WRAPPER: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        async_generator_return_wrapper as crate::codegen_abi::JsBody1<ClosureHeader>,
+    )
+    .with_declared(1);
+static ASYNC_GENERATOR_THROW_WRAPPER: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        async_generator_throw_wrapper as crate::codegen_abi::JsBody1<ClosureHeader>,
+    )
+    .with_declared(1);
 
 // #7577: `make_method_wrapper(state_id, original, func)` used to live here. Its
 // signature was the defect — taking `original` as a parameter forced every
@@ -219,9 +222,9 @@ fn make_settle_wrapper(
     is_fulfilled: bool,
 ) -> *mut ClosureHeader {
     let func = if is_fulfilled {
-        async_generator_settle_fulfill as *const u8
+        crate::fn_info!(async_generator_settle_fulfill, 1)
     } else {
-        async_generator_settle_reject as *const u8
+        crate::fn_info!(async_generator_settle_reject, 1)
     };
     let wrapper = js_closure_alloc(func, 2);
     js_closure_set_capture_f64(wrapper, 0, state_id as f64);
@@ -230,7 +233,7 @@ fn make_settle_wrapper(
 }
 
 fn make_drain_wrapper(state_id: usize) -> *mut ClosureHeader {
-    let wrapper = js_closure_alloc(async_generator_drain_wrapper as *const u8, 1);
+    let wrapper = js_closure_alloc(crate::fn_info!(async_generator_drain_wrapper, 0), 1);
     js_closure_set_capture_f64(wrapper, 0, state_id as f64);
     wrapper
 }
@@ -252,7 +255,7 @@ fn is_queue_wrapper(closure: *const ClosureHeader) -> bool {
     if closure.is_null() {
         return false;
     }
-    let func = unsafe { (*closure).func_ptr };
+    let func = unsafe { (*closure).code() };
     func == async_generator_next_wrapper as *const u8
         || func == async_generator_return_wrapper as *const u8
         || func == async_generator_throw_wrapper as *const u8
@@ -426,9 +429,9 @@ fn make_return_step_wrapper(
     is_fulfilled: bool,
 ) -> *mut ClosureHeader {
     let func = if is_fulfilled {
-        async_generator_return_step_fulfill as *const u8
+        crate::fn_info!(async_generator_return_step_fulfill, 1)
     } else {
-        async_generator_return_step_reject as *const u8
+        crate::fn_info!(async_generator_return_step_reject, 1)
     };
     let wrapper = js_closure_alloc(func, 3);
     js_closure_set_capture_f64(wrapper, 0, state_id as f64);

@@ -124,8 +124,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = async_hooks_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_rest(thunk, 0);
+    let thunk = crate::fn_info!(async_hooks_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
@@ -193,8 +192,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
 /// property reads whose static type was erased. Invocation observes the
 /// call-site receiver as its `this` argument, just like the real prototype.
 pub(crate) fn async_resource_prototype_method_value(name: &'static str, length: u32) -> f64 {
-    let thunk = async_hooks_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_rest(thunk, 0);
+    let thunk = crate::fn_info!(async_hooks_prototype_method_thunk, 1; with_rest(0));
     let closure = crate::closure::js_closure_alloc(thunk, 2);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

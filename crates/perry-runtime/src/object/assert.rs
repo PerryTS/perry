@@ -601,7 +601,7 @@ extern "C" fn assert_does_not_reject_rejected(
 }
 
 fn closure3(
-    func: *const u8,
+    func: *const crate::closure::JsFunctionInfo,
     result: *mut crate::promise::Promise,
     expected: f64,
     message: f64,
@@ -1151,13 +1151,13 @@ pub extern "C" fn js_assert_rejects(input: f64, expected: f64, message: f64) -> 
     }
     let result = crate::promise::js_promise_new();
     let on_fulfilled = closure3(
-        assert_rejects_fulfilled as *const u8,
+        crate::fn_info!(assert_rejects_fulfilled, 1),
         result,
         expected,
         message,
     );
     let on_rejected = closure3(
-        assert_rejects_rejected as *const u8,
+        crate::fn_info!(assert_rejects_rejected, 1),
         result,
         expected,
         message,
@@ -1174,9 +1174,9 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
     }
     let result = crate::promise::js_promise_new();
     let on_fulfilled =
-        crate::closure::js_closure_alloc(assert_does_not_reject_fulfilled as *const u8, 1);
+        crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_fulfilled, 1), 1);
     let on_rejected =
-        crate::closure::js_closure_alloc(assert_does_not_reject_rejected as *const u8, 3);
+        crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_rejected, 1), 3);
     crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
     crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);

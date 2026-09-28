@@ -135,8 +135,9 @@ pub struct ClosureHeader {
     pub capture_count: u32,
     /// The function object's ShapeId.
     pub shape_id: u32,
-    /// Pointer to the compiled closure body.
-    pub func_ptr: *const u8,
+    /// The body's static `JsFunctionInfo` (perry-abi): its code address and
+    /// every fact the runtime needs about the body.
+    pub info: *const perry_abi::JsFunctionInfo,
     /// The function object's own-property record (runtime-internal).
     pub props: *mut u8,
 }
@@ -309,8 +310,8 @@ mod layout_tests {
     fn closure_header_matches_runtime() {
         assert_layout!(ClosureHeader, perry_runtime::ClosureHeader);
         assert_eq!(
-            offset_of!(ClosureHeader, func_ptr),
-            offset_of!(perry_runtime::ClosureHeader, func_ptr)
+            offset_of!(ClosureHeader, info),
+            offset_of!(perry_runtime::ClosureHeader, info)
         );
         assert_eq!(
             offset_of!(ClosureHeader, capture_count),

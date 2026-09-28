@@ -19,11 +19,11 @@ macro_rules! closure_call_dispatch {
         /// Route one closure call with a known receiver.
         #[inline(always)]
         pub(crate) fn $dispatch(closure: *const ClosureHeader, this: JsThis $(, $a: f64)*) -> f64 {
-            let func_ptr = get_valid_func_ptr(closure);
-            if func_ptr.is_null() {
+            let Some(info) = crate::closure::closure_info(closure) else {
                 return dispatch_proxy_callee_or_throw(closure, this, &[$($a),*]);
-            }
-            match resolve_strategy(func_ptr).kind() {
+            };
+            let func_ptr = info.code;
+            match resolve_strategy(info).kind() {
                 DispatchKind::BoundMethod => unsafe {
                     dispatch_bound_method(closure, this, &[$($a),*])
                 },
@@ -541,11 +541,11 @@ pub(crate) fn dispatch_call_slice(
 /// More than 16 arguments: route as the per-arity entries do, then call the
 /// body through the padded ladder (`wide_call`).
 fn dispatch_call_wide(closure: *const ClosureHeader, this: JsThis, args: &[f64]) -> f64 {
-    let func_ptr = get_valid_func_ptr(closure);
-    if func_ptr.is_null() {
+    let Some(info) = crate::closure::closure_info(closure) else {
         return dispatch_proxy_callee_or_throw(closure, this, args);
-    }
-    match resolve_strategy(func_ptr).kind() {
+    };
+    let func_ptr = info.code;
+    match resolve_strategy(info).kind() {
         DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, this, args) },
         DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, args) },
         DispatchKind::Rest(fixed_arity, synth) => unsafe {
@@ -572,9 +572,7 @@ mod plain_call_tests {
 
     #[test]
     fn a_plain_call_passes_undefined_this() {
-        let body = observe_dynamic_this as *const u8;
-        let closure = crate::closure::js_closure_alloc(body, 0);
-        crate::closure::js_register_closure_arity(body, 1);
+        let closure = crate::closure::js_closure_alloc(crate::fn_info!(observe_dynamic_this, 1), 0);
 
         // A receiver passed to an enclosing call must not leak into a plain
         // call: the body sees exactly the `undefined` this entry passes.

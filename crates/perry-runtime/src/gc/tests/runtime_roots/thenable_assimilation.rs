@@ -47,11 +47,12 @@ fn test_assimilated_thenable_wrapper_survives_then_callback_copied_minor_gc() {
     activate_malloc_registry_for_tests();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(promise_mutable_root_scanner);
-    crate::closure::js_register_closure_arity(test_thenable_then_force_minor_gc as *const u8, 2);
 
     let scope = RuntimeHandleScope::new();
-    let then_closure =
-        crate::closure::js_closure_alloc(test_thenable_then_force_minor_gc as *const u8, 0);
+    let then_closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(test_thenable_then_force_minor_gc, 2; with_declared(2)),
+        0,
+    );
     let then_handle = scope.root_raw_mut_ptr(then_closure);
 
     // `{ then(resolve, reject) { … } }` — an object literal (class_id 0), so

@@ -116,7 +116,7 @@ fn ensure_runner_scheduled() {
         }
     });
     if should_schedule {
-        let closure = make_closure(test_runner_task as *const u8, 0, 0);
+        let closure = make_closure(crate::fn_info!(test_runner_task, 0), 0, 0);
         crate::timer::js_set_immediate_callback(closure as i64);
     }
 }
@@ -382,7 +382,7 @@ fn call_test_callback(callback: f64, name: &str) -> Result<f64, f64> {
     let arity = crate::closure::closure_length(callback_ptr).unwrap_or(0);
     catch_js(|| {
         if arity >= 2 {
-            let done = scope.root_nanbox_f64(closure_value(test_done as *const u8, 1));
+            let done = scope.root_nanbox_f64(closure_value(crate::fn_info!(test_done, 1), 1));
             crate::closure::js_closure_call2(
                 callback_ptr,
                 crate::closure::plain_call_receiver(),

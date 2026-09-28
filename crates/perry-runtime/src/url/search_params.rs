@@ -1260,16 +1260,15 @@ pub(crate) fn url_search_params_dynamic_call(
 /// object. Returns `None` for names outside the covered surface so unknown
 /// properties still read as `undefined`.
 pub(crate) fn url_search_params_method_value(obj: *const ObjectHeader, name: &str) -> Option<f64> {
-    let (func_ptr, arity): (*const u8, u32) = match name {
-        "append" => (usp_append_thunk as *const u8, 2),
-        "set" => (usp_set_thunk as *const u8, 2),
-        "get" => (usp_get_thunk as *const u8, 1),
-        "has" => (usp_has_thunk as *const u8, 1),
-        "delete" => (usp_delete_thunk as *const u8, 1),
+    let info = match name {
+        "append" => crate::fn_info!(usp_append_thunk, 2; with_declared(2)),
+        "set" => crate::fn_info!(usp_set_thunk, 2; with_declared(2)),
+        "get" => crate::fn_info!(usp_get_thunk, 1; with_declared(1)),
+        "has" => crate::fn_info!(usp_has_thunk, 1; with_declared(1)),
+        "delete" => crate::fn_info!(usp_delete_thunk, 1; with_declared(1)),
         _ => return None,
     };
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(info, 1);
     if closure.is_null() {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }

@@ -19,9 +19,7 @@ fn process_finalization_before_exit_listener_ptr() -> *const crate::closure::Clo
         if !existing.is_null() {
             return existing;
         }
-        let func_ptr = process_finalization_before_exit_listener as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 1);
-        crate::closure::js_register_closure_length(func_ptr, 1);
+        let func_ptr = crate::fn_info!(process_finalization_before_exit_listener, 1; with_declared(1), with_length(1));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         crate::object::set_bound_native_closure_name(closure, "processFinalizationBeforeExit");
         crate::object::set_builtin_closure_length(closure as usize, 1);
@@ -243,21 +241,29 @@ pub(crate) fn process_finalization_value() -> f64 {
     module_set_field(
         obj,
         "register",
-        module_function2("register", process_finalization_register_function, 2),
+        module_function2(
+            "register",
+            crate::fn_info!(process_finalization_register_function, 2; with_declared(2), with_length(2)),
+            2,
+        ),
     );
     module_set_field(
         obj,
         "registerBeforeExit",
         module_function2(
             "registerBeforeExit",
-            process_finalization_register_before_exit_function,
+            crate::fn_info!(process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
             2,
         ),
     );
     module_set_field(
         obj,
         "unregister",
-        module_function1("unregister", process_finalization_unregister_function, 1),
+        module_function1(
+            "unregister",
+            crate::fn_info!(process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
+            1,
+        ),
     );
     let value = module_object_value(obj);
     PROCESS_FINALIZATION_OBJECT.with(|c| c.set(value));

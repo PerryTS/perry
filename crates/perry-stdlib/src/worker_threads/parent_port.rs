@@ -11,52 +11,58 @@ pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectH
     set_object_field(
         obj,
         "postMessage",
-        closure_value(worker_parent_port_post_message as *const u8, 1),
+        closure_value(
+            perry_runtime::fn_info!(worker_parent_port_post_message, 1; with_declared(1)),
+        ),
     );
     set_object_field(
         obj,
         "on",
-        closure_value(worker_parent_port_on as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
     );
     set_object_field(
         obj,
         "addListener",
-        closure_value(worker_parent_port_on as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
     );
     set_object_field(
         obj,
         "once",
-        closure_value(worker_parent_port_on as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_parent_port_on, 2; with_declared(2))),
     );
     set_object_field(
         obj,
         "off",
-        closure_value(worker_parent_port_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_parent_port_off, 2; with_declared(2))),
     );
     set_object_field(
         obj,
         "removeListener",
-        closure_value(worker_parent_port_off as *const u8, 2),
+        closure_value(perry_runtime::fn_info!(worker_parent_port_off, 2; with_declared(2))),
     );
     set_object_field(
         obj,
         "addEventListener",
-        closure_value(worker_parent_port_add_event_listener as *const u8, 2),
+        closure_value(
+            perry_runtime::fn_info!(worker_parent_port_add_event_listener, 2; with_declared(2)),
+        ),
     );
     set_object_field(
         obj,
         "removeEventListener",
-        closure_value(worker_parent_port_remove_event_listener as *const u8, 2),
+        closure_value(
+            perry_runtime::fn_info!(worker_parent_port_remove_event_listener, 2; with_declared(2)),
+        ),
     );
     set_object_field(
         obj,
         "ref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        closure_value(perry_runtime::fn_info!(worker_threads_noop0, 0; with_declared(0))),
     );
     set_object_field(
         obj,
         "unref",
-        closure_value(worker_threads_noop0 as *const u8, 0),
+        closure_value(perry_runtime::fn_info!(worker_threads_noop0, 0; with_declared(0))),
     );
     obj
 }

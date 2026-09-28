@@ -536,8 +536,7 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
             && body.contains("log.call(deprecate, message, site)")
             && body.contains("return fn.apply(this, arguments)")
         {
-            let fp = depd_wrapfunction_outer_thunk as *const u8;
-            crate::closure::js_register_closure_arity(fp, 5);
+            let fp = crate::fn_info!(depd_wrapfunction_outer_thunk, 5; with_declared(5));
             let closure = crate::closure::js_closure_alloc_singleton(fp);
             if !closure.is_null() {
                 return crate::value::js_nanbox_pointer(closure as i64);
@@ -576,7 +575,7 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
 /// is spec-identical to `new Function(…)`, so this is the same entry the
 /// construct paths reach (`lower_call/new.rs` and `construct.rs`). The value
 /// used to carry the shared no-op thunk, so every such call returned
-/// `undefined`. Registered as a rest closure (`populate.rs`), so `rest` holds
+/// `undefined`. Its info records a rest parameter (`populate.rs`), so `rest` holds
 /// every argument.
 #[cfg(not(panic = "abort"))]
 pub(crate) extern "C-unwind" fn global_this_function_call_thunk(

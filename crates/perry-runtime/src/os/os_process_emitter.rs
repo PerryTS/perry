@@ -203,8 +203,10 @@ extern "C" fn process_once_raw_wrapper(
 fn create_process_once_raw_wrapper(
     callback: *const crate::closure::ClosureHeader,
 ) -> *const crate::closure::ClosureHeader {
-    crate::closure::js_register_closure_rest(process_once_raw_wrapper as *const u8, 0);
-    let wrapper = crate::closure::js_closure_alloc(process_once_raw_wrapper as *const u8, 1);
+    let wrapper = crate::closure::js_closure_alloc(
+        crate::fn_info!(process_once_raw_wrapper, 1; with_rest(0)),
+        1,
+    );
     let callback_value =
         f64::from_bits(crate::value::JSValue::pointer(callback as *const u8).bits());
     crate::closure::js_closure_set_capture_f64(wrapper, 0, callback_value);

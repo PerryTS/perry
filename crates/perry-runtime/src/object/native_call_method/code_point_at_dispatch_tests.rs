@@ -100,7 +100,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
         let method = crate::object::global_this::install_proto_method(
             proto,
             "codePointAt",
-            crate::object::string_proto_thunks::string_proto_code_point_at_thunk as *const u8,
+            crate::fn_info!(crate::object::string_proto_thunks::string_proto_code_point_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
         );
         let before = crate::builtins::test_boxed_primitive_payload_count();
@@ -127,7 +127,7 @@ fn builtin_callee_gets_the_primitive_receiver_and_a_user_callee_the_wrapper() {
         ) -> f64 {
             0.0
         }
-        let user = crate::closure::js_closure_alloc(sloppy_user_body as *const u8, 0);
+        let user = crate::closure::js_closure_alloc(crate::fn_info!(sloppy_user_body, 0), 0);
         let user_value = crate::value::js_nanbox_pointer(user as i64);
         let before = crate::builtins::test_boxed_primitive_payload_count();
         let _ = super::call_primitive_closure_value(

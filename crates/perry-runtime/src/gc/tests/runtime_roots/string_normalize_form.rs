@@ -53,7 +53,8 @@ fn normalize_form_coercion_must_not_strand_the_subject_payload() {
     // `{ toString() { <forces a copying minor>; return "NFC" } }`
     let form = crate::object::js_object_alloc(0, 1);
     let form_handle = scope.root_raw_mut_ptr(form);
-    let to_string = crate::closure::js_closure_alloc(normalize_form_force_minor_gc as *const u8, 0);
+    let to_string =
+        crate::closure::js_closure_alloc(crate::fn_info!(normalize_form_force_minor_gc, 0), 0);
     let to_string_handle = scope.root_raw_mut_ptr(to_string);
     let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
     let key_handle = scope.root_string_ptr(key);

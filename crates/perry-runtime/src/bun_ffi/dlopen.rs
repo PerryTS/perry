@@ -5,7 +5,7 @@
 //! single capture is its `SYMS` index, so the shared per-arity thunks
 //! (`sym_thunk_0..=16`) stay signature-compatible with the closure call
 //! ABI (`extern "C" fn(*const ClosureHeader, f64 × arity) -> f64`,
-//! arity-padded by `closure/dispatch` via `js_register_closure_arity`).
+//! arity-padded by `closure/dispatch` from each thunk's `JsFunctionInfo`).
 //!
 //! `close()` calls `dlclose` and poisons the library's symbols: later
 //! calls throw instead of jumping through a dangling handle. This is
@@ -323,25 +323,25 @@ sym_thunk!(
     a15
 );
 
-fn sym_thunk_for(arity: usize) -> *const u8 {
+fn sym_thunk_for(arity: usize) -> *const crate::closure::JsFunctionInfo {
     match arity {
-        0 => sym_thunk_0 as *const u8,
-        1 => sym_thunk_1 as *const u8,
-        2 => sym_thunk_2 as *const u8,
-        3 => sym_thunk_3 as *const u8,
-        4 => sym_thunk_4 as *const u8,
-        5 => sym_thunk_5 as *const u8,
-        6 => sym_thunk_6 as *const u8,
-        7 => sym_thunk_7 as *const u8,
-        8 => sym_thunk_8 as *const u8,
-        9 => sym_thunk_9 as *const u8,
-        10 => sym_thunk_10 as *const u8,
-        11 => sym_thunk_11 as *const u8,
-        12 => sym_thunk_12 as *const u8,
-        13 => sym_thunk_13 as *const u8,
-        14 => sym_thunk_14 as *const u8,
-        15 => sym_thunk_15 as *const u8,
-        _ => sym_thunk_16 as *const u8,
+        0 => crate::fn_info!(sym_thunk_0, 0; with_declared(0), with_length(0)),
+        1 => crate::fn_info!(sym_thunk_1, 1; with_declared(1), with_length(1)),
+        2 => crate::fn_info!(sym_thunk_2, 2; with_declared(2), with_length(2)),
+        3 => crate::fn_info!(sym_thunk_3, 3; with_declared(3), with_length(3)),
+        4 => crate::fn_info!(sym_thunk_4, 4; with_declared(4), with_length(4)),
+        5 => crate::fn_info!(sym_thunk_5, 5; with_declared(5), with_length(5)),
+        6 => crate::fn_info!(sym_thunk_6, 6; with_declared(6), with_length(6)),
+        7 => crate::fn_info!(sym_thunk_7, 7; with_declared(7), with_length(7)),
+        8 => crate::fn_info!(sym_thunk_8, 8; with_declared(8), with_length(8)),
+        9 => crate::fn_info!(sym_thunk_9, 9; with_declared(9), with_length(9)),
+        10 => crate::fn_info!(sym_thunk_10, 10; with_declared(10), with_length(10)),
+        11 => crate::fn_info!(sym_thunk_11, 11; with_declared(11), with_length(11)),
+        12 => crate::fn_info!(sym_thunk_12, 12; with_declared(12), with_length(12)),
+        13 => crate::fn_info!(sym_thunk_13, 13; with_declared(13), with_length(13)),
+        14 => crate::fn_info!(sym_thunk_14, 14; with_declared(14), with_length(14)),
+        15 => crate::fn_info!(sym_thunk_15, 15; with_declared(15), with_length(15)),
+        _ => crate::fn_info!(sym_thunk_16, 16; with_declared(16), with_length(16)),
     }
 }
 
@@ -368,10 +368,13 @@ pub(crate) fn close_library_index(lib_index: usize) {
 /// u64 index. The capture is written as raw bits — a small integer never
 /// classifies as pointer-bearing in the GC layout, so the closure stays
 /// pointer-free.
-fn index_closure(func: *const u8, index: usize, arity: u32, name: &str) -> f64 {
-    crate::closure::js_register_closure_arity(func, arity);
-    crate::closure::js_register_closure_length(func, arity);
-    let closure = crate::closure::js_closure_alloc(func, 1);
+fn index_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    index: usize,
+    arity: u32,
+    name: &str,
+) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 1);
     crate::closure::js_closure_set_capture_bits(closure, 0, index as u64);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
@@ -385,10 +388,8 @@ extern "C" fn noop_close_thunk(
     super::undefined()
 }
 
-fn no_capture_closure(func: *const u8, arity: u32, name: &str) -> f64 {
-    crate::closure::js_register_closure_arity(func, arity);
-    crate::closure::js_register_closure_length(func, arity);
-    let closure = crate::closure::js_closure_alloc(func, 0);
+fn no_capture_closure(info: *const crate::closure::JsFunctionInfo, arity: u32, name: &str) -> f64 {
+    let closure = crate::closure::js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -802,7 +803,12 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         });
     }
 
-    let close_value = index_closure(close_thunk as *const u8, lib_index, 0, "close");
+    let close_value = index_closure(
+        crate::fn_info!(close_thunk, 0; with_declared(0), with_length(0)),
+        lib_index,
+        0,
+        "close",
+    );
     let close_handle = scope.root_nanbox_f64(close_value);
 
     let result = crate::object::js_object_alloc(0, 2);
@@ -905,7 +911,7 @@ pub(crate) unsafe fn link_symbols_value(table_arg: f64) -> f64 {
         });
     }
     let close = scope.root_nanbox_f64(no_capture_closure(
-        noop_close_thunk as *const u8,
+        crate::fn_info!(noop_close_thunk, 0; with_declared(0), with_length(0)),
         0,
         "close",
     ));
@@ -1172,19 +1178,19 @@ pub(crate) unsafe fn node_dlopen_value(path_arg: f64, definitions_arg: f64) -> f
 
     let lib = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 3));
     let close = scope.root_nanbox_f64(index_closure(
-        close_thunk as *const u8,
+        crate::fn_info!(close_thunk, 0; with_declared(0), with_length(0)),
         lib_index,
         0,
         "close",
     ));
     let register = scope.root_nanbox_f64(index_closure(
-        node_register_callback_thunk as *const u8,
+        crate::fn_info!(node_register_callback_thunk, 2; with_declared(2), with_length(2)),
         lib_index,
         2,
         "registerCallback",
     ));
     let unregister = scope.root_nanbox_f64(index_closure(
-        node_unregister_callback_thunk as *const u8,
+        crate::fn_info!(node_unregister_callback_thunk, 1; with_declared(1), with_length(1)),
         lib_index,
         1,
         "unregisterCallback",

@@ -469,8 +469,7 @@ fn as_num_raw(v: f64) -> f64 {
 }
 
 fn host_double_fn() -> f64 {
-    let fp = host_double_thunk as *const u8;
-    crate::closure::js_register_closure_arity(fp, 1);
+    let fp = crate::fn_info!(host_double_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc_singleton(fp);
     crate::value::js_nanbox_pointer(closure as i64)
 }

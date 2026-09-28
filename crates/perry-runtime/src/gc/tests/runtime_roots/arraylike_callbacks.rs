@@ -40,7 +40,7 @@ fn arraylike_map_survives_a_moving_minor_inside_every_callback() {
     ));
     let recv_before = arr as usize;
 
-    let cb = crate::closure::js_closure_alloc_singleton(collect_then_double as *const u8);
+    let cb = crate::closure::js_closure_alloc_singleton(crate::fn_info!(collect_then_double, 3));
     let cb_value = f64::from_bits(crate::JSValue::pointer(cb as *const u8).bits());
 
     let cycles_before = copying_minor_cycles();

@@ -32,8 +32,7 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::{
     is_closure_ptr, js_closure_alloc, js_closure_call0, js_closure_get_capture_ptr,
-    js_closure_set_capture_ptr, js_register_closure_arity, native_call_value_this, ClosureHeader,
-    JsThis,
+    js_closure_set_capture_ptr, native_call_value_this, ClosureHeader, JsThis,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name, js_object_set_field_f64,
@@ -111,9 +110,7 @@ extern "C" fn bound_dispose_thunk(
 }
 
 fn make_bound_dispose_thunk(method: f64, resource: f64) -> f64 {
-    let func = bound_dispose_thunk as *const u8;
-    js_register_closure_arity(func, 0);
-    let closure = js_closure_alloc(func, 2);
+    let closure = js_closure_alloc(crate::fn_info!(bound_dispose_thunk, 0; with_declared(0)), 2);
     if closure.is_null() {
         return undefined();
     }
@@ -262,9 +259,10 @@ extern "C" fn adopt_disposer_thunk(
 }
 
 fn make_adopt_disposer(value: f64, on_dispose: f64) -> f64 {
-    let func = adopt_disposer_thunk as *const u8;
-    js_register_closure_arity(func, 0);
-    let closure = js_closure_alloc(func, 2);
+    let closure = js_closure_alloc(
+        crate::fn_info!(adopt_disposer_thunk, 0; with_declared(0)),
+        2,
+    );
     if closure.is_null() {
         return undefined();
     }

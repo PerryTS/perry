@@ -395,7 +395,7 @@ mod tests {
     /// argument registers held.
     #[test]
     fn reflect_apply_forwards_every_argument() {
-        let closure = crate::closure::js_closure_alloc(weighted_six as *const u8, 0);
+        let closure = crate::closure::js_closure_alloc(crate::fn_info!(weighted_six, 6), 0);
         let f = crate::value::js_nanbox_pointer(closure as i64);
         let args = array_from_args(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         let result = js_reflect_apply(f, f64::from_bits(TAG_UNDEFINED), args);

@@ -27,7 +27,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     if closure.is_null() {
         return None;
     }
-    if (*closure).func_ptr != super::global_this::global_this_builtin_noop_thunk as *const u8 {
+    if (*closure).code() != super::global_this::global_this_builtin_noop_thunk as *const u8 {
         return None;
     }
     super::native_module::builtin_closure_length(closure as usize)?;

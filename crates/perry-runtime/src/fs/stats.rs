@@ -26,7 +26,8 @@ pub(crate) unsafe fn make_stats_predicate(value: bool) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let tag = if value { TAG_TRUE } else { TAG_FALSE };
-    let closure = crate::closure::js_closure_alloc(stats_closure_return_captured as *const u8, 1);
+    let closure =
+        crate::closure::js_closure_alloc(crate::fn_info!(stats_closure_return_captured, 0), 1);
     crate::closure::js_closure_set_capture_f64(closure, 0, f64::from_bits(tag));
     // NaN-box the closure pointer with POINTER_TAG so the dynamic
     // dispatch path in `js_native_call_method` can unwrap it.
@@ -181,6 +182,7 @@ fn ensure_stats_date_accessors_registered() {
                     name.as_ptr(),
                     name.len() as i64,
                     setter as i64,
+                    1,
                 );
             }
         }

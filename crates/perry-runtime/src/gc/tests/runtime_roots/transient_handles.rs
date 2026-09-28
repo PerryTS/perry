@@ -704,11 +704,9 @@ fn test_transient_runtime_handle_closure_captures_gc() {
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
-    let closure = crate::closure::js_closure_alloc_with_captures_singleton(
-        captured_func as *const u8,
-        1,
-        captures.as_ptr(),
-    );
+    let info = crate::fn_info!(captured_func, 0);
+    let closure =
+        crate::closure::js_closure_alloc_with_captures_singleton(info, 1, captures.as_ptr());
 
     let closure_scope = RuntimeHandleScope::new();
     let closure_root = closure_scope.root_raw_mut_ptr(closure);
@@ -724,8 +722,7 @@ fn test_transient_runtime_handle_closure_captures_gc() {
         assert_string_bytes(stored_ptr, b"closure-payload");
     }
 
-    let entries =
-        crate::closure::test_captured_singleton_closure_cache_entries(captured_func as *const u8);
+    let entries = crate::closure::test_captured_singleton_closure_cache_entries(info);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].0.len(), 1);
     assert_eq!(entries[0].0[0] & TAG_MASK, STRING_TAG);

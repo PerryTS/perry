@@ -128,10 +128,7 @@ fn ensure_gc_scanner_registered() {
 }
 
 fn ensure_wrapper_closures_registered() {
-    DOMAIN_WRAPPERS_REGISTERED.call_once(|| {
-        perry_runtime::closure::js_register_closure_rest(domain_bound_wrapper as *const u8, 0);
-        perry_runtime::closure::js_register_closure_rest(domain_intercept_wrapper as *const u8, 0);
-    });
+    DOMAIN_WRAPPERS_REGISTERED.call_once(|| {});
 }
 
 /// `HANDLES` payload releaser (#11471): see `register_handle_payload_releaser`.
@@ -397,7 +394,10 @@ pub unsafe extern "C" fn js_domain_run(
 #[no_mangle]
 pub unsafe extern "C" fn js_domain_bind(handle: Handle, callback: f64) -> f64 {
     ensure_wrapper_closures_registered();
-    let closure = perry_runtime::closure::js_closure_alloc(domain_bound_wrapper as *const u8, 2);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(domain_bound_wrapper, 1; with_rest(0)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 1, callback);
     js_nanbox_pointer(closure as i64)
@@ -406,8 +406,10 @@ pub unsafe extern "C" fn js_domain_bind(handle: Handle, callback: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_domain_intercept(handle: Handle, callback: f64) -> f64 {
     ensure_wrapper_closures_registered();
-    let closure =
-        perry_runtime::closure::js_closure_alloc(domain_intercept_wrapper as *const u8, 2);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(domain_intercept_wrapper, 1; with_rest(0)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 1, callback);
     js_nanbox_pointer(closure as i64)

@@ -2,8 +2,6 @@ use super::*;
 use crate::promise::{Promise, PromiseState};
 
 fn readable() -> f64 {
-    register_arities();
-    crate::child_process::cp_register_arities();
     crate::child_process::cp_build_readable()
 }
 

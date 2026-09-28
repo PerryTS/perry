@@ -121,13 +121,12 @@ fn emit_cached_own_method_guard(
         .block()
         .gep(DOUBLE, &fields, &[(I64, &field_index.to_string())]);
     let closure_value = ctx.block().load(DOUBLE, &slot);
+    // The guard compares the value's `JsFunctionInfo` with the body's.
+    let expected_info = ctx.block().fn_info_ref(closure_symbol);
     let fast_handle = ctx.block().call(
         I64,
         "js_closure_exact_func_guard",
-        &[
-            (DOUBLE, &closure_value),
-            (PTR, &format!("@{closure_symbol}")),
-        ],
+        &[(DOUBLE, &closure_value), (PTR, &expected_info)],
     );
     let guard_passes = ctx.block().icmp_ne(I64, &fast_handle, "0");
     let fast_end = ctx.block().label.clone();
@@ -144,7 +143,7 @@ fn emit_cached_own_method_guard(
             (I32, &field_index.to_string()),
             (PTR, &bytes_global),
             (I64, &name_len),
-            (PTR, &format!("@{closure_symbol}")),
+            (PTR, &expected_info),
             (PTR, &ic_slot.slot_ref),
         ],
     );

@@ -222,7 +222,7 @@ extern "C" fn count_first_and_register(
 ) -> f64 {
     FIRST_CALLS.fetch_add(1, Ordering::SeqCst);
     let server = perry_runtime::closure::js_closure_get_capture_f64(c, 0) as Handle;
-    on_listening(server, closure_of(count_second));
+    on_listening(server, closure_of(perry_runtime::fn_info!(count_second, 0)));
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
@@ -239,13 +239,8 @@ fn on_listening(server: Handle, listener: i64) {
     unsafe { js_ws_on(server, event.as_raw(), listener.get()) };
 }
 
-fn closure_of(
-    f: extern "C" fn(
-        *const perry_runtime::closure::ClosureHeader,
-        perry_runtime::closure::JsThis,
-    ) -> f64,
-) -> i64 {
-    perry_runtime::closure::js_closure_alloc(f as *const u8, 0) as i64
+fn closure_of(info: *const perry_runtime::closure::JsFunctionInfo) -> i64 {
+    perry_runtime::closure::js_closure_alloc(info, 0) as i64
 }
 
 /// A server that reads as bound, with nothing of its own queued.
@@ -282,7 +277,7 @@ fn listening_reaches_each_listener_once() {
     let server = listening_server();
 
     push_ws_event(PendingWsEvent::Listening(server));
-    on_listening(server, closure_of(count_first));
+    on_listening(server, closure_of(perry_runtime::fn_info!(count_first, 0)));
     assert_eq!(
         listening_queued_for(server),
         1,
@@ -291,7 +286,7 @@ fn listening_reaches_each_listener_once() {
     js_ws_process_pending();
     assert_eq!(FIRST_CALLS.load(Ordering::SeqCst), 1);
 
-    on_listening(server, closure_of(count_second));
+    on_listening(server, closure_of(perry_runtime::fn_info!(count_second, 0)));
     assert_eq!(
         listening_queued_for(server),
         1,
@@ -317,7 +312,10 @@ fn a_listener_registered_during_its_event_gets_no_replay() {
     FIRST_CALLS.store(0, Ordering::SeqCst);
     SECOND_CALLS.store(0, Ordering::SeqCst);
     let server = listening_server();
-    let first = perry_runtime::closure::js_closure_alloc(count_first_and_register as *const u8, 1);
+    let first = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(count_first_and_register, 0),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_f64(first, 0, server as f64);
 
     push_ws_event(PendingWsEvent::Listening(server));

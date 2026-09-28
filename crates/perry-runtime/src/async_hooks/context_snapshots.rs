@@ -99,9 +99,11 @@ pub(super) extern "C" fn async_local_storage_snapshot_trampoline(
 }
 
 pub(super) fn async_local_storage_static_snapshot_value() -> f64 {
-    super::register_snapshot_trampoline_once();
     let snapshot_id = register_context_snapshot(crate::async_context::capture_context());
-    let closure = js_closure_alloc(async_local_storage_snapshot_trampoline as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(async_local_storage_snapshot_trampoline, 2; with_rest(1)),
+        1,
+    );
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

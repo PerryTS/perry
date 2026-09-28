@@ -63,7 +63,7 @@ extern "C" fn noop_listener(_c: *const RawClosureHeader, _this: perry_ffi::JsThi
 }
 
 fn fake_listener() -> i64 {
-    let closure = perry_ffi::alloc_closure(noop_listener as perry_ffi::JsBody0, 0);
+    let closure = perry_ffi::alloc_closure(perry_ffi::js_function_info!(noop_listener, 0), 0);
     nanbox_pointer_bits(closure as i64).to_bits() as i64
 }
 

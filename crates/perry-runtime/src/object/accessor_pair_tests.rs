@@ -13,7 +13,7 @@ unsafe fn closure_bits() -> u64 {
     ) -> f64 {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
-    let c = crate::closure::js_closure_alloc(noop as *const u8, 0);
+    let c = crate::closure::js_closure_alloc(crate::fn_info!(noop, 0), 0);
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 

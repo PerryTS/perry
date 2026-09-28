@@ -299,7 +299,7 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
-    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 6);
+    let next = js_closure_alloc(crate::fn_info!(timers_promises_interval_next, 0), 6);
     js_closure_set_capture_f64(next, 0, value);
     js_closure_set_capture_f64(next, 1, signal);
     js_closure_set_capture_f64(next, 2, delay_ms);
@@ -308,11 +308,11 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     js_closure_set_capture_f64(next, 5, validation_error);
     js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
 
-    let ret = js_closure_alloc(timers_promises_interval_return as *const u8, 1);
+    let ret = js_closure_alloc(crate::fn_info!(timers_promises_interval_return, 0), 1);
     js_closure_set_capture_f64(ret, 0, boxed_ptr(next as *const u8));
     js_object_set_field_by_name(obj, string_key(b"return"), boxed_ptr(ret as *const u8));
 
-    let ret = js_closure_alloc(timers_promises_interval_self as *const u8, 1);
+    let ret = js_closure_alloc(crate::fn_info!(timers_promises_interval_self, 0), 1);
     js_closure_set_capture_f64(ret, 0, obj_value);
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if !sym.is_null() {
