@@ -1,0 +1,275 @@
+//! Step 4b loop regions (`stmt::region_loop`): what the emitted IR must contain.
+//!
+//! Two of the region's obligations are invisible to every runtime probe, so
+//! the IR is the only evidence (the argument is `write_pic_barrier_tests.rs`'s
+//! header, and #8183's record that a release build with a store barrier
+//! deleted passes every runtime matrix byte-identically):
+//!
+//! 1. a bare store of a pointer-capable value owes the GC the store IC's
+//!    bookkeeping (remembered set + incremental-mark shading + layout note);
+//! 2. a region that stores tests the two per-object store facts that are not
+//!    shape facts yet (DESIGN §6.5a F-A, F-B) in its guard.
+//!
+//! Each test is written to fail under the matching sabotage of
+//! `region_loop.rs` (recorded in `/root/linktime/PROGRESS.md`).
+
+use super::class_field_barrier_tests::ir_opts;
+use crate::{compile_module, CompileOptions};
+use perry_hir::types::Type;
+use perry_hir::{
+    BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp,
+};
+use std::collections::{HashMap, HashSet};
+
+const O: u32 = 1;
+const V: u32 = 2;
+const N: u32 = 3;
+const I: u32 = 4;
+const H: u32 = 5;
+
+fn opts() -> CompileOptions {
+    let mut o = ir_opts();
+    o.is_entry_module = false;
+    o
+}
+
+fn param(id: u32, name: &str) -> Param {
+    Param {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    }
+}
+
+fn get(key: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(O)),
+        property: key.to_string(),
+        byte_offset: 0,
+    }
+}
+
+fn put(key: &str, value: Expr) -> Stmt {
+    Stmt::Expr(Expr::PutValueSet {
+        target: Box::new(Expr::LocalGet(O)),
+        key: Box::new(Expr::String(key.to_string())),
+        value: Box::new(value),
+        receiver: Box::new(Expr::LocalGet(O)),
+        strict: false,
+    })
+}
+
+/// `function probe(o, v, n) { let h = 0; for (let i = 0; i < n; i++) { body } return h; }`
+fn loop_ir(name: &str, body: Vec<Stmt>) -> String {
+    let mut m = Module::new(name);
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(O, "o"), param(V, "v"), param(N, "n")],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: H,
+                name: "h".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: I,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(I)),
+                    right: Box::new(Expr::LocalGet(N)),
+                }),
+                update: Some(Expr::Update {
+                    id: I,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body,
+            },
+            Stmt::Return(Some(Expr::LocalGet(H))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
+}
+
+/// The blocks of the probe function, label -> (instructions, successors).
+fn blocks(ir: &str) -> HashMap<String, (Vec<String>, Vec<String>)> {
+    let mut out = HashMap::new();
+    let mut in_fn = false;
+    let mut cur: Option<String> = None;
+    let mut insts: Vec<String> = Vec::new();
+    let flush = |cur: &mut Option<String>,
+                 insts: &mut Vec<String>,
+                 out: &mut HashMap<String, (Vec<String>, Vec<String>)>| {
+        if let Some(l) = cur.take() {
+            let succ: Vec<String> = insts
+                .last()
+                .map(|t| {
+                    t.split("label %")
+                        .skip(1)
+                        .map(|x| {
+                            x.chars()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                                .collect()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.insert(l, (std::mem::take(insts), succ));
+        }
+    };
+    for line in ir.lines() {
+        if line.starts_with("define ") && line.contains("probe") {
+            in_fn = true;
+            continue;
+        }
+        if !in_fn {
+            continue;
+        }
+        if line.starts_with('}') {
+            flush(&mut cur, &mut insts, &mut out);
+            in_fn = false;
+            continue;
+        }
+        if !line.starts_with(' ') && line.ends_with(':') {
+            flush(&mut cur, &mut insts, &mut out);
+            cur = Some(line.trim_end_matches(':').to_string());
+            continue;
+        }
+        if !line.trim().is_empty() {
+            insts.push(line.trim().to_string());
+        }
+    }
+    out
+}
+
+/// Every block reachable from an F-body entry (`rloop.fast*`) without
+/// leaving through the split's join.
+fn f_body_blocks(bl: &HashMap<String, (Vec<String>, Vec<String>)>) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let mut work: Vec<String> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.fast"))
+        .cloned()
+        .collect();
+    while let Some(l) = work.pop() {
+        if l.starts_with("rloop.join") || !seen.insert(l.clone()) {
+            continue;
+        }
+        if let Some((_, succ)) = bl.get(&l) {
+            work.extend(succ.iter().cloned());
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
+    // `o.x = v; o.y = i;` — `v` is `any`: pointer-capable.
+    let ir = loop_ir(
+        "region_loop_barrier",
+        vec![put("x", Expr::LocalGet(V)), put("y", Expr::LocalGet(I))],
+    );
+    let bl = blocks(&ir);
+    let f = f_body_blocks(&bl);
+    assert!(
+        !f.is_empty(),
+        "the loop must form a region: no `rloop.fast` block in\n{ir}"
+    );
+    let barrier_in_f = f.iter().any(|l| {
+        bl[l]
+            .0
+            .iter()
+            .any(|i| i.contains("call void @js_write_barrier_slot_validated_parent("))
+    });
+    assert!(
+        barrier_in_f,
+        "a bare store of an `any` value in F-body must carry the remembered-set \
+         / incremental-mark barrier; F-body blocks: {f:?}"
+    );
+}
+
+#[test]
+fn a_storing_regions_guard_tests_the_two_per_object_store_facts() {
+    let ir = loop_ir(
+        "region_loop_admission",
+        vec![
+            put("y", Expr::LocalGet(I)),
+            Stmt::Expr(Expr::LocalSet(
+                H,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(H)),
+                    right: Box::new(get("x")),
+                }),
+            )),
+        ],
+    );
+    let bl = blocks(&ir);
+    let chk: Vec<&String> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.guard.chk"))
+        .collect();
+    assert!(!chk.is_empty(), "no region guard in\n{ir}");
+    for l in chk {
+        let body = bl[l].0.join("\n");
+        assert!(
+            body.contains("and i16") && body.contains(", 128"),
+            "F-B (Array-subclass numeric proof, `_reserved & 0x80`) missing from {l}:\n{body}"
+        );
+        assert!(
+            body.contains(", 768"),
+            "F-A (class-less receiver kind, `_reserved & 0x300`) missing from {l}:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn a_read_only_region_guard_does_not_test_store_facts() {
+    let ir = loop_ir(
+        "region_loop_readonly",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(get("x")),
+                right: Box::new(get("y")),
+            }),
+        ))],
+    );
+    let bl = blocks(&ir);
+    let chk: Vec<&String> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.guard.chk"))
+        .collect();
+    assert!(!chk.is_empty(), "no region guard in\n{ir}");
+    for l in chk {
+        assert!(
+            !bl[l].0.join("\n").contains(", 768"),
+            "a region that never stores must not pay for the store admission"
+        );
+    }
+}
