@@ -1464,6 +1464,8 @@ js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
 js_gc_declare_typed_shape_layout	void	i64,i32u,ptr,i32u,ptr,i32u
 js_gc_enter_unsafe_zone	void	
+js_gc_entry_safepoint	void	
+js_gc_entry_safepoint_args	void	ptr,i32u
 js_gc_exit_unsafe_zone	void	
 js_gc_forget_object_layout	void	i64
 js_gc_init	void	
