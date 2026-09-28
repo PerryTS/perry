@@ -273,3 +273,67 @@ fn a_read_only_region_guard_does_not_test_store_facts() {
         );
     }
 }
+
+#[test]
+fn a_read_region_carries_a_spill_copy_whose_reads_go_through_the_spill_buffer() {
+    // `h = h + o.x` — `x` is only read, so its word may name a spill slot.
+    let ir = loop_ir(
+        "region_loop_spill",
+        vec![Stmt::Expr(Expr::LocalSet(
+            H,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(H)),
+                right: Box::new(get("x")),
+            }),
+        ))],
+    );
+    let bl = blocks(&ir);
+    assert!(
+        bl.keys().any(|l| l.starts_with("rloop.version.spill")),
+        "a region reading a key it never stores must select a spill copy on a flipped word:\n{ir}"
+    );
+    let spill_reads: Vec<&String> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.slot.spill"))
+        .collect();
+    assert!(!spill_reads.is_empty(), "no spill-addressed read in\n{ir}");
+    for l in spill_reads {
+        let body = bl[l].0.join("\n");
+        // meta, then ObjectMeta.spill (+32), then the element past the
+        // 8-byte array header at (field - 32).
+        assert!(
+            body.matches("load i64").count() >= 2
+                && body.contains(", 32")
+                && body.contains("sub i64"),
+            "{l} must load ObjectHeader.meta and ObjectMeta.spill and index by field - 32:\n{body}"
+        );
+    }
+    // The guard recognises the spill word by the flipped id (S5 convention).
+    let flips: Vec<&String> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.guard.flip"))
+        .collect();
+    assert!(!flips.is_empty(), "no flip compare in\n{ir}");
+    assert!(
+        flips
+            .iter()
+            .all(|l| bl[*l].0.join("\n").contains("xor i32")),
+        "the spill word is recognised by its ShapeId with PACKED_SPILL_FLIP flipped"
+    );
+}
+
+#[test]
+fn a_region_that_stores_every_key_it_names_has_no_spill_copy() {
+    let ir = loop_ir("region_loop_nospill", vec![put("y", Expr::LocalGet(I))]);
+    let bl = blocks(&ir);
+    assert!(
+        bl.keys().any(|l| l.starts_with("rloop.guard.chk")),
+        "the loop must still form a region:\n{ir}"
+    );
+    assert!(
+        !bl.keys()
+            .any(|l| l.starts_with("rloop.version.spill") || l.starts_with("rloop.slot.spill")),
+        "a stored key is published only inline, so no spill copy is needed:\n{ir}"
+    );
+}
