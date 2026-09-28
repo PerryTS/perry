@@ -3358,6 +3358,15 @@ js_run_ext_pump	void
 js_run_module_init_catching	void	i64
 js_run_stdlib_pump	void	
 js_runtime_init	void	
+js_runtime_install_bun_cli_utils	void	
+js_runtime_install_compiled	void	
+js_runtime_install_dyn_eval	void	
+js_runtime_install_intl_datetime	void	
+js_runtime_install_intl_namespace	void	
+js_runtime_install_regex_engine	void	
+js_runtime_install_temporal	void	
+js_runtime_install_url_engine	void	
+js_runtime_register_feature_installer	void	ptr
 js_runtime_validate_crypto_key_arg	void	f64,ptr,i32u
 js_runtime_validate_integer_arg	void	f64,ptr,i32u,f64,f64
 js_runtime_validate_string_arg	void	f64,ptr,i32u

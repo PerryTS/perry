@@ -1779,34 +1779,12 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
     );
 }
 
-/// Install the `Intl.*` namespace members. Behind `intl-namespace` (default-on;
-/// the compiler enables it whenever the program mentions `Intl` or any
-/// locale-formatting API): when the feature is off this is a no-op, the
-/// `Intl` global is still a real (empty) namespace object, and `-dead_strip`
-/// reclaims the constructor/option/format machinery that nothing else
-/// reaches. `toLocale*` / `localeCompare` are unaffected — their entry points
-/// and helpers live outside this gate.
-///
-/// `globalThis` population is live in every program, so it reaches the members
-/// only through a slot the `intl-namespace` install fills (see
-/// `crate::feature_hooks`); an empty slot leaves the namespace empty, exactly
-/// as a build without the feature does.
-pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
-    if let Some(install) = INTL_NAMESPACE_MEMBERS.get() {
-        install(ns_obj);
-    }
-}
-
-static INTL_NAMESPACE_MEMBERS: crate::feature_hooks::Hook<fn(*mut ObjectHeader)> =
-    crate::feature_hooks::Hook::empty();
-
-/// The `intl-namespace` install.
+pub use hooked::install_intl_namespace;
 #[cfg(feature = "intl-namespace")]
-pub(crate) fn install_intl_namespace_feature() {
-    INTL_NAMESPACE_MEMBERS.set(install_intl_namespace_members);
-    hooked::install();
-}
+pub(crate) use hooked::install_intl_namespace_feature;
 
+/// The `Intl.*` members `install_intl_namespace` adds once the
+/// `intl-namespace` install has filled its slot.
 #[cfg(feature = "intl-namespace")]
 fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
