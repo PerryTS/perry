@@ -225,6 +225,10 @@ fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    debug_assert!(
+        class_id != 0 && class_id < 0x7FFF_FF00,
+        "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
+    );
     let _no_collect = crate::gc::GcSuppressScope::new();
     let payload = crate::closure::closure_payload_size(1);
     let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
@@ -257,6 +261,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     for key in INTRINSIC_OWN_DATA_KEYS {
         install_intrinsic_own_data(class_id, key);
     }
+    // ClassBody static accessors, in ClassBody order.
+    for key in super::class_registry::class_own_string_member_names(class_id, true) {
+        install_declared_static_accessor(class_id, &key);
+    }
     ptr
 }
 
@@ -284,7 +292,7 @@ fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
 /// not the intrinsic data property, is the class's own `key`.
 fn static_member_owns(class_id: u32, key: &str) -> bool {
     super::class_registry::class_has_own_static_method(class_id, key)
-        || super::class_registry::class_own_static_accessor_ptrs(class_id, key).is_some()
+        || super::class_registry::class_registered_static_accessor_ptrs(class_id, key).is_some()
 }
 
 /// Is own `key` of class `class_id` still the intrinsic data property (not
@@ -336,10 +344,18 @@ pub(crate) fn note_static_field_defined(class_id: u32, key: &str) {
 /// property in line. A key the program already redefined or deleted is left
 /// alone.
 pub(crate) fn note_intrinsic_registration(class_id: u32, key: &str) {
-    if !INTRINSIC_OWN_DATA_KEYS.contains(&key) || class_value_cached(class_id).is_none() {
+    if class_value_cached(class_id).is_none() {
         return;
     }
     let _no_collect = crate::gc::GcSuppressScope::new();
+    // A ClassBody static accessor registered after the object exists (a
+    // computed key registers when the class definition evaluates).
+    if super::class_registry::class_registered_static_accessor_ptrs(class_id, key).is_some() {
+        install_declared_static_accessor(class_id, key);
+    }
+    if !INTRINSIC_OWN_DATA_KEYS.contains(&key) {
+        return;
+    }
     if holds_intrinsic(class_id, key) {
         if static_member_owns(class_id, key) {
             class_static_remove(class_id, key);
@@ -352,6 +368,15 @@ pub(crate) fn note_intrinsic_registration(class_id: u32, key: &str) {
     {
         install_intrinsic_own_data(class_id, key);
     }
+}
+
+/// The class function object for `class_id` if this agent has minted it.
+/// A read that finds none has its answer without minting one: an object that
+/// was never created owns no properties. (A builtin parent such as `Error`
+/// never gets a class function object, so reads walking to it must use this.)
+#[inline]
+pub(crate) fn class_value_if_minted(class_id: u32) -> Option<*mut ClosureHeader> {
+    class_value_cached(class_id)
 }
 
 /// The class function object for `class_id` on this agent (minted on first
@@ -458,6 +483,29 @@ pub unsafe extern "C" fn js_class_static_field_put(
     crate::object::js_object_set_field_by_name(receiver, key, value);
 }
 
+/// The address of class `class_id`'s [[Prototype]] (0 when null): the
+/// recorded one (`Object.setPrototypeOf(C, p)`), else the parent class's
+/// function object, else the parent function (`extends <function>`), else
+/// %Function.prototype%.
+pub(crate) fn class_prototype_addr(class_id: u32) -> usize {
+    if super::class_registry::class_static_prototype_is_nulled(class_id) {
+        return 0;
+    }
+    let proto = super::class_registry::class_static_prototype(class_id) as usize;
+    if proto != 0 {
+        proto
+    } else if let Some(parent) = super::get_parent_class_id(class_id)
+        .filter(|&p| p != 0 && p != class_id && super::is_class_id_registered(p))
+    {
+        class_value_ptr(parent) as usize
+    } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
+        parent
+    } else {
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
+            as usize
+    }
+}
+
 /// [[Get]] of `key` on class `class_id`'s [[Prototype]], `receiver` as the
 /// receiver: the continuation of a read of a key the class does not own
 /// (e.g. its own `name` was deleted — `Sub.name` then reads `Base.name`, a
@@ -471,22 +519,7 @@ pub(crate) fn class_prototype_get(
     receiver: f64,
 ) -> crate::value::JSValue {
     use crate::value::JSValue;
-    if super::class_registry::class_static_prototype_is_nulled(class_id) {
-        return JSValue::undefined();
-    }
-    let proto = super::class_registry::class_static_prototype(class_id) as usize;
-    let proto = if proto != 0 {
-        proto
-    } else if let Some(parent) = super::get_parent_class_id(class_id)
-        .filter(|&p| p != 0 && p != class_id && super::is_class_id_registered(p))
-    {
-        class_value_ptr(parent) as usize
-    } else if let Some(parent) = super::class_registry::class_parent_closure(class_id) {
-        parent
-    } else {
-        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
-            as usize
-    };
+    let proto = class_prototype_addr(class_id);
     if proto == 0 {
         return JSValue::undefined();
     }
@@ -494,6 +527,208 @@ pub(crate) fn class_prototype_get(
     let value = super::js_object_get_field_by_name(proto as *const super::ObjectHeader, key);
     super::field_get_set::accessor_receiver_override_end(prev);
     value
+}
+
+// ---------------------------------------------------------------------------
+// Static accessors: accessor properties of the function object.
+// ---------------------------------------------------------------------------
+
+/// ClassBody defaults for an accessor: `(enumerable, configurable)`.
+pub(crate) const CLASS_ACCESSOR_DEFAULT_ATTRS: (bool, bool) = (false, true);
+
+/// Install — or refresh, when a half arrives later — the ClassBody static
+/// accessor `name` of `class_id` as an accessor property of its function
+/// object's own-property object: the pair holds the reflected closures and
+/// the compiled static entries (`fn() -> value` / `fn(v)`, `this` armed by
+/// the caller — NOT the instance `fn(this)` convention; only this module and
+/// its callers read a class function object's pairs). A half whose compiled
+/// entry is unchanged keeps its closure, so reflection hands out the same
+/// function every time; attributes a `defineProperty` set are kept.
+/// Private (`#x`) accessors are not properties and are never installed.
+fn install_declared_static_accessor(class_id: u32, name: &str) {
+    if name.starts_with('#') {
+        return;
+    }
+    let Some((raw_get, raw_set)) =
+        super::class_registry::class_registered_static_accessor_ptrs(class_id, name)
+    else {
+        return;
+    };
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    let existing = class_static_own_accessor(class_id, name);
+    let (have, enumerable, configurable) = match existing {
+        Some((acc, e, c)) => (acc, e, c),
+        None => (
+            crate::object::accessor_pair::Accessor::default(),
+            CLASS_ACCESSOR_DEFAULT_ATTRS.0,
+            CLASS_ACCESSOR_DEFAULT_ATTRS.1,
+        ),
+    };
+    let half = |raw: usize, have_raw: usize, have: u64, is_setter: bool| -> u64 {
+        if raw == 0 {
+            0
+        } else if raw == have_raw && have != 0 {
+            have
+        } else {
+            super::class_registry::class_accessor_function_value(raw, is_setter, name).to_bits()
+        }
+    };
+    let get = half(raw_get, have.raw_get, have.get, false);
+    let set = half(raw_set, have.raw_set, have.set, true);
+    class_static_define_accessor(
+        class_id,
+        name,
+        crate::object::accessor_pair::Accessor {
+            get,
+            set,
+            raw_get,
+            raw_set,
+        },
+        enumerable,
+        configurable,
+    );
+}
+
+/// Class `class_id`'s own accessor property `name` (ClassBody or
+/// `defineProperty`), with `(enumerable, configurable)`.
+pub(crate) fn class_static_own_accessor(
+    class_id: u32,
+    name: &str,
+) -> Option<(crate::object::accessor_pair::Accessor, bool, bool)> {
+    use crate::object::key_attrs as ka;
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: this agent's live class closure; its bag (if any) is a live
+    // ordinary object whose attributes live with its keys. Nothing allocates.
+    unsafe {
+        let bag = crate::closure::props::bag_of(ptr);
+        if bag.is_null() {
+            return None;
+        }
+        let entry = ka::object_key_entry(bag, name.as_bytes());
+        if entry & ka::ENTRY_ACCESSOR == 0 {
+            return None;
+        }
+        let acc = crate::object::accessor_pair::own_accessor(bag as usize, name.as_bytes())?;
+        Some((
+            acc,
+            entry & ka::ENTRY_NON_ENUMERABLE == 0,
+            entry & ka::ENTRY_NON_CONFIGURABLE == 0,
+        ))
+    }
+}
+
+/// Does class `class_id` own an accessor property `name`?
+pub(crate) fn class_static_has_own_accessor(class_id: u32, name: &str) -> bool {
+    class_static_own_accessor(class_id, name).is_some()
+}
+
+/// Define (or replace) class `class_id`'s own accessor property `name`: a data
+/// property of that name becomes this accessor.
+pub(crate) fn class_static_define_accessor(
+    class_id: u32,
+    name: &str,
+    acc: crate::object::accessor_pair::Accessor,
+    enumerable: bool,
+    configurable: bool,
+) {
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: this agent's live class closure; no collection in this scope.
+    let bag = unsafe { crate::closure::props::bag_ensure(ptr) };
+    crate::object::set_builtin_accessor_pair(
+        bag as usize,
+        name.to_string(),
+        acc,
+        crate::object::PropertyAttrs::new(false, enumerable, configurable),
+    );
+}
+
+/// Change the attributes of class `class_id`'s own accessor `name`.
+pub(crate) fn class_static_set_accessor_attrs(
+    class_id: u32,
+    name: &str,
+    enumerable: bool,
+    configurable: bool,
+) {
+    if let Some((acc, _, _)) = class_static_own_accessor(class_id, name) {
+        class_static_define_accessor(class_id, name, acc, enumerable, configurable);
+    }
+}
+
+/// Class `class_id`'s own accessor property names, in creation order.
+pub(crate) fn class_static_accessor_names(class_id: u32) -> Vec<String> {
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: this agent's live class closure.
+    unsafe { crate::closure::props::bag_accessor_names(ptr) }
+}
+
+/// Run a class static accessor's getter for `receiver`. The compiled
+/// ClassBody entry takes the static convention: `this` is armed (the class
+/// the read started from — a stashed override — or `receiver`) and the
+/// private/capture owner is `receiver`, the evaluation the getter was found
+/// through (#10891/#10893). A `defineProperty` getter is an ordinary closure.
+///
+/// # Safety
+/// `acc` came from [`class_static_own_accessor`].
+pub(crate) unsafe fn class_static_accessor_call_get(
+    acc: crate::object::accessor_pair::Accessor,
+    receiver: f64,
+) -> f64 {
+    let this = crate::object::field_get_set::accessor_receiver_override_take().unwrap_or(receiver);
+    if acc.raw_get != 0 {
+        crate::object::static_this_arm_if_unarmed(this);
+        crate::object::static_private_owner_push(receiver);
+        let f: extern "C" fn() -> f64 = std::mem::transmute(acc.raw_get);
+        let result = f();
+        crate::object::static_private_owner_pop();
+        crate::object::static_this_disarm();
+        return result;
+    }
+    if acc.get != 0 {
+        return f64::from_bits(crate::object::invoke_accessor_getter(acc.get, this).bits());
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Run a class static accessor's setter; `false` when the accessor has none.
+///
+/// # Safety
+/// As [`class_static_accessor_call_get`].
+pub(crate) unsafe fn class_static_accessor_call_set(
+    acc: crate::object::accessor_pair::Accessor,
+    receiver: f64,
+    value: f64,
+) -> bool {
+    if acc.raw_set != 0 {
+        crate::object::static_this_arm_if_unarmed(receiver);
+        crate::object::static_private_owner_push(receiver);
+        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let _ = f(value);
+        crate::object::static_private_owner_pop();
+        crate::object::static_this_disarm();
+        return true;
+    }
+    if acc.set != 0 {
+        crate::object::invoke_accessor_setter(acc.set, receiver, value);
+        return true;
+    }
+    false
+}
+
+/// `Object.getOwnPropertyDescriptor(C, name)` for an own accessor of the class.
+pub(crate) fn class_static_accessor_descriptor(class_id: u32, name: &str) -> Option<f64> {
+    let (acc, enumerable, configurable) = class_static_own_accessor(class_id, name)?;
+    let undef = crate::value::TAG_UNDEFINED;
+    // SAFETY: both halves are the property's own closure values (or
+    // undefined); the builder roots them across its allocation.
+    Some(unsafe {
+        crate::object::descriptors::build_accessor_descriptor(
+            f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
+            f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
+            enumerable,
+            configurable,
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +844,44 @@ mod tests {
         assert_eq!(class_value_id(other), Some(0x6A02));
     }
 
+    /// A static walk that reaches a BUILTIN parent (`class E extends Error`)
+    /// stops there: a builtin id has no class function object, so no reader
+    /// may mint one for it (minting `0xFFFF_0001` grew the class-value
+    /// directory to 16M pages, which every collection then scanned).
+    #[test]
+    fn a_builtin_parent_never_gets_a_class_function_object() {
+        let cid = 0x6D71;
+        register(cid);
+        crate::object::js_register_class_parent(cid, crate::error::CLASS_ID_ERROR);
+        let recv = class_value(cid);
+        let (_, pages_before) = CLASS_VALUES.with(std::cell::Cell::get);
+        let applied = unsafe {
+            crate::object::class_registry::class_static_accessor_setter_apply(cid, "zz", recv, 1.0)
+        };
+        assert!(!applied, "no static accessor named zz on the chain");
+        assert!(!crate::object::class_registry::static_accessor_in_chain(
+            cid, "zz"
+        ));
+        // A static symbol read up the chain (latch armed, as once any class
+        // has a static symbol member) reaches Error too and must not mint.
+        crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.arm();
+        let sym = unsafe { crate::symbol::js_symbol_new_empty() };
+        assert!(crate::symbol::class_static_symbol_lookup_in_chain(cid, sym).is_none());
+        assert!(
+            crate::symbol::class_static_symbol_keys_for_class(crate::error::CLASS_ID_ERROR)
+                .is_empty()
+        );
+        assert!(
+            class_value_cached(crate::error::CLASS_ID_ERROR).is_none(),
+            "the builtin Error id must not get a class function object"
+        );
+        let (_, pages_after) = CLASS_VALUES.with(std::cell::Cell::get);
+        assert_eq!(
+            pages_after, pages_before,
+            "the walks grew the class-value directory"
+        );
+    }
+
     /// The table is a root: the scan visits every minted class value.
     #[test]
     fn class_value_table_is_scanned() {
@@ -707,6 +980,50 @@ mod tests {
             None,
             "a static method named `name` is the class's own `name`"
         );
+    }
+
+    /// A ClassBody static accessor is an accessor property of the class
+    /// function object: ClassBody attributes, one closure per half across
+    /// reads, attributes changed in place, and a delete removes it.
+    #[test]
+    fn static_accessors_are_accessor_properties_of_the_function_object() {
+        let cid = 0x6E01;
+        register(cid);
+        extern "C" fn getter() -> f64 {
+            41.0
+        }
+        unsafe {
+            crate::object::js_register_class_name(cid, b"Acc".as_ptr(), 3);
+            crate::object::class_registry::js_register_class_static_getter(
+                cid as i64,
+                b"g".as_ptr(),
+                1,
+                getter as *const () as usize as i64,
+            );
+        }
+        let (acc, enumerable, configurable) =
+            class_static_own_accessor(cid, "g").expect("an own accessor property");
+        assert_ne!(acc.get, 0, "a reflected getter closure");
+        assert_eq!(acc.set, 0);
+        assert_eq!((enumerable, configurable), CLASS_ACCESSOR_DEFAULT_ATTRS);
+        let again = class_static_own_accessor(cid, "g").unwrap().0;
+        assert_eq!(again.get, acc.get, "one closure per half");
+        let ptr = class_value_ptr(cid) as usize;
+        assert_eq!(
+            unsafe { crate::closure::props::bag_get(ptr, b"g") },
+            None,
+            "an accessor key has no data value"
+        );
+        let got = unsafe { class_static_accessor_call_get(acc, class_value(cid)) };
+        assert_eq!(got, 41.0);
+        class_static_set_accessor_attrs(cid, "g", true, false);
+        assert_eq!(
+            class_static_own_accessor(cid, "g").map(|(_, e, c)| (e, c)),
+            Some((true, false))
+        );
+        class_static_set_accessor_attrs(cid, "g", false, true);
+        assert!(class_static_remove(cid, "g"), "delete removes the property");
+        assert!(class_static_own_accessor(cid, "g").is_none());
     }
 
     /// Only the function object's own code pointer names a class.

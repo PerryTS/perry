@@ -69,18 +69,10 @@ pub extern "C" fn js_object_delete_field(
         unsafe {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
-                if super::class_registry::class_name_for_id(class_id).is_some() {
-                    if super::class_registry::static_declared_accessor_ptrs(class_id, name)
-                        .is_some()
-                        && !super::class_registry::static_accessor_attrs(class_id, name).1
-                    {
-                        return 0;
-                    }
-                    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
-                    super::class_registry::class_mark_key_deleted(class_id, name);
-                    super::class_registry::invalidate_class_string_member_order(
-                        class_id, name, true,
-                    );
+                if super::class_registry::class_name_for_id(class_id).is_some()
+                    && class_delete_own_key(class_id, name) == 0
+                {
+                    return 0;
                 }
                 // #6363: a native HANDLE's own properties are its user expandos.
                 // `delete` used to unconditionally report success while LEAVING
@@ -204,6 +196,10 @@ pub extern "C" fn js_object_delete_field(
         // user-attached props are dropped from the dynamic-prop table outright.
         if crate::closure::is_closure_ptr(obj as usize) {
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                // A class constructor: [[Delete]] on its own property.
+                if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
+                    return class_delete_own_key(class_id, name);
+                }
                 // A plain (non-arrow, non-bound) function's `prototype` is a
                 // non-configurable own property. `get_property_attrs` only knows
                 // about it once #3655 has lazily registered a descriptor (on first
@@ -791,6 +787,20 @@ pub extern "C" fn js_object_delete_field(
 #[inline]
 fn delete_receiver_is_pointer(obj_value: f64) -> bool {
     crate::value::JSValue::from_bits(obj_value.to_bits()).is_pointer()
+}
+
+/// `[[Delete]]` of class `class_id`'s own string key `name` (the class
+/// constructor's own property): `0` when it is non-configurable.
+fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
+    if crate::object::class_value::class_static_own_accessor(class_id, name)
+        .is_some_and(|(_, _, configurable)| !configurable)
+    {
+        return 0;
+    }
+    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
+    super::class_registry::class_mark_key_deleted(class_id, name);
+    super::class_registry::invalidate_class_string_member_order(class_id, name, true);
+    1
 }
 
 fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
