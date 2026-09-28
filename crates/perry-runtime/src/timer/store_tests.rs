@@ -392,6 +392,77 @@ fn purging_an_agent_drops_its_partition() {
     assert!(with_current_existing(|t| t.any_pending()).is_none());
 }
 
+/// `remove_by_id` frees an Immediate's slab slot but leaves its index queued
+/// in `check` as a placeholder (O(1) cancel). If a later `setTimeout` reuses
+/// that freed slot, `pop_check` must recognize the placeholder is stale
+/// (its stored `seq` no longer matches the slot's new occupant) rather than
+/// stealing the reused Timeout — which is still referenced by the timer heap
+/// and would later panic `key()`'s "heap index is live" assert. Regression
+/// for the ABA bug fixed alongside this test.
+#[test]
+fn stale_check_placeholder_does_not_steal_a_reused_slab_slot() {
+    reset_for_test();
+    let base = Instant::now();
+    with_current(|timers| {
+        let immediate = timers.insert_check(entry_at(1, Class::Immediate, base, 0));
+        assert!(timers
+            .remove_by_id(1, |class| class == Class::Immediate)
+            .is_some());
+
+        let reused = timers.insert_timer(entry_at(2, Class::Timeout, base, 10));
+        assert_eq!(
+            reused, immediate,
+            "the test must actually exercise slab slot reuse"
+        );
+
+        assert!(
+            timers.pop_check(u64::MAX).is_none(),
+            "the stale placeholder must not steal the reused entry"
+        );
+
+        let now = base + Duration::from_millis(50);
+        assert_eq!(
+            timers.pop_due(now, u64::MAX).map(|e| e.id),
+            Some(2),
+            "the reused Timeout must still be reachable through the heap"
+        );
+    });
+}
+
+/// Same ABA hazard, for the poll queue: `remove_by_id` on a `Pending` entry
+/// leaves a placeholder in `poll_ready`, and a later timer reusing its slab
+/// slot must not be stolen by `pop_poll`.
+#[test]
+fn stale_poll_placeholder_does_not_steal_a_reused_slab_slot() {
+    reset_for_test();
+    let base = Instant::now();
+    with_current(|timers| {
+        let pending = timers.insert_pending(entry_at(1, Class::Pending, base, 0));
+        timers.promote_pending();
+        assert!(timers
+            .remove_by_id(1, |class| class == Class::Pending)
+            .is_some());
+
+        let reused = timers.insert_timer(entry_at(2, Class::Timeout, base, 10));
+        assert_eq!(
+            reused, pending,
+            "the test must actually exercise slab slot reuse"
+        );
+
+        assert!(
+            timers.pop_poll().is_none(),
+            "the stale placeholder must not steal the reused entry"
+        );
+
+        let now = base + Duration::from_millis(50);
+        assert_eq!(
+            timers.pop_due(now, u64::MAX).map(|e| e.id),
+            Some(2),
+            "the reused Timeout must still be reachable through the heap"
+        );
+    });
+}
+
 /// A thousand inserts and cancels in mixed order must leave the heap a valid
 /// min-heap: the drain order is the sorted order. This is the invariant a
 /// hand-written sift-up/sift-down most easily breaks.

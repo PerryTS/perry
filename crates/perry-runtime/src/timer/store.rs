@@ -219,9 +219,19 @@ pub(super) struct AgentTimers {
     refed: Vec<usize>,
     /// Slab indices, min-heap on `(deadline, seq)`, unref'd entries only.
     unrefed: Vec<usize>,
-    /// Check-phase queue in scheduling order. Holds slab indices; a cancelled
-    /// entry leaves a `None` slab slot behind, skipped on pop.
-    check: VecDeque<usize>,
+    /// Check-phase queue in scheduling order. Holds `(slab index, seq)`
+    /// placeholders — not bare indices — because `remove_by_id` frees the
+    /// slab slot (pushes it to `free`) but deliberately leaves this queue's
+    /// entry behind rather than paying for an O(n) removal (see
+    /// `remove_by_id`). A later insert can reuse that same slab index before
+    /// this queue's placeholder is popped; without `seq` in the placeholder,
+    /// `pop_check` would take the *new* occupant, still referenced by the
+    /// timer heap, and a later heap operation would panic on a slab slot
+    /// `take()` already emptied out from under it (#panic "heap index is
+    /// live"). Comparing the stored `seq` against the slot's current
+    /// occupant tells a stale placeholder (cancelled, slot reused) from a
+    /// live one, at the cost of one field per queue entry.
+    check: VecDeque<(usize, u64)>,
     /// Ref'd entries currently in `check`.
     refed_check: usize,
     /// Live (not cancelled) entries in `check`, and in the two poll queues.
@@ -233,9 +243,10 @@ pub(super) struct AgentTimers {
     poll_live: usize,
     /// Native completion callbacks waiting for the poll phase that will run
     /// them, and the ones still waiting to become eligible. See
-    /// [`AgentTimers::promote_pending`].
-    poll_ready: VecDeque<usize>,
-    poll_staged: VecDeque<usize>,
+    /// [`AgentTimers::promote_pending`]. `(slab index, seq)` placeholders,
+    /// for the same ABA reason `check` uses them.
+    poll_ready: VecDeque<(usize, u64)>,
+    poll_staged: VecDeque<(usize, u64)>,
     by_id: BTreeMap<i64, usize>,
     next_seq: u64,
 }
@@ -410,7 +421,8 @@ impl AgentTimers {
         debug_assert_eq!(entry.class, Class::Immediate);
         let refed = entry.refed;
         let index = self.alloc(entry);
-        self.check.push_back(index);
+        let seq = self.slab[index].as_ref().expect("just allocated").seq;
+        self.check.push_back((index, seq));
         self.refed_check += usize::from(refed);
         self.check_live += 1;
         index
@@ -488,21 +500,26 @@ impl AgentTimers {
     /// scheduled *by* a check callback runs on the next turn, as in Node.
     pub(super) fn pop_check(&mut self, horizon: u64) -> Option<Entry> {
         loop {
-            let index = *self.check.front()?;
-            match self.slab.get(index).and_then(|e| e.as_ref()) {
-                // Cancelled: its slab slot is already gone. Drop the placeholder.
-                None => {
-                    self.check.pop_front();
-                }
-                Some(entry) if entry.seq >= horizon => return None,
-                Some(entry) => {
-                    let refed = entry.refed;
-                    self.check.pop_front();
-                    self.refed_check -= usize::from(refed);
-                    self.check_live -= 1;
-                    return self.take(index);
-                }
+            let (index, seq) = *self.check.front()?;
+            let live = match self.slab.get(index).and_then(|e| e.as_ref()) {
+                // Cancelled: its slab slot is already gone.
+                None => None,
+                // Stale: the slot was reused by a later insert (ABA) — this
+                // placeholder's occupant is not the entry it was queued for.
+                Some(entry) if entry.seq != seq => None,
+                Some(entry) => Some((entry.seq, entry.refed)),
+            };
+            let Some((entry_seq, refed)) = live else {
+                self.check.pop_front();
+                continue;
+            };
+            if entry_seq >= horizon {
+                return None;
             }
+            self.check.pop_front();
+            self.refed_check -= usize::from(refed);
+            self.check_live -= 1;
+            return self.take(index);
         }
     }
 
@@ -522,7 +539,8 @@ impl AgentTimers {
     pub(super) fn insert_pending(&mut self, entry: Entry) -> usize {
         debug_assert_eq!(entry.class, Class::Pending);
         let index = self.alloc(entry);
-        self.poll_staged.push_back(index);
+        let seq = self.slab[index].as_ref().expect("just allocated").seq;
+        self.poll_staged.push_back((index, seq));
         self.poll_live += 1;
         index
     }
@@ -530,18 +548,20 @@ impl AgentTimers {
     /// Take the next native completion callback the poll phase may run.
     pub(super) fn pop_poll(&mut self) -> Option<Entry> {
         loop {
-            let index = *self.poll_ready.front()?;
-            match self.slab.get(index).and_then(|e| e.as_ref()) {
-                // Cancelled: drop the placeholder and look at the next one.
-                None => {
-                    self.poll_ready.pop_front();
-                }
-                Some(_) => {
-                    self.poll_ready.pop_front();
-                    self.poll_live -= 1;
-                    return self.take(index);
-                }
+            let (index, seq) = *self.poll_ready.front()?;
+            let live = matches!(
+                self.slab.get(index).and_then(|e| e.as_ref()),
+                // A slot whose current occupant's `seq` disagrees is either
+                // cancelled (slot empty) or ABA-reused by a later insert.
+                Some(entry) if entry.seq == seq
+            );
+            if !live {
+                self.poll_ready.pop_front();
+                continue;
             }
+            self.poll_ready.pop_front();
+            self.poll_live -= 1;
+            return self.take(index);
         }
     }
 
@@ -559,7 +579,10 @@ impl AgentTimers {
             self.poll_ready
                 .iter()
                 .chain(self.poll_staged.iter())
-                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .filter(|&&(i, seq)| matches!(
+                    self.slab.get(i).and_then(|e| e.as_ref()),
+                    Some(entry) if entry.seq == seq
+                ))
                 .count(),
             "poll_live drifted from the poll queues"
         );
@@ -586,10 +609,12 @@ impl AgentTimers {
         if class.is_timer() {
             self.heap_detach(index);
         } else if class == Class::Pending {
-            // Leave the queue placeholder; `pop_poll` skips an emptied slot.
+            // Leave the queue placeholder; `pop_poll` skips it once the slot
+            // is empty (cancelled) or its `seq` no longer matches (reused).
             self.poll_live -= 1;
         } else {
-            // Leave the queue placeholder: `pop_check` skips an emptied slot.
+            // Leave the queue placeholder: `pop_check` skips it once the slot
+            // is empty (cancelled) or its `seq` no longer matches (reused).
             // Removing it here would be O(n) in the queue length for no gain.
             let refed = self.slab[index].as_ref().expect("live entry").refed;
             self.refed_check -= usize::from(refed);
@@ -682,7 +707,10 @@ impl AgentTimers {
             self.check_live,
             self.check
                 .iter()
-                .filter(|&&i| self.slab.get(i).is_some_and(Option::is_some))
+                .filter(|&&(i, seq)| matches!(
+                    self.slab.get(i).and_then(|e| e.as_ref()),
+                    Some(entry) if entry.seq == seq
+                ))
                 .count(),
             "check_live drifted from the check queue"
         );
