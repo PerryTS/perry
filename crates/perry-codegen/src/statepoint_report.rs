@@ -91,6 +91,36 @@ pub(crate) fn note_gc_map(functions: usize, records: usize, roots: usize) {
     }
 }
 
+/// RFC deferred collection S5: function-entry polls, summed over modules.
+/// `[scaffolds, kept_indirect, kept_scc, recursive_sccs, uncovered_sccs]`.
+static ENTRY_POLLS: Mutex<[u64; 5]> = Mutex::new([0; 5]);
+
+/// Record one module's entry-poll finalisation. Called from
+/// `entry_polls::finalize_module`.
+pub(crate) fn note_entry_polls(stats: &crate::entry_polls::EntryPollStats) {
+    if !enabled() {
+        return;
+    }
+    if let Ok(mut totals) = ENTRY_POLLS.lock() {
+        for (slot, value) in totals.iter_mut().zip([
+            stats.scaffolds,
+            stats.kept_indirect,
+            stats.kept_scc,
+            stats.recursive_sccs,
+            stats.uncovered_sccs,
+        ]) {
+            *slot += value as u64;
+        }
+    }
+}
+
+fn take_entry_polls() -> [u64; 5] {
+    match ENTRY_POLLS.lock() {
+        Ok(mut totals) => std::mem::take(&mut *totals),
+        Err(_) => [0; 5],
+    }
+}
+
 fn take_gc_map() -> GcMapTotals {
     match GC_MAP.lock() {
         Ok(mut totals) => std::mem::take(&mut *totals),
@@ -172,6 +202,13 @@ fn render_text_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
     let mut out = String::from(
         "Perry native-stack GC report (--statepoint-report)\n\
          ==================================================\n\n",
+    );
+    let [scaffolds, kept_indirect, kept_scc, sccs, uncovered] = take_entry_polls();
+    let _ = writeln!(
+        out,
+        "entry polls: {} kept ({kept_indirect} indirect-entry, {kept_scc} recursive-SCC) of \
+         {scaffolds} scaffolds; {sccs} recursive SCCs, {uncovered} allocating without a candidate",
+        kept_indirect + kept_scc
     );
     if records.is_empty() {
         out.push_str(

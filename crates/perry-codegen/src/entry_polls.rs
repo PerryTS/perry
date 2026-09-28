@@ -329,6 +329,7 @@ pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollSta
         }
         neutralise(function, &site);
     }
+    crate::statepoint_report::note_entry_polls(&stats);
     stats
 }
 
