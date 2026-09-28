@@ -1431,6 +1431,12 @@ pub(crate) fn lower_split(
     let ok = verify(ctx, fast_first_block, scan_start, scan_end, &active.emitted);
     if !ok {
         stat(4, 1);
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("2") {
+            eprintln!(
+                "[perry region] F-body discarded by the verifier in {}",
+                ctx.func.name
+            );
+        }
     }
 
     // G-body: today's lowering.
