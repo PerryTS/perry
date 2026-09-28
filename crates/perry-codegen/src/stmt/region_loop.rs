@@ -1722,28 +1722,10 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         }
     }
     let values: Vec<String> = values.into_iter().map(|v| v.expect("lowered")).collect();
-    let fold_i = ctx.new_block("rloop.tree.fold");
     let gen_i = ctx.new_block("rloop.tree.generic");
     let merge_i = ctx.new_block("rloop.tree.merge");
-    let fold_l = ctx.block_label(fold_i);
     let gen_l = ctx.block_label(gen_i);
     let merge_l = ctx.block_label(merge_i);
-    let mut all_num: Option<String> = None;
-    for (v, n) in values.iter().zip(needs.iter()) {
-        if !n {
-            continue;
-        }
-        let is_num = crate::stmt::emit_js_value_is_number(ctx, v);
-        all_num = Some(match all_num {
-            Some(prev) => ctx.block().and(I1, &prev, &is_num),
-            None => is_num,
-        });
-    }
-    match all_num {
-        Some(c) => ctx.block().cond_br(&c, &fold_l, &gen_l),
-        None => ctx.block().br(&fold_l),
-    }
-    ctx.current_block = fold_i;
     fn fold(ctx: &mut FnCtx<'_>, e: &Expr, values: &[String], next: &mut usize) -> String {
         if let Expr::Binary {
             op: BinaryOp::Add,
@@ -1759,9 +1741,22 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         *next += 1;
         v
     }
+    // The fold runs first and is verified by its RESULT: every non-number a
+    // leaf can hold is a NaN-box (a tag in the positive NaN suffix, an INT32
+    // box included), and IEEE addition propagates a NaN from any operand, so a
+    // non-NaN sum proves every leaf was a number and `+` was numeric addition
+    // throughout. A NaN sum (a boxed leaf, or a genuine NaN operand) takes the
+    // generic arm, which recomputes the tree from scratch: the reads are own
+    // data slots, the other leaves are effect-free, so nothing is observed
+    // twice. One ordered compare replaces a per-leaf tag test.
     let fast = fold(ctx, e, &values, &mut 0);
     let fast_end = ctx.block().label.clone();
-    ctx.block().br(&merge_l);
+    if needs.iter().any(|n| *n) {
+        let ok = ctx.block().fcmp("ord", &fast, "0.0");
+        ctx.block().cond_br(&ok, &merge_l, &gen_l);
+    } else {
+        ctx.block().br(&merge_l);
+    }
     // The generic arm: the tree in source order through today's lowering,
     // with the facts masked (it may run JS between its reads), then the flag.
     ctx.current_block = gen_i;
