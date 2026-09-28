@@ -35,6 +35,21 @@ console.log("user Stats class:", new Stats().mtime, new Stats().constructor.name
 console.log("fs Stats unaffected:", plain.mtime instanceof Date);
 
 show("statSync", plain);
+
+// Pinned fractional timestamps: the Date takes Math.round of the fractional
+// ms, up at .9 and down at .4.
+const rounded = ROOT + "/rounded.txt";
+fs.writeFileSync(rounded, "r");
+for (const [label, seconds, expected] of [["up", 1000.0009, 1000001], ["down", 1000.0004, 1000000]] as const) {
+  fs.utimesSync(rounded, seconds, seconds);
+  const r = fs.statSync(rounded);
+  console.log(
+    `rounding ${label}:`,
+    r.mtimeMs % 1 !== 0,
+    r.mtime.getTime() === expected,
+    r.mtime.getTime() === Math.round(r.mtimeMs),
+  );
+}
 show("lstatSync", fs.lstatSync(file));
 const fd = fs.openSync(file, "r");
 show("fstatSync", fs.fstatSync(fd));
