@@ -154,15 +154,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 });
                 let blk = ctx.block();
-                let msg_handle = unbox_to_i64(blk, &m);
+                // #11519: the message goes over NaN-boxed; the runtime coerces
+                // it. Masking it to a `*StringHeader` here turned an inline
+                // SSO message into a garbage address.
                 let err_handle = blk.call(
                     I64,
                     "js_aggregateerror_new_full",
-                    &[
-                        (DOUBLE, &errors_box),
-                        (I64, &msg_handle),
-                        (DOUBLE, &options_box),
-                    ],
+                    &[(DOUBLE, &errors_box), (DOUBLE, &m), (DOUBLE, &options_box)],
                 );
                 Ok(nanbox_pointer_inline(blk, &err_handle))
             })

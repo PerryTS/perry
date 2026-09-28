@@ -2,16 +2,16 @@
   "platforms": {
     "darwin-arm64": {
       "async": {
-        "max_bytes": 5804512
+        "max_bytes": 6017952
       },
       "cli": {
-        "max_bytes": 5804416
+        "max_bytes": 6183344
       },
       "json": {
-        "max_bytes": 5721728
+        "max_bytes": 5935200
       },
       "loop": {
-        "max_bytes": 5589376
+        "max_bytes": 5786304
       }
     }
   },

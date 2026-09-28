@@ -531,13 +531,8 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // perry-ext-net, which register their own pumps with the runtime (the
     // bundled copies that drained here were deleted in tokio lane L4).
 
-    #[cfg(all(
-        feature = "tls-runtime",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    {
-        count += unsafe { crate::tls::js_tls_process_pending() };
+    if let Some(pump) = PUMP_TLS.get() {
+        count += unsafe { pump() };
     }
 
     // Process pending worker_threads messages (stdin reader)
@@ -553,18 +548,16 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     count += crate::readline::js_readline_process_pending();
 
     // Process pending crypto Hash/Hmac stream digest events (#2479).
-    #[cfg(feature = "crypto")]
-    {
-        count += unsafe { crate::crypto::js_crypto_stream_process_pending() };
+    if let Some(pump) = PUMP_CRYPTO.get() {
+        count += unsafe { pump() };
     }
 
     // Process pending zlib stream events (#1843) — `createGzip()` etc.
     // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
     // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
     // here on the main thread. Bundled path (perry-stdlib's own zlib mod):
-    #[cfg(feature = "compression-gzip")]
-    {
-        count += unsafe { crate::zlib::js_zlib_process_pending() };
+    if let Some(pump) = PUMP_ZLIB.get() {
+        count += unsafe { pump() };
     }
 
     count
@@ -586,6 +579,76 @@ fn has_own_pending_resolution() -> bool {
             .unwrap()
             .iter()
             .any(|resolution| resolution.owner == agent)
+}
+
+// ---- optional-feature pump contributions (see `super::feature_hooks`) ----
+//
+// The pump and the has-active gate are always live, so they reach the optional
+// subsystems only through these slots; see `common::dispatch` for the scheme.
+use super::feature_hooks::Hook;
+
+/// An async pump contribution: returns how many completions it drained.
+type PumpArm = unsafe fn() -> i32;
+/// An active-handle contribution: `true` keeps the event loop alive.
+type ActiveArm = fn() -> bool;
+
+static PUMP_TLS: Hook<PumpArm> = Hook::empty();
+static PUMP_CRYPTO: Hook<PumpArm> = Hook::empty();
+static PUMP_ZLIB: Hook<PumpArm> = Hook::empty();
+static ACTIVE_TURNLOOP_HTTP: Hook<ActiveArm> = Hook::empty();
+static ACTIVE_TURNLOOP_SMTP: Hook<ActiveArm> = Hook::empty();
+static ACTIVE_TLS: Hook<ActiveArm> = Hook::empty();
+static ACTIVE_CRYPTO: Hook<ActiveArm> = Hook::empty();
+static ACTIVE_ZLIB: Hook<ActiveArm> = Hook::empty();
+
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(crate) fn install_tls_pump() {
+    unsafe fn pump() -> i32 {
+        crate::tls::js_tls_process_pending()
+    }
+    fn active() -> bool {
+        crate::tls::js_tls_has_active_handles() != 0
+    }
+    PUMP_TLS.set(pump);
+    ACTIVE_TLS.set(active);
+}
+
+#[cfg(feature = "crypto")]
+pub(crate) fn install_crypto_pump() {
+    unsafe fn pump() -> i32 {
+        crate::crypto::js_crypto_stream_process_pending()
+    }
+    fn active() -> bool {
+        crate::crypto::js_crypto_stream_has_active_handles() != 0
+    }
+    PUMP_CRYPTO.set(pump);
+    ACTIVE_CRYPTO.set(active);
+}
+
+#[cfg(feature = "compression-gzip")]
+pub(crate) fn install_zlib_pump() {
+    unsafe fn pump() -> i32 {
+        crate::zlib::js_zlib_process_pending()
+    }
+    fn active() -> bool {
+        crate::zlib::js_zlib_has_active_handles() != 0
+    }
+    PUMP_ZLIB.set(pump);
+    ACTIVE_ZLIB.set(active);
+}
+
+#[cfg(feature = "turnloop-http-client")]
+pub(crate) fn install_turnloop_http_client_active() {
+    ACTIVE_TURNLOOP_HTTP.set(crate::turnloop_client::has_pending_requests);
+}
+
+#[cfg(feature = "turnloop-smtp-client")]
+pub(crate) fn install_turnloop_smtp_active() {
+    ACTIVE_TURNLOOP_SMTP.set(crate::turnloop_smtp::has_pending);
 }
 
 /// Returns 1 if the stdlib has active event sources that need the event
@@ -614,26 +677,17 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // the legacy tokio tick over a turnloop turn (P4's note 2) — so a fetch
     // that took the turnloop path would have driven tokio to wait for work
     // tokio was not carrying. A separate predicate is the whole point.
-    #[cfg(feature = "turnloop-http-client")]
-    if crate::turnloop_client::has_pending_requests() {
+    if ACTIVE_TURNLOOP_HTTP.get().is_some_and(|active| active()) {
         return 1;
     }
-    #[cfg(feature = "turnloop-smtp-client")]
-    if crate::turnloop_smtp::has_pending() {
+    if ACTIVE_TURNLOOP_SMTP.get().is_some_and(|active| active()) {
         return 1;
     }
     // Active WebSocket / raw TCP handles keep the loop alive through the
     // keepalive contributors perry-ext-ws / perry-ext-net register with the
     // runtime (the bundled copies checked here were deleted in tokio lane L4).
-    #[cfg(all(
-        feature = "tls-runtime",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    {
-        if crate::tls::js_tls_has_active_handles() != 0 {
-            return 1;
-        }
+    if ACTIVE_TLS.get().is_some_and(|active| active()) {
+        return 1;
     }
     // readline (#347 Phase 1) — keep the loop alive while a stdin
     // reader is started and EOF hasn't been observed, so `rl.on('line')`
@@ -657,21 +711,15 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if crate::worker_threads::js_worker_threads_has_pending() != 0 {
         return 1;
     }
-    #[cfg(feature = "crypto")]
-    {
-        if crate::crypto::js_crypto_stream_has_active_handles() != 0 {
-            return 1;
-        }
+    if ACTIVE_CRYPTO.get().is_some_and(|active| active()) {
+        return 1;
     }
     // zlib streams (#1843) — keep the loop alive while `.end()`-queued
     // 'data'/'end' events are still waiting to be drained, so a purely-
     // synchronous `createGzip().write(x).end()` program doesn't exit before
     // its listeners fire. Bundled path:
-    #[cfg(feature = "compression-gzip")]
-    {
-        if crate::zlib::js_zlib_has_active_handles() != 0 {
-            return 1;
-        }
+    if ACTIVE_ZLIB.get().is_some_and(|active| active()) {
+        return 1;
     }
     0
 }

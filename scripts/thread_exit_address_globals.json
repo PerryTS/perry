@@ -15,6 +15,11 @@
    "type": "ImageTable",
    "verdict": "no_heap_address",
    "why": "Selects a table of the calling thread's class image (object/class_image.rs). The tables are keyed by codegen class ids and hold code addresses (func_ptr), counts, flags and Rust-owned strings; no GC heap address."
+  },
+  {
+   "type": "Hook",
+   "verdict": "no_heap_address",
+   "why": "perry-stdlib's link-time feature slot (common/feature_hooks.rs): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
   }
  ],
  "entries": [

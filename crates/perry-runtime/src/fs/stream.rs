@@ -1628,7 +1628,9 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
 pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
     let bits = v.to_bits();
     let top16 = bits >> 48;
-    let raw = if (0x7FF8..=0x7FFF).contains(&top16) {
+    // An inline SSO string (0x7FF9) carries characters, not an address: its
+    // masked bits used to reach `is_closure_ptr` as a pointer (#11519).
+    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else if top16 == 0 {
         bits as usize

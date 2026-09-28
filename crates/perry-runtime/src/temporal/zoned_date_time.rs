@@ -34,7 +34,7 @@ fn require_ns(v: f64) -> i128 {
         b if b == crate::value::TAG_FALSE => return 0,
         _ => {}
     }
-    if jv.is_string() {
+    if jv.is_any_string() {
         return dispatch::read_string(v)
             .trim()
             .parse::<i128>()
@@ -51,7 +51,7 @@ fn require_ns(v: f64) -> i128 {
 
 fn timezone_arg(v: f64) -> TimeZone {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         // `ToTemporalTimeZoneIdentifier` (strict): only IANA names and UTC-offset
         // strings are accepted. An ISO-datetime string like
         // "1997-12-04T12:34[+01:00]" must throw a RangeError.
@@ -118,7 +118,7 @@ fn coerce_zdt_with_options(v: f64, opts: f64) -> ZonedDateTime {
         ));
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         // Parse the string BEFORE reading options (spec order: an invalid string
         // throws a RangeError before `GetOptionsObject` — which would otherwise
         // throw a TypeError for a non-object options value). `from_utf8` couples

@@ -26,6 +26,11 @@ pub(super) fn describe_received(value: f64) -> String {
     if jsval.is_number() {
         return format!("type number ({})", jsval.to_number());
     }
+    if jsval.is_short_string() {
+        // Inline SSO string (#11519): no header behind its bits.
+        let text = jsval.to_owned_string().unwrap_or_default();
+        return format!("type string ('{text}')");
+    }
     if jsval.is_string() {
         let text = unsafe { read_string(JsString::from_raw(jsval.as_string_ptr())) };
         return match text {

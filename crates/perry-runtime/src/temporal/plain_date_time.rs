@@ -86,7 +86,7 @@ fn coerce_dt_with_opts(v: f64, opts: f64) -> PlainDateTime {
         ),
         None => {}
     }
-    if JSValue::from_bits(v.to_bits()).is_string() {
+    if JSValue::from_bits(v.to_bits()).is_any_string() {
         let dt = ok_or_throw(dispatch::read_string(v).parse::<PlainDateTime>());
         let _ = super::options::overflow(opts);
         return dt;

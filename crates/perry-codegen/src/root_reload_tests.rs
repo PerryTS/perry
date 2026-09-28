@@ -88,7 +88,11 @@ fn a_non_collecting_window_is_left_byte_for_byte_alone() {
 /// conservative reload/root window back into every dispatch tower.
 #[test]
 fn dispatch_probes_do_not_open_a_reload_window() {
-    for helper in ["js_object_get_class_id", "js_object_get_own_field_or_undef"] {
+    // `js_object_get_own_field_or_undef` was the second probe here. The
+    // generated call-graph table proves it reaches JS (#11522), so the hand
+    // list alone no longer makes it non-collecting; see
+    // `own_field_probe_reaching_js_opens_a_reload_window` below.
+    for helper in ["js_object_get_class_id"] {
         assert!(
             NON_COLLECTING.contains(&helper),
             "{helper} is missing from root_reload's leaf authority"
@@ -98,6 +102,23 @@ fn dispatch_probes_do_not_open_a_reload_window() {
         assert_eq!(apply_to_function(&mut f), 0, "{helper}");
         assert_eq!(body(&f), before, "{helper}");
     }
+}
+
+/// #11522: the hand-kept `NON_COLLECTING` entry is overruled by the generated
+/// table, because the call graph proves the helper can reach a Proxy trap.
+#[test]
+fn own_field_probe_reaching_js_opens_a_reload_window() {
+    let helper = "js_object_get_own_field_or_undef";
+    assert!(NON_COLLECTING.contains(&helper));
+    assert_ne!(
+        crate::gc_call_effects::classify_direct_callee(helper),
+        crate::gc_call_effects::GcCallEffect::CannotCollect
+    );
+    let mut f = one_block(helper);
+    assert!(
+        apply_to_function(&mut f) > 0,
+        "a collecting callee must keep its reload window"
+    );
 }
 
 #[test]

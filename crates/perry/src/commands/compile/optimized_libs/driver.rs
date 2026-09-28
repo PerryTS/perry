@@ -643,6 +643,18 @@ pub(crate) fn build_optimized_libs(
                 runtime,
                 prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
                 well_known_libs,
+                // The prebuilt stdlib carries every feature. Install only the
+                // ones this program needs — the same set an auto-optimized
+                // rebuild would compile — so the linker can drop the rest.
+                // A deferred dynamic-code site can reach a module by runtime
+                // string, so such programs keep installing everything.
+                stdlib_installs: if perry_hir::has_deferred_dynamic_code_sites() {
+                    crate::commands::stdlib_installs::StdlibInstalls::Compiled
+                } else {
+                    crate::commands::stdlib_installs::StdlibInstalls::Selected(
+                        features.iter().map(|f| f.to_string()).collect(),
+                    )
+                },
                 ..OptimizedLibs::empty()
             };
         }
@@ -804,6 +816,7 @@ pub(crate) fn build_optimized_libs(
             extra_bc: Vec::new(),
             prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
             well_known_libs,
+            stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls::Compiled,
         };
     }
 
@@ -1296,5 +1309,6 @@ pub(crate) fn build_optimized_libs(
         extra_bc,
         prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
         well_known_libs,
+        stdlib_installs: crate::commands::stdlib_installs::StdlibInstalls::Compiled,
     }
 }

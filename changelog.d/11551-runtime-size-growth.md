@@ -1,0 +1,9 @@
+- **perf(size)**: every native binary is about 84 KB smaller (−110.6 KB on Linux), from two cuts:
+  - The 14 feature-module thread-exit release hooks that #11471 named in the always-linked dispatcher now register from their own table's first insert. Those are geisterhand, ui_text, frame, tui, DOMException, node:vm, MessagePort, v8 promise hooks, tls, dgram, child_process and pty.
+  - The `PERRY_STACK_SYMBOLS` `nm` symbolizer (~67 KB) is now served by `gc-instruments`. The knob joins `INSTRUMENT_KNOBS`, so a binary built without the feature aborts at startup if it is set.
+- Runtime size gate (#11541):
+  - It has never been green in CI. The budget was measured on a local Mac, and CI's macos-14 links ~132 KB larger for the same commit, a constant offset.
+  - #11135's cli baseline (5,804,416) was below its own head's cli size (5,969,840).
+  - Growth since #11135 on the Linux loop probe: +45 KB from the #11135 train merge, +78 KB across 09-24..09-27 (50f5358ba "property attributes live with the keys" alone +24.6 KB), and +74 KB from #11471.
+  - Still unrecovered: the class-accessor / key_attrs / canonical_keys perf series (~30–40 KB, deliberate) and the net/turnloop additions.
+- `benchmarks/runtime_size_budget/budget.json` is re-baselined to CI scale from this PR's own labelled macos-14 binary-size run, post-fix: async 6,017,952, cli 6,183,344, json 5,935,200, loop 5,786,304. Those are −67 KB vs main's 09-27 nightly (6,085,408 / 6,250,816 / 6,019,200 / 5,870,320). The new baseline includes the ~132 KB CI linker offset, the corrected cli baseline, and the residual growth listed above.

@@ -739,28 +739,26 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
 }
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
-    let id = schedule_callback_timer(
+    schedule_js_timer(
         callback,
         delay_ms,
         Vec::new(),
         "Timeout",
         Class::Timeout,
-        None,
-    );
-    timer_object(id, CallbackTimerKind::Timeout)
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
-    let id = schedule_callback_timer(
+    schedule_js_timer(
         callback,
         0.0,
         Vec::new(),
         "Immediate",
         Class::Immediate,
-        None,
-    );
-    timer_object(id, CallbackTimerKind::Immediate)
+        CallbackTimerKind::Immediate,
+    )
 }
 
 fn schedule_callback_timer(
@@ -771,6 +769,44 @@ fn schedule_callback_timer(
     class: Class,
     trigger_async_id: Option<u64>,
 ) -> i64 {
+    schedule_callback_timer_inner(
+        callback,
+        delay_ms,
+        args,
+        type_name,
+        class,
+        trigger_async_id,
+        None,
+    )
+    .0
+}
+
+/// A JS-visible `setTimeout` / `setInterval` / `setImmediate`: schedules the
+/// timer and returns its handle object. The handle is built BEFORE the
+/// async_hooks `init` fires and is the `resource` that hook receives, so
+/// `init(id, "Timeout", trigger, resource)`'s `resource === setTimeout(...)`,
+/// as in Node (#11583). It used to be a pointer-tagged raw timer id, with a
+/// second, distinct object minted for the caller afterwards.
+fn schedule_js_timer(
+    callback: i64,
+    delay_ms: f64,
+    args: Vec<f64>,
+    type_name: &str,
+    class: Class,
+    kind: CallbackTimerKind,
+) -> i64 {
+    schedule_callback_timer_inner(callback, delay_ms, args, type_name, class, None, Some(kind)).1
+}
+
+fn schedule_callback_timer_inner(
+    callback: i64,
+    delay_ms: f64,
+    args: Vec<f64>,
+    type_name: &str,
+    class: Class,
+    trigger_async_id: Option<u64>,
+    js_handle: Option<CallbackTimerKind>,
+) -> (i64, i64) {
     crate::promise::bump(if class == Class::Interval {
         &PROFILE_INTERVAL_TIMER_REGISTRATIONS
     } else {
@@ -780,14 +816,15 @@ fn schedule_callback_timer(
         Class::Immediate | Class::Pending => CallbackTimerKind::Immediate,
         _ => CallbackTimerKind::Timeout,
     };
+    let mocked = |id: i64| (id, js_handle.map_or(0, |kind| timer_object(id, kind)));
     if class == Class::Interval {
         if let Some(id) = schedule_mock_interval_timer(callback, delay_ms, args.clone()) {
-            return id;
+            return mocked(id);
         }
     } else if let Some(id) =
         schedule_mock_callback_timer(callback, delay_ms, args.clone(), handle_kind)
     {
-        return id;
+        return mocked(id);
     }
     ensure_initialized();
 
@@ -806,6 +843,15 @@ fn schedule_callback_timer(
     // same evicting cap plus an O(n) `min()` scan per insert. (#340/#341 took
     // the KIND out of this registry — the handle object carries it now.)
     let scheduled = register_scheduled_timer(id);
+    // The JS handle object, when there is one, is the async_hooks resource.
+    let handle = js_handle
+        .map(|kind| timer_object(id, kind))
+        .filter(|&obj| obj != 0)
+        .map(|obj| scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj)));
+    let resource = || match &handle {
+        Some(handle) => handle.get_nanbox_f64(),
+        None => timer_handle_value(id),
+    };
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
@@ -814,11 +860,11 @@ fn schedule_callback_timer(
             || match trigger_async_id {
                 Some(trigger_async_id) => crate::async_hooks::init_resource_with_trigger(
                     type_name,
-                    timer_handle_value(id),
+                    resource(),
                     true,
                     trigger_async_id,
                 ),
-                None => crate::async_hooks::init_resource(type_name, timer_handle_value(id), true),
+                None => crate::async_hooks::init_resource(type_name, resource(), true),
             },
         );
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
@@ -845,7 +891,10 @@ fn schedule_callback_timer(
     record_timer_ref_state(id, true);
     sync_loop_timer();
 
-    id
+    let handle = handle.map_or(0, |handle| {
+        crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64()) as i64
+    });
+    (id, handle)
 }
 
 /// JS-style setTimeout that takes a callback function, delay, and a buffer
@@ -857,15 +906,14 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    let id = schedule_callback_timer(
+    schedule_js_timer(
         callback,
         delay_ms,
         args_from_raw(args_ptr, n_args),
         "Timeout",
         Class::Timeout,
-        None,
-    );
-    timer_object(id, CallbackTimerKind::Timeout)
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
@@ -874,15 +922,14 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    let id = schedule_callback_timer(
+    schedule_js_timer(
         callback,
         0.0,
         args_from_raw(args_ptr, n_args),
         "Immediate",
         Class::Immediate,
-        None,
-    );
-    timer_object(id, CallbackTimerKind::Immediate)
+        CallbackTimerKind::Immediate,
+    )
 }
 
 /// Copy a codegen-supplied trailing-argument buffer; the caller may free it as
@@ -949,17 +996,16 @@ pub fn schedule_native_callback_chain(
 /// JS-style setInterval that takes a callback function and interval.
 #[no_mangle]
 pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
-    let id = schedule_callback_timer(
+    // node names an interval handle `Timeout` too, and `clearTimeout` /
+    // `clearInterval` are interchangeable on it.
+    schedule_js_timer(
         callback,
         interval_ms,
         Vec::new(),
         "Timeout",
         Class::Interval,
-        None,
-    );
-    // node names an interval handle `Timeout` too, and `clearTimeout` /
-    // `clearInterval` are interchangeable on it.
-    timer_object(id, CallbackTimerKind::Timeout)
+        CallbackTimerKind::Timeout,
+    )
 }
 
 #[no_mangle]
@@ -969,15 +1015,14 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    let id = schedule_callback_timer(
+    schedule_js_timer(
         callback,
         interval_ms,
         args_from_raw(args_ptr, n_args),
         "Timeout",
         Class::Interval,
-        None,
-    );
-    timer_object(id, CallbackTimerKind::Timeout)
+        CallbackTimerKind::Timeout,
+    )
 }
 
 /// How many `setTimeout`/`setInterval` handles this agent has outstanding —

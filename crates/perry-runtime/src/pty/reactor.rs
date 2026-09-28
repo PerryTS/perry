@@ -91,6 +91,17 @@ thread_local! {
 }
 
 #[inline]
+/// Register [`release_ptys_in_freed_ranges`] before the first `PTY_LIVE`
+/// insert (#11541). Every insert calls this first; named in
+/// `arena::thread_exit`'s dispatcher instead, the release was linked into
+/// every binary.
+fn register_thread_exit_release() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        crate::arena::thread_exit::register_thread_exit_range_hook(release_ptys_in_freed_ranges);
+    });
+}
+
 fn pty_live_lock() -> std::sync::MutexGuard<'static, Option<HashMap<u64, LivePty>>> {
     PTY_LIVE.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -183,6 +194,7 @@ fn pty_spawn_waiter(handle: u64, master: RawFd) {
 /// reader + waiter threads and wake the loop. Returns the registry handle.
 pub(super) fn pty_register_live(ipty: f64, child: native::PtyChild) -> u64 {
     let handle = PTY_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
+    register_thread_exit_release();
     {
         let mut guard = pty_live_lock();
         let map = guard.get_or_insert_with(HashMap::new);
@@ -622,6 +634,7 @@ pub(crate) fn release_ptys_in_freed_ranges(freed: &crate::arena::thread_exit::Fr
 #[doc(hidden)]
 pub fn pty_register_idle_live_for_test(ipty: f64) -> u64 {
     let handle = PTY_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
+    register_thread_exit_release();
     pty_live_lock().get_or_insert_with(HashMap::new).insert(
         handle,
         LivePty {

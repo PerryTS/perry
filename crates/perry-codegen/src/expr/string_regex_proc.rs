@@ -55,7 +55,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let s_box = lower_expr(ctx, string)?;
             let idx_d = lower_expr(ctx, index)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // #11519: an SSO receiver has no header behind its masked bits.
+            let s_handle = crate::expr::unbox_ffi_str_arg(blk, &s_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             // Runtime returns NaN-boxed f64 directly (string or undefined).
             Ok(blk.call(DOUBLE, "js_string_at", &[(I64, &s_handle), (I32, &idx_i32)]))
@@ -64,7 +65,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let s_box = lower_expr(ctx, string)?;
             let idx_d = lower_expr(ctx, index)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            let s_handle = crate::expr::unbox_ffi_str_arg(blk, &s_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             Ok(blk.call(
                 DOUBLE,

@@ -93,7 +93,16 @@ pub struct TlsClientMetadata {
 }
 
 fn client_metadata() -> &'static Mutex<HashMap<i64, TlsClientMetadata>> {
-    crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || Mutex::new(HashMap::new()))
+    // #11541: the map registers its thread-exit hook when it is created (every
+    // insert goes through here; the release reads the `OnceLock` directly)
+    // instead of being named in `arena::thread_exit`'s dispatcher, which
+    // linked it into every binary.
+    crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || {
+        crate::arena::thread_exit::register_thread_exit_range_hook(
+            release_tls_client_metadata_in_freed_ranges,
+        );
+        Mutex::new(HashMap::new())
+    })
 }
 
 /// #11471: drop every client record whose `checkServerIdentity` closure lives

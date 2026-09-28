@@ -8,7 +8,7 @@
 #
 #                       shadow (PERRY_RS4GC=0)   native (statepoints, SHIPS)
 #   curated ~124 files  gated                    gated, --max-unrooted 0
-#   dependency (zod)    gated, --max-stale 118   THIS SCRIPT (was missing)
+#   dependency (zod)    gated, --max-stale 10    THIS SCRIPT (was missing)
 #
 # #7280's own finding was that the curated corpus is the wrong POPULATION --
 # 25 curated files pass while 20 lines of stock zod fault. #7452's finding was

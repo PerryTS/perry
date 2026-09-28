@@ -366,19 +366,11 @@ unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
     }
     let key = crate::string::js_string_from_bytes(b"format".as_ptr(), 6);
     let val = js_object_get_field_by_name(obj, key);
-    let vbits = val.bits();
-    if (vbits >> 48) as u16 != 0x7FFF {
-        return None;
-    }
-    let ptr = (vbits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-    if ptr.is_null() {
-        return None;
-    }
-    let bytes = std::slice::from_raw_parts(
-        (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-        (*ptr).byte_len as usize,
-    );
-    Some(String::from_utf8_lossy(bytes).to_ascii_lowercase())
+    // Heap or inline SSO string (#11519): `"pem"`/`"der"`/`"jwk"` built at
+    // runtime are short enough to be SSO.
+    crate::string::with_string_value_bytes(f64::from_bits(val.bits()), |bytes| {
+        String::from_utf8_lossy(bytes).to_ascii_lowercase()
+    })
 }
 
 unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f64 {
@@ -406,20 +398,11 @@ unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f6
 }
 
 unsafe fn js_string_from_value(bits: f64) -> Option<String> {
-    let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
-    if top16 != 0x7FFF {
-        return None;
-    }
-    let ptr = (raw & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-    if ptr.is_null() {
-        return None;
-    }
-    let bytes = std::slice::from_raw_parts(
-        (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-        (*ptr).byte_len as usize,
-    );
-    std::str::from_utf8(bytes).ok().map(str::to_string)
+    // Heap or inline SSO string (#11519).
+    crate::string::with_string_value_bytes(bits, |bytes| {
+        std::str::from_utf8(bytes).ok().map(str::to_string)
+    })
+    .flatten()
 }
 
 unsafe fn object_field_string_value(obj_bits: f64, name: &[u8]) -> Option<String> {
@@ -1170,30 +1153,16 @@ pub unsafe fn dispatch_buffer_method(
                 false
             } else {
                 let key_bits = args[0].to_bits();
-                if (key_bits >> 48) == 0x7FFF {
-                    // string key
-                    let sptr =
-                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
-                    if sptr.is_null() {
-                        false
-                    } else {
-                        let slen = (*sptr).byte_len as usize;
-                        let sdata =
-                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        let bytes = std::slice::from_raw_parts(sdata, slen);
-                        if let Ok(s) = std::str::from_utf8(bytes) {
-                            // Only numeric-string indices that are in bounds
-                            // count as own properties for Buffer/Uint8Array.
-                            if let Ok(idx) = s.parse::<u32>() {
-                                let buf_len = (*buf_ptr).length;
-                                idx < buf_len
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    }
+                if let Some(own) = crate::string::with_string_value_bytes(args[0], |bytes| {
+                    // A string key — heap or inline SSO (#11519). Only
+                    // numeric-string indices that are in bounds count as own
+                    // properties for Buffer/Uint8Array.
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .is_some_and(|idx| idx < (*buf_ptr).length)
+                }) {
+                    own
                 } else if (key_bits >> 48) == 0x7FFE {
                     // int32 key
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
@@ -1222,27 +1191,16 @@ pub unsafe fn dispatch_buffer_method(
                 false
             } else {
                 let key_bits = args[0].to_bits();
-                if (key_bits >> 48) == 0x7FFF {
-                    let sptr =
-                        (key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::string::StringHeader;
-                    if sptr.is_null() {
-                        false
-                    } else {
-                        let slen = (*sptr).byte_len as usize;
-                        let sdata =
-                            (sptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        let bytes = std::slice::from_raw_parts(sdata, slen);
-                        if let Ok(s) = std::str::from_utf8(bytes) {
-                            if let Ok(idx) = s.parse::<u32>() {
-                                let buf_len = (*buf_ptr).length;
-                                idx < buf_len
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    }
+                if let Some(own) = crate::string::with_string_value_bytes(args[0], |bytes| {
+                    // A string key — heap or inline SSO (#11519). Only
+                    // numeric-string indices that are in bounds count as own
+                    // properties for Buffer/Uint8Array.
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .is_some_and(|idx| idx < (*buf_ptr).length)
+                }) {
+                    own
                 } else if (key_bits >> 48) == 0x7FFE {
                     let idx = (key_bits & 0xFFFF_FFFF) as i32;
                     let buf_len = (*buf_ptr).length as i32;

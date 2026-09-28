@@ -941,6 +941,27 @@ pub fn str_bytes_from_jsvalue(
     None
 }
 
+/// Run `f` over the bytes of a string value in either representation — heap
+/// `STRING_TAG` or inline SSO `SHORT_STRING_TAG` — and return its result, or
+/// `None` when `value` is not a string (#11519).
+///
+/// This is the closure form of [`str_bytes_from_jsvalue`]: the SSO bytes live
+/// in a stack scratch buffer owned by this frame, so no allocation happens on
+/// either path. `f` must not allocate on the GC heap while it holds the slice
+/// (a heap string's payload could move); copy the bytes out first if it needs
+/// to.
+#[inline]
+pub fn with_string_value_bytes<R>(value: f64, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let (ptr, len) = str_bytes_from_jsvalue(value, &mut scratch)?;
+    if ptr.is_null() || len == 0 {
+        return Some(f(&[]));
+    }
+    // SAFETY: `str_bytes_from_jsvalue` returned a live heap payload or a view
+    // of `scratch`, both valid for the duration of this call.
+    Some(f(unsafe { slice::from_raw_parts(ptr, len as usize) }))
+}
+
 /// Sibling of [`str_bytes_from_jsvalue`] that additionally reports whether the
 /// operand is pure ASCII.
 ///

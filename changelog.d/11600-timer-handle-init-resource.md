@@ -1,0 +1,1 @@
+**A timer's handle is the resource its async_hooks `init` received (#11583).** For `setTimeout`/`setImmediate`/`setInterval`, `init` got a pointer-tagged raw timer id while the call returned a separately minted handle object, so `resource === setTimeout(...)` was false. The handle object is now built before `init` fires and is both the resource and the return value.
