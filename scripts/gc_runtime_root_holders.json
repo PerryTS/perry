@@ -936,7 +936,7 @@
       "why": "#[cfg(test)] Cell<bool> selects the unchanged slow Get for differential tests. Holds only a boolean, never a GC address or JSValue, and is absent from shipped binaries."
     },
     {
-      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "file": "crates/perry-runtime/src/object/native_module/class_method_bind.rs",
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
@@ -3883,7 +3883,7 @@
       "name": "HANDLE_PROPERTY_BIND_REENTRY"
     },
     {
-      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "file": "crates/perry-runtime/src/object/native_module/class_method_bind.rs",
       "name": "TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT"
     },
     {

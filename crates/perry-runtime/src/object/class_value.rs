@@ -684,13 +684,8 @@ mod tests {
         let got = crate::value::JSValue::from_bits(got.to_bits());
         let hdr = got.as_string_ptr();
         assert!(!hdr.is_null());
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                (hdr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                (*hdr).byte_len as usize,
-            )
-        };
-        assert_eq!(bytes, text.as_bytes());
+        let bytes = unsafe { crate::string::OwnedStringBytes::copy_from_header(hdr) };
+        assert_eq!(bytes.as_bytes(), text.as_bytes());
         let keys: Vec<String> = class_static_entries(cid)
             .into_iter()
             .map(|(k, _)| k)

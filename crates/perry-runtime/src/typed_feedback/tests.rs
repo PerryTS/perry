@@ -1231,10 +1231,6 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
 #[test]
 fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
-    let native_module = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/object/native_module.rs"
-    ));
     let class_method_bind = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/object/native_module/class_method_bind.rs"
