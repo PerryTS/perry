@@ -28,8 +28,10 @@ pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;
 mod module_keys;
+mod name_tables;
 mod namespace_builders;
 mod namespace_prototype;
+mod vtable_impls;
 mod web_locks;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
@@ -58,6 +60,8 @@ pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
+use name_tables::should_cache_native_module_namespace;
+pub(crate) use name_tables::{assert_instance_base_module, canonical_native_callable_property};
 #[cfg(test)]
 pub(crate) use namespace_builders::create_fs_constants_object;
 pub(crate) use namespace_builders::{
@@ -68,6 +72,8 @@ pub(crate) use namespace_builders::{
 pub(crate) use namespace_prototype::{
     native_module_namespace_default_prototype, native_module_namespace_prototype_bits,
 };
+use vtable_impls::vt_get_own_field;
+pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
 crate::perry_thread_local! {
@@ -699,106 +705,6 @@ pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, 
 
 pub(crate) fn subtle_crypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
-}
-
-pub(crate) fn canonical_native_callable_property<'a>(
-    module_name: &str,
-    property_name: &'a str,
-) -> &'a str {
-    match (module_name, property_name) {
-        ("fs", "FileReadStream") => "ReadStream",
-        ("fs", "FileWriteStream") => "WriteStream",
-        ("path" | "path.posix" | "path.win32", "_makeLong") => "toNamespacedPath",
-        ("querystring", "decode") => "parse",
-        ("querystring", "encode") => "stringify",
-        ("cluster", "setupMaster") => "setupPrimary",
-        _ => property_name,
-    }
-}
-
-pub(crate) fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {
-    match module_name {
-        "assert.instance" | "assert.instance.skip" => Some("assert"),
-        "assert/strict.instance" | "assert/strict.instance.skip" => Some("assert/strict"),
-        _ => None,
-    }
-}
-
-fn should_cache_native_module_namespace(module_name: &str) -> bool {
-    matches!(
-        module_name,
-        "assert/strict"
-            | "async_hooks"
-            | "async_hooks.default"
-            | "bun"
-            | "bun.ant"
-            | "constants"
-            | "constants.default"
-            // #5263: cache the top-level namespace objects whose dynamic
-            // member access is now allowed by default. A stable (cached)
-            // namespace object means a user-set symbol property
-            // (`fs[Symbol.for('graceful-fs.queue')] = queue`, keyed by object
-            // pointer in `SYMBOL_PROPERTIES`) round-trips on reads — otherwise
-            // each `NativeModuleRef` mints a fresh object and the write is lost.
-            // String-keyed writes already persist via the module-keyed
-            // `NATIVE_NAMESPACE_PROP_OVERRIDES` side-table. These are pure
-            // tag+name holders (all real dispatch keys off the module name, not
-            // object state), so caching only affects object identity.
-            | "fs"
-            // #10428: one object per module, so `require('node:http') === require('http')`.
-            | "http"
-            | "https"
-            | "http2"
-            | "net"
-            | "dns.default"
-            | "dns/promises.default"
-            | "child_process.default"
-            | "cluster"
-            | "cluster.default"
-            | "dgram"
-            | "events"
-            | "fs.constants"
-            | "inspector"
-            | "inspector.default"
-            | "inspector.Network"
-            | "inspector/promises"
-            | "inspector/promises.default"
-            | "module"
-            | "node-pty"
-            | "node-pty.default"
-            | "os"
-            | "os.default"
-            | "path"
-            | "path.default"
-            | "path.posix.default"
-            | "path.win32.default"
-            | "perf_hooks.default"
-            | "punycode"
-            | "punycode.default"
-            | "punycode.ucs2"
-            | "querystring"
-            | "querystring.default"
-            | "repl"
-            | "repl.default"
-            | "sea"
-            | "sea.default"
-            | "process"
-            | "process.namespace"
-            | "process.default"
-            | "url"
-            | "url.default"
-            | "util"
-            | "util.default"
-            | "util.types"
-            | "path.posix"
-            | "path.win32"
-            | "readline/promises"
-            | "timers/promises"
-            | "vm"
-            | "vm.constants"
-            | "crypto.webcrypto"
-            | "crypto.subtle"
-    )
 }
 
 /// #1479: read the module-name string stored in field 0 of a
@@ -1771,135 +1677,6 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> Strin
         return String::new();
     }
     read_native_module_name(obj).unwrap_or_default()
-}
-
-// ─── Vtable impls relocated from field_get_set.rs (EN size work) ───────
-// Bodies moved verbatim so their table references are reachable only
-// through the installed vtable. See `NativeModuleVtable`.
-
-/// Own-field read on a namespace object (`fs.constants`, method values,
-/// process IPC props, …). Returns `None` when the receiver carries no
-/// module name — the caller falls through to the generic field scan.
-unsafe fn vt_get_own_field(
-    obj: *const ObjectHeader,
-    key: *const crate::StringHeader,
-) -> Option<JSValue> {
-    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let key_len = (*key).byte_len as usize;
-    let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
-    let module_name = get_module_name_from_namespace(nb_ptr);
-    if module_name.is_empty() {
-        return None;
-    }
-    let property_name =
-        std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
-    // A user override (`require('node:timers').setImmediate = patched`)
-    // wins all built-in resolution below — CJS exports are mutable in Node.
-    if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
-        return Some(JSValue::from_bits(value.to_bits()));
-    }
-    if matches!(
-        module_name.as_str(),
-        "process" | "process.namespace" | "process.default"
-    ) {
-        if let Some(value) = crate::process::process_ipc_property(property_name) {
-            return Some(JSValue::from_bits(value.to_bits()));
-        }
-    }
-    if let Some(value) = super::field_get_set::native_module_own_field_by_key(obj, key) {
-        return Some(value);
-    }
-    if let Some(value) = performance_namespace_method(&module_name, property_name, nb_ptr) {
-        return Some(JSValue::from_bits(value.to_bits()));
-    }
-    // #3687: node:cluster default-import EventEmitter methods on the
-    // distinct `cluster.default` namespace (see original comment at the
-    // pre-relocation site in field_get_set.rs history).
-    if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
-        return Some(JSValue::from_bits(
-            bound_native_callable_export_value(&module_name, property_name).to_bits(),
-        ));
-    }
-    if let Some(val) = get_native_module_constant(&module_name, property_name, nb_ptr) {
-        return Some(JSValue::from_bits(val.to_bits()));
-    }
-    if module_name == "crypto.webcrypto" {
-        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
-            return Some(JSValue::from_bits(value.to_bits()));
-        }
-    }
-    if module_name == "crypto.subtle" {
-        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
-            return Some(JSValue::from_bits(value.to_bits()));
-        }
-    }
-    // Issue #894: callable exports (`("events", "EventEmitter")` …) get a
-    // bound-method closure for require-then-member-access parity.
-    if is_native_module_callable_export(&module_name, property_name) {
-        if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
-            return Some(JSValue::from_bits(bound.to_bits()));
-        }
-        let value = bound_native_callable_export_value(&module_name, property_name);
-        let value = if module_name == "bun" && property_name == "hash" {
-            crate::bun_compat::decorate_bun_hash(value)
-        } else {
-            value
-        };
-        return Some(JSValue::from_bits(value.to_bits()));
-    }
-    // Object-valued exports (e.g. `perf_hooks.performance` / `.constants`) are
-    // resolved by the shared per-property dispatch but are not covered by the
-    // override / constant / callable checks above. Without delegating, a DYNAMIC
-    // namespace read (`createRequire(...)("perf_hooks").performance`,
-    // `process.getBuiltinModule(...)`) returned undefined for them while the
-    // static codegen path resolved them via `js_native_module_property_by_name`.
-    // Defer to that authoritative resolver so dynamic namespaces match static.
-    if native_module_has_enumerable_key(&module_name, property_name) {
-        let resolved = js_native_module_property_by_name(
-            module_name.as_ptr(),
-            module_name.len(),
-            key_ptr,
-            key_len,
-        );
-        return Some(JSValue::from_bits(resolved.to_bits()));
-    }
-    // #11542: not an own property — continue at the namespace's
-    // `[[Prototype]]` (see `namespace_prototype`).
-    Some(namespace_prototype::non_own_field(
-        obj,
-        key,
-        &module_name,
-        key_ptr,
-        key_len,
-    ))
-}
-
-/// `Object.keys(namespace)` — fresh array of the module's enumerable
-/// keys. `None` when the module is unknown; caller falls back to the
-/// generic keys_array path. Also reused by `Object.getOwnPropertyNames`
-/// (#5268): a native-module object must enumerate its export surface there
-/// too, not the internal `__module__` sentinel.
-pub(crate) unsafe fn vt_own_keys_array(
-    obj: *const ObjectHeader,
-) -> Option<*mut crate::array::ArrayHeader> {
-    let module_name = read_native_module_name(obj)?;
-    let keys = native_module_enumerable_keys(&module_name)?;
-    let include_permission = matches!(
-        module_name.as_str(),
-        "process" | "process.namespace" | "process.default"
-    ) && crate::process::process_permission_enabled();
-    let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
-    for key_bytes in keys {
-        let key_str =
-            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
-    }
-    if include_permission {
-        let key_str =
-            crate::string::js_string_from_bytes(b"permission".as_ptr(), b"permission".len() as u32);
-        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
-    }
-    Some(out)
 }
 
 /// #6667: materialize a native-module namespace's exports into `dst` during

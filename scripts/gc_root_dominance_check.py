@@ -1775,7 +1775,7 @@ POLL_CAPABLE_RUNTIME = {
     #
     # Measured when added: the ONLY window this reclassifies over the curated
     # corpus is that one, which the same PR fixes in
-    # `lower_call/new.rs::construction_runs_user_code`.
+    # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
 

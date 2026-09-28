@@ -1150,7 +1150,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // `get_native_module_constant` directly.
         // Issue #649 / #3687 / #894: native-module own-field reads
         // (sub-namespaces, process IPC props, callable exports). Body
-        // relocated to native_module.rs::vt_get_own_field so the
+        // relocated to native_module/vtable_impls.rs::vt_get_own_field so the
         // (module, method) tables are reachable only through the vtable.
         // `None` (no module name / vtable uninstalled) falls through to
         // the generic scans below, matching the pre-relocation flow.

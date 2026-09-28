@@ -384,10 +384,22 @@ fn temp_path_guard_removes_unless_retained() {
     };
     assert!(early_return().is_err());
 
-    assert!(!plain.exists(), "an unretained scratch dir must not outlive its guard");
-    assert!(!file.exists(), "an unretained temp file must not outlive its guard");
-    assert!(failed.join("m.ll").is_file(), "a claimed failure keeps its IR");
-    assert!(kept.join("m.ll").is_file(), "PERRY_LLVM_KEEP_IR keeps everything");
+    assert!(
+        !plain.exists(),
+        "an unretained scratch dir must not outlive its guard"
+    );
+    assert!(
+        !file.exists(),
+        "an unretained temp file must not outlive its guard"
+    );
+    assert!(
+        failed.join("m.ll").is_file(),
+        "a claimed failure keeps its IR"
+    );
+    assert!(
+        kept.join("m.ll").is_file(),
+        "PERRY_LLVM_KEEP_IR keeps everything"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
