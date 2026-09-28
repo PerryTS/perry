@@ -1576,12 +1576,34 @@ pub(crate) fn lower_loop(
     let v = ctx.block().load(I1, &valid_slot);
     ctx.block().cond_br(&v, &split_l, &plain_l);
 
+    // The plain version first, so today's loop keeps today's place in the
+    // function: the region is not registered while it lowers, so its body is
+    // today's body.
+    let pos = ctx
+        .region_loops
+        .iter()
+        .position(|p| p.token == t)
+        .expect("the region is still registered");
+    let pending = ctx.region_loops.remove(pos);
+    ctx.current_block = plain;
+    note(ctx, Route::RloopPlain);
+    let r = lower(ctx);
+    ctx.region_loops.push(pending);
+    r?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_l);
+    }
     ctx.current_block = split;
     note(ctx, Route::RloopSplit);
     // A word naming a spill-located key selects the split copy that reads
     // through the spill buffer; every other word, the all-inline copy (the
     // hot one, whose reads are one load). A region that stores every key it
     // names never gets a spill word, so it needs no spill copy.
+    let pos = ctx
+        .region_loops
+        .iter()
+        .position(|p| p.token == t)
+        .expect("the region is still registered");
     let flags: Vec<String> = ctx.region_loops[pos]
         .receivers
         .iter()
@@ -1615,22 +1637,6 @@ pub(crate) fn lower_loop(
         }
     }
 
-    // The plain version: the region is not registered while it lowers, so
-    // its body is today's body.
-    let pos = ctx
-        .region_loops
-        .iter()
-        .position(|p| p.token == t)
-        .expect("the region is still registered");
-    let pending = ctx.region_loops.remove(pos);
-    ctx.current_block = plain;
-    note(ctx, Route::RloopPlain);
-    let r = lower(ctx);
-    ctx.region_loops.push(pending);
-    r?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_l);
-    }
     ctx.current_block = merge;
     Ok(())
 }
