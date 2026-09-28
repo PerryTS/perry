@@ -131,7 +131,21 @@ pub fn is_date_cell_addr(addr: usize) -> bool {
         // `undefined`. A registered buffer is never a `DateCell`, so reject it.
         // The lookup runs only in the rare tag-match case, keeping the common
         // (non-Date) property-read path unchanged.
-        !crate::buffer::is_registered_buffer(addr)
+        if crate::buffer::is_registered_buffer(addr) {
+            return false;
+        }
+        // #11558: a `Symbol.for` / well-known symbol is a Box-leaked
+        // `SymbolHeader` with no `GcHeader` either, and under mimalloc the
+        // word before it is the tail of the previous block — for a symbol
+        // allocated right after another symbol, that symbol's `id`. Once the
+        // id counter passes 17 (`GC_TYPE_DATE_CELL`) the next symbol read as
+        // a Date, and since `DateCell.meta` is the first word, its
+        // `SYMBOL_MAGIC` word was then dereferenced as an `ObjectMeta`:
+        // claude-code 2.1.112's `doctor` SIGSEGV'd reading `defaultProps` off
+        // a React element-type symbol. Every symbol carries `SYMBOL_MAGIC` in
+        // its first word, so the screen is one load for a real Date.
+        !(crate::symbol::may_be_symbol_header(addr as *const u8)
+            && crate::symbol::is_registered_symbol(addr))
     }
 }
 
