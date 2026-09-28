@@ -978,6 +978,18 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
     )
 }
 
+/// A static id the driver assigned by content was refused by the ordinary
+/// mint (see [`shape_descriptor_ensure_with_holes`]).
+#[cold]
+fn static_shape_id_refused_abort(requested: u32, proto_id: u64) -> ! {
+    eprintln!(
+        "Perry internal error: the static ShapeId {requested:#x} (proto {proto_id:#x}) \
+         was refused by the shape mint (it is outside the static band or already \
+         names other facts in this agent); a static id must name one shape"
+    );
+    std::process::abort();
+}
+
 /// [`shape_descriptor_ensure_with_generation`] with an explicit tombstone
 /// count — the publish half of an O(1) hole-delete, which must mint a shape
 /// identity distinct from every hole state of the same array. Also the mint
@@ -996,11 +1008,14 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
 /// immediate, so the record must never be pruned while no object carries
 /// it). A by-facts HIT returns the existing id whatever was requested — the
 /// static id whenever its seed ran first, which the seeds are placed to
-/// guarantee; otherwise an immediate compare against it only misses. A
-/// requested id outside the static band, or already present in this agent
-/// under other facts, is declined (the counter mints), so a static id names
-/// at most one set of facts per agent and a compare against it can never hit
-/// a different shape.
+/// guarantee; otherwise an immediate compare against it only misses.
+///
+/// The driver assigns ids BY CONTENT, so a requested id that cannot be
+/// adopted on a miss — outside the static band, or already present in this
+/// agent under other facts — is an invariant violation, and the mint ABORTS
+/// (as the typed install does): generated code compares against the id as an
+/// immediate, and a counter fallback would leave it naming whatever else
+/// holds it in this agent.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
@@ -1097,6 +1112,10 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
             && semantic_generation == 0
             && table.slab().record_ptr(id).is_none()
     });
+    if let (Some(requested), None) = (requested, adopted) {
+        drop(inner);
+        static_shape_id_refused_abort(requested, proto_id);
+    }
     let id = match adopted {
         Some(id) => id,
         None => if object_kind.is_exotic() {
