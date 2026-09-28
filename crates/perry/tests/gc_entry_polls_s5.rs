@@ -137,6 +137,9 @@ function mk(n: number): any {
 function pure(n: number): number {
   return n * 2 + 1;
 }
+function seven(): number {
+  return 7;
+}
 class Box {
   v: number;
   constructor(v: number) { this.v = v; }
@@ -147,8 +150,9 @@ const toObj = (x: number) => ({ x: x });
 const b = new Box(3);
 const mapped = [1, 2, 3].map(toObj).map((o: any) => mk(o.x)).map((o: any) => pure(o.n));
 const counted = [4, 5].map(pure);
+const sevens = [1, 2].map(seven);
 console.log(JSON.stringify(tree(2)) !== "", isEven(10).length, mapped.join(","),
-  counted.join(","), b.wrap(1).length, b.plain(2));
+  counted.join(","), b.wrap(1).length, b.plain(2), sevens.join(","));
 "#;
 
 #[test]
@@ -197,7 +201,14 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
         total_polls(&fns, "wrap") >= 1,
         "an allocating method is entered indirectly and must poll"
     );
-    assert_eq!(total_polls(&fns, "plain"), 0);
+    // `plain` is non-allocating only where `this.v + x` is proven numeric: the
+    // boxed body and the typed clone. Its `$generic`/`$pshape` clones may run a
+    // user `valueOf` through `+`, so they are not leaves and do poll.
+    for (name, polls) in polls_by_clone(&fns, "plain") {
+        if !name.contains('$') || name.contains("$typed") {
+            assert_eq!(polls, 0, "{name} is a proven leaf and must not poll");
+        }
+    }
     // An allocating closure body polls.
     assert!(
         fns.iter()
@@ -205,10 +216,11 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
         "the allocating arrow's body must poll at entry"
     );
     // The value wrapper that makes `mk` a callback polls (with its args
-    // spilled for the runtime to root); `pure`'s wrapper forwards to a proven
-    // leaf and does not.
+    // spilled for the runtime to root); `seven`'s wrapper forwards to a proven
+    // leaf and does not. (`pure`'s does poll: its annotation is not enforced,
+    // so `n * 2` may run a user `valueOf`.)
     assert!(wrapper_of(&fns, "__mk").contains(WRAPPER_POLL));
-    assert!(!wrapper_of(&fns, "__pure").contains(WRAPPER_POLL));
+    assert!(!wrapper_of(&fns, "__seven").contains(WRAPPER_POLL));
 
     let run = Command::new(&bin).output().expect("run");
     assert!(
@@ -218,7 +230,7 @@ fn entry_polls_go_to_recursive_sccs_and_indirect_entries_only() {
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout).trim(),
-        "true 1 3,5,7 9,11 2 5"
+        "true 1 3,5,7 9,11 2 5 7,7"
     );
 }
 
