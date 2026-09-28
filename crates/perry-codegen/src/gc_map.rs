@@ -1252,8 +1252,13 @@ pub(crate) fn note_statepoint_functions(functions: &[&crate::function::LlFunctio
     let mut guard = STATEPOINT_FUNCTIONS.lock().unwrap_or_else(|p| p.into_inner());
     let set = guard.get_or_insert_with(Default::default);
     for function in functions {
+        // The latest render is authoritative: the RS4GC budget retry can move a
+        // function onto a shadow frame and render it again, and a stale entry
+        // would make the verifier treat its unmapped frames as a leaf bug.
         if function.uses_statepoint_strategy() {
             set.insert(function.name.clone());
+        } else {
+            set.remove(&function.name);
         }
     }
 }
