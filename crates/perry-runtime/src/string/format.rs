@@ -407,6 +407,7 @@ pub(crate) fn debug_assert_small_string_caches_not_minor_relevant() {
 #[cfg(test)]
 pub(crate) fn test_write_small_int_cache_slot(idx: usize, ptr: *mut StringHeader) {
     SMALL_INT_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): test-only sabotage writer; SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
         (*c.get())[idx % SMALL_INT_CACHE_SIZE] = ptr;
     });
 }
