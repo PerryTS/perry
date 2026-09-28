@@ -229,7 +229,8 @@ pub(crate) struct EntryPollStats {
 /// callee that polls at entry bounds its own allocation per call, so a
 /// recursion that only reaches allocation through such callees needs nothing
 /// more — which is what keeps a numeric recursion whose only collecting edge
-/// is a cold fallback into its generic clone (`fib$spec_i32` → `fib`) free of a
+/// is a cold fallback into its generic clone (a specialized-ABI `fib` clone falling
+/// back to the boxed `fib`) free of a
 /// per-call poll. SCCs are visited callees-first, so a callee's poll is known
 /// before its callers are decided.
 pub(crate) fn finalize_module(functions: &mut [&mut LlFunction]) -> EntryPollStats {
