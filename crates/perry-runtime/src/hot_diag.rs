@@ -1553,7 +1553,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 11] = [
+const RECV_ROUTE_NAMES: [&str; 13] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1571,14 +1571,22 @@ const RECV_ROUTE_NAMES: [&str; 11] = [
     // the miss handler's key scan (primed or not) — the spill reads the
     // inline routes did not serve.
     "rt_spill_miss",
+    // Runtime-counted: a class-field read whose inline guard missed, answered
+    // from the receiver's shape (the site's word or the inherited cache)...
+    "rt_class_miss_shape",
+    // ...or by the generic read ladder behind it (own miss, inherited cache,
+    // priming), where it used to take the site-less by-name walk.
+    "rt_class_miss_ladder",
 ];
 
 /// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
 pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
+pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 11;
+pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 12;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 11] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 11];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 13] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 13];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a

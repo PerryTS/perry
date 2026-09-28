@@ -1382,7 +1382,7 @@ fn outlined_mru_hit_enabled() -> bool {
 /// the caller has established that the tag was `POINTER`. `cache_slot` is the
 /// codegen-emitted per-site slot or null.
 #[inline]
-pub(super) unsafe fn pic_outlined_mru_hit(
+pub(crate) unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<f64> {
@@ -1436,7 +1436,7 @@ pub extern "C" fn js_object_get_field_ic(
 /// The whole full-outline read ladder; `probe_mru` is false only on the cold
 /// arm of the S2 split, whose leaf entry has already asked the MRU word.
 #[inline(always)]
-pub(super) fn get_field_ic_dispatch(
+pub(crate) fn get_field_ic_dispatch(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,

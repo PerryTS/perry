@@ -283,8 +283,9 @@ fn the_ic_call_carries_the_guard_operands() {
     // The helper runs the same guard the inline miss arm used to call, so it
     // must receive the same seven operands in the same order — site id,
     // receiver, expected class id, expected shape id, key, field index,
-    // require_raw_f64. A dropped operand compiles and silently guards on the
-    // wrong thing.
+    // require_raw_f64 — and then the site's own read cache, from which the
+    // One Path read answers a receiver the guard does not describe. A dropped
+    // operand compiles and silently guards on the wrong thing.
     let ir = ir(Type::Number);
     let guardcall = block_body(&ir, "class_field_inline.guardcall")
         .expect("guardcall block")
@@ -304,8 +305,13 @@ fn the_ic_call_carries_the_guard_operands() {
         .collect();
     assert_eq!(
         tys,
-        vec!["i64", "double", "i32", "i32", "i64", "i32", "i32"],
+        vec!["i64", "double", "i32", "i32", "i64", "i32", "i32", "ptr"],
         "IC call signature drifted from the guard's operand list:\n{line}"
+    );
+    let cache = args.rsplit_once(", ").expect("last operand").1;
+    assert!(
+        cache.starts_with("ptr @perry_ic_"),
+        "the last operand must be the site's own read cache global, got `{cache}`:\n{line}"
     );
 }
 
