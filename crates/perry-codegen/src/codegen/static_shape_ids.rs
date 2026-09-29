@@ -278,7 +278,12 @@ pub(crate) fn class_birth(
         Some(&(_, _, birth_live)) if !typed && birth_live > *field_count => birth_live,
         _ => 0,
     };
-    let shape = (class_id != 0).then(|| BirthShape {
+    // An empty literal names the runtime's own empty shape, which the runtime
+    // mints at startup before any seed or module init: it can never adopt a
+    // static id (its mint would only ever by-facts hit the counter id), so it
+    // is not given one.
+    let literal = sanitized_class.starts_with("__AnonShape_");
+    let shape = (class_id != 0 && !(literal && *field_count == 0)).then(|| BirthShape {
         keys: packed.as_bytes().to_vec(),
         key_count: *field_count,
         live: if wide_live > 0 {
@@ -286,7 +291,7 @@ pub(crate) fn class_birth(
         } else {
             *field_count
         },
-        proto: if sanitized_class.starts_with("__AnonShape_") {
+        proto: if literal {
             BirthProto::Literal
         } else {
             BirthProto::Class(class_id)

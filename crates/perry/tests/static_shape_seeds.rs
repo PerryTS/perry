@@ -83,7 +83,10 @@ fn census(bin: &Path) -> (String, Vec<String>) {
         .filter(|l| l.starts_with("perry-static-shape: "))
         .map(str::to_string)
         .collect();
-    (String::from_utf8_lossy(&run.stdout).trim().to_string(), lines)
+    (
+        String::from_utf8_lossy(&run.stdout).trim().to_string(),
+        lines,
+    )
 }
 
 /// The static ids the seed unit minted (each must be a hit).
@@ -124,9 +127,20 @@ fn the_seed_makes_a_literals_births_carry_its_guard_immediate_cold_and_warm() {
         "no literal seed: the guard immediates were not captured\n{lines:#?}"
     );
     let mints = literal_mints(&lines, &ids);
-    assert!(!mints.is_empty(), "the literal's own mint never ran\n{lines:#?}");
+    assert!(
+        !mints.is_empty(),
+        "the literal's own mint never ran\n{lines:#?}"
+    );
     for l in &mints {
-        assert!(l.ends_with(" hit"), "cold: the literal's births miss its immediate: {l}");
+        assert!(
+            l.ends_with(" hit"),
+            "cold: the literal's births miss its immediate: {l}"
+        );
+    }
+    // No static request misses at all (early.ts also holds an empty literal,
+    // whose shape is the runtime's own and so gets no static id).
+    for l in &lines {
+        assert!(l.ends_with(" hit"), "cold: a static request missed: {l}");
     }
 
     // Warm: every module is a cache hit, and the replayed sidecars give the
@@ -135,9 +149,16 @@ fn the_seed_makes_a_literals_births_carry_its_guard_immediate_cold_and_warm() {
     assert!(log.contains("Reused cached object"), "warm build: {log}");
     let (out, warm_lines) = census(&warm);
     assert_eq!(out, EXPECTED);
-    assert_eq!(seeded(&warm_lines), ids, "the warm seed set differs from the cold one");
+    assert_eq!(
+        seeded(&warm_lines),
+        ids,
+        "the warm seed set differs from the cold one"
+    );
     for l in literal_mints(&warm_lines, &ids) {
-        assert!(l.ends_with(" hit"), "warm: the literal's births miss its immediate: {l}");
+        assert!(
+            l.ends_with(" hit"),
+            "warm: the literal's births miss its immediate: {l}"
+        );
     }
 
     // Sabotage: empty seed sidecars make the warm link seed nothing. The
@@ -154,10 +175,16 @@ fn the_seed_makes_a_literals_births_carry_its_guard_immediate_cold_and_warm() {
     }
     assert!(emptied > 0, "no seed sidecar was written under {objects:?}");
     let (sabotaged, log) = compile(dir.path(), "sabotaged_bin");
-    assert!(log.contains("Reused cached object"), "sabotaged build: {log}");
+    assert!(
+        log.contains("Reused cached object"),
+        "sabotaged build: {log}"
+    );
     let (out, sab_lines) = census(&sabotaged);
     assert_eq!(out, EXPECTED, "a miss must only be slow");
-    assert!(seeded(&sab_lines).is_empty(), "the sabotaged build still seeded");
+    assert!(
+        seeded(&sab_lines).is_empty(),
+        "the sabotaged build still seeded"
+    );
     let sab_mints = literal_mints(&sab_lines, &ids);
     assert!(
         !sab_mints.is_empty() && sab_mints.iter().all(|l| l.ends_with(" miss")),
