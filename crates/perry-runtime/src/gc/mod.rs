@@ -169,6 +169,7 @@ pub(crate) mod prefetch;
 mod copying;
 mod copying_first_cycle;
 mod copying_parent_facts;
+mod copying_object_scan;
 mod copying_phase;
 mod copying_pointer_set;
 mod diag_sites;

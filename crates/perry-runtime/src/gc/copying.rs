@@ -416,7 +416,7 @@ impl CopyingNurseryCollector {
         if addr == self.memo_addr {
             return Some(self.memo_result);
         }
-        let ptr = self.ptrs.classify(addr)?;
+        let ptr = self.ptrs.classify_inline(addr)?;
         Some(self.mark_classified(addr, ptr))
     }
 
@@ -710,6 +710,10 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        // The common case, written out (#11549): see `gc/copying_object_scan.rs`.
+        if self.scan_plain_object(header) {
+            return;
+        }
         let mut changed = false;
         // LAZY, not eager. Reading the fact once per traced OBJECT regressed
         // all six fixtures (+0.88 % to +5.09 % instructions): a great many

@@ -227,7 +227,7 @@ impl CopyingNurseryCollector {
             return None;
         }
         let addr = bits as usize;
-        let ptr = self.ptrs.classify(addr)?;
+        let ptr = self.ptrs.classify_inline(addr)?;
         #[cfg(test)]
         if copy_decode_sabotage::forgetting(copy_decode_sabotage::RAW_MARK) {
             return None;

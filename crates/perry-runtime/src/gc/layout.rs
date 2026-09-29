@@ -118,6 +118,7 @@ pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
     }
 }
 
+pub(in crate::gc) mod shape_layout_table;
 mod slot_mask;
 #[cfg(test)]
 mod test_accessors;
@@ -125,6 +126,7 @@ mod transfer;
 mod typed_shape;
 
 pub(in crate::gc) use slot_mask::LayoutSlotMask;
+pub(in crate::gc) use shape_layout_table::ShapeLayoutTable;
 #[cfg(test)]
 pub(crate) use test_accessors::{
     test_gc_rewrite_slot_addresses, test_gc_rewrite_slot_count, test_layout_pointer_slot_count,
@@ -185,8 +187,8 @@ thread_local! {
 // array cannot stale this index. Nothing to prune on object death (entries are
 // per-shape, shared).
 thread_local! {
-    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<crate::fast_hash::PtrHashMap<u32, Option<TypedLayoutDescriptor>>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<ShapeLayoutTable> =
+        RefCell::new(ShapeLayoutTable::new());
 }
 
 fn shape_layout_keyed_enabled() -> bool {
@@ -337,7 +339,17 @@ unsafe fn shape_shared_pointer_mask_from(
     if (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT == 0 {
         return None;
     }
-    with_shape_shared_descriptor_from(user_ptr, shape, |d| d.pointer_mask.clone())
+    // `with_shape_shared_descriptor_from(.., |d| d.pointer_mask.clone())`,
+    // through the table's exact one-entry memo (`shape_layout_table.rs`).
+    let shape_id =
+        crate::object::shapes::object_shape_stamp(user_ptr as *const crate::object::ObjectHeader);
+    if shape_id == 0 {
+        return None;
+    }
+    let field_count = shape.map_or(0, |shape| shape.live_inline_slot_count() as usize);
+    hot_shape_layouts()
+        .borrow()
+        .shared_pointer_mask(shape_id, field_count)
 }
 
 /// Install `descriptor` as the canonical layout for `shape_id` and set the
