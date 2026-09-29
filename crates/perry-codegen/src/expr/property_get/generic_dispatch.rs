@@ -19,8 +19,8 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 /// Since #9708 codegen emits only the 8-byte slot (`@perry_ic_N = private
 /// global ptr null`) and the runtime allocates the words itself, sized from
 /// its own `PicCache` — so the constant is no longer an emission width, but
-/// the emitted way GEPs (`PIC_WAY_BASE + PIC_WAYS * 2` words) must still
-/// land inside that allocation. perry-codegen does not depend on
+/// the runtime's miss entry reads its ways at `PIC_WAY_BASE + PIC_WAYS * 2`
+/// words, which the pairing tests keep inside that allocation. perry-codegen does not depend on
 /// perry-runtime (the same reason `INLINE_SLOT_FLOOR` is duplicated in
 /// `target_layout`), so the pairing is held by `pic_cache_layout_matches_runtime`
 /// here and `pic_cache_words_match_codegen` in the runtime: change one and both
@@ -29,9 +29,11 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 pub(crate) const PIC_CACHE_WORDS: usize = 12;
 /// First word of the polymorphic way array (words 0..2 are the MRU entry and
 /// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
+#[cfg(test)]
 pub(crate) const PIC_WAY_BASE: usize = 4;
 /// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
 /// shapes inline. Mirrors the runtime's `PIC_WAYS`.
+#[cfg(test)]
 pub(crate) const PIC_WAYS: usize = 4;
 /// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
 /// before anything has primed it.
@@ -63,14 +65,17 @@ pub(crate) const PACKED_GET_EMPTY: i64 = 0xFFFF_FFFF;
 /// The hit path's compare therefore REFUSES a spill entry without asking a
 /// question of its own, which is what lets the overflow-bit test (a 10-byte
 /// `movabs`, a `test` and a branch, on every read of every site) leave the hit
-/// path entirely. The spill entry is still served: `pic.token.miss` un-flips
-/// the bit, and a match branches straight to the slow entry, which decodes the
-/// same word. See the design note at the head of this function.
+/// path entirely. The spill entry is still served: the site's one miss call
+/// (`js_object_get_field_ic_slow`) un-flips the bit first thing. Codegen no
+/// longer reads the word's encoding; the mirror is kept for the pairing tests.
+#[cfg(test)]
 pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
 
 /// Way-state word: `> 0` means at least one way is populated and the compares
 /// are worth running; `0` (fresh) and a negative megamorphic countdown
-/// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
+/// both skip them. Mirrors the runtime's `PIC_WAY_STATE` (read there only,
+/// by the miss entry; kept here for the pairing tests).
+#[cfg(test)]
 pub(crate) const PIC_WAY_STATE: usize = 3;
 // Word 2 is unused: it held the Array-subclass named-prefix token, site state
 // not derived from one shape, retired by S6. A site holds `(ShapeId, slot)`
@@ -90,6 +95,11 @@ pub(crate) const PIC_WAY_STATE: usize = 3;
 /// re-reading it at each consumer is not merely cheap, it is the correct
 /// reading: every cold block sees the pool's current address rather than one
 /// captured before whatever collected.
+/// The runtime's never-written empty shape directory (`shapes_store.rs`),
+/// which confirms nothing: a `length` site's front operand, and the value
+/// where the agent's own directory is not readable inline.
+const EMPTY_SHAPE_DIR: &str = "@PERRY_EMPTY_SHAPE_DIR";
+
 fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
     let blk = ctx.block();
     let key_box = blk.load(DOUBLE, key_handle_global);
@@ -776,9 +786,7 @@ pub(crate) fn lower_generic_property_get(
     // the hit path pays a `jmp` to the survivor instead of falling through.
     let hit_live_idx =
         crate::expr::typed_feedback_emission_enabled().then(|| ctx.new_block("pic.hit.live"));
-    let miss_idx = ctx.new_block("pic.miss");
     let hit_label = ctx.block_label(hit_idx);
-    let miss_label = ctx.block_label(miss_idx);
     // Small-handle receivers (native-module registry ids) must never be
     // dereferenced. Pre-#7883 they were kept out of the loads by selecting a
     // sentinel address and AND-ing `is_real_ptr` into `hit`; the branch does
@@ -877,12 +885,11 @@ pub(crate) fn lower_generic_property_get(
             ctx.block().inttoptr(I64, &pcid_addr)
         }
     };
-    // The hot ShapeId load has exactly ONE use: the compare. The two cold
-    // consumers of the same word — the spill compare in `pic.token.miss` and
-    // the way token in `pic.ways` — read it AGAIN there, through an atomic
-    // load that GVN will not merge with this one. That is a deliberate
-    // re-derivation on the miss path (one load, on a path that is about to
-    // spend hundreds), and it is what lets isel fold this load into the
+    // The hot ShapeId load has exactly ONE use: the compare. The cold
+    // consumers of the same word — the spill compare and the way tokens —
+    // live in the miss front, which reads it AGAIN from the receiver. That is
+    // a deliberate re-derivation on the miss path (one load, on a path that
+    // is about to make a call), and it is what lets isel fold this load into the
     // compare itself: `cmp %ecx, 4(%rdi)` instead of a `mov` and a `cmp`,
     // one instruction fewer on every hit. With the word live into the cold
     // blocks it had to sit in a register.
@@ -893,11 +900,27 @@ pub(crate) fn lower_generic_property_get(
     // proves the shape without a discriminator OR or a wide token mask.
     let packed_stamp = ctx.block().trunc(I64, &packed_word, I32);
     let token_eq = ctx.block().icmp_eq(I32, &pcid, &packed_stamp);
-    let token_miss_idx = ctx.new_block("pic.token.miss");
-    let token_miss_label = ctx.block_label(token_miss_idx);
+    // What stays inline is the hit: the ShapeId compare and the load
+    // (first-read D3). Everything else a miss can be — a spill entry, a
+    // polymorphic way, a latched site's slot guess, an inherited read, the
+    // collecting miss — is answered by a runtime call.
+    //
+    // Outside profiling builds, the compare's false edge first makes ONE
+    // GC-leaf call, `js_object_get_field_ic_front` (`pic.miss.front`): it
+    // answers a spill entry, a polymorphic way and a latched site's
+    // shape-confirmed slot guess, and returns `TAG_HOLE` for anything else.
+    // Only then does the site branch to the collecting slow call, so the
+    // statepoint spills and reloads that call needs sit on that cold edge
+    // alone. Receiver-validation failures skip the front: it answers
+    // nothing for a receiver that is not a real object.
+    let front_idx =
+        (!crate::expr::typed_feedback_emission_enabled()).then(|| ctx.new_block("pic.miss.front"));
+    let token_miss_label = front_idx
+        .map(|idx| ctx.block_label(idx))
+        .unwrap_or_else(|| cold_label.clone());
     // `.length` on a plain Array (#10714), tested on the compare's FALSE edge
     // and nowhere earlier. See `emit_plain_array_length_arm` for what it
-    // answers and what it leaves to `pic.token.miss`.
+    // answers and what it leaves to the miss front (`pic.miss.front`).
     //
     // An Array can never take the hit: its `+4` word is `capacity`, a count
     // rule 3 (#10828) bounds below the ShapeId floor, so the compare above
@@ -931,102 +954,6 @@ pub(crate) fn lower_generic_property_get(
             .cond_br(&token_eq, &hit_label, &token_miss_label);
     }
 
-    ctx.current_block = token_miss_idx;
-    // The cold re-read of the ShapeId word — see the hot load above.
-    let pcid = ctx.block().load_atomic_monotonic(I32, &pcid_ptr, 4);
-    let pcid64 = ctx.block().zext(I32, &pcid, I64);
-    // pic_prime_get is the only production writer of get-cache tokens and
-    // refuses the zero-ShapeId token. All remaining tokens carry a valid,
-    // never-reused ShapeId; vacant entries are zero. Equality therefore
-    // proves a nonzero stamp without another check on every property read.
-    // Keyless Object.create(proto) receivers still miss and walk prototypes.
-    let token = ctx.block().or(I64, &pcid64, "4611686018427387904");
-    // The SPILL entry — tested HERE, and nowhere on the hit path.
-    //
-    // A key past the object's inline region used to publish its slot into the
-    // compact word with `IC_SLOT_OVERFLOW_BIT` set, and every read of every
-    // site paid to ask whether the bit was there: LLVM folds
-    // `((packed >> 32) & (1 << 30)) == 0` into `packed & (1 << 62)`, which is
-    // a 10-byte `movabs`, a `test` and a branch on the hit path of sites whose
-    // field is inline and can never see the bit.
-    //
-    // Now a spill entry publishes the SAME ShapeId with `PACKED_SPILL_FLIP`
-    // flipped into it, which lands it outside the ShapeId range, so the hit
-    // path's compare refuses it for free. Un-flipping the bit here recognises
-    // it in three instructions ON THE MISS PATH ONLY, and a match is served
-    // by `pic.spill.hit` below — skipping the full cache's resolution and the
-    // polymorphic ways, neither of which can serve a spill key anyway
-    // (`pic_prime_get` refuses to cascade an encoded slot into a way).
-    let spill_stamp = ctx
-        .block()
-        .xor(I32, &packed_stamp, &PACKED_SPILL_FLIP.to_string());
-    let is_spill = ctx.block().icmp_eq(I32, &pcid, &spill_stamp);
-    let ways_entry_idx = ctx.new_block("pic.token.ways");
-    let ways_entry_label = ctx.block_label(ways_entry_idx);
-    let spill_hit_idx = ctx.new_block("pic.spill.hit");
-    let spill_hit_label = ctx.block_label(spill_hit_idx);
-    ctx.block()
-        .cond_br(&is_spill, &spill_hit_label, &ways_entry_label);
-
-    // S5: the SPILL hit. The flipped entry is a `(ShapeId, index)` fact like
-    // the inline one, and the ShapeId alone proves where the value is: the
-    // key list and the live inline-slot bound it names fix the key's
-    // position, a position at or past the bound IS its index in the spill
-    // buffer, and every carrier of the shape has that storage (the runtime
-    // reserves it for a key claimed without a value, keeps a stored
-    // `undefined` across buffer growth, and publishes no spill entry while
-    // spill storage is disabled — `spill_reserve_claimed`,
-    // `spill_get_present`, `packed_get::prime_get`). So the hit is two
-    // dependent loads to reach the buffer and one at the fixed index, with no
-    // null, bound or hole test:
-    //
-    //   meta  = [handle + META]           ObjectHeader.meta
-    //   spill = [meta + 32]               ObjectMeta.spill
-    //   value = [spill + 8 + index * 8]   past the u32 length/capacity words
-    //
-    // Nothing here allocates or can collect, so the receiver needs no root.
-    ctx.current_block = spill_hit_idx;
-    crate::expr::receiver_range::emit_route_note(
-        ctx.block(),
-        crate::expr::receiver_range::Route::GenericSpillHit,
-    );
-    let (val_spill, spill_end_label) = emit_spill_hit(
-        ctx,
-        fused_recv.as_ref(),
-        &entry_handle,
-        &packed_word,
-        &merge_label,
-    );
-
-    // Every way load still requires a resolved full cache. A site that has
-    // never primed has no cache, so there is nothing to compare against.
-    //
-    // That "never primed" edge is also exactly where an INHERITED read lives:
-    // a key on the prototype chain is never an own slot on the receiver's
-    // shape, so a site that only ever reads it never resolves its cache, and
-    // every read of it reaches this branch with `present` false. So that
-    // edge, and no other, asks the inherited-read cache (#10834/#10842)
-    // before calling out — see `pic.miss.inherited` below. Every other path
-    // to the exit (a small handle, a spill entry, an MRU or way miss at a site
-    // that HAS primed) is unchanged to the instruction; the first placement
-    // asked on all of them and cost every own-key miss the price of a
-    // declining probe (+88 on a megamorphic site, +89 on a spill read).
-    //
-    // Under `--typed-feedback` the edge keeps its old target: the recording
-    // blocks put a guard-fail and a fallback-call record on precisely this
-    // edge, and a read served without a call would have to change one of
-    // those records. Feedback builds are profiling builds; they keep their
-    // signal byte-identical and go without the hook.
-    ctx.current_block = ways_entry_idx;
-    let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    let inherited_idx = (!crate::expr::typed_feedback_emission_enabled())
-        .then(|| ctx.new_block("pic.miss.inherited"));
-    let never_primed_label = inherited_idx
-        .map(|idx| ctx.block_label(idx))
-        .unwrap_or_else(|| cold_label.clone());
-    ctx.block()
-        .cond_br(&token_cache.present, &miss_label, &never_primed_label);
-
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
     // token hit permanently proves that the cached slot remains live and
@@ -1040,7 +967,7 @@ pub(crate) fn lower_generic_property_get(
     }
     // A matched compact word is now, by construction, an INLINE slot: a
     // spill-located key publishes its ShapeId flipped by `PACKED_SPILL_FLIP`
-    // and is recognised in `pic.token.miss` instead. The overflow-bit test
+    // and is recognised by the miss front instead. The overflow-bit test
     // that used to stand between this shift and the load is gone from the hit
     // path — see the note there for what it cost and where it went.
     let slot = ctx.block().lshr(I64, &packed_word, "32");
@@ -1107,169 +1034,6 @@ pub(crate) fn lower_generic_property_get(
         }
     };
 
-    // PIC miss on the MRU entry — before paying for the call, try the
-    // polymorphic ways (#7753).
-    //
-    // The slow entry is not a cheap fallback: it re-derives the receiver kind
-    // from scratch (proxy band, closure magic, registered-buffer and
-    // typed-array registries, small-handle dispatch), reads the
-    // accessors-in-use thread-local, then linear-scans the keys array with a
-    // `js_string_equals` per key. On a site whose receiver alternates between a
-    // handful of shapes — the shape of every discriminated-union dispatch —
-    // a single-entry cache misses on essentially every read and that whole
-    // ladder runs per field access. Measured on a tree-walking interpreter it
-    // was ~34% of run time.
-    //
-    // The ways are consulted only here, so a genuinely monomorphic site keeps
-    // the exact instruction sequence it had before this block existed. The
-    // typed-feedback counters are also recorded before the way compares, so a
-    // way hit still reports guard-fail + fallback-call exactly as it did when
-    // it was a real miss — the feedback heuristics see an unchanged signal
-    // (the site IS polymorphic; only the cost of that changed).
-    //
-    // # Why this block is DOMINATED by `pic.token` (#7907)
-    //
-    // Its only predecessor is `pic.token.miss`, which is `pic.token`'s. The
-    // exact descriptor identity proves cached-slot bounds, so `token` is
-    // everything the way compares need, and the cache pointer arrives on one
-    // edge rather than through a phi.
-    //
-    // #7883 could not rely on that: it routed the two receiver-validation
-    // failures here as well, which left the values live on only some edges, so
-    // the block **re-derived them** — header and identity loads, the token
-    // select, and a safe-address select for small-handle receivers.
-    // That was correct, and it was justified as cold. It is not cold: on a site
-    // whose receiver rotates over more shapes than the MRU entry holds — the
-    // shape #7753's ways exist for — this block runs on nearly every read, so
-    // the duplicate ladder sat on the hot path. Measured on `interp.ts`'s
-    // `evalNode`, the single hottest instruction in the whole program was the
-    // redundant receiver reconstruction inside this block.
-    ctx.current_block = miss_idx;
-    let cache_ref = token_cache.cache.clone();
-    crate::expr::emit_typed_feedback_record_call(
-        ctx.block(),
-        "js_typed_feedback_record_guard_fail",
-        &[(I64, &feedback_site_id)],
-    );
-    crate::expr::emit_typed_feedback_record_call(
-        ctx.block(),
-        "js_typed_feedback_record_fallback_call",
-        &[(I64, &feedback_site_id)],
-    );
-
-    // Every way contains a ShapeId token. A non-zero receiver token keeps an
-    // empty way from matching; no GC-epoch guard is necessary because ids are
-    // never reused and descriptor identity survives key relocation.
-    //
-    // The compares sit behind their own branch on `cache[PIC_WAY_STATE] > 0`
-    // rather than being folded into one flat predicate, because a site whose
-    // receiver rotation is WIDER than the ways hold never hits one and would
-    // otherwise pay four dependent loads on every read: measured at **+37%** on
-    // a 7-shape site, against a 2.5x speedup on a 5-shape one. `pic_prime_get`
-    // latches that state to `-1` once a site proves itself megamorphic, and a
-    // fresh site reads `0`, so for both the branch is one load,
-    // one compare, and a perfectly predicted fall-through to the call — which
-    // is exactly the pre-#7753 code path.
-    let state_ptr = ctx
-        .block()
-        .gep(I64, &cache_ref, &[(I64, &PIC_WAY_STATE.to_string())]);
-    let way_state = ctx.block().load(I64, &state_ptr);
-    let ways_live = ctx.block().icmp_sgt(I64, &way_state, "0");
-    let ways_idx = ctx.new_block("pic.ways");
-    let ways_label = ctx.block_label(ways_idx);
-    ctx.block().cond_br(&ways_live, &ways_label, &call_label);
-
-    ctx.current_block = ways_idx;
-    // `is_object` is not ANDed in any more: it is statically true on every edge
-    // that reaches here (#7907 — see the dominance note above).
-    // Reduced as a BALANCED TREE, not as a left fold. At most one way can hold
-    // a given token (`pic_prime_get` evicts a duplicate before it writes one,
-    // and pic_prime_get excludes zero-ShapeId tokens), so the association is
-    // free to change — but the fold made `way_slot` a chain of `PIC_WAYS`
-    // dependent `csel`s whose last node is the operand of the bounds compare
-    // that gates the branch out of this block. On `interp.ts` that node was the
-    // hottest instruction in `evalNode` (#7907). The tree halves the chain.
-    let mut lanes: Vec<(String, String)> = Vec::with_capacity(PIC_WAYS);
-    for w in 0..PIC_WAYS {
-        let tok_ptr = ctx.block().gep(
-            I64,
-            &cache_ref,
-            &[(I64, &(PIC_WAY_BASE + w * 2).to_string())],
-        );
-        let way_tok = ctx.block().load(I64, &tok_ptr);
-        let eq = ctx.block().icmp_eq(I64, &way_tok, &token);
-        let slot_ptr = ctx.block().gep(
-            I64,
-            &cache_ref,
-            &[(I64, &(PIC_WAY_BASE + w * 2 + 1).to_string())],
-        );
-        let way_slot_val = ctx.block().load(I64, &slot_ptr);
-        let lane_slot = ctx.block().select(I1, &eq, I64, &way_slot_val, "0");
-        lanes.push((eq, lane_slot));
-    }
-    while lanes.len() > 1 {
-        let mut merged: Vec<(String, String)> = Vec::with_capacity(lanes.len().div_ceil(2));
-        for pair in lanes.chunks(2) {
-            match pair {
-                [(a_any, a_slot), (b_any, b_slot)] => {
-                    let any = ctx.block().or(I1, a_any, b_any);
-                    let slot = ctx.block().select(I1, a_any, I64, a_slot, b_slot);
-                    merged.push((any, slot));
-                }
-                [single] => merged.push(single.clone()),
-                _ => unreachable!("chunks(2) yields one or two elements"),
-            }
-        }
-        lanes = merged;
-    }
-    let (way_any, way_slot) = lanes
-        .pop()
-        .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
-    let way_load_idx = ctx.new_block("pic.way.load");
-    let way_load_label = ctx.block_label(way_load_idx);
-    ctx.block().cond_br(&way_any, &way_load_label, &call_label);
-
-    ctx.current_block = way_load_idx;
-    if fused_recv.is_some() {
-        crate::expr::receiver_range::emit_route_note(
-            ctx.block(),
-            crate::expr::receiver_range::Route::GenericWayHit,
-        );
-    }
-    let way_offset = ctx.block().shl(I64, &way_slot, "3");
-    let way_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
-    let way_base = ctx.block().add(I64, &way_handle, &obj_header_size);
-    let way_field_addr = ctx.block().add(I64, &way_base, &way_offset);
-    let way_field_ptr = ctx.block().inttoptr(I64, &way_field_addr);
-    let val_way = ctx.block().load(DOUBLE, &way_field_ptr);
-    // The loaded value is the answer here too, for the reason the shape-gated
-    // hit above needs no `TAG_HOLE` compare (#10826: a successful delete
-    // ALWAYS moves the receiver's ShapeId, so an exact-id match proves the
-    // slot it names is live).
-    //
-    // A way pair is not a second kind of cache entry needing its own
-    // argument. `pic_prime_get` is the ONLY writer of a way, and the only
-    // values it ever writes into one are `prev_tok`/`prev_slot` — the pair
-    // that was sitting in the MRU entry. Every `(token, slot)` a way holds is
-    // therefore an MRU pair that aged out; the token it is compared against is
-    // the same receiver ShapeId word the MRU compare reads; and ShapeIds are
-    // never reused. Whatever makes the MRU pair safe to load without a hole
-    // check makes the way pair safe — the entry did not become weaker by
-    // moving one word over.
-    //
-    // The two ways in which a way pair differs from an MRU pair both narrow
-    // it: an overflow-encoded slot is refused entry to a way at all, and a way
-    // is consulted only after the MRU entry has already missed.
-    let way_end_label = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    // #7907: receiver-validation failure. A receiver that gets here can never
-    // match a way — the compares require a real pointer to a plain
-    // descriptor-free `ObjectHeader` — so it goes straight to the handler,
-    // which reproduces the whole ladder anyway (proxy band, closure magic,
-    // buffer/typed-array registries, small-handle dispatch). The typed-feedback
-    // counters are the same two records on the same edges, so the feedback
-    // signal is byte-identical to what the pre-T1 blocks reported.
     if let Some(cold_idx) = cold_idx {
         ctx.current_block = cold_idx;
         crate::expr::emit_typed_feedback_record_call(
@@ -1285,48 +1049,14 @@ pub(crate) fn lower_generic_property_get(
         ctx.block().br(&call_label);
     }
 
-    // The inherited-read hook, on the never-primed edge only (see the branch
-    // that reaches it, in `pic.token.ways`). A read whose key lives on the
-    // prototype chain can never take the own-slot hit — the receiver's shape
-    // says the key is not own — so before this block it paid the slow entry's
-    // prologue and dispatch (79 of an inherited read's 204 instructions,
-    // measured by the inherited-reads lane) just to reach the same lookup
-    // inside `get_field_ic_miss_impl`. `js_inherited_read_cache_hit_f64` is
-    // a pure state read — it allocates nothing, triggers no GC and runs no
-    // user code — so it is a leaf in `gc_call_effects.rs` and
-    // `root_reload.rs`: no spill, no reload around it. `TAG_HOLE` is its
-    // decline sentinel, which no ordinary value can be, so the answer is one
-    // compare, with the SERVED edge as the true edge like every guard-passing
-    // edge in this tower (#7883); a decline continues to the one exit exactly
-    // as the never-primed edge did before. Nothing is primed from here:
-    // priming stays in the miss handler, the one place that already knows
-    // the key is not own without a second search. The versioned-loop deopt
-    // note is emitted here as it is on the exit, so entering either cold arm
-    // still records the bailout.
-    let inherited_arm = inherited_idx.map(|idx| {
-        ctx.current_block = idx;
-        crate::expr::emit_versioned_loop_callback_deopt(ctx);
-        let inh_key_handle = emit_key_handle(ctx, &key_handle_global);
-        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
-        let recv_ptr = ctx.block().inttoptr(I64, &handle);
-        let key_ptr = ctx.block().inttoptr(I64, &inh_key_handle);
-        let val_inherited = ctx.block().call(
-            DOUBLE,
-            "js_inherited_read_cache_hit_f64",
-            &[(PTR, &recv_ptr), (PTR, &key_ptr)],
-        );
-        let inherited_bits = ctx.block().bitcast_double_to_i64(&val_inherited);
-        let inherited_served =
-            ctx.block()
-                .icmp_ne(I64, &inherited_bits, crate::nanbox::TAG_HOLE_I64);
-        let inherited_end_label = ctx.block().label.clone();
-        ctx.block()
-            .cond_br(&inherited_served, &merge_label, &cold_label);
-        (val_inherited, inherited_end_label)
-    });
-
-    // The object exit: one call reproducing every pointer-path arm this tower
-    // used to expand.
+    // The collecting exit. It receives what the miss front declined (and,
+    // without a front, every miss) with the same four operands as before
+    // first-read D3: a never-primed site's inherited-read cache
+    // (#10834/#10842) is asked inside it, then the full miss body runs.
+    // Under `--typed-feedback` every miss records guard-fail + fallback-call
+    // on the way in (`cold` above), the signal those builds always saw for a
+    // non-hit. The versioned-loop deopt note is emitted here as well, so
+    // entering this cold arm still records the bailout.
     ctx.current_block = call_idx;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
@@ -1343,6 +1073,53 @@ pub(crate) fn lower_generic_property_get(
     );
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
+
+    // The front (see `token_miss_label`). Its operands: the agent's
+    // shape-directory mirror (`PERRY_AGENT_PTRS` slot 0), so the front reads
+    // no thread-local; the receiver; the key exactly as the pool global holds
+    // it — STRING-tagged, the form a canonical key list stores, so the
+    // latched confirm compares one word; and the site's two cache words. A
+    // `length` site passes the runtime's empty directory
+    // (`PERRY_EMPTY_SHAPE_DIR`): an Array-subclass receiver serves `length`
+    // from its elements store, which no key list names, so its latched edge
+    // must not be confirmed from the shape. The call is a
+    // `"gc-leaf-function"` (the front is `Leaf` in the generated call-effects
+    // table): nothing live across it is spilled or relocated.
+    let front_arm = front_idx.map(|front_idx| {
+        ctx.current_block = front_idx;
+        let dir = if property == "length" {
+            EMPTY_SHAPE_DIR.to_string()
+        } else {
+            crate::expr::agent_ptr::emit_agent_ptr_or(
+                ctx,
+                crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+                EMPTY_SHAPE_DIR,
+            )
+        };
+        let front_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+        let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+        let answered = ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_ic_front",
+            &[
+                (PTR, &dir),
+                (I64, &front_handle),
+                (I64, &key_bits),
+                (PTR, &cache_slot_ref),
+                (PTR, &packed_ref),
+            ],
+        );
+        let answered_bits = ctx.block().bitcast_double_to_i64(&answered);
+        let served = ctx
+            .block()
+            .icmp_ne(I64, &answered_bits, crate::nanbox::TAG_HOLE_I64);
+        let front_end_label = ctx.block().label.clone();
+        // The SERVED edge is the true edge, like every guard-passing edge in
+        // the tower (#7883).
+        ctx.block().cond_br(&served, &merge_label, &call_label);
+        (answered, front_end_label)
+    });
 
     // Native Map/Set `.size`: their common leading field was admitted only by
     // the exact live GC-kind checks above. Keep the read inline; calling
@@ -1375,12 +1152,11 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = merge_idx;
     let mut incoming: Vec<(&str, &str)> = vec![
         (&val_hit, &hit_end_label),
-        (&val_way, &way_end_label),
         (&val_miss, &miss_end_label),
         (&val_nonptr, &nonptr_end_label),
     ];
-    if let Some((val_inherited, inherited_end_label)) = inherited_arm.as_ref() {
-        incoming.push((val_inherited, inherited_end_label));
+    if let Some((answered, front_end_label)) = front_arm.as_ref() {
+        incoming.push((answered, front_end_label));
     }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));
@@ -1394,63 +1170,5 @@ pub(crate) fn lower_generic_property_get(
     if let Some((len, array_end_label)) = array_length_arm.as_ref() {
         incoming.push((len, array_end_label));
     }
-    incoming.push((&val_spill, &spill_end_label));
     Ok(ctx.block().phi(DOUBLE, &incoming))
-}
-
-/// `pic.spill.hit`'s loads (see the note at its branch): the value at spill
-/// index `packed_word >> 32` of the receiver's spill buffer. Returns the value
-/// and the label of the block that branches to `merge_label`.
-fn emit_spill_hit(
-    ctx: &mut FnCtx<'_>,
-    fused_recv: Option<&crate::expr::receiver_range::FusedReceiver>,
-    entry_handle: &str,
-    packed_word: &str,
-    merge_label: &str,
-) -> (String, String) {
-    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
-    let meta_offset = crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple);
-    let meta_slot = match fused_recv {
-        // `handle + META`, addressed from the biased value (`receiver_range`).
-        Some(f) => {
-            crate::expr::receiver_range::emit_field_ptr(ctx.block(), &f.biased, meta_offset as i64)
-        }
-        None => {
-            let addr = ctx.block().add(I64, entry_handle, &meta_offset.to_string());
-            ctx.block().inttoptr(I64, &addr)
-        }
-    };
-    let meta = if ilp32 {
-        let narrow = ctx.block().load(I32, &meta_slot);
-        ctx.block().zext(I32, &narrow, I64)
-    } else {
-        ctx.block().load(I64, &meta_slot)
-    };
-    let meta_ptr = ctx.block().inttoptr(I64, &meta);
-    let spill_slot = ctx.block().gep(
-        I8,
-        &meta_ptr,
-        &[(
-            I64,
-            &crate::target_layout::OBJECT_META_SPILL_OFFSET_BYTES.to_string(),
-        )],
-    );
-    // `ObjectMeta.spill` is a `u64` on every target (the buffer address,
-    // zero-extended on ILP32).
-    let spill = ctx.block().load(I64, &spill_slot);
-    let spill_ptr = ctx.block().inttoptr(I64, &spill);
-    let index = ctx.block().lshr(I64, packed_word, "32");
-    let elements = ctx.block().gep(
-        I8,
-        &spill_ptr,
-        &[(
-            I64,
-            &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
-        )],
-    );
-    let value_ptr = ctx.block().gep(DOUBLE, &elements, &[(I64, &index)]);
-    let value = ctx.block().load(DOUBLE, &value_ptr);
-    let end_label = ctx.block().label.clone();
-    ctx.block().br(merge_label);
-    (value, end_label)
 }

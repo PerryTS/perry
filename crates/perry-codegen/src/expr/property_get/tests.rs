@@ -200,6 +200,13 @@ fn no_call_location_without_debug_symbols() {
 /// #8067: the primary property-read PIC identity is the authoritative ShapeId
 /// only. Word 2 may carry the independent Array-subclass named-prefix proof,
 /// but it is consulted only after this exact ShapeId predicate fails.
+///
+/// First-read D3: the hit is the receiver's `+4` word compared, as an `i32`,
+/// with the compact word's low half — no discriminated token is formed at the
+/// site at all. The polymorphic ways' `PIC_ID_TOKEN_BIT | ShapeId` tokens are
+/// compared inside the miss front (`js_object_get_field_ic_front`), so the
+/// token bit appearing in emitted IR again would mean a way compare crept back
+/// inline.
 #[test]
 fn generic_property_get_hit_path_is_shape_id_only() {
     let ir = emit(false, None);
@@ -207,9 +214,25 @@ fn generic_property_get_hit_path_is_shape_id_only() {
         ir.contains("@perry_ic_"),
         "test premise: the generic read reaches the inline monomorphic PIC:\n{ir}"
     );
+    let token = ir
+        .find("\npic.token")
+        .unwrap_or_else(|| panic!("expected a pic.token block:\n{ir}"));
+    let token_body = &ir[token
+        ..ir[token + 1..]
+            .find("\n\n")
+            .map(|o| o + token + 1)
+            .unwrap_or(ir.len())];
     assert!(
-        ir.contains("4611686018427387904"),
-        "hit path must form a discriminated ShapeId token:\n{ir}"
+        token_body.contains("load i32")
+            && token_body.contains("trunc i64")
+            && token_body.contains("icmp eq i32"),
+        "the hit is the ShapeId word compared with the compact word's low \
+         half:\n{token_body}"
+    );
+    assert!(
+        !ir.contains("4611686018427387904"),
+        "no discriminated way token may be formed at the site — the ways are \
+         the miss front's:\n{ir}"
     );
     assert!(
         !ir.contains("@PERRY_IC_EPOCH"),
@@ -355,7 +378,13 @@ fn fs_promises_native_module_value_uses_submodule_singleton() {
 /// be the pre-#9708 shape coming back, with its 96 B of zero-fill per site.
 #[test]
 fn pic_cache_layout_matches_runtime() {
-    use crate::expr::property_get::generic_dispatch::{PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE};
+    use crate::expr::property_get::generic_dispatch::{
+        PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE,
+    };
+    assert!(
+        PIC_WAY_STATE < PIC_WAY_BASE,
+        "the way-state word sits below the ways, as in perry-runtime"
+    );
     assert_eq!(
         PIC_CACHE_WORDS, 12,
         "perry-runtime's PIC_CACHE_WORDS is 12; update both sides together"
@@ -394,10 +423,22 @@ fn pic_cache_layout_matches_runtime() {
              fills on the first prime (#9708), got:\n{def}\n\nIR:\n{ir}"
         );
     }
+    // The full cache is the runtime's to dereference: the site hands the slot's
+    // ADDRESS to the miss front and the slow entry, which test it for null
+    // (`read_confirm::tests::the_front_answers_a_way_and_declines_a_null_cache`,
+    // `ic_slow::tests::an_unresolved_cache_slot_is_never_dereferenced`). A
+    // site that loaded the slot itself would have to prove it non-null first.
     assert!(
-        ir.contains("load ptr, ptr @perry_ic_") && ir.contains("icmp ne ptr "),
-        "the full-cache fallback must prove the slot non-null before reading \
-         a cache word:\n{ir}"
+        !ir.contains("load ptr, ptr @perry_ic_"),
+        "the site must not dereference the full-cache slot:\n{ir}"
+    );
+    let front = ir
+        .lines()
+        .find(|l| l.contains(" = call double @js_object_get_field_ic_front("))
+        .unwrap_or_else(|| panic!("expected the miss front call:\n{ir}"));
+    assert!(
+        front.contains("ptr @perry_ic_") && front.contains("_packed_get)"),
+        "the front must receive the cache slot and the compact word:\n{front}"
     );
 }
 
@@ -454,253 +495,244 @@ fn array_subclass_named_prefix_proof_is_reached_through_the_one_exit() {
     );
 }
 
-/// #7753: the polymorphic ways must be consulted BEFORE the miss call, and the
-/// monomorphic path must not have grown any work.
+/// The emitted function holding the generic tower, split into
+/// `(label, trimmed body lines)` blocks. Register names restart in every
+/// function, so every def/use question must be asked inside this one.
+fn tower_blocks(ir: &str) -> Vec<(String, Vec<String>)> {
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.miss.call"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+    let mut blocks: Vec<(String, Vec<String>)> = Vec::new();
+    for line in func.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            blocks.push((line.trim_end_matches(':').to_string(), Vec::new()));
+        } else if let Some((_, body)) = blocks.last_mut() {
+            if !line.trim().is_empty() {
+                body.push(line.trim().to_string());
+            }
+        }
+    }
+    blocks
+}
+
+/// The one block whose label starts with `prefix`.
+fn tower_block<'b>(blocks: &'b [(String, Vec<String>)], prefix: &str) -> (&'b str, &'b [String]) {
+    let found: Vec<_> = blocks
+        .iter()
+        .filter(|(l, _)| l.starts_with(prefix))
+        .collect();
+    assert_eq!(found.len(), 1, "expected one `{prefix}` block: {blocks:?}");
+    (found[0].0.as_str(), &found[0].1)
+}
+
+/// `(cond, true target, false target)` of a block's `br i1` terminator.
+fn tower_cond_br(body: &[String]) -> (String, String, String) {
+    let term = body.last().expect("a terminated block");
+    let parts: Vec<&str> = term
+        .strip_prefix("br i1 ")
+        .unwrap_or_else(|| panic!("expected a conditional branch: {term}"))
+        .split(", ")
+        .collect();
+    let label = |s: &str| s.trim_start_matches("label %").to_string();
+    (parts[0].to_string(), label(parts[1]), label(parts[2]))
+}
+
+/// #7753: the polymorphic ways must be consulted BEFORE the collecting miss
+/// call, and the monomorphic path must not have grown any work.
 ///
 /// A one-entry cache misses on essentially every read at a site whose receiver
 /// alternates between shapes — the shape of every discriminated-union dispatch
-/// — and each miss runs the full `js_object_get_field_ic_miss` ladder
-/// (proxy/closure/buffer/typed-array probes, an accessors thread-local, then a
-/// linear keys scan with a `js_string_equals` per key). If the way block is
-/// ever deleted or floated below the call it stops paying for itself entirely,
-/// and nothing else in the suite would show it — the program still computes the
-/// right answer, just slowly. So assert the ORDER, not merely the presence.
+/// — and each miss that reaches the collecting slow entry pays its statepoint
+/// and the full miss ladder. If the ways are ever moved behind that call they
+/// stop paying for themselves, and nothing else in the suite would show it —
+/// the program still computes the right answer, just slowly. So assert the
+/// ORDER, not merely the presence.
+///
+/// First-read D3: the ways are asked by the GC-leaf miss front
+/// (`js_object_get_field_ic_front`, ways first — pinned by
+/// `read_confirm::tests::the_front_answers_a_way_and_declines_a_null_cache`),
+/// so the order is a CFG fact here: the ShapeId compare's false edge is the
+/// front, the front's SERVED edge is the merge, and the slow call is reached
+/// from the front only on its decline edge.
 #[test]
 fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     let ir = emit(false, None);
+    let blocks = tower_blocks(&ir);
+    let (_, token) = tower_block(&blocks, "pic.token");
+    let (_, on_hit, on_miss) = tower_cond_br(token);
+    assert!(on_hit.starts_with("pic.hit"), "{token:?}");
     assert!(
-        ir.contains("@perry_ic_"),
-        "test premise: the generic read reaches the inline PIC:\n{ir}"
+        on_miss.starts_with("pic.miss.front"),
+        "the compare's miss edge must reach the front (the ways) first: {token:?}"
     );
-    use crate::expr::property_get::generic_dispatch::{PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
-
-    // Block *text* order is an artifact of emission order, so assert the CFG
-    // instead: the block that calls the miss handler must be reachable only as
-    // a branch target of the way block, never straight-line after it.
-    let ways = ir
-        .find("\npic.ways")
-        .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
-    let way_load = ir
-        .find("\npic.way.load")
-        .unwrap_or_else(|| panic!("expected a pic.way.load block:\n{ir}"));
-    let call_block = ir
-        .find("\npic.miss.call")
-        .unwrap_or_else(|| panic!("expected a pic.miss.call block:\n{ir}"));
-    let ways_body = &ir[ways..[way_load, call_block, ir.len()]
-        .into_iter()
-        .filter(|&x| x > ways)
-        .min()
-        .unwrap()];
+    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
     assert!(
-        ways_body.contains("pic.way.load") && ways_body.contains("pic.miss.call"),
-        "pic.ways must end in a branch choosing between the way load and the \
-         miss call — otherwise the compares are not gating anything:\n{ways_body}"
+        front
+            .iter()
+            .any(|l| l.contains("call double @js_object_get_field_ic_front(")),
+        "{front:?}"
     );
     assert!(
-        !ways_body.contains("call double @js_object_get_field_ic"),
-        "the slow call must not sit inside the way block:\n{ways_body}"
+        !front
+            .iter()
+            .any(|l| l.contains("@js_object_get_field_ic_slow(")),
+        "the slow call must not sit inside the front block: {front:?}"
     );
-    // The way compares read (token, slot) pairs at words PIC_WAY_BASE.. and the
-    // gate reads the state word — all inside pic.ways, none anywhere else.
-    for w in 0..PIC_WAYS {
-        for word in [PIC_WAY_BASE + w * 2, PIC_WAY_BASE + w * 2 + 1] {
-            assert!(
-                ways_body.contains(&format!("i64 {word}\n")),
-                "way word {word} is never read in the way block:\n{ways_body}"
-            );
-        }
-    }
+    let (_, served, declined) = tower_cond_br(front);
+    assert!(served.starts_with("pget.recv_merge"), "{front:?}");
+    assert!(declined.starts_with("pic.miss.call"), "{front:?}");
+    // Every way of reaching the slow call from the object path goes through
+    // the front: its only other predecessor is the receiver-validation
+    // failure, which the front could not answer (no real object).
+    let (call_label, _) = tower_block(&blocks, "pic.miss.call");
+    let preds: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter()
+                .any(|l| l.starts_with("br ") && l.contains(&format!("label %{call_label}")))
+        })
+        .map(|(l, _)| l.as_str())
+        .collect();
     assert!(
-        ir.contains(&format!("i64 {PIC_WAY_STATE}\n")),
-        "the megamorphic gate must read the way-state word:\n{ir}"
+        preds.contains(&front_label)
+            && preds
+                .iter()
+                .all(|p| *p == front_label || p.starts_with("pget.recv_")),
+        "the slow call is reached from the front's decline or a receiver \
+         failure only: {preds:?}"
     );
 }
 
-/// #7907: `pic.miss` must be DOMINATED by `pic.token`, so the way compares can
-/// use the values that block already computed instead of re-deriving them.
+/// #7907: the miss path must be DOMINATED by `pic.token`, so it can use the
+/// values that block already computed instead of re-deriving them.
 ///
 /// #7883 routed all four failure edges — small-handle receiver, non-object
 /// receiver, MRU token mismatch, cached slot out of bounds — into one block,
-/// which left `token` / `token_nonnull` / `shape_id_eq` live on only some of them
-/// and forced the block to reload the whole header ladder. That block is not
-/// cold: on a receiver rotation wider than the MRU entry it runs on nearly
-/// every read, so the duplicate ladder was hot code. The fix is purely
-/// structural — send the two receiver-validation failures to `pic.miss.cold`
-/// (they can never resolve a way, since `way_hit` requires a real object) and
-/// the dominance follows.
+/// which left the token values live on only some of them and forced the block
+/// to reload the whole header ladder. That block is not cold: on a receiver
+/// rotation wider than the MRU entry it runs on nearly every read, so the
+/// duplicate ladder was hot code. The receiver-validation failures go to the
+/// slow exit directly (they can never resolve a way: a way hit requires a real
+/// object), and the dominance follows.
 ///
-/// Assert the *consequences*, not the block names alone: a re-derivation would
-/// show up as duplicate header loads or the small-handle sentinel `select`.
+/// First-read D3: that block is `pic.miss.front`, the GC-leaf front call. It
+/// must have exactly ONE predecessor, `pic.token`'s false edge, and the site
+/// must not re-derive a receiver predicate for it: the front re-reads the
+/// ShapeId word itself, so the hot load keeps a single use (the compare) and
+/// isel folds it into `cmp %ecx, 4(%rdi)`.
 #[test]
 fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     let ir = emit(false, None);
-    let main_start = ir
-        .find("define i32 @main()")
-        .expect("entry module should define main");
-    let main_rest = &ir[main_start..];
-    let main_end = main_rest
-        .find("\n}\n")
-        .expect("main should have a closing brace");
-    let main = &main_rest[..main_end];
-    assert!(
-        main.contains("@perry_ic_"),
-        "test premise: the generic read reaches the inline PIC:\n{ir}"
-    );
-    // T1: the landing block is now the single slow exit itself, and the
-    // dominance is structural — `pic.miss` has exactly ONE predecessor,
-    // `pic.token.miss`, which `pic.token` dominates. Assert that directly:
-    // routing any receiver-validation failure back into `pic.miss` would add a
-    // predecessor and immediately re-introduce the phis #7907 removed.
-    // `pic.miss` carries a numeric suffix and `pic.miss.call` starts with the
-    // same text, so match the block's own label exactly and then count the
-    // branches whose TARGET is that label (a `br i1` naming both blocks counts
-    // once, for the right one).
-    let miss_label = main
-        .lines()
-        .filter(|l| !l.starts_with(' ') && l.ends_with(':'))
-        .map(|l| l.trim_end_matches(':'))
-        .find(|l| {
-            l.strip_prefix("pic.miss.")
-                .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+    let blocks = tower_blocks(&ir);
+    let (front_label, _) = tower_block(&blocks, "pic.miss.front");
+    let (token_label, token) = tower_block(&blocks, "pic.token");
+    let preds: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter().any(|l| {
+                l.starts_with("br ")
+                    && l.split("label %")
+                        .skip(1)
+                        .any(|t| t.trim_end_matches(&[',', ' '][..]) == front_label)
+            })
         })
-        .unwrap_or_else(|| panic!("expected a pic.miss block:\n{ir}"))
-        .to_string();
-    let preds = main
-        .lines()
-        .filter(|l| l.trim_start().starts_with("br "))
-        .filter(|l| {
-            l.split("label %")
-                .skip(1)
-                .any(|t| t.trim_end_matches(&[',', ' '][..]) == miss_label)
-        })
-        .count();
+        .map(|(l, _)| l.as_str())
+        .collect();
     assert_eq!(
-        preds, 1,
-        "pic.miss must have exactly one predecessor (pic.token.miss), or it is \
-         no longer dominated by pic.token:\n{ir}"
+        preds,
+        vec![token_label],
+        "the front must have exactly one predecessor (pic.token), or it is no \
+         longer dominated by it: {blocks:?}"
+    );
+    let all: Vec<&String> = blocks.iter().flat_map(|(_, b)| b.iter()).collect();
+    assert!(
+        !all.iter().any(|l| l.contains("@PERRY_IC_EPOCH")),
+        "the removed keys-pointer epoch global must not appear"
     );
     assert!(
-        main.contains("label %pic.miss.call"),
-        "every receiver-validation failure must land on the single slow \
-         exit:\n{ir}"
+        !all.iter().any(|l| l.contains("ptrtoint ptr @perry_ic_")),
+        "the small-handle sentinel select must be gone"
     );
-    assert!(
-        !main.contains("@PERRY_IC_EPOCH"),
-        "the removed keys-pointer epoch global must not appear:\n{ir}"
-    );
-    assert!(
-        !main.contains("ptrtoint ptr @perry_ic_"),
-        "the small-handle sentinel select only existed because an invalid \
-         receiver could reach the way compares; it must be gone:\n{ir}"
-    );
-    // The receiver predicates, exactly once each. `icmp eq i32 %` is two: the
-    // ShapeId identity compare on the hit path and the spill compare in
-    // `pic.token.miss` that replaced the hit path's overflow-bit test. There
-    // is no GC-kind compare at all any more (#10828), so a single `icmp eq
-    // i8` would mean the header load has crept back somewhere.
+    // The receiver predicates, exactly once each: the ShapeId identity
+    // compare is the only `icmp eq i32`, and there is no GC-kind compare at
+    // all (#10828).
     for (needle, what, expect) in [
         ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 0),
-        ("icmp eq i32 %", "the ShapeId identity compare", 2),
+        ("icmp eq i32 %", "the ShapeId identity compare", 1),
     ] {
-        let n = main.matches(needle).count();
+        let n = all.iter().filter(|l| l.contains(needle)).count();
         assert_eq!(
             n, expect,
             "{what} appears {n} times, expected {expect} — a receiver \
-             predicate is being re-derived or has crept back:\n{ir}"
+             predicate is being re-derived or has crept back: {blocks:?}"
         );
     }
-    // The ONE re-derivation that is deliberate: `pic.token.miss` re-reads the
-    // ShapeId word through an atomic load rather than reusing the hot load's
-    // value, so that the hot load has a single use and isel folds it into
-    // the compare (`cmp %ecx, 4(%rdi)`). A plain second load would be merged
-    // back into the first by GVN and the hot word would be live into the
-    // cold blocks again.
-    let token_miss = main
-        .find("\npic.token.miss")
-        .unwrap_or_else(|| panic!("expected a pic.token.miss block:\n{ir}"));
-    let token_miss_body = &main[token_miss
-        ..main[token_miss + 1..]
-            .find("\npic.")
-            .map(|o| o + token_miss + 1)
-            .unwrap_or(main.len())];
-    assert!(
-        token_miss_body.contains("load atomic i32"),
-        "pic.token.miss must re-read the ShapeId word atomically so the hot \
-         load stays single-use:\n{token_miss_body}"
+    let shape_word = token
+        .iter()
+        .find(|l| l.contains(" = load i32, "))
+        .and_then(|l| l.split_once(" = "))
+        .map(|(r, _)| r.to_string())
+        .unwrap_or_else(|| panic!("the ShapeId word load: {token:?}"));
+    let uses = all
+        .iter()
+        .filter(|l| {
+            l.split(|c: char| c == ',' || c == ' ' || c == '(' || c == ')')
+                .any(|t| t == shape_word)
+        })
+        .count();
+    assert_eq!(
+        uses, 2,
+        "the hot ShapeId load must have exactly one use (the compare), so it \
+         folds into it and stays dead on the miss edge: {blocks:?}"
     );
 }
 
-/// S5: a matched SPILL entry is served inline. `pic.token.miss` branches to
-/// `pic.spill.hit` (not to the slow exit) on the un-flipped compare, and that
-/// block is exactly the three dependent loads the ShapeId licenses —
-/// `ObjectHeader.meta`, `ObjectMeta.spill`, the element at the word's index —
-/// with no call, no compare and no hole test, straight to the merge.
+/// S5: a matched SPILL entry is served without reaching the collecting call.
+///
+/// First-read D3: the miss front recognises it — the compact word holding the
+/// receiver's ShapeId flipped by `PACKED_SPILL_FLIP` — and answers with the
+/// three dependent loads the ShapeId licenses (`ObjectHeader.meta`,
+/// `ObjectMeta.spill`, the element at the word's index); its behaviour is
+/// `read_confirm::tests::the_front_serves_a_spill_entry_only_for_a_real_shape_id`.
+/// The CODEGEN half: the site hands the front the compact word (the spill
+/// index and flipped id live there), the front's SERVED edge lands on the
+/// merge without a second call, and no spill arithmetic is expanded inline.
 #[test]
-fn a_spill_entry_is_served_inline_by_three_loads() {
+fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
+    use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
     let ir = emit(false, None);
-    let main_start = ir
-        .find("define i32 @main()")
-        .expect("entry module should define main");
-    let main_rest = &ir[main_start..];
-    let main = &main_rest[..main_rest.find("\n}\n").expect("main closes")];
-    // A block: its label line (by prefix, labels carry a numeric suffix) and
-    // every indented line after it.
-    let block = |prefix: &str| -> String {
-        let mut lines = main
-            .lines()
-            .skip_while(|l| !(l.starts_with(prefix) && l.ends_with(':')));
-        let label = lines
-            .next()
-            .unwrap_or_else(|| panic!("expected a {prefix} block:\n{main}"));
-        let body: Vec<&str> = lines.take_while(|l| l.starts_with(' ')).collect();
-        format!("{label}\n{}", body.join("\n"))
-    };
-    let token_miss = block("pic.token.miss");
-    let spill_label = main
-        .lines()
-        .filter(|l| !l.starts_with(' ') && l.ends_with(':'))
-        .map(|l| l.trim_end_matches(':'))
-        .find(|l| l.starts_with("pic.spill.hit"))
-        .unwrap_or_else(|| panic!("expected a pic.spill.hit block:\n{main}"))
-        .to_string();
+    let blocks = tower_blocks(&ir);
+    let (front_label, front) = tower_block(&blocks, "pic.miss.front");
+    let call = front
+        .iter()
+        .find(|l| l.contains("@js_object_get_field_ic_front("))
+        .unwrap_or_else(|| panic!("the front call: {front:?}"));
     assert!(
-        token_miss.contains(&format!("label %{spill_label}")),
-        "the spill compare in pic.token.miss must branch to {spill_label}, not \
-         to the slow exit:\n{token_miss}"
+        call.ends_with("_packed_get)"),
+        "the front must receive the compact word it decodes a spill entry \
+         from: {call}"
     );
+    let answer = call.split_once(" = ").map(|(r, _)| r).unwrap();
+    let (_, merge) = tower_block(&blocks, "pget.recv_merge");
+    let phi = merge.iter().find(|l| l.contains(" = phi double ")).unwrap();
     assert!(
-        !token_miss.contains("label %pic.miss.call"),
-        "a matched spill entry must no longer call out:\n{token_miss}"
+        phi.contains(&format!("[ {answer}, %{front_label} ]")),
+        "the merge must take the front's answer straight from its block: {phi}"
     );
-    let hit = block(&spill_label);
-    let loads: Vec<&str> = hit.lines().filter(|l| l.contains(" = load ")).collect();
-    assert_eq!(
-        loads.len(),
-        3,
-        "the spill hit is exactly meta, spill and the value:\n{hit}"
-    );
-    assert!(loads[0].contains("load i64") && loads[1].contains("load i64"));
-    assert!(loads[2].contains("load double"), "{hit}");
-    for forbidden in ["call ", "icmp", "select", "atomic"] {
-        assert!(
-            !hit.contains(forbidden),
-            "the ShapeId match is the whole proof: no `{forbidden}` on the spill \
-             hit:\n{hit}"
-        );
+    for (label, body) in &blocks {
+        for gone in [
+            PACKED_SPILL_FLIP.to_string(),
+            "pic.spill".to_string(),
+            "xor i32 ".to_string(),
+        ] {
+            assert!(
+                !label.starts_with(gone.as_str()) && !body.iter().any(|l| l.contains(&gone)),
+                "no spill recognition may be expanded at the site, found \
+                 `{gone}` in {label}: {body:?}"
+            );
+        }
     }
-    let meta = crate::target_layout::object_meta_slot_offset_bytes("x86_64-unknown-linux-gnu");
-    let spill = crate::target_layout::OBJECT_META_SPILL_OFFSET_BYTES;
-    let elems = crate::target_layout::ARRAY_HEADER_SIZE_BYTES;
-    assert_eq!((meta, spill, elems), (8, 32, 8));
-    assert!(
-        hit.contains(&format!("i64 {spill}")) && hit.contains(&format!("i64 {elems}")),
-        "the loads use the paired layout constants:\n{hit}"
-    );
-    assert!(
-        hit.contains("lshr i64") && hit.contains(", 32"),
-        "the spill index is the compact word's high half:\n{hit}"
-    );
-    assert!(hit.contains("br label %pget.recv_merge"), "{hit}");
 }
 
 /// #8067: an exact ShapeId match proves the cached slot's descriptor facts, so
@@ -711,7 +743,7 @@ fn cached_slot_bound_comes_from_the_shape_descriptor_match() {
     let floor = crate::target_layout::INLINE_SLOT_FLOOR_LIT;
     let ir = emit(false, None);
     assert!(
-        ir.contains("4611686018427387904") && ir.contains("@perry_ic_"),
+        ir.contains("_packed_get") && ir.contains("@perry_ic_"),
         "test premise: the emitted read uses a ShapeId PIC:\n{ir}"
     );
     assert!(
@@ -722,38 +754,32 @@ fn cached_slot_bound_comes_from_the_shape_descriptor_match() {
     );
 }
 
-/// #7907: the way `(token, slot)` reduction is a balanced tree, so the slot
-/// select chain is `log2(PIC_WAYS)` deep instead of `PIC_WAYS` deep. Its last
-/// node feeds the bounds compare that gates the branch out of `pic.ways`, so
-/// the chain depth is directly on the critical path.
+/// #7907: the way `(token, slot)` reduction must not sit on the critical path
+/// of a way hit. It used to be a balanced select tree expanded per site, whose
+/// last node fed the bounds compare gating the branch out of `pic.ways`.
 ///
-/// At most one way can hold a given token — `pic_prime_get` evicts a duplicate
-/// before writing one, and a zero token is excluded by `token_nonnull` — so
-/// reassociating is value-preserving.
+/// First-read D3: the ways are compared in the miss front, which returns on
+/// the first matching way (at most one way holds a given token —
+/// `pic_prime_get` evicts a duplicate before writing one, and an empty way's 0
+/// cannot match), so there is no reduction left at all. Pin that the site
+/// expands none: no `pic.ways` block and no `select` anywhere in the tower.
 #[test]
-fn way_slot_reduction_is_a_balanced_tree() {
-    use crate::expr::property_get::generic_dispatch::PIC_WAYS;
+fn way_slot_reduction_is_not_expanded_per_site() {
     let ir = emit(false, None);
-    let ways = ir
-        .find("\npic.ways")
-        .unwrap_or_else(|| panic!("expected a pic.ways block:\n{ir}"));
-    // Block labels carry a numeric suffix (`pic.ways.16:`), so the search for
-    // the NEXT block has to start past this one's own label or it matches
-    // itself and slices an empty body — which reads as "the tree is missing".
-    let end = ir[ways + 1..]
-        .find("\npic.")
-        .map(|o| o + ways + 1)
-        .unwrap_or(ir.len());
-    let body = &ir[ways..end];
-    // A left fold emits PIC_WAYS selects whose 3rd operand is the previous
-    // select; the tree emits PIC_WAYS lane selects against the literal 0 plus
-    // PIC_WAYS-1 merges. Count the "select against 0" lanes: a fold has one.
-    let lanes = body.matches(", i64 0\n").count();
-    assert_eq!(
-        lanes, PIC_WAYS,
-        "expected one `select … , i64 <slot>, i64 0` per way (a balanced tree); \
-         a left fold produces exactly one:\n{body}"
-    );
+    let blocks = tower_blocks(&ir);
+    for (label, body) in &blocks {
+        assert!(
+            !label.starts_with("pic.way"),
+            "no way block may be expanded per site: {label}"
+        );
+        if label.starts_with("pic.") || label.starts_with("pget.") {
+            assert!(
+                !body.iter().any(|l| l.contains(" = select ")),
+                "no way reduction may be expanded per site, found a select in \
+                 {label}: {body:?}"
+            );
+        }
+    }
 }
 
 /// #7189 — `B.ns` where the imported module says `export * as ns from "./m.ts"`.
@@ -1146,22 +1172,40 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         "the hit block must end in the slot load and an unconditional branch \
          to the merge:\n{hit_body}"
     );
-    let way_body = blocks
-        .iter()
-        .find(|(l, _)| l.starts_with("pic.way.load"))
-        .map(|(_, body)| body.join("\n"))
-        .expect("the way load block");
+    // A way hit is answered in the miss front now (first-read D3), from the
+    // same proof: a way holds an aged MRU pair compared against the same
+    // ShapeId word. The front's answer is branched on only to tell a served
+    // value from its `TAG_HOLE` decline — the served edge is the TRUE edge
+    // and lands on the merge — never to re-test a served slot.
     assert!(
-        !way_body.contains(crate::nanbox::TAG_HOLE_I64),
-        "the way path must not compare the loaded slot against TAG_HOLE — a \
-         way holds an aged MRU pair and its token is the same ShapeId word, \
-         so a way hit carries the same liveness proof as an MRU hit:\n\
-         {way_body}"
+        !blocks.iter().any(|(l, _)| l.starts_with("pic.way")),
+        "no way block may be expanded per site:\n{func}"
+    );
+    let front_body = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pic.miss.front"))
+        .map(|(_, body)| body.join("\n"))
+        .expect("the miss front block");
+    let term = front_body
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with("br "))
+        .unwrap();
+    assert!(
+        front_body.contains(&format!(", {}", crate::nanbox::TAG_HOLE_I64))
+            && term.contains("br i1 ")
+            && term.contains(", label %pget.recv_merge")
+            && term.contains("label %pic.miss.call"),
+        "the front's decline test must send the served value to the merge on \
+         the TRUE edge and the decline to the slow call:\n{front_body}"
+    );
+    let (served_at, declined_at) = (
+        term.find("label %pget.recv_merge").unwrap(),
+        term.find("label %pic.miss.call").unwrap(),
     );
     assert!(
-        way_body.contains("load double") && way_body.contains("br label %"),
-        "the way load block must end in the slot load and an unconditional \
-         branch to the merge:\n{way_body}"
+        served_at < declined_at,
+        "served must be the TRUE edge: {term}"
     );
 }
 
@@ -1438,6 +1482,56 @@ fn no_gc_header_load_on_any_target() {
     }
 }
 
+/// First-read D3: the miss front's directory operand (`PERRY_AGENT_PTRS`
+/// slot 0) is read WITHOUT a call wherever the target has a call-free
+/// thread-pointer path: an initial-exec load on an ELF executable, the TEB's
+/// TLS array on Windows x86-64 (`agent_ptr::AgentPtrAccess::WindowsTeb`), the
+/// pthread TSD on Apple aarch64. x86-64 Darwin keeps the `gc-leaf` accessor:
+/// Mach-O has no call-free thread-local model there (`agent_ptr.rs`).
+#[test]
+fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
+    for (target, inline_form) in [
+        (
+            "x86_64-unknown-linux-gnu",
+            Some("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
+        ),
+        (
+            "x86_64-pc-windows-msvc",
+            Some("load ptr, ptr addrspace(256) inttoptr (i64 88 to ptr addrspace(256))"),
+        ),
+        ("aarch64-apple-darwin", Some("mrs $0, tpidrro_el0")),
+        ("x86_64-apple-darwin", None),
+    ] {
+        let mut opts = ir_opts(false, None);
+        opts.target = Some(target.to_string());
+        let ir =
+            String::from_utf8(compile_module(&module_with_nullish_read(), opts).unwrap()).unwrap();
+        let func = ir
+            .split("\ndefine ")
+            .find(|f| f.contains("\npic.miss.front"))
+            .unwrap_or_else(|| panic!("{target}: no function contains the front:\n{ir}"));
+        let dir_call = func.contains("call ptr @perry_shape_dir_cell(");
+        match inline_form {
+            Some(form) => {
+                assert!(
+                    func.contains(form) && !dir_call,
+                    "{target}: the directory must be read inline (`{form}`), \
+                     with no accessor call:\n{func}"
+                );
+            }
+            None => assert!(dir_call, "{target}: the accessor call:\n{func}"),
+        }
+        if target.contains("windows") {
+            for global in ["@_tls_index", "@PERRY_AGENT_PTRS_SECREL"] {
+                assert!(
+                    func.contains(&format!("load i32, ptr {global}")),
+                    "{target}: the TEB form reads {global}:\n{func}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
     use crate::expr::property_get::generic_dispatch::PACKED_GET_EMPTY;
@@ -1457,7 +1551,7 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
     // `icmp ne i64 %packed, 0` beside it any more: the sentinel above makes
     // the ShapeId compare prove the site is primed as well. Named by the
     // packed word's register: a blanket "no `icmp ne i64`" would now also
-    // forbid the inherited-read hook's decline compare on the exit edge,
+    // forbid the miss front's `TAG_HOLE` decline compare,
     // which is a different question about a different value.
     let packed = ir
         .lines()
@@ -1472,15 +1566,16 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
         "the compact word must not be tested against zero:\n{ir}"
     );
     assert!(
-        ir.contains("pic.token.miss"),
-        "a full-cache dereference must still guard a null site: {ir}"
+        !ir.contains("load ptr, ptr @perry_ic_"),
+        "the full cache stays lazy: the site never dereferences its slot (the \
+         front and the slow entry null-test it): {ir}"
     );
 }
 
-/// T1: the whole point — per untyped `obj.prop` the emitted tower is TWO calls
-/// and a handful of blocks, with the inline hit and the polymorphic ways kept.
+/// T1: per untyped `obj.prop` the emitted tower is a bounded handful of blocks
+/// and calls, with only the inline hit kept inline.
 ///
-/// This is a ratchet, so it is an EXACT count in both dimensions. The tower it
+/// This is a ratchet, so it is an EXACT count in both dimensions. The tower T1
 /// replaced expanded 33 tower blocks and SIX runtime call sites per site
 /// (`js_object_get_field_by_name_f64` twice, the feedback-wrapped class-ref
 /// helper, `js_throw_type_error_property_access`,
@@ -1490,58 +1585,20 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 /// sites; a single arm creeping back inline is a regression measured in
 /// megabytes of `.text`, and nothing else in the suite would report it.
 ///
-/// Two and not one: a single shared exit let SimplifyCFG fold the receiver-tag
-/// test and the small-handle test into one flat predicate, costing +4.00
-/// instructions on every HIT (measured, before those two tests became the one
-/// fused compare). The separate non-pointer callee still keeps the `.length`
-/// tower's chain branchy, so the count below is 2 — and a change that makes it
-/// 1 is a hit-path regression, not a size win.
-/// A SPILL-located key must still be RECOGNISED — just not on the hit path.
+/// Two collecting exits and not one: a single shared exit let SimplifyCFG fold
+/// the receiver-tag test and the small-handle test into one flat predicate,
+/// costing +4.00 instructions on every HIT (measured, before those two tests
+/// became the one fused compare). The separate non-pointer callee still keeps
+/// the `.length` tower's chain branchy — a change that makes it one is a
+/// hit-path regression, not a size win.
 ///
-/// Taking the overflow-bit test off the hit path is only sound if the entry it
-/// used to catch is caught somewhere else. `pic.token.miss` un-flips
-/// `PACKED_SPILL_FLIP` and branches straight to `pic.spill.hit` (S5), skipping
-/// the full cache's resolution and the ways (neither can hold an encoded
-/// slot). Without this test, deleting the spill compare would leave every
-/// spill read correct-but-slow — it would walk the ways, miss, call out, and
-/// re-scan the keys array on every read, which is invisible in program
-/// output.
+/// First-read D3: the spill entry, the ways, the inherited-read cache and the
+/// latched confirm are no longer expanded per site. The ShapeId compare's
+/// false edge makes ONE plain call to the GC-leaf front
+/// (`js_object_get_field_ic_front`), whose `TAG_HOLE` decline continues to the
+/// collecting slow call.
 #[test]
-fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
-    use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
-    let ir = emit(false, None);
-    let func = ir
-        .split("\ndefine ")
-        .find(|f| f.contains("\npic.token.miss"))
-        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
-
-    // Split the function into blocks and find `pic.token.miss`'s body.
-    let mut body: Vec<&str> = Vec::new();
-    let mut inside = false;
-    for line in func.lines() {
-        if !line.starts_with(' ') && line.ends_with(':') {
-            inside = line.trim_end_matches(':').starts_with("pic.token.miss");
-            continue;
-        }
-        if inside {
-            body.push(line);
-        }
-    }
-    let body = body.join("\n");
-    assert!(
-        body.contains("xor i32 ") && body.contains(&PACKED_SPILL_FLIP.to_string()),
-        "`pic.token.miss` must un-flip PACKED_SPILL_FLIP to recognise a spill \
-         entry:\n{body}"
-    );
-    assert!(
-        body.contains("label %pic.spill.hit"),
-        "a recognised spill entry must branch straight to the inline spill \
-         hit, not walk the ways or call out:\n{body}"
-    );
-}
-
-#[test]
-fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
+fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks() {
     let ir = emit(false, None);
     let func = ir
         .split("\ndefine ")
@@ -1550,8 +1607,8 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
 
     // Every call/invoke in the whole function, by callee. Feedback records are
     // compile-time gated and absent from this build; anything else must be the
-    // one exit (the fixture's module init contributes its own calls, so match
-    // on the property-GET family rather than on a total).
+    // front or one of the two exits (the fixture's module init contributes its
+    // own calls, so match on the property-GET family rather than on a total).
     let pget_calls: Vec<&str> = func
         .lines()
         .filter(|l| l.contains(" call ") || l.contains(" invoke "))
@@ -1560,6 +1617,7 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         .filter(|c| {
             c.starts_with("js_object_get_field")
                 || c.starts_with("js_typed_feedback_object_get_field")
+                || c.starts_with("js_inherited_read_cache")
                 || *c == "js_throw_type_error_property_access"
         })
         .collect();
@@ -1568,10 +1626,34 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     assert_eq!(
         sorted,
         vec![
+            "js_object_get_field_ic_front",
             "js_object_get_field_ic_nonptr",
             "js_object_get_field_ic_slow"
         ],
-        "the tower must expand exactly two property-GET call sites:\n{func}"
+        "the tower must expand the front and exactly two collecting exits:\n{func}"
+    );
+    // The front is nounwind: a plain call, never an invoke (its GC-leaf
+    // classification is `gc_call_effects`' test).
+    let fronts: Vec<&str> = func
+        .lines()
+        .filter(|l| l.contains("@js_object_get_field_ic_front("))
+        .collect();
+    assert_eq!(fronts.len(), 1, "one front call per tower:\n{func}");
+    assert!(
+        fronts[0].contains(" = call double "),
+        "the front is nounwind, a plain call:\n{func}"
+    );
+    // A non-`length` site confirms from this agent's own directory: the dir
+    // operand is slot 0 of `PERRY_AGENT_PTRS` (one initial-exec load in this
+    // ELF executable), never the empty directory a `length` site passes.
+    assert!(
+        !fronts[0].contains("@PERRY_EMPTY_SHAPE_DIR"),
+        "only a `length` site passes the empty directory:\n{}",
+        fronts[0]
+    );
+    assert!(
+        func.contains("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
+        "the dir operand is PERRY_AGENT_PTRS slot 0:\n{func}"
     );
 
     let blocks: Vec<&str> = func
@@ -1588,41 +1670,25 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // its split (cold): a POINTER-tagged small handle fails the fused
         // receiver test too and goes on to the object exit from here
         "pget.recv_nonptr",
-        // `pic.recv_hdr` is GONE: it existed to load the GC header word, and
-        // the ShapeId compare in `pic.token` now proves the kind (#10828) and
-        // the descriptor state (#10824) that word was loaded for.
+        // `pic.recv_hdr` is GONE: the ShapeId compare in `pic.token` proves
+        // the kind (#10828) and the descriptor state (#10824).
         "pic.token",
-        "pic.token.miss",
-        // `pic.token.miss` recognises a SPILL-located key by un-flipping
-        // PACKED_SPILL_FLIP and branches to `pic.spill.hit` (S5: three
-        // dependent loads, no call); everything else continues here to the
-        // full cache and the ways.
-        "pic.spill.hit",
-        // `pic.hit.inline` is GONE: with spill entries
-        // refused by the ShapeId compare itself, the hit block has nothing to
-        // decide between and the load sits directly in `pic.hit`.
-        "pic.token.ways",
-        // The hit block ends in the slot load and a branch to the merge:
-        // `pic.hit.deleted` is GONE with the `TAG_HOLE` compare (#10826 made
-        // delete a shape transition, so a ShapeId hit proves the slot live);
-        // `pic.hit.live` exists only when typed feedback has something to
-        // record on the live edge.
+        // The hit block is the slot load and a branch to the merge: no
+        // overflow-bit test (a spill entry is refused by the compare itself)
+        // and no `TAG_HOLE` compare (#10826 made delete a shape transition).
         "pic.hit",
-        // the polymorphic ways, deliberately still inline (#7753)
-        "pic.miss",
-        "pic.ways",
-        // `pic.way.live` is GONE with the way path's `TAG_HOLE` compare: the
-        // load block has nothing left to decide and branches to the merge.
-        "pic.way.load",
-        // the inherited-read hook, on the never-primed edge out of
-        // `pic.token.ways` and nowhere else (`js_inherited_read_cache_hit_f64`,
-        // a leaf); a decline continues to the one exit
-        "pic.miss.inherited",
+        // First-read D3: the compare's false edge. One GC-leaf call answers
+        // a way, a spill entry or a latched site's confirmed guess; its
+        // decline continues to the one exit. `pic.token.miss`,
+        // `pic.spill.hit`, `pic.token.ways`, `pic.miss`, `pic.ways`,
+        // `pic.way.load`, `pic.not_ways`, `pic.mega` and `pic.miss.inherited`
+        // are GONE into it and into the slow entry.
+        "pic.miss.front",
         // the one exit, and the join
         "pic.miss.call",
         "pget.recv_merge",
     ];
-    // Labels carry a numeric suffix (`pic.ways.16`); strip it for comparison.
+    // Labels carry a numeric suffix (`pic.token.6`); strip it for comparison.
     let mut normalized: Vec<String> = blocks
         .iter()
         .map(|b| {
@@ -1642,198 +1708,123 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     );
 }
 
+/// A SPILL-located key must still be RECOGNISED — just not on the hit path.
+///
+/// Taking the overflow-bit test off the hit path is only sound if the entry it
+/// used to catch is caught somewhere else. Without that, every spill read
+/// would be correct-but-slow — it would miss, call out, and re-scan the keys
+/// array on every read, which is invisible in program output.
+///
+/// First-read D3: the miss front recognises it (un-flips `PACKED_SPILL_FLIP`,
+/// checks the result is a real ShapeId, and loads the value —
+/// `read_confirm::tests::the_front_serves_a_spill_entry_only_for_a_real_shape_id`),
+/// so the site recognises it nowhere: the flip constant is not emitted, and the
+/// only block the compare's false edge reaches is the front.
+#[test]
+fn a_spill_entry_is_recognised_by_the_front_and_nowhere_at_the_site() {
+    use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
+    let ir = emit(false, None);
+    let blocks = tower_blocks(&ir);
+    let flip = PACKED_SPILL_FLIP.to_string();
+    let flip_i32 = (PACKED_SPILL_FLIP as i32).to_string();
+    for (label, body) in &blocks {
+        assert!(
+            !body
+                .iter()
+                .any(|l| l.contains(&flip) || l.contains(&flip_i32)),
+            "PACKED_SPILL_FLIP must not be emitted at the site (`{label}`): {body:?}"
+        );
+    }
+    let (_, token) = tower_block(&blocks, "pic.token");
+    let (_, _, on_miss) = tower_cond_br(token);
+    assert!(
+        on_miss.starts_with("pic.miss.front"),
+        "the compare's false edge must reach the front, which recognises a \
+         spill entry: {token:?}"
+    );
+}
+
 /// The inherited-read cache (#10834/#10842) is asked on the NEVER-PRIMED edge
 /// and nowhere else. A read whose key lives on the prototype chain is never an
 /// own slot on the receiver's shape, so a site that only reads such a key never
-/// resolves its per-site cache, and every read of it reaches `pic.token.ways`
-/// with `present` false. That edge — which used to go straight to the exit —
-/// now asks the cache before calling out. The first placement asked on EVERY
-/// path into the exit and charged each own-key miss a declining probe (+88 on
-/// a megamorphic site, +89 on a spill read, measured); this one costs every
-/// other path zero instructions.
+/// resolves its per-site cache. The first placement asked on EVERY path into
+/// the exit and charged each own-key miss a declining probe (+88 on a
+/// megamorphic site, +89 on a spill read, measured).
 ///
-/// Five things are pinned, each of which would otherwise fail silently (the
-/// program still computes the right value through the slow entry):
+/// First-read D3: the probe moved into the slow entry
+/// (`js_object_get_field_ic_slow`, which asks it only when the site's cache
+/// slot is unresolved), behind the leaf front — so an own-key way, spill or
+/// latched read never reaches it, and the site expands none of it. Pinned
+/// here, each of which would otherwise fail silently (the program still
+/// computes the right value through the slow entry):
 ///
-/// 1. the hook call sits in `pic.miss.inherited` and in no other block, in
-///    particular NOT on any path to the inline slot load (the CFG-walk test
-///    asserts the same from the other side);
-/// 2. that block is reached from `pic.token.ways` on the FALSE edge of the
-///    cache-present test, and from nowhere else;
-/// 3. its result is branched on with the SERVED edge as the true edge, the
-///    tower's rule for every guard-passing edge, and the false edge is the
-///    one exit;
-/// 4. the slow entry is still called from `pic.miss.call` only, with the same
-///    four operands;
-/// 5. the merge phi takes the served value from `pic.miss.inherited`.
+/// 1. no block of the site calls the hook — in particular none on a path to
+///    the inline slot load (the CFG-walk test asserts the same from the other
+///    side);
+/// 2. the slow entry is called from `pic.miss.call` only, with the same four
+///    operands (the never-primed test reads the cache slot);
+/// 3. `pic.miss.call` is reached from the front only on its `TAG_HOLE`
+///    decline, so a front-served read never pays the probe;
+/// 4. the merge takes the slow entry's value from `pic.miss.call`.
 #[test]
 fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
     let ir = emit(false, None);
-    let func = ir
-        .split("\ndefine ")
-        .find(|f| f.contains("\npic.miss.call"))
-        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
-    let mut blocks: Vec<(String, Vec<String>)> = Vec::new();
-    let mut cur: Option<(String, Vec<String>)> = None;
-    for line in func.lines() {
-        if !line.starts_with(' ') && line.ends_with(':') {
-            if let Some(b) = cur.take() {
-                blocks.push(b);
-            }
-            cur = Some((line.trim_end_matches(':').to_string(), Vec::new()));
-            continue;
-        }
-        if let Some((_, body)) = cur.as_mut() {
-            body.push(line.trim().to_string());
-        }
-    }
-    if let Some(b) = cur.take() {
-        blocks.push(b);
-    }
-    // 1. one caller block, and it is the inherited arm.
+    let blocks = tower_blocks(&ir);
+    // 1.
     let holders: Vec<&str> = blocks
         .iter()
         .filter(|(_, body)| {
             body.iter()
-                .any(|l| l.contains("call double @js_inherited_read_cache_hit_f64("))
+                .any(|l| l.contains("@js_inherited_read_cache_hit_f64("))
         })
         .map(|(l, _)| l.as_str())
         .collect();
-    assert_eq!(
-        holders.len(),
-        1,
-        "the inherited hook must be called from exactly one block: {holders:?}\n{func}"
-    );
-    let inh_label = holders[0];
     assert!(
-        inh_label.starts_with("pic.miss.inherited"),
-        "the hook belongs on the never-primed edge, found it in `{inh_label}`:\n{func}"
+        holders.is_empty(),
+        "the inherited hook belongs to the slow entry, not the site: {holders:?}"
     );
-    let (_, inh_body) = blocks.iter().find(|(l, _)| l == inh_label).unwrap();
-    let hook_line = inh_body
-        .iter()
-        .find(|l| l.contains("@js_inherited_read_cache_hit_f64("))
-        .unwrap();
-    assert!(
-        hook_line.contains("(ptr %") && hook_line.matches(", ptr %").count() == 1,
-        "the hook takes the masked receiver and the interned key as two \
-         pointers:\n{hook_line}"
-    );
-    // 2. reached only from `pic.token.ways`, on the FALSE edge of `present`.
-    let preds: Vec<(&str, &str)> = blocks
+    // 2.
+    let slow_callers: Vec<(&str, &String)> = blocks
         .iter()
         .flat_map(|(l, body)| {
             body.iter()
-                .filter(|t| t.starts_with("br ") && t.contains(&format!("label %{inh_label}")))
-                .map(move |t| (l.as_str(), t.as_str()))
+                .filter(|t| t.contains("@js_object_get_field_ic_slow("))
+                .map(move |t| (l.as_str(), t))
         })
-        .collect();
-    assert_eq!(
-        preds.len(),
-        1,
-        "exactly one edge may reach the hook: {preds:?}\n{func}"
-    );
-    let (pred_label, pred_term) = preds[0];
-    assert!(
-        pred_label.starts_with("pic.token.ways"),
-        "the hook's one predecessor must be the cache-present test: {pred_label}"
-    );
-    let parts: Vec<&str> = pred_term
-        .strip_prefix("br i1 ")
-        .unwrap()
-        .split(", ")
-        .collect();
-    assert!(
-        parts[1].starts_with("label %pic.miss") && !parts[1].starts_with("label %pic.miss.inh"),
-        "the TRUE edge of `present` must still be the way compares: {pred_term}"
-    );
-    assert!(
-        parts[2].starts_with(&format!("label %{inh_label}")),
-        "the hook must sit on the FALSE (never-primed) edge: {pred_term}"
-    );
-    let present_def = blocks
-        .iter()
-        .find(|(l, _)| l == pred_label)
-        .and_then(|(_, body)| {
-            body.iter()
-                .find(|l| l.starts_with(&format!("{} = ", parts[0])))
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "the branch condition {} must be defined in {pred_label}",
-                parts[0]
-            )
-        });
-    assert!(
-        present_def.contains("icmp ne ptr ") && present_def.ends_with(", null"),
-        "`present` is the cache slot's non-null test:\n{present_def}"
-    );
-    // 3. polarity: `icmp ne <bits>, TAG_HOLE` is "served", served is the TRUE
-    //    edge and lands on the merge; the false edge is the one exit.
-    let served = inh_body
-        .iter()
-        .find(|l| l.contains("icmp ne i64 ") && l.ends_with(crate::nanbox::TAG_HOLE_I64))
-        .unwrap_or_else(|| panic!("the decline compare against TAG_HOLE:\n{func}"));
-    let cond = served.split_once(" = ").map(|(c, _)| c).unwrap();
-    let term = inh_body
-        .iter()
-        .rev()
-        .find(|l| l.starts_with("br "))
-        .unwrap();
-    let parts: Vec<&str> = term
-        .strip_prefix("br i1 ")
-        .unwrap_or_else(|| panic!("the arm must branch on the hook's answer: {term}"))
-        .split(", ")
-        .collect();
-    assert_eq!(
-        parts[0], cond,
-        "the branch must be on the served predicate: {term}"
-    );
-    assert!(
-        parts[1].starts_with("label %pget.recv_merge"),
-        "the SERVED edge must be the true edge and land on the merge: {term}"
-    );
-    assert!(
-        parts[2].starts_with("label %pic.miss.call"),
-        "the decline must be the false edge into the one exit: {term}"
-    );
-    // 4. the slow entry: one caller, the exit, same operands.
-    let slow_callers: Vec<&str> = blocks
-        .iter()
-        .filter(|(_, body)| {
-            body.iter()
-                .any(|l| l.contains("@js_object_get_field_ic_slow("))
-        })
-        .map(|(l, _)| l.as_str())
         .collect();
     assert_eq!(slow_callers.len(), 1, "{slow_callers:?}");
+    let (call_label, slow_line) = slow_callers[0];
     assert!(
-        slow_callers[0].starts_with("pic.miss.call"),
+        call_label.starts_with("pic.miss.call"),
         "the slow entry must be called from the one exit: {slow_callers:?}"
     );
-    let (_, slow_body) = blocks.iter().find(|(l, _)| l == slow_callers[0]).unwrap();
-    let slow_line = slow_body
-        .iter()
-        .find(|l| l.contains("@js_object_get_field_ic_slow("))
-        .unwrap();
     assert!(
-        slow_line.contains("ptr @perry_ic_") && slow_line.contains("_packed_get"),
-        "the slow entry must still receive the cache slot and the packed \
-         word:\n{slow_line}"
+        slow_line.contains("(i64 %")
+            && slow_line.matches(", i64 %").count() == 1
+            && slow_line.contains("ptr @perry_ic_")
+            && slow_line.contains("_packed_get"),
+        "the slow entry must still receive the receiver, the key, the cache \
+         slot and the packed word:\n{slow_line}"
     );
-    // 5. the merge takes the served value from the inherited arm.
-    let (_, merge_body) = blocks
-        .iter()
-        .find(|(l, _)| l.starts_with("pget.recv_merge"))
-        .unwrap();
-    let phi = merge_body
-        .iter()
-        .find(|l| l.contains(" = phi double "))
-        .unwrap();
-    let served_value = hook_line.split_once(" = ").map(|(v, _)| v).unwrap();
+    // 3.
+    let (_, front) = tower_block(&blocks, "pic.miss.front");
+    let (cond, served, declined) = tower_cond_br(front);
     assert!(
-        phi.contains(&format!("[ {served_value}, %{inh_label} ]")),
-        "the merge must take the hook's value from `{inh_label}`:\n{phi}"
+        front
+            .iter()
+            .any(|l| l.starts_with(&format!("{cond} = icmp ne i64 "))
+                && l.ends_with(crate::nanbox::TAG_HOLE_I64)),
+        "the front's branch must be on its TAG_HOLE decline: {front:?}"
+    );
+    assert!(served.starts_with("pget.recv_merge"), "{front:?}");
+    assert_eq!(declined, call_label, "{front:?}");
+    // 4.
+    let (_, merge) = tower_block(&blocks, "pget.recv_merge");
+    let phi = merge.iter().find(|l| l.contains(" = phi double ")).unwrap();
+    let value = slow_line.split_once(" = ").map(|(v, _)| v).unwrap();
+    assert!(
+        phi.contains(&format!("[ {value}, %{call_label} ]")),
+        "the merge must take the slow entry's value from `{call_label}`:\n{phi}"
     );
 }
 

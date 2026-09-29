@@ -10,8 +10,12 @@
 pub const ARRAY_HEADER_SIZE: usize = 8;
 
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
-/// Slot 0 is reserved (the megamorphic follow-up's shape-record directory).
 pub const AGENT_PTR_SLOTS: usize = 4;
+/// Slot 0: the address of this agent's ordinary shape-directory mirror
+/// (`shapes_store::ORDINARY_DIR`), which a generic read site passes to its
+/// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no
+/// thread-local.
+pub const AGENT_PTR_SHAPE_DIR: usize = 0;
 /// Slot 1: the address of this agent's implicit-`this` cell
 /// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
 pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;

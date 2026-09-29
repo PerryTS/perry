@@ -50,6 +50,7 @@ pub(crate) use shapes_slot_list::{
     shape_index_migrate_after_delete, shape_index_shift_in_place,
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
 };
+pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
     IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
     RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
@@ -413,67 +414,91 @@ pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
     })
 }
 
+/// The address of this thread's ordinary shape-directory mirror, which
+/// [`positional_key_words`] reads through (`agent_ptrs` slot
+/// `AGENT_PTR_SHAPE_DIR`).
+#[inline]
+pub(crate) fn ordinary_dir_addr() -> *const u8 {
+    ShapeSlab::ordinary_dir_addr()
+}
+
 /// The position bound of shape `id` (S3c), or `None` when it names no record.
 #[cfg(test)]
 pub(crate) fn test_position_bound_of_id(id: u32) -> Option<u32> {
     shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
 }
 
-/// The megamorphic read's slot-guess confirm: when `obj` carries an ordinary
-/// ShapeId of this agent whose record says key position `guess` is inline slot
-/// `guess` (`position_bound`), and the key AT that position is `key` itself
-/// (one pointer compare: canonical lists hold their text's atom), the value in
-/// the receiver's slot `guess`. `None` for anything else — a wrong or stale
-/// guess, another text, a dictionary/class/descriptor/tombstoned shape, an id
-/// that names no record — and the caller takes its ordinary path.
+/// Shape `shape_id`'s positional key words, for the megamorphic read confirm
+/// (`ic_miss::read_confirm::js_object_get_field_ic_front`): `(the keys
+/// array, POSBOUND)` when the record answers by position — key position
+/// `i < POSBOUND` IS inline slot `i` of every receiver carrying the shape —
+/// and `None` otherwise (no ordinary record under that id in this agent, or
+/// POSBOUND 0: a dictionary, class, descriptor/prototype-generation,
+/// tombstoned or accessor-keyed shape).
 ///
-/// The guess decides nothing: the receiver's own shape confirms it or it is
-/// ignored. Allocation-free, no user code.
+/// A canonical list holds its text's ATOM, boxed exactly as a site's pool
+/// entry holds it, so the caller compares key WORDS: equality is identity,
+/// and a mismatch proves nothing (a list written before its atom existed, an
+/// SSO slot), which the caller answers by declining to the slow entry.
+///
+/// `dir` is this thread's ordinary directory mirror ([`ordinary_dir_addr`]),
+/// as the agent's pointer block holds it.
+///
+/// Allocation-free, no user code, no formatting path: it is part of a
+/// GC-leaf stub.
 ///
 /// # Safety
-/// `obj` is a heap pointer above the handle band (its `+4` word is read);
-/// `key` is a heap `StringHeader`.
-#[inline]
-pub(crate) unsafe fn confirm_slot_guess(
-    obj: *const crate::object::ObjectHeader,
-    key: *const crate::StringHeader,
-    guess: usize,
-) -> Option<f64> {
-    if !slot_guess_confirmed((*obj).parent_class_id, key, guess) {
-        return None;
-    }
-    Some(
-        *((obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>() + guess * 8)
-            as *const f64),
-    )
+/// `dir` is this thread's [`ordinary_dir_addr`] or `PERRY_EMPTY_SHAPE_DIR` (never
+/// null); any `shape_id`.
+/// The words are valid until the next safepoint.
+#[inline(always)]
+pub(crate) unsafe fn positional_key_words(
+    dir: *const u8,
+    shape_id: u32,
+) -> Option<(PositionalKeys, usize)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    Some((
+        PositionalKeys(r.keys as usize as *const ArrayHeader),
+        r.position_bound_raw() as usize,
+    ))
 }
 
-/// Does shape `shape_id` of this agent store `key` at inline slot `guess`,
-/// by position? See [`confirm_slot_guess`].
+/// A record's canonical keys array, for [`positional_key_words`]: its words
+/// are asked only once POSBOUND is known to be nonzero, so the front-offset
+/// arithmetic runs only on the path that reads a key.
+pub(crate) struct PositionalKeys(*const ArrayHeader);
+
+impl PositionalKeys {
+    /// The first logical key word.
+    ///
+    /// # Safety
+    /// Only when the record's POSBOUND is nonzero: then `keys` names a live
+    /// keys array (the collector marks through and rewrites `keys`) holding
+    /// at least POSBOUND logical keys. Logical element `i` sits past the
+    /// array's FRONT OFFSET, which a canonical list can carry without ever
+    /// being shifted (a size-class round-up alone makes the physical capacity
+    /// exceed the logical one: `keys_front_offset_tests`), so the accessor is
+    /// asked, never `+8`.
+    #[inline(always)]
+    pub(crate) unsafe fn words(&self) -> *const u64 {
+        crate::array::array_elements_ptr(self.0) as *const u64
+    }
+}
+
+/// Does shape `shape_id` store the key whose NaN-boxed bits are `key_bits`
+/// at inline slot `guess`, by position? See [`positional_key_words`].
 ///
 /// # Safety
-/// `key` is a heap `StringHeader`.
-#[inline]
+/// As [`positional_key_words`].
+#[cfg(test)]
 pub(crate) unsafe fn slot_guess_confirmed(
+    dir: *const u8,
     shape_id: u32,
-    key: *const crate::StringHeader,
+    key_bits: u64,
     guess: usize,
 ) -> bool {
-    // SAFETY: this thread's own mirror.
-    let record = unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) };
-    if record.is_null() {
-        return false;
-    }
-    let r = &*record;
-    if guess >= r.position_bound_raw() as usize {
-        return false;
-    }
-    // A bound > 0 means the record names a live keys array (the collector
-    // marks through and rewrites `keys`) holding at least `bound` logical
-    // keys; logical element `i` sits past the array's front offset.
-    let arr = r.keys as usize as *const ArrayHeader;
-    let slots = crate::array::array_elements_ptr(arr) as *const u64;
-    *slots.add(guess) == crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits()
+    positional_key_words(dir, shape_id)
+        .is_some_and(|(keys, bound)| guess < bound && *keys.words().add(guess) == key_bits)
 }
 
 /// Byte equality without a libc call for the short keys property names are.

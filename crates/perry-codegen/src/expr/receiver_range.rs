@@ -88,7 +88,10 @@ pub(crate) enum Route {
     Generic = 0,
     /// ...and was served by the compact MRU word.
     GenericMruHit = 1,
-    /// ...and was served by one of the polymorphic ways.
+    /// ...and was served by one of the polymorphic ways. No longer emitted:
+    /// the ways are read by the runtime's miss entry (first-read D3). The
+    /// number stays reserved: it indexes `RECV_ROUTE_NAMES`.
+    #[allow(dead_code)]
     GenericWayHit = 2,
     /// A read region's receiver test passed (R1 part 1).
     Region = 3,
@@ -101,7 +104,9 @@ pub(crate) enum Route {
     /// The cached field-index early return's receiver test passed.
     CachedFieldIndex = 7,
     /// A generic read served from the receiver's SPILL buffer by the compact
-    /// word's flipped entry (S5, `pic.spill.hit`).
+    /// word's flipped entry (S5). No longer emitted: the runtime's miss entry
+    /// serves it (first-read D3). The number stays reserved, as above.
+    #[allow(dead_code)]
     GenericSpillHit = 8,
 }
 

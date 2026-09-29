@@ -15,10 +15,22 @@
 //!   model (every thread-local access is a TLV thunk call), so the block's
 //!   address is read from the runtime's `HotTls` cache through the pthread
 //!   TSD fast path (`hot_tls.rs`), at `HOT_TLS_AGENT_PTRS_OFFSET`.
-//! * [`AgentPtrAccess::Call`] — everything else (Windows, wasm, arm64_32,
-//!   x86-64 Darwin, dylib/staticlib outputs): the runtime accessor.
+//! * [`AgentPtrAccess::WindowsTeb`] — Windows x86-64, any output kind: the
+//!   same sequence the compiler emits for a native thread-local, spelled out
+//!   because the runtime cannot export the block under a stable name there
+//!   (`agent_ptrs.rs`): `gs:[0x58]` (the TEB's `ThreadLocalStoragePointer`)
+//!   indexed by the image's `_tls_index` gives this thread's TLS block for
+//!   the image, and the block sits at `PERRY_AGENT_PTRS_SECREL` (a `.secrel32`
+//!   the runtime emits for its own static) inside it. Emitted code and the
+//!   runtime are linked into ONE image, so `_tls_index` is theirs.
+//! * [`AgentPtrAccess::Call`] — everything else (wasm, arm64_32, Windows
+//!   aarch64, x86-64 Darwin, ELF dylib/staticlib outputs): the runtime
+//!   accessor. x86-64 Darwin has no call-free thread-local model (every
+//!   Mach-O thread-local access is a TLV thunk call) and the runtime's
+//!   pthread-TSD fast path (`HotTls`, the Apple aarch64 route) is built for
+//!   aarch64 only.
 //!
-//! In both inline forms a null slot means "not published yet" and takes the
+//! In every inline form a null slot means "not published yet" and takes the
 //! accessor call, which publishes it; so the inline forms and the call are
 //! equivalent by construction.
 
@@ -35,9 +47,17 @@ pub(crate) const AGENT_PTRS_SYMBOL: &str = "PERRY_AGENT_PTRS";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentPtrAccess {
     InitialExec,
+    WindowsTeb,
     AppleTsd,
     Call,
 }
+
+/// `PERRY_AGENT_PTRS`'s offset in the image's TLS block on Windows x86-64
+/// (`agent_ptrs.rs`), and the image's TLS index.
+pub(crate) const AGENT_PTRS_SECREL_SYMBOL: &str = "PERRY_AGENT_PTRS_SECREL";
+pub(crate) const TLS_INDEX_SYMBOL: &str = "_tls_index";
+/// `NT_TIB64`/`TEB64.ThreadLocalStoragePointer`, off `gs`.
+const TEB_TLS_POINTER_OFFSET: &str = "88";
 
 thread_local! {
     /// Whether the module being compiled is linked into an EXECUTABLE (set per
@@ -62,10 +82,102 @@ pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {
     if elf && OUTPUT_IS_EXECUTABLE.with(|c| c.get()) {
         return AgentPtrAccess::InitialExec;
     }
+    if triple.starts_with("x86_64") && triple.contains("windows") {
+        return AgentPtrAccess::WindowsTeb;
+    }
     if super::hot_tls::inline_hot_tls_enabled(ctx) {
         return AgentPtrAccess::AppleTsd;
     }
     AgentPtrAccess::Call
+}
+
+/// The current value of per-agent pointer `slot`, for a GC-leaf callee that
+/// accepts `absent` (a constant operand meaning "not available here") in its
+/// place: one initial-exec load in an ELF executable (the slot must never be
+/// null there); the `HotTls` read on Apple aarch64, `absent` when the direct
+/// TSD path is unavailable or the block is not published; the slot's `gc-leaf`
+/// runtime accessor everywhere else. No null test and no fallback call on the
+/// inline forms, so a site pays only the read. Ends in the block where the
+/// returned register holds the value.
+pub(crate) fn emit_agent_ptr_or(ctx: &mut FnCtx<'_>, slot: usize, absent: &str) -> String {
+    debug_assert!(slot < AGENT_PTR_SLOTS);
+    let slot_off = (slot * 8).to_string();
+    let access = agent_ptr_access(ctx);
+    match access {
+        AgentPtrAccess::InitialExec | AgentPtrAccess::WindowsTeb => {
+            let at = emit_slot_addr(ctx, access, &slot_off);
+            ctx.block().load(PTR, &at)
+        }
+        AgentPtrAccess::AppleTsd => {
+            let lookup = super::hot_tls::emit_hot_tls_lookup(ctx, "agent_ptr");
+            let field = super::hot_tls::hot_tls_field(
+                ctx,
+                &lookup.hot,
+                &HOT_TLS_AGENT_PTRS_OFFSET.to_string(),
+            );
+            let blk = ctx.block();
+            let block_ptr = blk.load(PTR, &field);
+            let at = blk.gep(
+                crate::types::I8,
+                &block_ptr,
+                &[(crate::types::I64, &slot_off)],
+            );
+            let val = blk.load(PTR, &at);
+            let fast_pred = blk.label.clone();
+            let join_idx = ctx.new_block("agent_ptr.join");
+            let join_label = ctx.block_label(join_idx);
+            ctx.block().br(&join_label);
+            ctx.current_block = lookup.slow_idx;
+            let slow_pred = ctx.block().label.clone();
+            ctx.block().br(&join_label);
+            ctx.current_block = join_idx;
+            ctx.block()
+                .phi(PTR, &[(&val, &fast_pred), (absent, &slow_pred)])
+        }
+        AgentPtrAccess::Call => ctx.block().call(PTR, agent_ptr_accessor(slot), &[]),
+    }
+}
+
+/// The address of the slot `slot_off` bytes into this thread's block, for the
+/// two forms that name the block through the thread pointer (module docs).
+fn emit_slot_addr(ctx: &mut FnCtx<'_>, access: AgentPtrAccess, slot_off: &str) -> String {
+    let blk = ctx.block();
+    let block = match access {
+        AgentPtrAccess::InitialExec => format!("@{AGENT_PTRS_SYMBOL}"),
+        AgentPtrAccess::WindowsTeb => {
+            // `mov gs:[0x58]` — a plain load in the x86 `gs` address space
+            // (256). Plain, not volatile: it is re-read after every call, and
+            // a thread switch happens only inside a call.
+            let tls_array = blk.next_reg();
+            blk.emit_raw(format!(
+                "  {tls_array} = load ptr, ptr addrspace(256) inttoptr (i64 {TEB_TLS_POINTER_OFFSET} to ptr addrspace(256)), align 8"
+            ));
+            let index = blk.load(crate::types::I32, &format!("@{TLS_INDEX_SYMBOL}"));
+            let index = blk.zext(crate::types::I32, &index, crate::types::I64);
+            let entry = blk.gep(PTR, &tls_array, &[(crate::types::I64, &index)]);
+            let image_block = blk.load(PTR, &entry);
+            let secrel = blk.load(crate::types::I32, &format!("@{AGENT_PTRS_SECREL_SYMBOL}"));
+            let secrel = blk.zext(crate::types::I32, &secrel, crate::types::I64);
+            blk.gep(
+                crate::types::I8,
+                &image_block,
+                &[(crate::types::I64, &secrel)],
+            )
+        }
+        AgentPtrAccess::AppleTsd | AgentPtrAccess::Call => {
+            unreachable!("{access:?} does not name the block through the thread pointer")
+        }
+    };
+    blk.gep(crate::types::I8, &block, &[(crate::types::I64, slot_off)])
+}
+
+/// The `gc-leaf` runtime accessor of per-agent pointer `slot`.
+fn agent_ptr_accessor(slot: usize) -> &'static str {
+    match slot {
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR => "perry_shape_dir_cell",
+        crate::runtime_abi::AGENT_PTR_IMPLICIT_THIS => "perry_implicit_this_cell",
+        _ => unreachable!("agent pointer slot {slot} has no accessor"),
+    }
 }
 
 /// Emit a load of per-agent pointer `slot`, falling back to `fallback_fn`
@@ -79,15 +191,11 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
     }
     let slot_off = (slot * 8).to_string();
     let (fast_pred, fast_val, slow_idx) = match access {
-        AgentPtrAccess::InitialExec => {
+        AgentPtrAccess::InitialExec | AgentPtrAccess::WindowsTeb => {
             let slow_idx = ctx.new_block("agent_ptr.slow");
             let fast_idx = ctx.new_block("agent_ptr.fast");
+            let at = emit_slot_addr(ctx, access, &slot_off);
             let blk = ctx.block();
-            let at = blk.gep(
-                crate::types::I8,
-                &format!("@{AGENT_PTRS_SYMBOL}"),
-                &[(crate::types::I64, &slot_off)],
-            );
             let val = blk.load(PTR, &at);
             let ok = blk.icmp_ne(PTR, &val, "null");
             let fast_label = ctx.block_label(fast_idx);

@@ -205,6 +205,8 @@ const NON_COLLECTING: &[&str] = &[
     "js_inherited_read_cache_hit_f64",
     // S2 GC-leaf IC hits; proven `Leaf` by the generated call-effects table.
     "js_object_get_field_ic_fast",
+    // First-read D3: a generic read's miss front, proven `Leaf` likewise.
+    "js_object_get_field_ic_front",
     "js_class_field_get_ic_fast",
     "js_class_field_set_ic_fast",
     "js_put_value_set_packed_fast",

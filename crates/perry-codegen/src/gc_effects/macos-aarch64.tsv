@@ -2123,6 +2123,7 @@ js_object_get_field_f64	Leaf
 js_object_get_field_ic	Reenters
 js_object_get_field_ic_fast	Leaf
 js_object_get_field_ic_fast_miss	Reenters
+js_object_get_field_ic_front	Leaf
 js_object_get_field_ic_miss	Reenters
 js_object_get_field_ic_miss_packed	Reenters
 js_object_get_field_ic_nonptr	Reenters
@@ -3959,6 +3960,7 @@ perry_resolve_static_plugin	Leaf
 perry_runtime_widget_init	Reenters
 perry_safe_area_insets_make	Reenters
 perry_set_wake_callback	Leaf
+perry_shape_dir_cell	Leaf
 perry_store_census_arm	Leaf
 perry_string_header_abi_revision	Leaf
 perry_stub_warn_ffi	Leaf
