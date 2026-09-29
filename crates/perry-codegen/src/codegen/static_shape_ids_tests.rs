@@ -47,16 +47,22 @@ fn ids_depend_on_the_content_set_not_its_order_or_duplicates() {
 }
 
 #[test]
-fn a_hash_collision_probes_to_the_next_free_id() {
-    // Force many contents into a tiny region of the band: identical hashes are
-    // impossible to construct cheaply, so check the probe invariant instead —
-    // no id repeats even when the band is densely filled near one slot.
+fn ids_are_dense_from_the_band_start_in_content_order() {
+    // The by-id store allocates a 32-record chunk per 32-id run it touches:
+    // ids must fill the band from its start, one per content, no gaps.
     let contents: Vec<BirthShape> = (0..70_000)
         .map(|i| class(&format!("p{i}\0"), 1, 1))
         .collect();
     let ids = assign_static_shape_ids(&contents);
     let distinct: BTreeSet<u32> = ids.values().copied().collect();
     assert_eq!(distinct.len(), 70_000);
+    assert_eq!(distinct.first(), Some(&SHAPE_ID_BASE));
+    assert_eq!(distinct.last(), Some(&(SHAPE_ID_BASE + 70_000 - 1)));
+    let mut sorted: Vec<&BirthShape> = contents.iter().collect();
+    sorted.sort();
+    for (rank, c) in sorted.into_iter().enumerate() {
+        assert_eq!(ids[c], SHAPE_ID_BASE + rank as u32);
+    }
 }
 
 #[test]

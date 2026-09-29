@@ -56,39 +56,6 @@ pub struct BirthShape {
 }
 
 impl BirthShape {
-    /// A stable 64-bit FNV-1a over the content (never `RandomState`: the id
-    /// must be identical across builds so cached objects stay valid).
-    fn content_hash(&self) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        let mut eat = |bytes: &[u8]| {
-            for &b in bytes {
-                h ^= u64::from(b);
-                h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-        };
-        eat(&(self.keys.len() as u64).to_le_bytes());
-        eat(&self.keys);
-        eat(&self.key_count.to_le_bytes());
-        eat(&self.live.to_le_bytes());
-        match self.proto {
-            BirthProto::Literal => eat(&[0]),
-            BirthProto::Class(cid) => {
-                eat(&[1]);
-                eat(&cid.to_le_bytes());
-            }
-        }
-        if let Some(masks) = &self.typed {
-            eat(&[2]);
-            for words in [&masks.raw_f64_words, &masks.pointer_words] {
-                eat(&(words.len() as u64).to_le_bytes());
-                for w in words {
-                    eat(&w.to_le_bytes());
-                }
-            }
-        }
-        h
-    }
-
     /// A literal content without a typed layout: the runtime seed mints it
     /// from its key names alone (`js_shape_seed_plain`). Class contents are
     /// seeded by their class registration, typed ones by their typed install.
@@ -103,10 +70,19 @@ impl BirthShape {
     }
 }
 
-/// Assign every distinct content a static id: `SHAPE_ID_BASE + (hash & mask)`,
-/// linear probing on collision, over the contents in sorted order (so the
-/// result depends on the SET only). Hash collisions in the 2^20 band are
-/// certain at program scale, which is why this is a whole-program pass.
+/// Assign every distinct content a static id: `SHAPE_ID_BASE + rank`, the
+/// content's rank in sorted order, so the result depends on the SET only and
+/// the ids are DENSE from the band's start. Dense is what the runtime's by-id
+/// store needs: `ShapeSlab` indexes a two-level directory of 32-record chunks
+/// by id, so every id placed in its own 32-id run allocates and touches a
+/// chunk of its own, and every 32 K-id run a directory page. Ids scattered by
+/// content hash over the 2^20 band cost tsc ~1.5 MB of chunk and page memory
+/// at startup (more with transparent huge pages) for a few hundred records
+/// that dense ids pack into a few KB.
+///
+/// Rank is not stable when the set changes: adding a content renumbers every
+/// content after it, and the object cache (whose key includes each module's
+/// `(content, id)` pairs) then rebuilds the modules whose ids moved.
 ///
 /// Every distinct content gets its OWN id (decision 16): a structural view of
 /// a class and its typed layout are different content, so they never share an
@@ -121,21 +97,12 @@ pub fn assign_static_shape_ids<'a>(
     contents: impl IntoIterator<Item = &'a BirthShape>,
 ) -> HashMap<BirthShape, u32> {
     let contents: BTreeSet<&BirthShape> = contents.into_iter().collect();
-    let mask = STATIC_SHAPE_ID_COUNT - 1;
-    let mut used = vec![false; STATIC_SHAPE_ID_COUNT as usize];
-    let mut ids: HashMap<BirthShape, u32> = HashMap::with_capacity(contents.len());
-    for c in contents {
-        if ids.len() as u32 >= STATIC_SHAPE_ID_COUNT {
-            break;
-        }
-        let mut slot = (c.content_hash() as u32) & mask;
-        while used[slot as usize] {
-            slot = (slot + 1) & mask;
-        }
-        used[slot as usize] = true;
-        ids.insert(c.clone(), SHAPE_ID_BASE + slot);
-    }
-    ids
+    contents
+        .into_iter()
+        .take(STATIC_SHAPE_ID_COUNT as usize)
+        .zip(SHAPE_ID_BASE..)
+        .map(|(c, id)| (c.clone(), id))
+        .collect()
 }
 
 /// One class keys global's birth as the driver's pre-pass collects it.
