@@ -189,13 +189,15 @@ fn notify_fetch_abort(signal_ptr: i64) {
     }
 }
 
-extern "C" fn abort_error_constructor_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn abort_error_constructor_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::error::js_throw_illegal_constructor_type_error()
 }
 
 fn abort_error_constructor_value() -> f64 {
-    let func = abort_error_constructor_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func, 0);
+    let func = crate::fn_info!(abort_error_constructor_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func, 0);
     crate::object::set_bound_native_closure_name(closure, "AbortError");
     crate::value::js_nanbox_pointer(closure as i64)
@@ -322,7 +324,10 @@ fn timeout_dom_exception_value() -> f64 {
 /// signal with a `TimeoutError` and firing its `abort` listeners (which is how
 /// a pending `fetch` bound by the signal learns to reject — see
 /// `js_fetch_with_options`).
-extern "C" fn abort_signal_timeout_fire(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn abort_signal_timeout_fire(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     let signal =
         crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
@@ -349,8 +354,7 @@ extern "C" fn abort_signal_timeout_fire(closure: *const crate::closure::ClosureH
 pub extern "C" fn js_abort_signal_timeout(ms: f64) -> *mut ObjectHeader {
     let _gc = crate::gc::GcSuppressScope::new();
     let signal = alloc_abort_signal();
-    let func = abort_signal_timeout_fire as *const u8;
-    crate::closure::js_register_closure_arity(func, 0);
+    let func = crate::fn_info!(abort_signal_timeout_fire, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func, 1);
     let signal_value = crate::value::js_nanbox_pointer(signal as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 0, signal_value.to_bits() as i64);
@@ -404,6 +408,7 @@ pub extern "C" fn js_abort_signal_throw_if_aborted(signal: *mut ObjectHeader) ->
 
 extern "C" fn abort_any_propagate_thunk(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     // capture 0 = combined signal pointer (NaN-boxed), capture 1 = source signal.
@@ -452,9 +457,10 @@ pub extern "C" fn js_abort_signal_any(
                 combined.with_mut_ptr(|ptr| abort_signal_set_aborted(ptr, reason));
                 break;
             }
-            let func = abort_any_propagate_thunk as *const u8;
-            crate::closure::js_register_closure_arity(func, 1);
-            let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func, 2));
+            let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                crate::fn_info!(abort_any_propagate_thunk, 1; with_declared(1)),
+                2,
+            ));
             closure.with_mut_ptr(|closure| {
                 combined.with_mut_ptr(|ptr| {
                     crate::closure::js_closure_set_capture_ptr(

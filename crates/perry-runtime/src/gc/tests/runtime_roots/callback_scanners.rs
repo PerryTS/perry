@@ -1,4 +1,11 @@
 use super::*;
+use crate::closure::js_closure_alloc;
+
+/// The singleton-cache keys: each seed and its snapshot below name the same info.
+static TEST_NO_CAPTURE_SINGLETON_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(test_no_capture_singleton_func as crate::fn_info!(@ty 0));
+static TEST_CAPTURED_SINGLETON_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(test_captured_singleton_func as crate::fn_info!(@ty 0));
 
 #[test]
 fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
@@ -6,7 +13,7 @@ fn test_map_set_foreach_runtime_handles_survive_callback_copied_minor_gc() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
-    let callback = crate::closure::js_closure_alloc(test_foreach_force_minor_gc as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_foreach_force_minor_gc, 2), 0);
     let callback_scope = RuntimeHandleScope::new();
     let callback_handle =
         callback_scope.root_nanbox_f64(f64::from_bits(ptr_bits(callback as usize)));
@@ -71,7 +78,7 @@ fn test_json_reviver_runtime_handles_survive_copied_minor_gc() {
     let setup_scope = RuntimeHandleScope::new();
     let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
     let text_handle = setup_scope.root_string_ptr(text);
-    let reviver = crate::closure::js_closure_alloc(test_reviver_force_minor_gc as *const u8, 0);
+    let reviver = js_closure_alloc(crate::fn_info!(test_reviver_force_minor_gc, 2), 0);
     let reviver_handle = setup_scope.root_raw_const_ptr(reviver);
 
     let before = gc_collection_count();
@@ -114,7 +121,7 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(&TEST_NO_CAPTURE_SINGLETON_INFO, 0);
     let original = closure as usize;
     let value = f64::from_bits(ptr_bits(original));
     crate::geisterhand_registry::test_seed_geisterhand_roots(value, value, value);
@@ -132,7 +139,7 @@ fn test_geisterhand_callback_then_json_reviver_copied_minor_gc() {
     let setup_scope = RuntimeHandleScope::new();
     let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
     let text_handle = setup_scope.root_string_ptr(text);
-    let reviver = crate::closure::js_closure_alloc(test_reviver_force_minor_gc as *const u8, 0);
+    let reviver = js_closure_alloc(crate::fn_info!(test_reviver_force_minor_gc, 2), 0);
     let reviver_handle = setup_scope.root_raw_const_ptr(reviver);
 
     let before = gc_collection_count();
@@ -166,7 +173,7 @@ fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
     let scope = RuntimeHandleScope::new();
     let obj = crate::object::js_object_alloc(0, 1);
     let key = crate::string::js_string_from_bytes(b"fn".as_ptr(), 2);
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(&TEST_NO_CAPTURE_SINGLETON_INFO, 0);
     let original_obj = obj as usize;
     let original_closure = closure as usize;
     let obj_handle = scope.root_nanbox_u64(ptr_bits(obj as usize));
@@ -193,7 +200,7 @@ fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
 
     let empty_key = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     let empty_key_handle = scope.root_nanbox_f64(f64::from_bits(string_bits(empty_key as usize)));
-    let reviver = crate::closure::js_closure_alloc(test_reviver_count_closure_leaf as *const u8, 0);
+    let reviver = js_closure_alloc(crate::fn_info!(test_reviver_count_closure_leaf, 2), 0);
     let reviver_handle = scope.root_raw_const_ptr(reviver);
 
     let revived = unsafe {
@@ -214,7 +221,8 @@ fn test_json_reviver_treats_closure_property_as_leaf_after_copied_minor_gc() {
     assert_eq!(stored & TAG_MASK, POINTER_TAG);
     assert_eq!(
         crate::closure::js_closure_call0(
-            (stored & POINTER_MASK) as *const crate::closure::ClosureHeader
+            (stored & POINTER_MASK) as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
         ),
         0.0
     );
@@ -652,8 +660,7 @@ fn test_promise_then_and_finally_handles_survive_setup_gc() {
     let scope = RuntimeHandleScope::new();
     let promise = crate::promise::js_promise_new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
-    let callback =
-        crate::closure::js_closure_alloc(test_promise_identity_force_minor_gc as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_promise_identity_force_minor_gc, 1), 0);
     let callback_handle = scope.root_raw_const_ptr(callback);
 
     let next = crate::promise::js_promise_then(
@@ -679,8 +686,7 @@ fn test_promise_then_and_finally_handles_survive_setup_gc() {
 
     let promise = crate::promise::js_promise_new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
-    let on_finally =
-        crate::closure::js_closure_alloc(test_promise_finally_force_minor_gc as *const u8, 0);
+    let on_finally = js_closure_alloc(crate::fn_info!(test_promise_finally_force_minor_gc, 1), 0);
     let on_finally_handle = scope.root_raw_const_ptr(on_finally);
 
     let finally_next = crate::promise::js_promise_finally(
@@ -879,8 +885,7 @@ fn test_microtask_dispatch_handles_survive_callback_gc() {
     let value = test_string_value(b"microtask");
     let source = crate::promise::js_promise_resolved(value);
     let source_handle = scope.root_raw_mut_ptr(source);
-    let callback =
-        crate::closure::js_closure_alloc(test_promise_identity_force_minor_gc as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_promise_identity_force_minor_gc, 1), 0);
     let callback_handle = scope.root_raw_const_ptr(callback);
     let next = crate::promise::js_promise_then(
         source_handle.get_raw_mut_ptr::<crate::promise::Promise>(),
@@ -914,7 +919,7 @@ fn test_plugin_callback_registry_rewrites_young_closure_after_copied_minor_gc() 
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     gc_register_mutable_root_scanner(crate::plugin::scan_plugin_roots_mut);
 
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(&TEST_NO_CAPTURE_SINGLETON_INFO, 0);
     let original = closure as usize;
     crate::plugin::test_seed_plugin_roots(ptr_bits(original));
 
@@ -935,7 +940,7 @@ fn test_geisterhand_callback_registry_rewrites_young_closure_after_copied_minor_
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     gc_register_mutable_root_scanner(crate::geisterhand_registry::scan_geisterhand_roots_mut);
 
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(&TEST_NO_CAPTURE_SINGLETON_INFO, 0);
     let original = closure as usize;
     let value = f64::from_bits(ptr_bits(original));
     crate::geisterhand_registry::test_seed_geisterhand_roots(value, value, value);
@@ -955,7 +960,7 @@ fn test_ui_text_foreach_registry_rewrites_young_render_closure_after_copied_mino
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     gc_register_mutable_root_scanner(crate::ui_text_registry::scan_ui_text_registry_roots_mut);
 
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(&TEST_NO_CAPTURE_SINGLETON_INFO, 0);
     let original = closure as usize;
     let value = f64::from_bits(ptr_bits(original));
     crate::ui_text_registry::test_seed_ui_text_registry_roots(value, value);
@@ -1262,7 +1267,10 @@ impl Drop for RuntimeCallbackRootGuard {
 fn assert_moved_callable_closure(bits: u64, original: usize) {
     let rewritten = assert_moved_closure_ptr(bits, original);
     assert_eq!(
-        crate::closure::js_closure_call0(rewritten as *const crate::closure::ClosureHeader),
+        crate::closure::js_closure_call0(
+            rewritten as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
+        ),
         0.0
     );
 }
@@ -1355,11 +1363,11 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     );
     crate::closure::test_clear_singleton_closure_caches();
     crate::closure::test_seed_singleton_closure_cache(
-        test_no_capture_singleton_func as *const u8,
+        &TEST_NO_CAPTURE_SINGLETON_INFO,
         fixture.nursery_user as *mut crate::closure::ClosureHeader,
     );
     crate::closure::test_seed_captured_singleton_closure_cache(
-        test_captured_singleton_func as *const u8,
+        &TEST_CAPTURED_SINGLETON_INFO,
         vec![fixture.nursery_bits],
         fixture.nursery_user as *mut crate::closure::ClosureHeader,
     );
@@ -1527,15 +1535,13 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         (fixture.old_addr(), fixture.old_addr(), fixture.old_addr())
     );
     assert_eq!(
-        crate::closure::test_singleton_closure_cache_entry(
-            test_no_capture_singleton_func as *const u8
-        )
-        .map(|ptr| ptr as usize),
+        crate::closure::test_singleton_closure_cache_entry(&TEST_NO_CAPTURE_SINGLETON_INFO)
+            .map(|ptr| ptr as usize),
         Some(fixture.old_addr())
     );
     assert_eq!(
         crate::closure::test_captured_singleton_closure_cache_entries(
-            test_captured_singleton_func as *const u8
+            &TEST_CAPTURED_SINGLETON_INFO
         ),
         vec![(
             vec![fixture.old_bits],
@@ -1655,6 +1661,7 @@ thread_local! {
 
 extern "C" fn test_sort_comparator_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
 ) -> f64 {
@@ -1693,7 +1700,7 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
         SORT_COPIED_OBJECTS.with(|count| count.set(0));
         let scope = RuntimeHandleScope::new();
         let comparator =
-            crate::closure::js_closure_alloc(test_sort_comparator_force_minor_gc as *const u8, 0);
+            js_closure_alloc(crate::fn_info!(test_sort_comparator_force_minor_gc, 2), 0);
         let comparator_handle = scope.root_raw_const_ptr(comparator);
         let arr = crate::array::js_array_alloc(count as u32);
         let arr_handle = scope.root_raw_mut_ptr(arr);
@@ -1747,13 +1754,16 @@ fn test_array_sort_comparator_rooted_buffers_survive_copied_minor_gc() {
     }
 }
 
-extern "C" fn test_tojson_force_minor_gc(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn test_tojson_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = crate::gc::gc_collect_minor();
     test_string_value(b"tojson-out")
 }
 
 fn json_test_object_with_gc_forcing_tojson(scope: &RuntimeHandleScope) -> f64 {
-    let to_json = crate::closure::js_closure_alloc(test_tojson_force_minor_gc as *const u8, 0);
+    let to_json = js_closure_alloc(crate::fn_info!(test_tojson_force_minor_gc, 0), 0);
     let to_json_handle = scope.root_raw_mut_ptr(to_json);
     let nested = crate::object::js_object_alloc(0, 1);
     let nested_handle = scope.root_raw_mut_ptr(nested);
@@ -1864,6 +1874,7 @@ fn test_json_stringify_array_rederives_elements_after_tojson_minor_gc() {
 
 extern "C" fn test_replacer_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     _offset: f64,
     _whole: f64,
@@ -1888,7 +1899,7 @@ fn test_string_replace_all_fn_rederives_subject_after_callback_minor_gc() {
     register_runtime_handle_root_scanner_for_tests();
 
     let scope = RuntimeHandleScope::new();
-    let callback = crate::closure::js_closure_alloc(test_replacer_force_minor_gc as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_replacer_force_minor_gc, 3), 0);
     let callback_handle = scope.root_raw_mut_ptr(callback);
     let s = crate::string::js_string_from_bytes(b"one--two--three".as_ptr(), 15);
     let s_handle = scope.root_string_ptr(s);
@@ -1912,6 +1923,7 @@ fn test_string_replace_all_fn_rederives_subject_after_callback_minor_gc() {
 
 extern "C" fn test_bigint_comparator_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     a: f64,
     b: f64,
 ) -> f64 {
@@ -1946,8 +1958,7 @@ fn test_bigint64_sort_comparator_boxes_survive_copied_minor_gc() {
     register_runtime_handle_root_scanner_for_tests();
 
     let scope = RuntimeHandleScope::new();
-    let comparator =
-        crate::closure::js_closure_alloc(test_bigint_comparator_force_minor_gc as *const u8, 0);
+    let comparator = js_closure_alloc(crate::fn_info!(test_bigint_comparator_force_minor_gc, 2), 0);
     let comparator_handle = scope.root_raw_const_ptr(comparator);
 
     let lanes: [i64; 6] = [42, -7, 1_000_000_000_007, 0, -900_000_000_001, 13];

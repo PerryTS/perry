@@ -50,7 +50,12 @@ fn native_process_fixture() {
     assert_eq!(tail, b"exit");
 }
 
-extern "C" fn event(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn event(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     let id = crate::closure::js_closure_get_capture_f64(closure, 0) as usize;
     EVENTS.with(|e| {
         e.borrow_mut()
@@ -59,14 +64,17 @@ extern "C" fn event(closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
     cp_undefined()
 }
 
-extern "C" fn data(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn data(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     OUTPUT.with(|o| o.borrow_mut().extend(cp_value_to_bytes(value)));
     cp_undefined()
 }
 
 fn register(target: f64, name: &str, id: usize) {
-    crate::closure::js_register_closure_arity(event as *const u8, 2);
-    let f = crate::closure::js_closure_alloc(event as *const u8, 1);
+    let f = crate::closure::js_closure_alloc(crate::fn_info!(event, 2; with_declared(2)), 1);
     crate::closure::js_closure_set_capture_f64(f, 0, id as f64);
     super::super::emitter::cp_register(target, cp_box_string(name), cp_box_ptr(f.cast()));
 }
@@ -113,8 +121,7 @@ fn spawn_fixture(mode: &str, timeout: Option<f64>) -> f64 {
         register(cp, name, id);
     }
     register(cp_get_field(cp, b"stdin"), "drain", 4);
-    crate::closure::js_register_closure_arity(data as *const u8, 1);
-    let f = crate::closure::js_closure_alloc(data as *const u8, 0);
+    let f = crate::closure::js_closure_alloc(crate::fn_info!(data, 1; with_declared(1)), 0);
     super::super::emitter::cp_register(
         cp_get_field(cp, b"stdout"),
         cp_box_string("data"),

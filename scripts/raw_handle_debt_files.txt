@@ -69,7 +69,8 @@
 31 crates/perry-runtime/src/array/iterator.rs
 12 crates/perry-runtime/src/array/push_pop.rs
 12 crates/perry-runtime/src/array/sort.rs
-12 crates/perry-runtime/src/async_hooks.rs
+11 crates/perry-runtime/src/async_hooks.rs
+1 crates/perry-runtime/src/async_hooks/context_snapshots.rs  # moved-from: crates/perry-runtime/src/async_hooks.rs
 5 crates/perry-runtime/src/atomics.rs
 7 crates/perry-runtime/src/builtins/console.rs
 12 crates/perry-runtime/src/builtins/globals.rs

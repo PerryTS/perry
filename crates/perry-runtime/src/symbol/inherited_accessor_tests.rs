@@ -2,7 +2,7 @@
 //! receiver as `this`, for `[[Get]]` and `[[Set]]` alike.
 
 use super::*;
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use std::cell::Cell;
 
 thread_local! {
@@ -10,20 +10,23 @@ thread_local! {
 }
 
 /// Getter body: answers the `this` it was invoked with.
-extern "C" fn this_getter(_closure: *const ClosureHeader) -> f64 {
-    crate::object::js_implicit_this_get()
+extern "C" fn this_getter(_closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    this.as_f64()
 }
 
 /// Setter body: records `(this, value)`.
-extern "C" fn recording_setter(_closure: *const ClosureHeader, value: f64) -> f64 {
-    let this = crate::object::js_implicit_this_get();
+extern "C" fn recording_setter(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let this = this.as_f64();
     SETTER_CALL.with(|c| c.set(Some((this.to_bits(), value.to_bits()))));
     f64::from_bits(TAG_UNDEFINED)
 }
 
-unsafe fn closure_bits(f: *const u8, arity: u32) -> u64 {
-    js_register_closure_arity(f, arity);
-    crate::value::js_nanbox_pointer(js_closure_alloc(f, 0) as i64).to_bits()
+unsafe fn closure_bits(info: *const crate::closure::JsFunctionInfo) -> u64 {
+    crate::value::js_nanbox_pointer(js_closure_alloc(info, 0) as i64).to_bits()
 }
 
 unsafe fn plain_object() -> f64 {
@@ -38,8 +41,8 @@ unsafe fn fixture() -> (f64, f64, f64, f64) {
     set_symbol_accessor_property(
         proto,
         sym,
-        closure_bits(this_getter as *const u8, 0),
-        closure_bits(recording_setter as *const u8, 1),
+        closure_bits(crate::fn_info!(this_getter, 0; with_declared(0))),
+        closure_bits(crate::fn_info!(recording_setter, 1; with_declared(1))),
     );
     let child = crate::object::js_object_create(proto);
     let grandchild = crate::object::js_object_create(child);
@@ -190,7 +193,12 @@ fn symbol_may_have_accessor_is_false_until_an_accessor_is_installed() {
         let bits_before = super::accessors::test_symbol_accessor_id_bits_set();
 
         let holder = plain_object();
-        set_symbol_accessor_property(holder, sym, closure_bits(this_getter as *const u8, 0), 0);
+        set_symbol_accessor_property(
+            holder,
+            sym,
+            closure_bits(crate::fn_info!(this_getter, 0; with_declared(0))),
+            0,
+        );
         let after = super::accessors::symbol_may_have_accessor(sym_key);
         let bits_after = super::accessors::test_symbol_accessor_id_bits_set();
         crate::gc::gc_unsuppress();

@@ -803,6 +803,21 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         {
             return Ok((value, true));
         }
+        // The same tracked view with an exact-i32 index that is NOT proven in
+        // bounds (`for (j < n) u[j]` with `n` a parameter): `lower_expr` takes
+        // the proven-view checked load, whose value is the element or, out of
+        // bounds, the `undefined` box. The residual-coerce rule cannot see
+        // which tier ran, so every element paid a `js_number_coerce` call —
+        // 12-17% of spectral-norm. ToNumber(undefined) is NaN and that box is
+        // the only non-Number the load yields, so one compare + select is the
+        // exact conversion.
+        if let Some(raw) = super::try_lower_proven_view_checked_f64_load(ctx, object, index)? {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&raw);
+            let is_undef = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+            let canonical = blk.select(I1, &is_undef, DOUBLE, "0x7FF8000000000000", &raw);
+            return Ok((canonical, true));
+        }
     }
     // Repsel Phase 4a.0 (#6904): a numeric-proven `a || b` / `a && b` /
     // `a ?? b` consumed as an arithmetic operand lowers with BOTH sides in

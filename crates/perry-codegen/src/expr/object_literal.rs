@@ -756,11 +756,20 @@ mod by_name_method_closure_tests {
     /// The `build` function's body, and only it — the closure bodies are
     /// separate `define`s and contain none of what is asserted below.
     pub(super) fn build_fn(ir: &str) -> String {
+        // `build` reads its dynamic `this` (the analysis counts the methods'
+        // `captures_this`), so it is compiled as a receiver-taking
+        // `__build$this` body behind a forwarding `__build`; the lowering
+        // under test is in the body.
+        let marker = if ir.contains("__build$this(") {
+            "__build$this("
+        } else {
+            "__build("
+        };
         let mut body = Vec::new();
         let mut inside = false;
         for line in ir.lines() {
             if line.starts_with("define ") {
-                inside = line.contains("__build(");
+                inside = line.contains(marker);
                 continue;
             }
             if inside {
@@ -889,9 +898,9 @@ mod by_name_method_closure_tests {
     /// the first place.
     ///
     /// Counting patch calls over the WHOLE function would be vacuous: closure
-    /// construction emits `js_closure_set_capture_bits` too (that is how the
-    /// reserved `this` slot is seeded from `js_implicit_this_get`), so the
-    /// count only means something in the tail.
+    /// construction emits `js_closure_set_capture_bits` too (that is how a
+    /// capturing closure's reserved `this` slot is seeded), so the count only
+    /// means something in the tail.
     #[test]
     fn the_this_patches_run_below_every_property_store() {
         let _pin = pin_routing("0");

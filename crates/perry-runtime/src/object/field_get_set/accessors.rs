@@ -285,18 +285,14 @@ unsafe fn prototype_property_value_with_guard(
         return None;
     }
     let receiver = crate::value::js_nanbox_pointer(receiver_addr() as i64);
-    let previous_this = super::super::js_implicit_this_set(receiver);
-    // The DISPLACED `this` and the displaced accessor receiver both ride
-    // through `js_object_get_field_by_name` — which can run a getter — before
-    // being republished. Rooting the ACCESSOR_RECEIVER_OVERRIDE cell (#7231)
-    // protects the armed value, not these saved ones; that residual is what
-    // these two handles close.
-    let previous_this_h = scope.root_nanbox_f64(previous_this);
+    // The displaced accessor receiver rides through `js_object_get_field_by_name`
+    // — which can run a getter — before being republished. Rooting the
+    // ACCESSOR_RECEIVER_OVERRIDE cell (#7231) protects the armed value, not the
+    // saved one; that residual is what this handle closes.
     let prev_override = accessor_receiver_override_begin(receiver);
     let prev_override_h = prev_override.map(|v| scope.root_nanbox_f64(v));
     let property = js_object_get_field_by_name(proto_ptr(), key());
     accessor_receiver_override_end(prev_override_h.map(|h| h.get_nanbox_f64()));
-    super::super::js_implicit_this_set(previous_this_h.get_nanbox_f64());
     if property.is_undefined() {
         None
     } else {
@@ -491,14 +487,12 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
     //
     // #9417: every value below is GC-managed and lives across an allocation.
     // `coerce_call_this` boxes a primitive receiver, `clone_closure_rebind_this`
-    // allocates a fresh `ClosureHeader`, and `js_closure_call0` runs USER CODE —
+    // allocates a fresh `ClosureHeader`, and the getter call runs USER CODE —
     // any of the three can drive an evacuating young-gen minor. A bare Rust
     // local is exactly the slot the collector cannot see or rewrite (#7249,
     // #7498), and the receiver here is not merely read afterwards: it is
-    // PUBLISHED into the GC-rooted `IMPLICIT_THIS` cell, and `prev` is written
-    // back into that same cell after the getter body has had a full turn to
-    // allocate. Either store installs a pre-collection address as some frame's
-    // `this`, after which every ordinary property read off it answers
+    // passed to the getter as its `this`. A stale copy would install a
+    // pre-collection address as the getter's `this`, after which every ordinary property read off it answers
     // `undefined` (`js_object_get_own_field_or_undef` fails its
     // `obj_type == GC_TYPE_OBJECT` check on the retired cell and returns
     // TAG_UNDEFINED rather than faulting) — the silent-wrong-answer shape
@@ -520,14 +514,15 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
     if (call_h.get_nanbox_u64() & crate::value::POINTER_MASK) == 0 {
         return JSValue::undefined();
     }
-    let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
     let result_f64 = {
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
-        crate::closure::js_closure_call0(closure)
+        crate::closure::js_closure_call0(
+            closure,
+            crate::closure::JsThis::from_f64(recv_h.get_nanbox_f64()),
+        )
     };
-    super::super::js_implicit_this_set(prev_h.get_nanbox_f64());
     JSValue::from_bits(result_f64.to_bits())
 }
 
@@ -557,11 +552,13 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
     if (call_h.get_nanbox_u64() & crate::value::POINTER_MASK) == 0 {
         return;
     }
-    let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
-    let _ = crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
-    super::super::js_implicit_this_set(prev_h.get_nanbox_f64());
+    let _ = crate::closure::js_closure_call1(
+        closure,
+        crate::closure::JsThis::from_f64(recv_h.get_nanbox_f64()),
+        value_h.get_nanbox_f64(),
+    );
 }
 
 /// Invoke an accessor owned by a descriptor-marked object before its empty

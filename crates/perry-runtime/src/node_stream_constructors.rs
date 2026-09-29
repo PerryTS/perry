@@ -4,39 +4,6 @@
 use super::*;
 use crate::value::JSValue;
 
-thread_local! {
-    static ITER_HELPER_ARITIES_REGISTERED: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-/// Register declared arities for the iterator-helper stubs (once per
-/// thread) so the closure dispatcher pads missing trailing args with
-/// `undefined` instead of reading register garbage. `reduce` strictly
-/// needs it — `reduce(fn)` omits the initial value — and registering
-/// the single-arg helpers makes a missing-callback call (`map()`)
-/// degrade to a no-op rather than dereference junk.
-pub(super) fn register_iter_helper_arities() {
-    if ITER_HELPER_ARITIES_REGISTERED.with(|c| c.replace(true)) {
-        return;
-    }
-    let entries: &[(StubFn, u32)] = &[
-        (cast1(ns_iter_to_array), 1),
-        (cast2(ns_iter_map), 2),
-        (cast2(ns_iter_filter), 2),
-        (cast3(ns_iter_reduce), 3),
-        (cast2(ns_iter_for_each), 2),
-        (cast2(ns_iter_find), 2),
-        (cast2(ns_iter_some), 2),
-        (cast2(ns_iter_every), 2),
-        (cast2(ns_iter_flat_map), 2),
-        (cast1(ns_iter_take), 1),
-        (cast1(ns_iter_drop), 1),
-    ];
-    for (f, arity) in entries {
-        crate::closure::js_register_closure_arity(*f as *const u8, *arity);
-    }
-}
-
 /// Coerce a NaN-boxed value to an `f64` if it is numeric (handling both the
 /// int32-boxed and double representations). Returns `None` for non-numbers.
 pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
@@ -388,10 +355,6 @@ pub use pipeline::{
     js_node_stream_compose, js_node_stream_compose_args, js_node_stream_duplex_from_options,
     js_node_stream_duplex_pair, js_node_stream_finished, js_node_stream_pipeline,
 };
-// Duplex-pair write/final callbacks are registered by the dispatch module
-// (`node_stream_dispatch.rs`); surface them through the constructors trunk so
-// `node_stream`'s `pub use constructors::*` carries them into that module.
-pub(crate) use pipeline::{duplex_pair_final_callback, duplex_pair_write_callback};
 
 pub use web_adapter::{
     js_node_stream_duplex_from_web, js_node_stream_duplex_to_web, js_node_stream_from_web,

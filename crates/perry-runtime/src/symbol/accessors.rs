@@ -307,9 +307,11 @@ pub(super) unsafe fn invoke_symbol_accessor_setter(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
-    let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+    crate::closure::js_closure_call1(
+        closure,
+        crate::closure::JsThis::from_f64(receiver),
+        value_h.get_nanbox_f64(),
+    );
     value_h.get_nanbox_f64()
 }
 
@@ -321,11 +323,7 @@ pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64)
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(receiver))
 }
 
 pub(super) fn scan_symbol_accessor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

@@ -47,12 +47,11 @@ pub(crate) use platform_impl::pty_register;
 mod platform_impl {
     use super::{native, reactor};
     use crate::child_process::{
-        cp_array_ptr, cp_box_ptr, cp_box_string, cp_build_object, cp_cast0, cp_cast1, cp_cast2,
-        cp_get_field, cp_make_error, cp_object_ptr, cp_set_field, cp_this, cp_undefined,
-        cp_value_to_bytes, cp_value_to_string, CpFn,
+        cp_array_ptr, cp_box_ptr, cp_box_string, cp_build_object, cp_get_field, cp_make_error,
+        cp_object_ptr, cp_set_field, cp_this, cp_undefined, cp_value_to_bytes, cp_value_to_string,
+        CpFn,
     };
-    use crate::closure::{js_native_call_value, ClosureHeader};
-    use crate::object::js_implicit_this_set;
+    use crate::closure::{native_call_value_this, ClosureHeader, JsThis};
     use crate::value::JSValue;
 
     // Shape-id band kept clear of cluster (0x7FFF_FC80) and child_process
@@ -83,7 +82,6 @@ mod platform_impl {
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let args = scope.root_nanbox_f64_slice(args);
-        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         let key = pty_listener_key(event);
         let Some(arr) = cp_array_ptr(cp_get_field(target.get_nanbox_f64(), &key)) else {
             return;
@@ -95,16 +93,15 @@ mod platform_impl {
             .collect();
         let callbacks = scope.root_nanbox_f64_slice(&callbacks);
         for cb in callbacks {
-            js_implicit_this_set(target.get_nanbox_f64());
             let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
             unsafe {
-                let _ = js_native_call_value(
+                let _ = native_call_value_this(
                     cb.get_nanbox_f64(),
+                    JsThis::from_f64(target.get_nanbox_f64()),
                     current_args.as_ptr(),
                     current_args.len(),
                 );
             }
-            js_implicit_this_set(prev.get_nanbox_f64());
         }
     }
 
@@ -130,7 +127,10 @@ mod platform_impl {
     /// subscription triple is stored as fields on the handle itself
     /// (GC-traced through the object), read back by the dispose body.
     fn pty_make_disposable(target: f64, event: &str, cb: f64) -> f64 {
-        let methods: [(&str, CpFn); 1] = [("dispose", cp_cast0(pty_disposable_dispose))];
+        let methods: [(&str, CpFn); 1] = [(
+            "dispose",
+            crate::fn_info!(pty_disposable_dispose, 0; with_declared(0)),
+        )];
         let obj = cp_build_object(&methods, PTY_DISPOSABLE_SHAPE_ID + methods.len() as u32);
         let val = cp_box_ptr(obj as *const u8);
         cp_set_field(val, b"__ptyTarget", target);
@@ -139,8 +139,11 @@ mod platform_impl {
         val
     }
 
-    extern "C" fn pty_disposable_dispose(closure: *const ClosureHeader) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_disposable_dispose(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         let target = cp_get_field(this, b"__ptyTarget");
         let cb = cp_get_field(this, b"__ptyCb");
         if let Some(event) = cp_value_to_string(cp_get_field(this, b"__ptyEvent")) {
@@ -165,20 +168,32 @@ mod platform_impl {
 
     // ----- IPty method bodies (slot 0 of each closure = the IPty object) ----
 
-    extern "C" fn pty_method_on_data(closure: *const ClosureHeader, cb: f64) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_method_on_data(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cb: f64,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         pty_register(this, "data", cb);
         pty_make_disposable(this, "data", cb)
     }
 
-    extern "C" fn pty_method_on_exit(closure: *const ClosureHeader, cb: f64) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_method_on_exit(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cb: f64,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         pty_register(this, "exit", cb);
         pty_make_disposable(this, "exit", cb)
     }
 
-    extern "C" fn pty_method_write(closure: *const ClosureHeader, data: f64) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_method_write(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        data: f64,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         if let Some(handle) = pty_handle_of(this) {
             let bytes = cp_value_to_bytes(data);
             if !bytes.is_empty() {
@@ -188,8 +203,13 @@ mod platform_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_resize(closure: *const ClosureHeader, cols: f64, rows: f64) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_method_resize(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        cols: f64,
+        rows: f64,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         let cols_i = pty_arg_i32(cols);
         let rows_i = pty_arg_i32(rows);
         if cols_i <= 0 || rows_i <= 0 || cols_i > u16::MAX as i32 || rows_i > u16::MAX as i32 {
@@ -208,23 +228,33 @@ mod platform_impl {
         cp_undefined()
     }
 
-    extern "C" fn pty_method_kill(closure: *const ClosureHeader, signal: f64) -> f64 {
-        let this = cp_this(closure);
+    extern "C" fn pty_method_kill(
+        closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        signal: f64,
+    ) -> f64 {
+        let this = cp_this(_this, closure);
         if let Some(handle) = pty_handle_of(this) {
             reactor::pty_live_kill(handle, pty_parse_kill_signal(signal));
         }
         cp_undefined()
     }
 
-    extern "C" fn pty_method_pause(closure: *const ClosureHeader) -> f64 {
-        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+    extern "C" fn pty_method_pause(
+        closure: *const ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        if let Some(handle) = pty_handle_of(cp_this(this, closure)) {
             reactor::pty_live_set_paused(handle, true);
         }
         cp_undefined()
     }
 
-    extern "C" fn pty_method_resume(closure: *const ClosureHeader) -> f64 {
-        if let Some(handle) = pty_handle_of(cp_this(closure)) {
+    extern "C" fn pty_method_resume(
+        closure: *const ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        if let Some(handle) = pty_handle_of(cp_this(this, closure)) {
             reactor::pty_live_set_paused(handle, false);
         }
         cp_undefined()
@@ -233,9 +263,12 @@ mod platform_impl {
     /// opencode's `Pty` wrapper calls `dispose()`; node-pty's UnixTerminal
     /// exposes the equivalent `destroy()`. Both are "hang up the terminal":
     /// kill with the default SIGHUP.
-    extern "C" fn pty_method_dispose(closure: *const ClosureHeader) -> f64 {
-        pty_method_resume(closure);
-        pty_method_kill(closure, cp_undefined())
+    extern "C" fn pty_method_dispose(
+        closure: *const ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        pty_method_resume(closure, this);
+        pty_method_kill(closure, this, cp_undefined())
     }
 
     /// `kill([signal])` — node-pty defaults to `SIGHUP` (a hangup is how a
@@ -320,31 +353,42 @@ mod platform_impl {
         }
     }
 
-    fn pty_register_arities() {
-        use crate::closure::js_register_closure_arity;
-        js_register_closure_arity(pty_method_on_data as *const u8, 1);
-        js_register_closure_arity(pty_method_on_exit as *const u8, 1);
-        js_register_closure_arity(pty_method_write as *const u8, 1);
-        js_register_closure_arity(pty_method_resize as *const u8, 2);
-        js_register_closure_arity(pty_method_kill as *const u8, 1);
-        js_register_closure_arity(pty_method_pause as *const u8, 0);
-        js_register_closure_arity(pty_method_resume as *const u8, 0);
-        js_register_closure_arity(pty_method_dispose as *const u8, 0);
-        js_register_closure_arity(pty_disposable_dispose as *const u8, 0);
-    }
-
     /// Build the IPty object shell (methods only; live fields are set by
     /// `js_pty_spawn` after the fork succeeds).
     fn pty_build_ipty() -> f64 {
         let methods: [(&str, CpFn); 8] = [
-            ("onData", cp_cast1(pty_method_on_data)),
-            ("onExit", cp_cast1(pty_method_on_exit)),
-            ("write", cp_cast1(pty_method_write)),
-            ("resize", cp_cast2(pty_method_resize)),
-            ("kill", cp_cast1(pty_method_kill)),
-            ("pause", cp_cast0(pty_method_pause)),
-            ("resume", cp_cast0(pty_method_resume)),
-            ("dispose", cp_cast0(pty_method_dispose)),
+            (
+                "onData",
+                crate::fn_info!(pty_method_on_data, 1; with_declared(1)),
+            ),
+            (
+                "onExit",
+                crate::fn_info!(pty_method_on_exit, 1; with_declared(1)),
+            ),
+            (
+                "write",
+                crate::fn_info!(pty_method_write, 1; with_declared(1)),
+            ),
+            (
+                "resize",
+                crate::fn_info!(pty_method_resize, 2; with_declared(2)),
+            ),
+            (
+                "kill",
+                crate::fn_info!(pty_method_kill, 1; with_declared(1)),
+            ),
+            (
+                "pause",
+                crate::fn_info!(pty_method_pause, 0; with_declared(0)),
+            ),
+            (
+                "resume",
+                crate::fn_info!(pty_method_resume, 0; with_declared(0)),
+            ),
+            (
+                "dispose",
+                crate::fn_info!(pty_method_dispose, 0; with_declared(0)),
+            ),
         ];
         let obj = cp_build_object(&methods, PTY_SHAPE_ID + methods.len() as u32);
         cp_box_ptr(obj as *const u8)
@@ -359,8 +403,6 @@ mod platform_impl {
     /// reader/waiter threads with the reactor. Returns the IPty object.
     #[no_mangle]
     pub extern "C" fn js_pty_spawn(file_bits: i64, args_bits: i64, opts_bits: i64) -> f64 {
-        pty_register_arities();
-
         let file_val = f64::from_bits(file_bits as u64);
         let Some(file) = cp_value_to_string(file_val).filter(|s| !s.is_empty()) else {
             crate::exception::js_throw(cp_make_error("spawn: file argument is required", &[]));
@@ -430,23 +472,30 @@ mod platform_impl {
         /// runner can't interleave their pumps.
         static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-        extern "C" fn test_data_listener(_closure: *const ClosureHeader, chunk: f64) -> f64 {
+        extern "C" fn test_data_listener(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            chunk: f64,
+        ) -> f64 {
             if let Some(s) = cp_value_to_string(chunk) {
                 DATA_SINK.lock().unwrap().push_str(&s);
             }
             cp_undefined()
         }
 
-        extern "C" fn test_exit_listener(_closure: *const ClosureHeader, payload: f64) -> f64 {
+        extern "C" fn test_exit_listener(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            payload: f64,
+        ) -> f64 {
             let code = cp_get_field(payload, b"exitCode");
             let signal = cp_get_field(payload, b"signal");
             *EXIT_SINK.lock().unwrap() = Some((code, signal));
             cp_undefined()
         }
 
-        fn listener_value(f: extern "C" fn(*const ClosureHeader, f64) -> f64) -> f64 {
-            crate::closure::js_register_closure_arity(f as *const u8, 1);
-            let closure = crate::closure::js_closure_alloc(f as *const u8, 0);
+        fn listener_value(info: *const crate::closure::JsFunctionInfo) -> f64 {
+            let closure = crate::closure::js_closure_alloc(info, 0);
             cp_box_ptr(closure as *const u8)
         }
 
@@ -493,8 +542,16 @@ mod platform_impl {
             assert_eq!(cp_get_field(ipty, b"cols"), 80.0);
             assert_eq!(cp_get_field(ipty, b"rows"), 24.0);
 
-            pty_register(ipty, "data", listener_value(test_data_listener));
-            pty_register(ipty, "exit", listener_value(test_exit_listener));
+            pty_register(
+                ipty,
+                "data",
+                listener_value(crate::fn_info!(test_data_listener, 1; with_declared(1))),
+            );
+            pty_register(
+                ipty,
+                "exit",
+                listener_value(crate::fn_info!(test_exit_listener, 1; with_declared(1))),
+            );
 
             let handle = pty_handle_of(ipty).expect("__ptyHandle set");
             // Output prints PTY_OK while the echoed command shows PTY_%s, so
@@ -530,7 +587,11 @@ mod platform_impl {
                 boxed_str("30").to_bits() as i64,
                 cp_undefined().to_bits() as i64,
             );
-            pty_register(ipty, "exit", listener_value(test_exit_listener));
+            pty_register(
+                ipty,
+                "exit",
+                listener_value(crate::fn_info!(test_exit_listener, 1; with_declared(1))),
+            );
             let handle = pty_handle_of(ipty).expect("__ptyHandle set");
 
             std::thread::sleep(std::time::Duration::from_millis(150));

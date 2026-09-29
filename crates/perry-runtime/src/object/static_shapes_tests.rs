@@ -143,3 +143,69 @@ fn a_class_seed_takes_the_class_prototype_identity() {
     );
     assert!(is_carrier(id));
 }
+
+/// The key literal's atom, as a module pool mints it at init
+/// (`js_string_pool_atom`): the pointer every read site of that text passes.
+fn pool_atom(text: &str) -> *const crate::StringHeader {
+    let hash = super::super::key_bytes_hash(text.as_ptr(), text.len());
+    crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
+}
+
+/// The megamorphic confirm as the miss entry asks it: this agent's directory,
+/// the site's key as NaN-boxed bits.
+unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> bool {
+    shapes::slot_guess_confirmed(
+        shapes::ordinary_dir_addr(),
+        id,
+        crate::JSValue::string_ptr(key as *mut _).bits(),
+        guess,
+    )
+}
+
+/// A seeded literal shape answers the megamorphic read's slot-guess confirm
+/// (`shapes::slot_guess_confirmed`: the position bound, then ONE pointer
+/// compare of the listed key against the site's key atom) exactly as a shape
+/// minted after the pools ran does. The seed runs before any module's pool
+/// mints its atoms, so a list that stored its own strings instead of the
+/// atoms confirms nothing, and every megamorphic read of a seeded literal
+/// falls to the by-name walk (lead_mega1 225.8 -> 435.8 instructions/read).
+///
+/// Sabotage: drop the atom mint in `canonical_keys_for_names` -> the seeded
+/// record's confirms fail (the minted twin's still pass).
+#[test]
+fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
+    let requested = SHAPE_ID_BASE + 0x1240;
+    let seeded = seed(requested, &["lt4m_a", "lt4m_k0"]);
+    assert_eq!(seeded, requested, "the seed must mint the requested id");
+    // Module init: the pools mint the atoms of their key literals.
+    let (a, k0, k1) = (
+        pool_atom("lt4m_a"),
+        pool_atom("lt4m_k0"),
+        pool_atom("lt4m_k1"),
+    );
+    // A literal minted by facts after the pools ran (the dynamic path).
+    let minted_keys = unsafe { canonical_keys_for_names(&[b"lt4m_a", b"lt4m_k1"]) };
+    let minted = shapes::shape_id_for_keys_ensure(minted_keys.arr(), 2);
+    for (id, key, guess, what) in [
+        (seeded, a, 0, "seeded `a` at 0"),
+        (seeded, k0, 1, "seeded `k0` at 1"),
+        (minted, a, 0, "minted `a` at 0"),
+        (minted, k1, 1, "minted `k1` at 1"),
+    ] {
+        // POSBOUND is a fact of the record: a seeded shape (built by the
+        // slab insert, like every other) carries it, nonzero, equal to its
+        // definition.
+        let (stored, by_facts) = shapes::test_positional_of_id(id).expect("a record");
+        assert!(
+            stored > 0 && stored == by_facts,
+            "{what}: the record must answer by position (POSBOUND {stored}, by facts {by_facts})"
+        );
+        assert!(
+            unsafe { confirmed(id, key, guess) },
+            "{what}: the megamorphic confirm must accept the key atom"
+        );
+    }
+    // And refutes a wrong guess or another key.
+    assert!(!unsafe { confirmed(seeded, a, 1) });
+    assert!(!unsafe { confirmed(seeded, k1, 1) });
+}

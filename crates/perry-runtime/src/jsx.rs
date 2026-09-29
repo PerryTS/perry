@@ -58,7 +58,14 @@ fn dispatch(type_arg: f64, props: f64) -> f64 {
     // the value-call path binds.
     if crate::proxy::js_proxy_is_proxy(type_arg) == 1 {
         if crate::proxy::proxy_wraps_callable(type_arg) {
-            return unsafe { crate::closure::js_native_call_value(type_arg, &props, 1) };
+            return unsafe {
+                crate::closure::js_native_call_value(
+                    type_arg,
+                    crate::closure::plain_call_receiver(),
+                    &props,
+                    1,
+                )
+            };
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -68,7 +75,7 @@ fn dispatch(type_arg: f64, props: f64) -> f64 {
     if jsval.is_pointer() {
         let ptr = jsval.as_pointer::<ClosureHeader>();
         if !ptr.is_null() && is_valid_closure(ptr) {
-            return js_closure_call1(ptr, props);
+            return js_closure_call1(ptr, crate::closure::plain_call_receiver(), props);
         }
     }
 
@@ -398,13 +405,17 @@ mod tests {
     }
 
     /// A function component: `(props) => <span>{props.children}</span>`.
-    extern "C" fn span_component(_closure: *const ClosureHeader, props: f64) -> f64 {
+    extern "C" fn span_component(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+        props: f64,
+    ) -> f64 {
         js_jsx(str_val("span"), props)
     }
 
     /// Allocate `span_component` as a real capture-free closure value.
     fn span_component_value() -> f64 {
-        let c = crate::closure::js_closure_alloc(span_component as *const u8, 0);
+        let c = crate::closure::js_closure_alloc(crate::fn_info!(span_component, 1), 0);
         f64::from_bits(JSValue::pointer(c as *const u8).bits())
     }
 

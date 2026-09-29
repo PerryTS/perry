@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
@@ -386,7 +386,7 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewShouldNavigat
         let result_cell = StdCell::new(f64::from_bits(0x7FFC_0000_0000_0001));
         let result_cell_ref = &result_cell;
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let r = unsafe { js_closure_call1(closure_ptr, url_nb) };
+            let r = unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb) };
             result_cell_ref.set(r);
         }));
         let result = result_cell.get();
@@ -420,13 +420,13 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewLoaded(
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let nb = nanbox_str(&url_str);
-            unsafe { js_closure_call1(closure_ptr, nb) };
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb) };
         }));
     });
 }
 
 extern "C" {
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
 }
 
 #[no_mangle]
@@ -454,7 +454,14 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewError(
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let msg_nb = nanbox_str(&msg);
-            unsafe { js_closure_call2(closure_ptr, code as f64, msg_nb) };
+            unsafe {
+                js_closure_call2(
+                    closure_ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    code as f64,
+                    msg_nb,
+                )
+            };
         }));
     });
 }
@@ -490,7 +497,7 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewEvalResult(
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let nb = nanbox_str(&s);
-            unsafe { js_closure_call1(closure_ptr, nb) };
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb) };
         }));
     });
 }

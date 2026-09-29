@@ -20,8 +20,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use crate::closure::{js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3};
-
 mod apply_construct;
 pub use apply_construct::{call_proxy_value_with_this, js_proxy_apply, js_proxy_construct};
 pub(crate) use apply_construct::{is_callable_function, is_constructor_function};
@@ -701,31 +699,31 @@ fn coerce_trap_bool(value: f64) -> f64 {
 /// Invoke a present (already-confirmed-callable) handler trap with the handler
 /// bound as the trap's `this` (ECMA-262: traps are called as
 /// `Call(trap, handler, args)`). Object-literal/method traps read `this` from a
-/// reserved closure slot, while free-function traps fall back to
-/// `IMPLICIT_THIS`; we set both so either style observes the handler. Mirrors
+/// reserved closure slot, while free-function traps read the `this`
+/// parameter; we supply both so either style observes the handler. Mirrors
 /// the apply/construct/getOwnPropertyDescriptor trap-call dance, which the
 /// per-trap paths (get/set/has/deleteProperty/defineProperty/…) previously
 /// skipped — they called the trap with the wrong `this` and, for get/set,
 /// dropped the trailing `receiver` argument.
 fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
-    let rebound = crate::closure::clone_closure_rebind_this(trap.to_bits(), handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let handler = this_scope.root_nanbox_f64(handler);
+    let rebound =
+        crate::closure::clone_closure_rebind_this(trap.to_bits(), handler.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return throw_type_error("proxy trap is not a function");
     }
     let undef = f64::from_bits(TAG_UNDEFINED);
     let a = |i: usize| -> f64 { args.get(i).copied().unwrap_or(undef) };
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
-    let result = match args.len() {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
-    };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    let this = crate::closure::JsThis::from_f64(handler.get_nanbox_f64());
+    match args.len() {
+        0 => crate::closure::js_closure_call0(closure, this),
+        1 => crate::closure::js_closure_call1(closure, this, a(0)),
+        2 => crate::closure::js_closure_call2(closure, this, a(0), a(1)),
+        3 => crate::closure::js_closure_call3(closure, this, a(0), a(1), a(2)),
+        _ => crate::closure::js_closure_call4(closure, this, a(0), a(1), a(2), a(3)),
+    }
 }
 
 /// Throw `TypeError: Reflect.<op> called on non-object`. Does not return.
@@ -992,11 +990,11 @@ enum MovedElement<'a> {
 
 /// Invoke a callable `f64` value with the supplied positional args and an
 /// explicit `thisArg` binding, throwing `TypeError` if `f` is not callable.
-/// Used by `Reflect.apply`. `thisArg` flows through `IMPLICIT_THIS` so free
+/// Used by `Reflect.apply`. `thisArg` is passed as the `this` parameter so free
 /// functions reading `this` observe it.
 fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     // A concise/object-literal method reads `this` from a baked capture slot,
-    // not IMPLICIT_THIS; rebind to the explicit `Reflect.apply` receiver so it
+    // not only the `this` parameter; rebind to the explicit `Reflect.apply` receiver so it
     // is honored (no-op for arrows / plain fns / bound fns).
     //
     // That rebind is also the one thing on this path that ALLOCATES, and the
@@ -1036,29 +1034,26 @@ fn dispatch_with_explicit_this(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
+    let this = crate::closure::JsThis::from_f64(this_arg);
     let a = |i: usize| -> f64 {
         args.get(i)
             .copied()
             .unwrap_or(f64::from_bits(TAG_UNDEFINED))
     };
-    let result = match args.len() {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        4 => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+    match args.len() {
+        0 => crate::closure::js_closure_call0(closure, this),
+        1 => crate::closure::js_closure_call1(closure, this, a(0)),
+        2 => crate::closure::js_closure_call2(closure, this, a(0), a(1)),
+        3 => crate::closure::js_closure_call3(closure, this, a(0), a(1), a(2)),
+        4 => crate::closure::js_closure_call4(closure, this, a(0), a(1), a(2), a(3)),
         // #10425: this arm was `_ => js_closure_call4(…)`, so every argument
         // after the fourth was dropped. The variadic entry point owns
         // arbitrary-arity dispatch, rest bundling included. (`call_trap`
         // above keeps its catch-all: a proxy trap receives at most four.)
         n => unsafe {
-            crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), n as i64)
+            crate::closure::js_closure_call_array(closure as i64, this, args.as_ptr(), n as i64)
         },
-    };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    }
 }
 
 /// Resolve the ultimate target when a Proxy wraps a class constructor. Used
@@ -1723,15 +1718,19 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     if setter_bits == 0 {
         return false;
     }
-    let rebound = crate::closure::clone_closure_rebind_this(setter_bits, receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let receiver = this_scope.root_nanbox_f64(receiver);
+    let value = this_scope.root_nanbox_f64(value);
+    let rebound = crate::closure::clone_closure_rebind_this(setter_bits, receiver.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return false;
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let _ = js_closure_call1(closure, value);
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
+    let _ = crate::closure::js_closure_call1(
+        closure,
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        value.get_nanbox_f64(),
+    );
     true
 }
 
@@ -2546,11 +2545,9 @@ pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
     let proxy = js_proxy_new(target, handler);
 
     // Build the revoke closure capturing the proxy value.
-    let revoke_closure =
-        crate::closure::js_closure_alloc(reflect_misc::proxy_revoke_trampoline as *const u8, 1);
-    crate::closure::js_register_closure_arity(
-        reflect_misc::proxy_revoke_trampoline as *const u8,
-        0,
+    let revoke_closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(reflect_misc::proxy_revoke_trampoline, 0; with_declared(0)),
+        1,
     );
     crate::closure::js_closure_set_capture_f64(revoke_closure, 0, proxy);
     let revoke_boxed = f64::from_bits(POINTER_TAG | ((revoke_closure as u64) & POINTER_MASK));
@@ -2956,10 +2953,13 @@ mod tests {
     /// including through a nested proxy whose inner proxy gets revoked.
     #[test]
     fn revoked_proxy_keeps_creation_callability() {
-        extern "C" fn dummy_fn(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        extern "C" fn dummy_fn(
+            _closure: *const crate::closure::ClosureHeader,
+            _this: crate::closure::JsThis,
+        ) -> f64 {
             f64::from_bits(TAG_UNDEFINED)
         }
-        let f = crate::closure::js_closure_alloc(dummy_fn as *const u8, 0);
+        let f = crate::closure::js_closure_alloc(crate::fn_info!(dummy_fn, 0), 0);
         let f_val = f64::from_bits(POINTER_TAG | ((f as u64) & POINTER_MASK));
         let handler = obj_value();
 
@@ -3236,7 +3236,10 @@ mod tests {
             let first_header =
                 (first as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             let original_flags = (*first_header)._reserved;
+            // Charter step 3: every per-object store fact below is changed
+            // through its writer's transition, as the runtime changes it.
             (*first).class_id = 0;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 0,
@@ -3249,6 +3252,7 @@ mod tests {
             // the pair discriminates "the guard reads the mark" from "the guard
             // stopped caring about class-id zero".
             (*first_header)._reserved = original_flags | crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 (4u64 << 16) | 3,
@@ -3257,6 +3261,7 @@ mod tests {
             );
             // A native-module receiver stays out no matter what it is marked.
             (*first).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 0,
@@ -3264,6 +3269,7 @@ mod tests {
             );
             (*first_header)._reserved = original_flags;
             (*first).class_id = original;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
         }
 
         assert_eq!(
@@ -3393,8 +3399,9 @@ mod tests {
         );
 
         // The discriminating quantity: clear the ordinary mark on ONE receiver
-        // and nothing else. Same objects, same ShapeId, same keys, same slots —
-        // if the guard still accepted, it would not be reading the mark.
+        // and nothing else. Same objects, same keys, same slots — charter step
+        // 3: the cleared mark moves that receiver to its `OrdinaryUnmarked`
+        // twin, which is what the guard must refuse.
         unsafe {
             let header =
                 (objects[2] as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -3405,6 +3412,7 @@ mod tests {
                 "the parser must mark what it allocates"
             );
             (*header)._reserved = saved & !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(objects[2]);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[key_y], 4),
                 0,
@@ -3412,6 +3420,7 @@ mod tests {
                  ordinary [[Set]]"
             );
             (*header)._reserved = saved;
+            crate::object::shapes::store_kind::restamp_object_store_kind(objects[2]);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[key_y], 4),
                 2,
@@ -3460,6 +3469,7 @@ mod tests {
             let header =
                 (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*header)._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(unmarked);
         }
         let mut cache2: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
         let mut cache2_slot: put_value::WritePicCacheSlot = &mut cache2;

@@ -290,7 +290,8 @@ pub extern "C" fn js_util_types_is_async_function(value: f64) -> f64 {
         return nanbox_bool(false);
     }
     let closure = ptr as *const crate::closure::ClosureHeader;
-    let is_async = unsafe { crate::closure::is_registered_async_function((*closure).func_ptr) };
+    let is_async = crate::closure::closure_info(closure)
+        .is_some_and(|info| crate::closure::info_has(info, crate::closure::FN_ASYNC));
     nanbox_bool(is_async)
 }
 
@@ -301,8 +302,10 @@ pub extern "C" fn js_util_types_is_generator_function(value: f64) -> f64 {
         return nanbox_bool(false);
     }
     let closure = v.as_pointer::<crate::closure::ClosureHeader>();
-    let func_ptr = crate::closure::get_valid_func_ptr(closure);
-    nanbox_bool(!func_ptr.is_null() && crate::closure::is_registered_generator_function(func_ptr))
+    nanbox_bool(
+        crate::closure::closure_info(closure)
+            .is_some_and(|info| crate::closure::info_has(info, crate::closure::FN_GENERATOR)),
+    )
 }
 
 #[no_mangle]
@@ -433,8 +436,12 @@ mod buffer_view_tests {
             expected_view
         );
         assert_eq!(
-            super::super::global_this::array_buffer_is_view_thunk(std::ptr::null(), value)
-                .to_bits(),
+            super::super::global_this::array_buffer_is_view_thunk(
+                std::ptr::null(),
+                crate::closure::JsThis::UNDEFINED,
+                value
+            )
+            .to_bits(),
             expected_view,
         );
         assert_eq!(

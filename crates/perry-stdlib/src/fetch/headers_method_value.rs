@@ -20,7 +20,7 @@ use super::*;
 extern "C" {
     #[link_name = "js_closure_alloc"]
     fn provider_js_closure_alloc(
-        function: *const u8,
+        info: *const perry_runtime::closure::JsFunctionInfo,
         capture_count: u32,
     ) -> *mut perry_runtime::closure::ClosureHeader;
     #[link_name = "js_closure_set_capture_f64"]
@@ -60,7 +60,7 @@ pub(crate) fn headers_bound_method_value(headers_id: usize, method_name: &'stati
     // a live root by the first collection that can run after the insert.
     super::gc::ensure_gc_registered();
     let closure =
-        unsafe { provider_js_closure_alloc(perry_runtime::closure::BOUND_METHOD_FUNC_PTR, 3) };
+        unsafe { provider_js_closure_alloc(&perry_runtime::closure::BOUND_METHOD_INFO, 3) };
     unsafe {
         provider_js_closure_set_capture_f64(closure, 0, handle_to_f64(headers_id));
         provider_js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);

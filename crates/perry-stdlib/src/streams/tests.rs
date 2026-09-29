@@ -260,7 +260,6 @@ fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
     for forbidden in [
         "perry_runtime::array::js_",
         "perry_runtime::closure::js_",
-        "perry_runtime::object::js_implicit_this_set",
         "perry_runtime::promise::js_",
     ] {
         assert!(
@@ -422,4 +421,64 @@ fn buffered_tee_demand_skips_only_the_cold_source_hop() {
     let mut streams = READABLE_STREAMS.lock().unwrap();
     streams.remove(&buffered);
     streams.remove(&empty);
+}
+
+/// Not a NaN-boxed value any call passes: "`next()` never ran".
+const NEXT_NOT_CALLED: f64 = 0.5;
+
+/// Records the receiver it was called with in its own capture slot 0 (a slot
+/// the collector sees), so no static holds a heap value.
+extern "C" fn next_recording_this(
+    closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+) -> f64 {
+    perry_runtime::closure::js_closure_set_capture_f64(
+        closure as *mut ClosureHeader,
+        0,
+        this.as_f64(),
+    );
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// An async-iterable source's `next()` is a METHOD call: the iterator is its
+/// receiver. The body reads `this` only from its receiver parameter, so this
+/// fails if `call_iterator_next` makes a plain call (the body would see
+/// `undefined`).
+#[test]
+fn iterator_next_is_called_with_the_iterator_as_its_receiver() {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let next = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(next_recording_this, 0; with_declared(0)),
+        1,
+    ));
+    perry_runtime::closure::js_closure_set_capture_f64(
+        next.get_raw_mut_ptr::<ClosureHeader>(),
+        0,
+        NEXT_NOT_CALLED,
+    );
+    let iterator_obj = scope.root_raw_mut_ptr(js_object_alloc(0, 1));
+    let key = js_string_from_bytes(b"next".as_ptr(), 4);
+    let next_value = f64::from_bits(
+        JSValue::pointer(next.get_raw_mut_ptr::<ClosureHeader>() as *const u8).bits(),
+    );
+    perry_runtime::object::js_object_set_field_by_name(
+        iterator_obj.get_raw_mut_ptr::<ObjectHeader>(),
+        key,
+        next_value,
+    );
+    let iterator = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::object_ptr(iterator_obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits(),
+    ));
+
+    let result = unsafe { call_iterator_next(iterator.get_nanbox_f64()) };
+    assert!(result.is_some());
+    let seen = perry_runtime::closure::js_closure_get_capture_f64(
+        next.get_raw_mut_ptr::<ClosureHeader>(),
+        0,
+    );
+    assert_eq!(
+        seen.to_bits(),
+        iterator.get_nanbox_f64().to_bits(),
+        "next() must see the iterator as `this`"
+    );
 }

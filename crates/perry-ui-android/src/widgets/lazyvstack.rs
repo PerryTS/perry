@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: f64, arg: f64) -> f64;
+    fn js_closure_call1(closure: f64, this: perry_ffi::JsThis, arg: f64) -> f64;
 }
 
 struct LazyState {
@@ -49,7 +49,8 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
     // Render initial items
     let n = count as i64;
     for i in 0..n {
-        let child_f64 = unsafe { js_closure_call1(render_closure, i as f64) };
+        let child_f64 =
+            unsafe { js_closure_call1(render_closure, perry_ffi::JsThis::UNDEFINED, i as f64) };
         let child_handle = child_f64.to_bits() as i64;
         if child_handle > 0 {
             super::add_child(container_handle, child_handle);
@@ -71,7 +72,8 @@ pub fn update(handle: i64, count: i64) {
 
             // Re-render all items
             for i in 0..count {
-                let child_f64 = unsafe { js_closure_call1(closure, i as f64) };
+                let child_f64 =
+                    unsafe { js_closure_call1(closure, perry_ffi::JsThis::UNDEFINED, i as f64) };
                 let child_handle = child_f64.to_bits() as i64;
                 if child_handle > 0 {
                     super::add_child(container, child_handle);

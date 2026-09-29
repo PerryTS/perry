@@ -354,8 +354,7 @@ unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
 /// would be a wrong `this` or an unrooted method value, neither of which a
 /// fixture reliably catches.
 ///
-/// `IMPLICIT_THIS` is bound across the call and restored after it, because the
-/// callee reads its receiver from there when it has no lexical `this`.
+/// The receiver is passed to the callee as its `this` argument.
 ///
 /// `recv` and `args` are READERS, not values: resolving the method can run an
 /// own accessor's getter and allocate, so the receiver and arguments handed to
@@ -391,18 +390,12 @@ unsafe fn invoke_own_user_method(own: f64, recv: f64, args: &[f64]) -> f64 {
     let arg_handles = root_scope.root_nanbox_f64_slice(args);
     // Re-read AFTER rooting: resolving the method can move the heap.
     let refreshed = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-    let prev_this_h = prev_this_scope.root_nanbox_u64(
-        crate::object::this_binding::IMPLICIT_THIS
-            .with(|c| c.replace(recv_handle.get_nanbox_f64().to_bits())),
-    );
-    let result = crate::closure::js_native_call_value(
+    crate::closure::native_call_value_this(
         method_handle.get_nanbox_f64(),
+        crate::closure::JsThis::from_f64(recv_handle.get_nanbox_f64()),
         refreshed.as_ptr(),
         refreshed.len(),
-    );
-    crate::object::this_binding::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    result
+    )
 }
 
 /// Does the array behind `arr` OWN a property named `push`? Returns the LIVE

@@ -4,8 +4,8 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
-fn web_method_receiver(name: &str) -> *mut ObjectHeader {
-    let receiver = crate::object::js_implicit_this_get();
+fn web_method_receiver(this: crate::closure::JsThis, name: &str) -> *mut ObjectHeader {
+    let receiver = this.as_f64();
     if crate::object::web_builtin_to_string_tag(receiver) == Some(name) {
         return crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader;
     }
@@ -15,8 +15,11 @@ fn web_method_receiver(name: &str) -> *mut ObjectHeader {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
 }
 
-extern "C" fn url_prototype_href_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
-    crate::url::js_url_get_href(web_method_receiver("URL"))
+extern "C" fn url_prototype_href_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    crate::url::js_url_get_href(web_method_receiver(this, "URL"))
 }
 
 fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
@@ -163,24 +166,17 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        object_prototype_dunder_proto_getter_thunk as *const u8,
+        crate::fn_info!(object_prototype_dunder_proto_getter_thunk, 0; with_declared(0)),
         0,
     );
     let setter = crate::closure::js_closure_alloc(
-        object_prototype_dunder_proto_setter_thunk as *const u8,
+        crate::fn_info!(object_prototype_dunder_proto_setter_thunk, 1; with_declared(1)),
         0,
     );
     if getter.is_null() || setter.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(
-        object_prototype_dunder_proto_getter_thunk as *const u8,
-        0,
-    );
-    crate::closure::js_register_closure_arity(
-        object_prototype_dunder_proto_setter_thunk as *const u8,
-        1,
-    );
+
     super::super::native_module::set_bound_native_closure_name(getter, "get __proto__");
     super::super::native_module::set_bound_native_closure_name(setter, "set __proto__");
     super::super::native_module::set_builtin_closure_length(getter as usize, 0);
@@ -213,27 +209,29 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
 
 extern "C" fn object_prototype_dunder_proto_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
     // Spec (Annex B §B.3.1 `get __proto__`): `ToObject(this).[[GetPrototypeOf]]()`.
     // `js_object_get_prototype_of` already implements exactly this shape —
     // wrapper-prototype resolution for primitives, Proxy/Temporal/handle
     // receivers, and a throw on `null`/`undefined` (the `ToObject` failure
     // case) — so the getter is a direct delegation, not a reimplementation.
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     crate::object::js_object_get_prototype_of(receiver)
 }
 
 extern "C" fn object_prototype_dunder_proto_setter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     crate::proxy::legacy_dunder_proto_set(receiver, value);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Install a native accessor (getter only) on a builtin prototype. The getter
-/// is an ordinary `ClosureHeader` that reads its receiver from `IMPLICIT_THIS`
+/// is an ordinary `ClosureHeader` that takes its receiver as `this`
 /// and brand-checks it, so `Object.getOwnPropertyDescriptor(P, k).get.call({})`
 /// throws like node's.
 ///
@@ -254,9 +252,12 @@ extern "C" fn object_prototype_dunder_proto_setter_thunk(
 /// `{ enumerable: true, configurable: true }`, and node prints
 /// `for-in d: decode,encoding,fatal,ignoreBOM`.
 #[cfg(feature = "global-text")]
-fn install_text_accessor(proto_obj: *mut ObjectHeader, name: &str, getter: *const u8) {
+fn install_text_accessor(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    getter: *const crate::closure::JsFunctionInfo,
+) {
     unsafe {
-        crate::closure::js_register_closure_arity(getter, 0);
         let closure = crate::closure::js_closure_alloc(getter, 0);
         if closure.is_null() {
             return;
@@ -341,13 +342,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "slice",
-                array_prototype_slice_thunk as *const u8,
+                crate::fn_info!(array_prototype_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             install_proto_method(
                 proto_obj,
                 "toString",
-                array_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_noop_proto_methods(
@@ -366,12 +367,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "flat",
-                array_prototype_flat_thunk as *const u8,
+                crate::fn_info!(array_prototype_flat_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             // Generic mutators get REAL thunks (vs the noop above) so a borrowed
             // reference works: `obj.pop = Array.prototype.pop; obj.pop()` and
-            // `Array.prototype.splice.call(obj, …)`. Each reads IMPLICIT_THIS and
+            // `Array.prototype.splice.call(obj, …)`. Each reads its `this` and
             // runs the array algorithm on a real array or array-like object.
             // #7760: `values` was a NOOP in the list above, and
             // `Array.prototype[Symbol.iterator]` was not an own property at all
@@ -383,43 +384,45 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let values_value = install_proto_method(
                 proto_obj,
                 "values",
-                array_prototype_values_thunk as *const u8,
+                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_builtin_iterator_symbol(proto_obj, values_value);
-            install_proto_method(proto_obj, "pop", array_prototype_pop_thunk as *const u8, 0);
+            install_proto_method(
+                proto_obj,
+                "pop",
+                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_proto_method(
                 proto_obj,
                 "shift",
-                array_prototype_shift_thunk as *const u8,
+                crate::fn_info!(array_prototype_shift_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "reverse",
-                array_prototype_reverse_thunk as *const u8,
+                crate::fn_info!(array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "push",
-                array_prototype_push_thunk as *const u8,
+                crate::fn_info!(array_prototype_push_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 1,
-                0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "unshift",
-                array_prototype_unshift_thunk as *const u8,
+                crate::fn_info!(array_prototype_unshift_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 1,
-                0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "splice",
-                array_prototype_splice_thunk as *const u8,
+                crate::fn_info!(array_prototype_splice_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 2,
-                0,
             );
             // #6908: `fill` / `copyWithin` get real thunks too — a Proxy
             // receiver resolves them through `Get(proxy, name)` to the
@@ -428,16 +431,14 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "fill",
-                array_prototype_fill_thunk as *const u8,
+                crate::fn_info!(array_prototype_fill_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 1,
-                0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "copyWithin",
-                array_prototype_copy_within_thunk as *const u8,
+                crate::fn_info!(array_prototype_copy_within_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 2,
-                0,
             );
             // `sort` / `concat` get real thunks too: a borrowed
             // `obj.sort = Array.prototype.sort; obj.sort()` must run the
@@ -447,58 +448,130 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "sort",
-                array_prototype_sort_thunk as *const u8,
+                crate::fn_info!(array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // Iteration / search methods: real generic-engine thunks (rest
             // shape — spec `.length` recorded separately below).
-            type RestThunk = extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64;
-            let arraylike_thunks: [(&str, RestThunk, u32); 14] = [
-                ("forEach", array_proto_forEach_thunk, 1),
-                ("map", array_proto_map_thunk, 1),
-                ("filter", array_proto_filter_thunk, 1),
-                ("some", array_proto_some_thunk, 1),
-                ("every", array_proto_every_thunk, 1),
-                ("find", array_proto_find_thunk, 1),
-                ("findIndex", array_proto_findIndex_thunk, 1),
-                ("findLast", array_proto_findLast_thunk, 1),
-                ("findLastIndex", array_proto_findLastIndex_thunk, 1),
-                ("reduce", array_proto_reduce_thunk, 1),
-                ("reduceRight", array_proto_reduceRight_thunk, 1),
-                ("indexOf", array_proto_indexOf_thunk, 1),
-                ("lastIndexOf", array_proto_lastIndexOf_thunk, 1),
-                ("includes", array_proto_includes_thunk, 1),
+            let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 14] = [
+                (
+                    "forEach",
+                    crate::fn_info!(array_proto_forEach_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "map",
+                    crate::fn_info!(array_proto_map_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "filter",
+                    crate::fn_info!(array_proto_filter_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "some",
+                    crate::fn_info!(array_proto_some_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "every",
+                    crate::fn_info!(array_proto_every_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "find",
+                    crate::fn_info!(array_proto_find_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "findIndex",
+                    crate::fn_info!(array_proto_findIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "findLast",
+                    crate::fn_info!(array_proto_findLast_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "findLastIndex",
+                    crate::fn_info!(array_proto_findLastIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "reduce",
+                    crate::fn_info!(array_proto_reduce_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "reduceRight",
+                    crate::fn_info!(array_proto_reduceRight_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "indexOf",
+                    crate::fn_info!(array_proto_indexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "lastIndexOf",
+                    crate::fn_info!(array_proto_lastIndexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
+                (
+                    "includes",
+                    crate::fn_info!(array_proto_includes_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    1,
+                ),
             ];
             for (name, thunk, len) in arraylike_thunks {
-                install_proto_method_rest_with_length(proto_obj, name, thunk as *const u8, len, 0);
+                install_proto_method_rest_with_length(proto_obj, name, thunk, len);
             }
-            install_proto_method(proto_obj, "at", array_proto_at_thunk as *const u8, 1);
-            install_proto_method(proto_obj, "join", array_proto_join_thunk as *const u8, 1);
+            install_proto_method(
+                proto_obj,
+                "at",
+                crate::fn_info!(array_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "join",
+                crate::fn_info!(array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "concat",
-                array_prototype_concat_thunk as *const u8,
+                crate::fn_info!(array_prototype_concat_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                 1,
-                0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "ArrayBuffer" => {
-            install_proto_method(proto_obj, "slice", array_buffer_slice_thunk as *const u8, 2);
+            install_proto_method(
+                proto_obj,
+                "slice",
+                crate::fn_info!(array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
                 "resize",
-                array_buffer_resize_thunk as *const u8,
+                crate::fn_info!(array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // The thunks take the optional `newLength` (call arity 1); the
             // spec `.length` of both is 0.
-            let transfers: [(&str, *const u8); 2] = [
-                ("transfer", array_buffer_transfer_thunk as *const u8),
+            let transfers: [(&str, *const crate::closure::JsFunctionInfo); 2] = [
+                (
+                    "transfer",
+                    crate::fn_info!(array_buffer_transfer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                ),
                 (
                     "transferToFixedLength",
-                    array_buffer_transfer_to_fixed_length_thunk as *const u8,
+                    crate::fn_info!(array_buffer_transfer_to_fixed_length_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 ),
             ];
             for (name, thunk) in transfers {
@@ -508,24 +581,26 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     super::super::native_module::set_builtin_closure_length(closure, 0);
                 }
             }
-            let getters: [(&str, *const u8); 4] = [
+            let getters: [(&str, *const crate::closure::JsFunctionInfo); 4] = [
                 (
                     "byteLength",
-                    array_buffer_byte_length_getter_thunk as *const u8,
+                    crate::fn_info!(array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
                 ),
                 (
                     "resizable",
-                    array_buffer_resizable_getter_thunk as *const u8,
+                    crate::fn_info!(array_buffer_resizable_getter_thunk, 0; with_declared(0)),
                 ),
                 (
                     "maxByteLength",
-                    array_buffer_max_byte_length_getter_thunk as *const u8,
+                    crate::fn_info!(array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)),
                 ),
-                ("detached", array_buffer_detached_getter_thunk as *const u8),
+                (
+                    "detached",
+                    crate::fn_info!(array_buffer_detached_getter_thunk, 0; with_declared(0)),
+                ),
             ];
             for (name, thunk) in getters {
                 unsafe {
-                    crate::closure::js_register_closure_arity(thunk, 0);
                     let getter = crate::closure::js_closure_alloc(thunk, 0);
                     if !getter.is_null() {
                         let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
@@ -544,16 +619,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "slice",
-                shared_array_buffer_slice_thunk as *const u8,
+                crate::fn_info!(shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             unsafe {
-                crate::closure::js_register_closure_arity(
-                    shared_array_buffer_byte_length_getter_thunk as *const u8,
-                    0,
-                );
                 let getter = crate::closure::js_closure_alloc(
-                    shared_array_buffer_byte_length_getter_thunk as *const u8,
+                    crate::fn_info!(shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
                     0,
                 );
                 if !getter.is_null() {
@@ -578,49 +649,49 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                object_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                object_prototype_is_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                object_prototype_has_own_property_thunk as *const u8,
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "propertyIsEnumerable",
-                object_prototype_property_is_enumerable_thunk as *const u8,
+                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                object_prototype_to_locale_string_thunk as *const u8,
+                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                object_prototype_value_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                object_prototype_has_own_property_thunk as *const u8,
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "propertyIsEnumerable",
-                object_prototype_property_is_enumerable_thunk as *const u8,
+                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_object_prototype_dunder_proto(proto_obj);
@@ -653,13 +724,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "apply",
-                function_prototype_apply_thunk as *const u8,
+                crate::fn_info!(function_prototype_apply_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                function_prototype_bind_thunk as *const u8,
+                crate::fn_info!(function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -667,13 +738,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                function_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(function_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                function_prototype_call_thunk as *const u8,
+                crate::fn_info!(function_prototype_call_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -694,13 +765,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                primitive_proto_thunks::string_proto_to_string_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                primitive_proto_thunks::string_proto_value_of_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -724,13 +795,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                primitive_proto_thunks::number_proto_value_of_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                primitive_proto_thunks::number_proto_to_locale_string_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::number_proto_to_locale_string_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -741,13 +812,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                primitive_proto_thunks::boolean_proto_to_string_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                primitive_proto_thunks::boolean_proto_value_of_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -763,13 +834,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                primitive_proto_thunks::symbol_proto_to_string_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                primitive_proto_thunks::symbol_proto_value_of_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -781,7 +852,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let to_string = install_proto_method(
                 proto_obj,
                 "toString",
-                primitive_proto_thunks::bigint_proto_to_string_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             super::super::native_module::set_builtin_closure_length(
@@ -791,7 +862,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                primitive_proto_thunks::bigint_proto_value_of_thunk as *const u8,
+                crate::fn_info!(primitive_proto_thunks::bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -862,13 +933,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                object_prototype_is_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "toString",
-                date_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(date_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             // `Date.prototype[Symbol.toPrimitive]` — a generic `OrdinaryToPrimitive`
@@ -892,8 +963,18 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         #[cfg(feature = "global-url")]
         "URLPattern" => {
-            install_proto_method_rest(proto_obj, "exec", url_pattern_exec_thunk as *const u8, 1);
-            install_proto_method_rest(proto_obj, "test", url_pattern_test_thunk as *const u8, 1);
+            install_proto_method_rest(
+                proto_obj,
+                "exec",
+                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            install_proto_method_rest(
+                proto_obj,
+                "test",
+                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             for name in [
                 "hasRegExpGroups",
                 "hash",
@@ -969,19 +1050,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "catch",
-                crate::promise::promise_prototype_catch_thunk as *const u8,
+                crate::fn_info!(crate::promise::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "finally",
-                crate::promise::promise_prototype_finally_thunk as *const u8,
+                crate::fn_info!(crate::promise::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "then",
-                crate::promise::promise_prototype_then_thunk as *const u8,
+                crate::fn_info!(crate::promise::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");
@@ -997,19 +1078,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "encode",
-                crate::text::text_encoder_encode_thunk as *const u8,
+                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "encodeInto",
-                crate::text::text_encoder_encode_into_thunk as *const u8,
+                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             install_text_accessor(
                 proto_obj,
                 "encoding",
-                crate::text::text_encoder_encoding_getter as *const u8,
+                crate::fn_info!(crate::text::text_encoder_encoding_getter, 0; with_declared(0)),
             );
             for name in ["encode", "encodeInto"] {
                 make_proto_member_enumerable(proto_obj, name);
@@ -1022,23 +1103,23 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "decode",
-                crate::text::text_decoder_decode_thunk as *const u8,
+                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_text_accessor(
                 proto_obj,
                 "encoding",
-                crate::text::text_decoder_encoding_getter as *const u8,
+                crate::fn_info!(crate::text::text_decoder_encoding_getter, 0; with_declared(0)),
             );
             install_text_accessor(
                 proto_obj,
                 "fatal",
-                crate::text::text_decoder_fatal_getter as *const u8,
+                crate::fn_info!(crate::text::text_decoder_fatal_getter, 0; with_declared(0)),
             );
             install_text_accessor(
                 proto_obj,
                 "ignoreBOM",
-                crate::text::text_decoder_ignore_bom_getter as *const u8,
+                crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
             );
             make_proto_member_enumerable(proto_obj, "decode");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -1053,7 +1134,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let entries_value = install_proto_method(
                 proto_obj,
                 "entries",
-                global_this_builtin_noop_thunk as *const u8,
+                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_builtin_iterator_symbol(proto_obj, entries_value);
@@ -1129,13 +1210,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ]
             };
             unsafe {
-                crate::closure::js_register_closure_arity(
-                    global_this_builtin_noop_thunk as *const u8,
-                    0,
-                );
                 for name in accessors {
                     let getter = crate::closure::js_closure_alloc(
-                        global_this_builtin_noop_thunk as *const u8,
+                        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0)),
                         0,
                     );
                     if !getter.is_null() {
@@ -1192,18 +1269,18 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_webcrypto_proto_getter(
                 proto_obj,
                 "subtle",
-                webcrypto_subtle_getter_thunk as *const u8,
+                crate::fn_info!(webcrypto_subtle_getter_thunk, 0; with_declared(0)),
             );
             install_webcrypto_proto_method(
                 proto_obj,
                 "getRandomValues",
-                webcrypto_get_random_values_thunk as *const u8,
+                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_webcrypto_proto_method(
                 proto_obj,
                 "randomUUID",
-                webcrypto_random_uuid_thunk as *const u8,
+                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -1211,13 +1288,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         #[cfg(feature = "global-webcrypto")]
         "CryptoKey" => {
             for (name, func_ptr) in [
-                ("algorithm", cryptokey_algorithm_getter_thunk as *const u8),
+                (
+                    "algorithm",
+                    crate::fn_info!(cryptokey_algorithm_getter_thunk, 0; with_declared(0)),
+                ),
                 (
                     "extractable",
-                    cryptokey_extractable_getter_thunk as *const u8,
+                    crate::fn_info!(cryptokey_extractable_getter_thunk, 0; with_declared(0)),
                 ),
-                ("type", cryptokey_type_getter_thunk as *const u8),
-                ("usages", cryptokey_usages_getter_thunk as *const u8),
+                (
+                    "type",
+                    crate::fn_info!(cryptokey_type_getter_thunk, 0; with_declared(0)),
+                ),
+                (
+                    "usages",
+                    crate::fn_info!(cryptokey_usages_getter_thunk, 0; with_declared(0)),
+                ),
             ] {
                 install_webcrypto_proto_getter(proto_obj, name, func_ptr);
             }
@@ -1228,22 +1314,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             for (name, func_ptr, length) in [
                 (
                     "encapsulateBits",
-                    subtle_crypto_encapsulate_bits_thunk as *const u8,
+                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                     2,
                 ),
                 (
                     "decapsulateBits",
-                    subtle_crypto_decapsulate_bits_thunk as *const u8,
+                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                     3,
                 ),
                 (
                     "encapsulateKey",
-                    subtle_crypto_encapsulate_key_thunk as *const u8,
+                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                     5,
                 ),
                 (
                     "decapsulateKey",
-                    subtle_crypto_decapsulate_key_thunk as *const u8,
+                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
                     6,
                 ),
             ] {
@@ -1257,19 +1343,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                error_prototype_to_string_thunk as *const u8,
+                crate::fn_info!(error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                object_prototype_is_prototype_of_thunk as *const u8,
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                object_prototype_has_own_property_thunk as *const u8,
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }
@@ -1340,7 +1426,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto(),
                 "toString",
-                url_prototype_href_thunk as *const u8,
+                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             web_method_enumerable(proto(), "toString");
@@ -1349,7 +1435,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // cannot reach this prototype links none of the accessors.
             #[cfg(feature = "global-url")]
             crate::url::prototype::install_url_prototype_accessors(proto());
-            install_proto_method(proto(), "toJSON", url_prototype_href_thunk as *const u8, 0);
+            install_proto_method(
+                proto(),
+                "toJSON",
+                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             web_method_enumerable(proto(), "toJSON");
         }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
@@ -1402,10 +1493,10 @@ pub(crate) fn install_error_prototype_data_properties(
 fn install_webcrypto_proto_method(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     arity: u32,
 ) {
-    install_proto_method(proto_obj, method_name, func_ptr, arity);
+    install_proto_method(proto_obj, method_name, info, arity);
     super::super::set_builtin_property_attrs(
         proto_obj as usize,
         method_name.to_string(),
@@ -1416,10 +1507,10 @@ fn install_webcrypto_proto_method(
 fn install_webcrypto_proto_method_rest_with_length(
     proto_obj: *mut ObjectHeader,
     method_name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     length: u32,
 ) {
-    install_proto_method_rest_with_length(proto_obj, method_name, func_ptr, length, 0);
+    install_proto_method_rest_with_length(proto_obj, method_name, info, length);
     super::super::set_builtin_property_attrs(
         proto_obj as usize,
         method_name.to_string(),
@@ -1427,12 +1518,15 @@ fn install_webcrypto_proto_method_rest_with_length(
     );
 }
 
-fn install_webcrypto_proto_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+fn install_webcrypto_proto_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     let value = if closure.is_null() {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     } else {

@@ -252,7 +252,18 @@ pub(crate) unsafe fn maybe_construct_http_class_with_this(
 /// (`js_fetch_or_value_super`, #10448/#10798) and the explicit-`this`
 /// `Base.call(this, opts)` path below (#10454), so every construction shape
 /// installs the identical surface. False when `method` is no stream base.
+///
+/// The node_stream shims are reached through the stream bucket's install
+/// (`js_nm_install_stream`), never directly: this runs on the always-linked
+/// `Function.prototype.call`/`.apply` path, and a direct call would link all of
+/// node_stream into every program. A stream base callee only exists in a
+/// program that imports `stream`, which emits that install.
 pub(crate) fn run_node_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
+    super::native_module_registry::nm_stream_subclass_init(method, this, opts)
+}
+
+/// The stream bucket's subclass-init entry, installed by `js_nm_install_stream`.
+pub(crate) fn node_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
     use crate::node_stream as ns;
     match method {
         "Readable" => ns::js_node_stream_readable_subclass_init(this, opts),
@@ -483,6 +494,7 @@ crate::perry_thread_local! {
 /// args)` (light-my-request's override shape) calls.
 extern "C" fn server_response_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     arg0: f64,
     arg1: f64,
     arg2: f64,
@@ -490,7 +502,7 @@ extern "C" fn server_response_prototype_method_thunk(
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
     let name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-    let receiver = crate::object::js_implicit_this_get();
+    let receiver = this.as_f64();
     let receiver_jv = JSValue::from_bits(receiver.to_bits());
     let receiver_is_handle = receiver_jv.is_pointer()
         && crate::value::addr_class::is_small_handle(
@@ -577,10 +589,9 @@ pub(crate) fn attach_http_server_response_prototype(constructor_value: f64) -> f
             PropertyAttrs::new(true, false, true),
         );
     });
-    let func_ptr = server_response_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 3);
+    let info = crate::fn_info!(server_response_prototype_method_thunk, 3; with_declared(3));
     for method in SERVER_RESPONSE_PROTOTYPE_METHODS {
-        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
+        let method_closure = crate::closure::js_closure_alloc(info, 2);
         if method_closure.is_null() {
             continue;
         }

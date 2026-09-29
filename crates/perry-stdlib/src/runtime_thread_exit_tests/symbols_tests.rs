@@ -28,7 +28,10 @@ extern "C" {
     fn js_u8_buffer_read_f64(target: *const u8, index: i32) -> f64;
 }
 
-extern "C" fn probe_thunk(_closure: *const perry_runtime::ClosureHeader) -> f64 {
+extern "C" fn probe_thunk(
+    _closure: *const perry_runtime::ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     0.0
 }
 
@@ -86,7 +89,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         // Object.defineProperty(obj, sym3, { get }) (SYMBOL_ACCESSOR_PROPERTIES).
         let sym3 = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471c")) });
         let getter = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
-            probe_thunk as *const u8,
+            perry_runtime::fn_info!(probe_thunk, 0),
             0,
         ));
         let accessor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));

@@ -34,7 +34,7 @@ extern "C" {
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_value_is_promise(value: f64) -> i32;
 }
 
@@ -87,7 +87,7 @@ unsafe fn invoke_handler(handler: f64) {
     js_run_stdlib_pump();
     js_promise_run_microtasks();
     let ptr = js_nanbox_get_pointer(handler) as *const u8;
-    let result = js_closure_call0(ptr);
+    let result = js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
     js_promise_run_microtasks();
     let _ = js_value_is_promise(result);
 }

@@ -317,7 +317,11 @@ pub extern "C" fn js_object_set_field_by_index(
                             let closure = (acc.set & crate::value::POINTER_MASK)
                                 as *const crate::closure::ClosureHeader;
                             if !closure.is_null() {
-                                crate::closure::js_closure_call1(closure, value);
+                                crate::closure::js_closure_call1(
+                                    closure,
+                                    crate::closure::plain_call_receiver(),
+                                    value,
+                                );
                             }
                         }
                         return;

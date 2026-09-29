@@ -460,6 +460,14 @@
    "why": "Census counts keyed by (&'static event, &'static owner-kind name); owner address is only classified, never stored."
   },
   {
+   "file": "crates/perry-runtime/src/object/shapes_store_kind.rs",
+   "names": [
+    "COUNTERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "shape-fact-audit diagnostic counters: an array of eight AtomicU64, only ever bumped by fetch_add(1) (audit::bump) and read by the atexit report; no store of a computed value, so it cannot hold an address. Absent unless the shape-fact-audit feature is on."
+  },
+  {
    "file": "crates/perry-runtime/src/event_pump.rs",
    "names": [
     "WAKE_CALLBACK"
@@ -2679,6 +2687,14 @@
   {
    "file": "crates/perry-runtime/src/object/native_module_registry.rs",
    "names": [
+    "NM_STREAM_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The node_stream_subclass_init NmStreamSubclassInitFn fn pointer, its only store at native_module_registry.rs:518 (js_nm_install_stream); a code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
     "NM_CONST_REGISTRY"
    ],
    "verdict": "no_heap_address",
@@ -4065,6 +4081,16 @@
    ],
    "verdict": "per_thread",
    "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes_store.rs",
+   "names": [
+    "EMPTY_CHUNK",
+    "EMPTY_PAGE",
+    "PERRY_EMPTY_SHAPE_DIR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty page directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
   },
   {
    "file": "crates/perry-runtime/src/object/static_shapes.rs",

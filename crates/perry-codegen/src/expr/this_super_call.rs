@@ -177,12 +177,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(slot) = ctx.this_stack.last().cloned() {
                 Ok(ctx.block().load(DOUBLE, &slot))
             } else {
-                let helper = if ctx.is_strict_fn {
-                    "js_implicit_this_get"
-                } else {
-                    "js_implicit_this_get_sloppy"
-                };
-                Ok(ctx.block().call(DOUBLE, helper, &[]))
+                Ok(crate::expr::body_call::unbound_this_value(ctx))
             }
         }
         Expr::NewTarget => {
@@ -717,12 +712,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (ptr_reg, user_arg_count.to_string())
                             };
 
-                            // Bind IMPLICIT_THIS to the current `this` so the parent
-                            // function body's `this.x = ...` writes land on the
-                            // subclass instance (non-arrow functions read `this` via
-                            // `js_implicit_this_get` when their this_stack is empty).
-                            // Save the prior IMPLICIT_THIS and restore it after — see
-                            // the #519 pattern in console_promise.rs / method_override.rs.
+                            // The parent function is called with the current `this`
+                            // as its receiver, so the parent body's `this.x = ...`
+                            // writes land on the subclass instance.
                             let this_box = match ctx.this_stack.last().cloned() {
                                 Some(slot) => ctx.block().load(DOUBLE, &slot),
                                 None => {
@@ -736,9 +728,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             // `GlobalRequest = global.Request`), it allocates the
                             // native fetch handle and stashes it on `this` so
                             // inherited body methods resolve; otherwise it falls
-                            // back to the ordinary implicit-`this`-bound
-                            // `js_native_call_value` (unchanged behavior for
-                            // every other runtime-value parent).
+                            // back to an ordinary call of the parent with
+                            // `this_box` as its receiver (unchanged behavior
+                            // for every other runtime-value parent).
                             let nt_save = crate::rooting::new_target_save_for_super(ctx);
                             let parent_result = ctx.block().call(
                                 DOUBLE,

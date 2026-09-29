@@ -72,7 +72,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // function `__perry_wk_hasinstance_<class>` and the LLVM backend registers a
     // pointer to it against the class id at module init.
     if let Some(func_ptr) = lookup_has_instance_hook(class_id) {
-        let hook: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(func_ptr as *const u8) };
+        let hook =
+            unsafe { crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0) };
         let result = hook(value);
         // Normalize: any truthy NaN-boxed bool stays as the TAG_TRUE/FALSE
         // sentinel. User-written `return typeof v === "number" && ...`

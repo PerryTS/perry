@@ -28,7 +28,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     // Runtime expects both args as NaN-boxed f64 values and returns the same
     // — no unboxing/reboxing needed on either side. Closure is a POINTER_TAG'd
-    // ClosureHeader; the runtime reads `func_ptr` and calls it per element.
+    // ClosureHeader; the runtime calls its body per element.
     NativeModSig {
         module: "perry/thread",
         has_receiver: false,

@@ -459,7 +459,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                 tag_str = Some("Error".to_string());
             }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
-                let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);
+                let getter = crate::closure::body_call::js_bare_body_fn!(func_ptr as *const u8; a0);
                 let result_f64 = getter(value);
                 let rbits = result_f64.to_bits();
                 if (rbits & 0xFFFF_0000_0000_0000) == STRING_TAG {

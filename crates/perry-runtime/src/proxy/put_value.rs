@@ -12,6 +12,13 @@ use super::*;
 /// (`json/parser.rs`, `json_tape.rs`), which carries an authoritative ShapeId
 /// since #8067/#8086 but no class.
 ///
+/// Charter step 3: this is F-A, and it is now a SHAPE fact — the receiver's
+/// shape kind is `Ordinary` (or `OrdinaryNumericProof`, whose proof the
+/// store's layout note retires) exactly when the per-object record admits it
+/// (`object::shapes::store_kind`). A class object (`Class`), a dictionary
+/// and a native-module receiver (`OrdinaryUnmarked`) all fail it. The
+/// history below explains why the record exists at all.
+///
 /// This replaces a blanket `class_id != 0`. That clause was standing in for
 /// three per-object exclusions the generic path still applies verbatim
 /// (`object/field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`):
@@ -26,16 +33,18 @@ use super::*;
 #[inline]
 unsafe fn write_fast_path_receiver_kind_ok(
     obj: *const crate::ObjectHeader,
-    obj_flags: u16,
+    _obj_flags: u16,
 ) -> bool {
-    let class_id = (*obj).class_id;
-    if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
-        return false;
-    }
-    if crate::object::is_class_object_ptr(obj.cast()) {
-        return false;
-    }
-    class_id != 0 || obj_flags & crate::gc::OBJ_FLAG_PLAIN_ORDINARY != 0
+    crate::object::shapes::store_kind::audit::note_admission_read();
+    matches!(
+        crate::object::shapes::shape_object_kind_by_id(crate::object::shapes::object_shape_stamp(
+            obj
+        )),
+        Some(
+            crate::object::shapes::ShapeObjectKind::Ordinary
+                | crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof
+        )
+    )
 }
 
 /// `proxy[key] = value` — if handler.set exists, call it with
@@ -1577,7 +1586,7 @@ fn object_array_numeric_write_slots(
             return None;
         }
         let shape = crate::object::shapes::object_shape_descriptor(obj)?;
-        if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        if !shape.object_kind.is_ordinary_layout() {
             return None;
         }
         let shape_id = crate::object::shapes::object_shape_stamp(obj);

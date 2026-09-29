@@ -350,7 +350,7 @@ pub fn add_keyboard_shortcut(_key_ptr: *const u8, _modifiers: f64, _callback: f6
 }
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -419,7 +419,7 @@ pub fn handle_activate() {
                 return;
             }
             unsafe {
-                js_closure_call1(ptr, 0.0);
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, 0.0);
             }
         }
     });
@@ -435,7 +435,7 @@ pub fn handle_terminate() {
                 return;
             }
             unsafe {
-                js_closure_call1(ptr, 0.0);
+                js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, 0.0);
             }
         }
     });

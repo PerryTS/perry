@@ -1,43 +1,7 @@
-//! Stream option parsing and method-arity registration, split out of
-//! `stream.rs` to keep it under the 2000-line cap.
+//! Stream option parsing, split out of `stream.rs` to keep it under the
+//! 2000-line cap.
 
 use super::*;
-
-pub(super) fn register_stream_method_arities() {
-    crate::closure::js_register_closure_arity(write_stream_write_impl as *const u8, 3);
-    crate::closure::js_register_closure_arity(write_stream_end_impl as *const u8, 3);
-    crate::closure::js_register_closure_arity(write_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_close_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(stream_emit_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_turn_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_pipe_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_pause_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_resume_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_is_paused_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_close_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(read_stream_resume_from_drain_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_turn_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_write_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_flush_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_flush_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_end_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_destroy_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_reopen_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_off_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_remove_all_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_listener_count_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_emit_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_periodic_flush_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_async_open_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_async_open_done_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_async_mkdir_done_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_close_events_impl as *const u8, 0);
-}
 
 pub(super) fn init_read_state_from_options(
     path_value: f64,

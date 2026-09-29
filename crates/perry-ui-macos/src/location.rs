@@ -9,7 +9,7 @@ extern "C" {
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
 }
 
 // Raw ObjC runtime FFI for dynamic class registration
@@ -46,7 +46,12 @@ unsafe fn invoke_callback(lat: f64, lon: f64) {
         js_run_stdlib_pump();
         js_promise_run_microtasks();
         let closure_ptr = js_nanbox_get_pointer(closure_f64);
-        js_closure_call2(closure_ptr as *const u8, lat, lon);
+        js_closure_call2(
+            closure_ptr as *const u8,
+            perry_ffi::JsThis::UNDEFINED,
+            lat,
+            lon,
+        );
     }
 }
 

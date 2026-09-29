@@ -11,9 +11,9 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
-    js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_call_array,
-    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_set_capture_f64,
-    js_closure_set_capture_ptr, js_register_closure_rest, ClosureHeader,
+    js_closure_alloc, js_closure_call1, js_closure_call4, js_closure_get_capture_f64,
+    js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    ClosureHeader,
 };
 use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -993,6 +993,7 @@ fn emit_init(async_id: u64, type_name: &str, trigger_async_id: u64, resource: f6
     with_hook_callbacks(HookPhase::Init, type_name == "PROMISE", |callback| {
         js_closure_call4(
             callback,
+            crate::closure::plain_call_receiver(),
             async_id as f64,
             type_value_handle.get_nanbox_f64(),
             async_id_to_js_number(trigger_async_id),
@@ -1013,7 +1014,11 @@ fn before_with_kind(async_id: u64, trigger_async_id: u64, is_promise: bool) {
     CURRENT_EXECUTION_ID.with(|c| c.set(async_id));
     CURRENT_TRIGGER_ID.with(|c| c.set(trigger_async_id));
     with_hook_callbacks(HookPhase::Before, is_promise, |callback| {
-        js_closure_call1(callback, async_id as f64);
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            async_id as f64,
+        );
     });
 }
 
@@ -1030,7 +1035,11 @@ fn after_with_kind(async_id: u64, is_promise: bool) {
         return;
     }
     with_hook_callbacks(HookPhase::After, is_promise, |callback| {
-        js_closure_call1(callback, async_id as f64);
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            async_id as f64,
+        );
     });
     let prev = EXECUTION_STACK
         .with(|stack| stack.borrow_mut().pop())
@@ -1064,7 +1073,11 @@ pub fn promise_resolve(async_id: u64) {
         return;
     }
     with_hook_callbacks(HookPhase::PromiseResolve, true, |callback| {
-        js_closure_call1(callback, async_id as f64);
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            async_id as f64,
+        );
     });
 }
 
@@ -1086,7 +1099,11 @@ fn destroy_with_kind(async_id: u64, is_promise: bool) {
         return;
     }
     with_hook_callbacks(HookPhase::Destroy, is_promise, |callback| {
-        js_closure_call1(callback, async_id as f64);
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            async_id as f64,
+        );
     });
     RESOURCES.lock().unwrap().remove(&async_id);
 }
@@ -1104,7 +1121,11 @@ fn emit_explicit_destroy(async_id: u64) {
         return;
     }
     with_hook_callbacks(HookPhase::Destroy, false, |callback| {
-        js_closure_call1(callback, async_id as f64);
+        js_closure_call1(
+            callback,
+            crate::closure::plain_call_receiver(),
+            async_id as f64,
+        );
     });
     RESOURCES.lock().unwrap().remove(&async_id);
 }
@@ -1339,6 +1360,7 @@ pub extern "C" fn js_async_resource_set_event_emitter(handle: i64, event_emitter
 /// the call-site `this` for a detached function.
 extern "C" fn async_resource_bind_method_trampoline(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     if closure.is_null() {
@@ -1378,9 +1400,10 @@ extern "C" fn async_resource_bind_method_trampoline(
 }
 
 fn async_resource_bind_method_value(handle: i64) -> f64 {
-    let trampoline = async_resource_bind_method_trampoline as *const u8;
-    js_register_closure_rest(trampoline, 0);
-    let closure = js_closure_alloc(trampoline, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(async_resource_bind_method_trampoline, 1; with_rest(0)),
+        1,
+    );
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -1594,23 +1617,33 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     }
     let outcome = try_run_resource_scope(ids, || {
         let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
-        let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-            this_arg_handle.get_nanbox_f64(),
-        ));
         let callback_outcome = crate::exception::js_call_catching(|| {
             args_array_handle.with_const_ptr::<ArrayHeader, _>(|arr| {
                 if arr.is_null() {
-                    unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
+                    unsafe {
+                        crate::closure::js_closure_call_array(
+                            callback as i64,
+                            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+                            ptr::null(),
+                            0,
+                        )
+                    }
                 } else {
                     let len = js_array_length(arr) as i64;
                     let data = unsafe {
                         crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
                     };
-                    unsafe { js_closure_call_array(callback as i64, data, len) }
+                    unsafe {
+                        crate::closure::js_closure_call_array(
+                            callback as i64,
+                            crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
+                            data,
+                            len,
+                        )
+                    }
                 }
             })
         });
-        crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
         match callback_outcome {
             Ok(value) => value,
             Err(error) => crate::exception::js_throw(error),
@@ -1626,7 +1659,11 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
 /// synthesized closure; receives the rest array of forwarded args and replays
 /// the call through `runInAsyncScope` so init/before/after/destroy fire with
 /// the bound resource's async id active.
-extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn async_resource_bind_trampoline(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -1637,7 +1674,7 @@ extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest
         return TAG_UNDEFINED_F64;
     }
     if JSValue::from_bits(this_arg.to_bits()).is_undefined() {
-        this_arg = crate::object::js_implicit_this_get();
+        this_arg = this.as_f64();
     }
     let args_array_ptr = ptr_from_nanboxed(rest) as i64;
     js_async_resource_run_in_async_scope(handle, callback, this_arg, args_array_ptr)
@@ -1653,7 +1690,6 @@ fn register_bind_trampoline_once() {
         if !flag.get() {
             // fixed_arity=0 → dispatch_rest_bundled calls
             // `f(closure, rest_array)` regardless of forwarded arity.
-            js_register_closure_rest(async_resource_bind_trampoline as *const u8, 0);
             flag.set(true);
         }
     });
@@ -1672,7 +1708,10 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_
         return 0;
     };
     register_bind_trampoline_once();
-    let closure = js_closure_alloc(async_resource_bind_trampoline as *const u8, 3);
+    let closure = js_closure_alloc(
+        crate::fn_info!(async_resource_bind_trampoline, 1; with_rest(0)),
+        3,
+    );
     if closure.is_null() {
         return 0;
     }
@@ -1744,7 +1783,7 @@ pub extern "C" fn js_async_resource_static_bind_value(
                 let name = js_string_value_to_string(f64::from_bits(own_name.bits()));
                 (!name.is_empty()).then_some(name)
             } else {
-                unsafe { crate::builtins::function_name_for_ptr((*callback).func_ptr as usize) }
+                unsafe { crate::builtins::function_name_for_ptr((*callback).code() as usize) }
                     .filter(|name| !name.is_empty())
             }
         };
@@ -1782,6 +1821,7 @@ pub extern "C" fn js_async_resource_static_bind_direct(
 
 pub extern "C" fn js_async_resource_static_bind_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback_value: f64,
     type_value: f64,
     this_arg: f64,
@@ -1792,6 +1832,7 @@ pub extern "C" fn js_async_resource_static_bind_method(
 
 pub extern "C" fn js_async_local_storage_static_bind_method(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback_value: f64,
     _rest: f64,
 ) -> f64 {
@@ -1806,123 +1847,10 @@ pub extern "C" fn js_async_local_storage_static_bind_direct(
     js_async_resource_static_bind_value(callback_value, TAG_UNDEFINED_F64, TAG_UNDEFINED_F64)
 }
 
-fn register_context_snapshot(snapshot: crate::async_context::AsyncContextSnapshot) -> usize {
-    let id = NEXT_CONTEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
-    CONTEXT_SNAPSHOTS.lock().unwrap().insert(id, snapshot);
-    id
-}
-
-fn run_with_context_snapshot(snapshot_id: usize, f: impl FnOnce() -> f64) -> f64 {
-    let snapshot = CONTEXT_SNAPSHOTS
-        .lock()
-        .unwrap()
-        .get(&snapshot_id)
-        .cloned()
-        .unwrap_or_default();
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let mut snapshot = snapshot;
-    let snapshot_roots = crate::async_context::root_snapshot(&scope, &snapshot);
-    let previous = crate::async_context::enter_context(&snapshot);
-    // Guard-held (GC-scanned, throw-safe) — see runInAsyncScope (#788).
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
-    );
-    let result = f();
-    let result_handle = scope.root_nanbox_f64(result);
-    crate::async_context::refresh_snapshot_from_roots(&mut snapshot, &snapshot_roots);
-    if let Some(action) = crate::async_context::pop_context_guard() {
-        crate::async_context::apply_context_guard(action);
-    }
-    result_handle.get_nanbox_f64()
-}
-
-fn call_callback_with_rest(callback_value: f64, this_arg: f64, rest: f64) -> f64 {
-    if !is_callable_value(callback_value) {
-        throw_apply_not_function(callback_value);
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let callback_handle = scope.root_nanbox_f64(callback_value);
-    let this_arg_handle = scope.root_nanbox_f64(this_arg);
-    let rebound_bits = crate::closure::clone_closure_rebind_this(
-        callback_handle.get_nanbox_f64().to_bits(),
-        this_arg_handle.get_nanbox_f64(),
-    );
-    let rebound_handle = scope.root_nanbox_f64(f64::from_bits(rebound_bits));
-    let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
-    if callback.is_null() {
-        throw_apply_not_function(callback_handle.get_nanbox_f64());
-    }
-    let args_array = ptr_from_nanboxed(rest) as *const ArrayHeader;
-    let args_array_handle = scope.root_raw_const_ptr(args_array);
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        this_arg_handle.get_nanbox_f64(),
-    ));
-    let result = if args_array.is_null() {
-        unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
-    } else {
-        let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
-        let len = js_array_length(arr) as i64;
-        let data = if arr.is_null() || len == 0 {
-            ptr::null()
-        } else {
-            unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64 }
-        };
-        unsafe { js_closure_call_array(callback as i64, data, len) }
-    };
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
-}
-
-extern "C" fn async_local_storage_snapshot_trampoline(
-    closure: *const ClosureHeader,
-    callback_value: f64,
-    rest: f64,
-) -> f64 {
-    let snapshot_id = js_closure_get_capture_ptr(closure, 0) as usize;
-    run_with_context_snapshot(snapshot_id, || {
-        // AsyncLocalStorage.snapshot() intentionally invokes the supplied
-        // callback as a plain function. The receiver used to call the snapshot
-        // wrapper itself is not forwarded.
-        call_callback_with_rest(callback_value, TAG_UNDEFINED_F64, rest)
-    })
-}
-
-fn register_snapshot_trampoline_once() {
-    thread_local! {
-        static REGISTERED: Cell<bool> = const { Cell::new(false) };
-    }
-    REGISTERED.with(|flag| {
-        if !flag.get() {
-            js_register_closure_rest(async_local_storage_snapshot_trampoline as *const u8, 1);
-            flag.set(true);
-        }
-    });
-}
-
-fn async_local_storage_static_snapshot_value() -> f64 {
-    register_snapshot_trampoline_once();
-    let snapshot_id = register_context_snapshot(crate::async_context::capture_context());
-    let closure = js_closure_alloc(async_local_storage_snapshot_trampoline as *const u8, 1);
-    if closure.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    js_closure_set_capture_ptr(closure, 0, snapshot_id as i64);
-    crate::object::set_builtin_closure_length(closure as usize, 1);
-    crate::object::set_bound_native_closure_name(closure, "bound");
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-pub extern "C" fn js_async_local_storage_static_snapshot_method(
-    _closure: *const ClosureHeader,
-    _rest: f64,
-) -> f64 {
-    async_local_storage_static_snapshot_value()
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_local_storage_static_snapshot_direct(_rest: i64) -> f64 {
-    async_local_storage_static_snapshot_value()
-}
+mod context_snapshots;
+pub use context_snapshots::{
+    js_async_local_storage_static_snapshot_direct, js_async_local_storage_static_snapshot_method,
+};
 
 pub fn scan_async_hooks_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);

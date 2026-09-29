@@ -8,7 +8,11 @@ thread_local! {
     static COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-extern "C" fn moving_own_keys(_closure: *const crate::closure::ClosureHeader, target: f64) -> f64 {
+extern "C" fn moving_own_keys(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    target: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -61,9 +65,12 @@ fn run(inherited_proxy: bool, descriptor_trap: bool) {
     }
     let handler = object(&scope);
     let (name, function) = if descriptor_trap {
-        ("getOwnPropertyDescriptor", moving_descriptor as *const u8)
+        (
+            "getOwnPropertyDescriptor",
+            crate::fn_info!(moving_descriptor, 2),
+        )
     } else {
-        ("ownKeys", moving_own_keys as *const u8)
+        ("ownKeys", crate::fn_info!(moving_own_keys, 1))
     };
     let callback = crate::closure::js_closure_alloc(function, 0);
     set(handler, name, f64::from_bits(ptr_bits(callback as usize)));
@@ -131,6 +138,7 @@ fn for_in_grown_result_and_receiver_survive_prototype_collection() {
 
 extern "C" fn moving_descriptor(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     target: f64,
     key: f64,
 ) -> f64 {
@@ -150,7 +158,10 @@ fn descriptor_trap_collection_preserves_for_in_target_and_keys() {
     run(false, true);
 }
 
-extern "C" fn moving_value(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_value(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     COPIED.with(|count| count.set(count.get() + trace.copying_nursery.copied_objects));
     23.0
@@ -158,6 +169,7 @@ extern "C" fn moving_value(_closure: *const crate::closure::ClosureHeader) -> f6
 
 extern "C" fn descriptor_with_moving_field(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _target: f64,
     _key: f64,
 ) -> f64 {
@@ -166,7 +178,7 @@ extern "C" fn descriptor_with_moving_field(
     for name in ["enumerable", "configurable", "writable"] {
         set(result, name, f64::from_bits(crate::value::TAG_TRUE));
     }
-    let getter = crate::closure::js_closure_alloc(moving_value as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(moving_value, 0), 0);
     let descriptor = object(&scope);
     set(descriptor, "get", f64::from_bits(ptr_bits(getter as usize)));
     let key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
@@ -200,7 +212,8 @@ fn descriptor_completion_reloads_after_field_getter_collection() {
     let target = object(&scope);
     set(target, "property_name", 7.0);
     let handler = object(&scope);
-    let callback = crate::closure::js_closure_alloc(descriptor_with_moving_field as *const u8, 0);
+    let callback =
+        crate::closure::js_closure_alloc(crate::fn_info!(descriptor_with_moving_field, 2), 0);
     set(
         handler,
         "getOwnPropertyDescriptor",

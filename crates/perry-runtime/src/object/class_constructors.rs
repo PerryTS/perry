@@ -227,13 +227,15 @@ fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32, u32)> {
 static CLASS_CONSTRUCTOR_FLAGS: ImageTable<RwLock<Option<ConstructorFlagTable>>> =
     ImageTable::new(|image| &image.constructor_flags);
 
-/// Codegen FFI: record `(has_synthetic_arguments, has_rest)` for a class ctor.
-/// See [`CLASS_CONSTRUCTOR_FLAGS`].
+/// Codegen FFI: record `(has_synthetic_arguments, has_rest)` for a class
+/// ctor, and `rest_fixed` — the parameters before its first trailing array
+/// (`-1` when the constructor has none). See [`CLASS_CONSTRUCTOR_FLAGS`].
 #[no_mangle]
 pub extern "C" fn js_register_class_constructor_flags(
     class_id: i64,
     has_synthetic_arguments: i64,
     has_rest: i64,
+    rest_fixed: i64,
 ) {
     if class_id == 0 {
         return;
@@ -244,23 +246,27 @@ pub extern "C" fn js_register_class_constructor_flags(
     }
     guard.as_mut().unwrap().insert(
         class_id as u32,
-        (has_synthetic_arguments != 0, has_rest != 0),
+        (
+            has_synthetic_arguments != 0,
+            has_rest != 0,
+            u32::try_from(rest_fixed).ok(),
+        ),
     );
 }
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_JS_REGISTER_CLASS_CONSTRUCTOR_FLAGS: extern "C" fn(i64, i64, i64) =
+static KEEP_JS_REGISTER_CLASS_CONSTRUCTOR_FLAGS: extern "C" fn(i64, i64, i64, i64) =
     js_register_class_constructor_flags;
 
-/// Look up a class ctor's `(has_synthetic_arguments, has_rest)` flags.
-fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
+/// Look up a class ctor's `(has_synthetic_arguments, has_rest, rest_fixed)`.
+fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool, Option<u32>) {
     CLASS_CONSTRUCTOR_FLAGS
         .read()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(&class_id).copied()))
-        .unwrap_or((false, false))
+        .unwrap_or((false, false, None))
 }
 
 /// Bind the USER parameter slots of `ctor_cid`'s registered constructor (every
@@ -269,9 +275,10 @@ fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
 ///
 /// Codegen lowers the trailing array parameters as
 /// `[fixed..., user_rest?, synthesized_arguments?]` and registers the position
-/// of the first one in the closure-rest table (`ctor_rest_regs`). The flags say
-/// which arrays follow: a user rest receives the arguments from that position
-/// on, the synthesized `arguments` slot receives EVERY argument.
+/// of the first one with the class's constructor flags
+/// (`js_register_class_constructor_flags`). The flags say which arrays
+/// follow: a user rest receives the arguments from that position on, the
+/// synthesized `arguments` slot receives EVERY argument.
 ///
 /// #10484: the dynamic construct paths used to pack only a user-rest tail at
 /// that position, so a constructor reading `arguments` saw just the arguments
@@ -282,7 +289,6 @@ fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
 /// The returned words are not rooted. Callers hand them to the constructor call
 /// without allocating in between.
 unsafe fn constructor_user_arg_slots(
-    ctor_ptr: usize,
     ctor_cid: u32,
     user_params: usize,
     args_ptr: *const f64,
@@ -296,11 +302,11 @@ unsafe fn constructor_user_arg_slots(
             undef
         }
     };
-    let (has_synth, flagged_rest) = lookup_class_constructor_flags(ctor_cid);
+    let (has_synth, flagged_rest, rest_fixed) = lookup_class_constructor_flags(ctor_cid);
     // An unflagged registration is a plain `constructor(a, ...rest)`.
     let has_rest = flagged_rest || !has_synth;
     let trailing = usize::from(has_rest) + usize::from(has_synth);
-    let Some(fixed) = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+    let Some(fixed) = rest_fixed
         .map(|fixed| fixed as usize)
         .filter(|fixed| fixed + trailing <= user_params)
     else {
@@ -673,7 +679,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
             } else {
                 crate::array::js_array_length(arr)
             } as usize;
-            let (has_synth, has_rest_flag) = lookup_class_constructor_flags(cur);
+            let (has_synth, has_rest_flag, _) = lookup_class_constructor_flags(cur);
             let (final_args, call_synth, call_rest) = if sig_caps == 0 {
                 // No signature cap params: #6018's synth/rest handling applies
                 // cleanly — forward all spread args flat and let
@@ -706,13 +712,8 @@ pub unsafe extern "C" fn js_super_construct_apply(
                 let spread: Vec<f64> = (0..n)
                     .map(|i| crate::array::js_array_get_f64(arr, i as u32))
                     .collect();
-                let mut fa = constructor_user_arg_slots(
-                    ctor_ptr,
-                    cur,
-                    user_params,
-                    spread.as_ptr(),
-                    spread.len(),
-                );
+                let mut fa =
+                    constructor_user_arg_slots(cur, user_params, spread.as_ptr(), spread.len());
                 for slot in 0..sig_caps as usize {
                     fa.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
                 }
@@ -914,9 +915,6 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         if let Some((func_ptr, param_count, has_rest)) =
             super::class_registry::lookup_static_method_in_chain(parent_cid, name)
         {
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this =
-                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value));
             crate::object::static_this_arm_if_unarmed(this_value);
             let result = if has_rest {
                 // Mirror `js_class_static_method_call`'s rest bundling: fixed
@@ -948,7 +946,6 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
                 super::class_registry::call_static_method(func_ptr, args_ptr, args_len, param_count)
             };
             crate::object::static_this_disarm();
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }
@@ -980,15 +977,12 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // walks the parent chain and drops its read lock before returning, so the
     // invoked body may re-take the registry lock without deadlocking (wall-37).
     if let Some(method_value) = super::class_registry::lookup_prototype_method(parent_cid, name) {
-        // #8495: root the displaced receiver across the call below — the
-        // replace has already overwritten the cell, so this is the frame's only
-        // copy and the restore would otherwise publish a pre-move address.
-        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-        let prev_this_h = prev_this_scope
-            .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-        let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
-        super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-        return result;
+        return crate::closure::native_call_value_this(
+            method_value,
+            crate::closure::JsThis::from_f64(this_value),
+            args_ptr,
+            args_len,
+        );
     }
     // #6316: the parent chain is real (an intermediate user class) but bottoms
     // out in a NATIVE base whose surface perry stamps onto the instance —
@@ -1028,19 +1022,16 @@ unsafe fn call_displaced_native_base_method(
         return crate::object::map_set_subclass::super_collection_method(this_value, name, args)
             .unwrap_or(undef);
     };
-    // The stashed closure already captures the receiver in slot 0, but bind
-    // IMPLICIT_THIS too: the shared emitter/stream stubs read their receiver
-    // through `this_value(closure)`, which falls back to IMPLICIT_THIS when the
-    // capture is undefined (the prototype-installed form).
-    // #8495: root the displaced receiver across the call below — the
-    // replace has already overwritten the cell, so this is the frame's only
-    // copy and the restore would otherwise publish a pre-move address.
-    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-    let prev_this_h = prev_this_scope
-        .root_nanbox_u64(super::IMPLICIT_THIS.with(|c| c.replace(this_value.to_bits())));
-    let result = crate::closure::js_native_call_value(method_value, args_ptr, args_len);
-    super::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    result
+    // The stashed closure already captures the receiver in slot 0, but pass
+    // it as `this` too: the shared emitter/stream stubs fall back to their
+    // `this` argument when the capture is undefined (the prototype-installed
+    // form).
+    crate::closure::native_call_value_this(
+        method_value,
+        crate::closure::JsThis::from_f64(this_value),
+        args_ptr,
+        args_len,
+    )
 }
 
 /// Keepalive anchor (generated-code-only callee).
@@ -1162,11 +1153,10 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
                     sig_caps,
                     caps.len(),
                     args_len,
-                    crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+                    lookup_class_constructor_flags(cur).2
                 );
             }
-            let mut final_args =
-                constructor_user_arg_slots(ctor_ptr, cur, user_params, args_ptr, args_len);
+            let mut final_args = constructor_user_arg_slots(cur, user_params, args_ptr, args_len);
             for slot in 0..sig_caps as usize {
                 final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
             }
@@ -1537,8 +1527,7 @@ unsafe fn replay_class_object_constructor_impl(
     // caps are appended. Without this the rest binds to the first arg as a
     // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
     // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
-    let mut final_args =
-        constructor_user_arg_slots(ctor_ptr, ctor_cid, user_params, args_ptr, args_len);
+    let mut final_args = constructor_user_arg_slots(ctor_cid, user_params, args_ptr, args_len);
     // Exactly `sig_caps` trailing cap slots: per-evaluation snapshot first
     // (class EXPRESSIONS carry `__perry_ctor_caps`), decl-site snapshot second
     // (class DECLARATIONS reached as heap values), undefined last.
@@ -1642,8 +1631,7 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     // are appended. Without this the rest binds to the first arg as a
     // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
     // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
-    let mut final_args =
-        constructor_user_arg_slots(ctor_ptr, ctor_cid, user_params, args_ptr, args_len);
+    let mut final_args = constructor_user_arg_slots(ctor_cid, user_params, args_ptr, args_len);
     for slot in 0..sig_caps as usize {
         final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
     }
@@ -1662,13 +1650,10 @@ pub(crate) unsafe fn replay_registered_class_constructor(
 mod constructor_arg_slot_tests {
     use super::*;
 
-    /// Distinct registry keys per case: `CLASS_CONSTRUCTOR_FLAGS` is
-    /// process-global and the closure-rest table is keyed by function pointer.
-    fn key(case: u32) -> (usize, u32) {
-        // Any stable non-null address works — the helper only READS the
-        // registrations under this key, it never calls through the pointer.
-        let ptr = (0x10_484_000usize) + case as usize * 0x40;
-        (ptr, 10_484_000 + case)
+    /// A distinct class id per case: `CLASS_CONSTRUCTOR_FLAGS` is
+    /// process-global.
+    fn key(case: u32) -> u32 {
+        10_484_000 + case
     }
 
     fn array_of(value: f64) -> (usize, u32) {
@@ -1685,14 +1670,13 @@ mod constructor_arg_slot_tests {
 
     #[test]
     fn the_synthesized_arguments_slot_takes_every_argument() {
-        let (ptr, cid) = key(1);
+        let cid = key(1);
         // `constructor(p, q)` reading `arguments`: two fixed slots, then the
         // synthesized array at index 2.
-        js_register_class_constructor_flags(cid as i64, 1, 0);
-        crate::closure::js_register_closure_rest(ptr as *const u8, 2);
+        js_register_class_constructor_flags(cid as i64, 1, 0, 2);
 
         let args = [11.0, 22.0, 33.0];
-        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 3, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 3);
         assert_eq!(slots[0], 11.0);
         assert_eq!(slots[1], 22.0);
@@ -1711,24 +1695,23 @@ mod constructor_arg_slot_tests {
         // Fewer arguments than declared parameters: the fixed slots pad with
         // `undefined` while `arguments.length` stays at what was passed.
         let one = [11.0];
-        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, one.as_ptr(), one.len()) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 3, one.as_ptr(), one.len()) };
         assert_eq!(slots[1].to_bits(), crate::value::TAG_UNDEFINED);
         assert_eq!(array_of(slots[2]).1, 1);
 
-        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, std::ptr::null(), 0) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 3, std::ptr::null(), 0) };
         assert_eq!(array_of(slots[2]).1, 0);
     }
 
     #[test]
     fn a_user_rest_and_arguments_constructor_fills_both_arrays() {
-        let (ptr, cid) = key(2);
+        let cid = key(2);
         // `constructor(first, ...rest)` reading `arguments`: one fixed slot,
         // the rest array at index 1, the full argument list at index 2.
-        js_register_class_constructor_flags(cid as i64, 1, 1);
-        crate::closure::js_register_closure_rest(ptr as *const u8, 1);
+        js_register_class_constructor_flags(cid as i64, 1, 1, 1);
 
         let args = [11.0, 22.0, 33.0];
-        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 3, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 3);
         assert_eq!(slots[0], 11.0);
         assert_eq!(array_of(slots[1]).1, 2, "rest holds the tail only");
@@ -1738,12 +1721,13 @@ mod constructor_arg_slot_tests {
 
     #[test]
     fn an_unflagged_rest_constructor_keeps_tail_only_packing() {
-        let (ptr, cid) = key(3);
-        // No flags registered at all — a plain `constructor(a, ...rest)`.
-        crate::closure::js_register_closure_rest(ptr as *const u8, 1);
+        let cid = key(3);
+        // Neither `arguments` nor a rest flag — a plain `constructor(a, ...rest)`
+        // registered only with its rest position.
+        js_register_class_constructor_flags(cid as i64, 0, 0, 1);
 
         let args = [11.0, 22.0, 33.0];
-        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 2, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 2, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 2);
         assert_eq!(slots[0], 11.0);
         assert_eq!(array_of(slots[1]).1, 2);
@@ -1751,11 +1735,11 @@ mod constructor_arg_slot_tests {
 
     #[test]
     fn a_constructor_with_no_trailing_array_stays_positional() {
-        let (_, cid) = key(4);
-        // An unregistered constructor pointer: positional, padded to the
-        // declared parameter count.
+        let cid = key(4);
+        // An unregistered constructor: positional, padded to the declared
+        // parameter count.
         let args = [11.0];
-        let slots = unsafe { constructor_user_arg_slots(0x10_484_900, cid, 2, args.as_ptr(), 1) };
+        let slots = unsafe { constructor_user_arg_slots(cid, 2, args.as_ptr(), 1) };
         assert_eq!(slots.len(), 2);
         assert_eq!(slots[0], 11.0);
         assert_eq!(slots[1].to_bits(), crate::value::TAG_UNDEFINED);

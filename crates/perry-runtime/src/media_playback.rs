@@ -532,18 +532,27 @@ fn fire_state_callback(closure_d: f64, state: MediaState) {
     let s = state.as_str();
     let header = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     if header.is_null() {
-        let _ = js_closure_call1(closure, f64::from_bits(TAG_UNDEFINED));
+        let _ = js_closure_call1(
+            closure,
+            crate::closure::plain_call_receiver(),
+            f64::from_bits(TAG_UNDEFINED),
+        );
         return;
     }
     let str_d = crate::value::js_nanbox_string(header as i64);
-    let _ = js_closure_call1(closure, str_d);
+    let _ = js_closure_call1(closure, crate::closure::plain_call_receiver(), str_d);
 }
 
 fn fire_time_callback(closure_d: f64, current: f64, duration: f64) {
     let Some(closure) = unbox_closure(closure_d) else {
         return;
     };
-    let _ = js_closure_call2(closure, current, duration);
+    let _ = js_closure_call2(
+        closure,
+        crate::closure::plain_call_receiver(),
+        current,
+        duration,
+    );
 }
 
 // ---------------------------------------------------------------------------

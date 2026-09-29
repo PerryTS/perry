@@ -786,14 +786,14 @@ fn invoke_global_hotkey_callback(key: usize) {
         let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
         if !callback_ptr.is_null() {
             unsafe {
-                js_closure_call0(callback_ptr);
+                js_closure_call0(callback_ptr, perry_ffi::JsThis::UNDEFINED);
             }
         }
     }
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -818,7 +818,7 @@ define_class!(
                 if let Some(closure_f64) = closure_f64 {
                     let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                     unsafe {
-                        js_closure_call0(closure_ptr as *const u8);
+                        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             }));
@@ -1306,7 +1306,7 @@ define_class!(
                 if let Some(closure_f64) = closure_f64 {
                     let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
                     unsafe {
-                        js_closure_call0(closure_ptr as *const u8);
+                        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             }));
@@ -1535,7 +1535,7 @@ define_class!(
 
 fn invoke_terminate_callback() {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
     let cb = ON_TERMINATE_CALLBACK.with(|c| *c.borrow());
@@ -1543,7 +1543,11 @@ fn invoke_terminate_callback() {
         unsafe {
             let ptr = js_nanbox_get_pointer(callback) as *const u8;
             if !ptr.is_null() {
-                js_closure_call1(ptr, f64::from_bits(0x7FFC_0000_0000_0001)); // undefined
+                js_closure_call1(
+                    ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    f64::from_bits(0x7FFC_0000_0000_0001),
+                ); // undefined
             }
         }
     }
@@ -1551,7 +1555,7 @@ fn invoke_terminate_callback() {
 
 fn invoke_activate_callback() {
     extern "C" {
-        fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+        fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
         fn js_nanbox_get_pointer(value: f64) -> i64;
     }
     let cb = ON_ACTIVATE_CALLBACK.with(|c| *c.borrow());
@@ -1559,7 +1563,11 @@ fn invoke_activate_callback() {
         unsafe {
             let ptr = js_nanbox_get_pointer(callback) as *const u8;
             if !ptr.is_null() {
-                js_closure_call1(ptr, f64::from_bits(0x7FFC_0000_0000_0001)); // undefined
+                js_closure_call1(
+                    ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    f64::from_bits(0x7FFC_0000_0000_0001),
+                ); // undefined
             }
         }
     }
@@ -1772,7 +1780,7 @@ thread_local! {
 pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
     extern "C" {
         fn js_nanbox_get_pointer(value: f64) -> i64;
-        fn js_closure_call0(closure: *const u8) -> f64;
+        fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     }
     WINDOWS.with(|w| {
         let windows = w.borrow();
@@ -1791,7 +1799,7 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
                         .with(|callbacks| callbacks.borrow().get(&window_handle).copied());
                     if let Some(callback) = callback {
                         let ptr = js_nanbox_get_pointer(callback) as *const u8;
-                        js_closure_call0(ptr);
+                        js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                     }
                 });
                 let _: Retained<AnyObject> = objc2::msg_send![

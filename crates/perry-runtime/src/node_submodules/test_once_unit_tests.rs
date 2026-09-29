@@ -5,21 +5,27 @@ thread_local! {
     static REENTRANT_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-extern "C" fn reentrant_implementation(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn reentrant_implementation(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let recurse = REENTRANT_ACTIVE.with(|active| !active.replace(true));
     if recurse {
         let mock = REENTRANT_MOCK.with(Cell::get);
-        js_closure_call0(raw_ptr_from_value(mock) as *const ClosureHeader);
+        js_closure_call0(
+            raw_ptr_from_value(mock) as *const ClosureHeader,
+            crate::closure::plain_call_receiver(),
+        );
         REENTRANT_ACTIVE.with(|active| active.set(false));
     }
     10.0
 }
 
-extern "C" fn return_twenty(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn return_twenty(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     20.0
 }
 
-extern "C" fn return_thirty(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn return_thirty(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     30.0
 }
 
@@ -108,9 +114,9 @@ fn restoring_a_mock_preserves_calls_and_scheduled_implementations() {
 #[test]
 fn reentrant_dispatch_uses_completed_call_indices_like_node() {
     MOCK_STATES.with(|states| states.borrow_mut().clear());
-    let outer = closure_value(reentrant_implementation as *const u8, 0);
-    let explicit_once = closure_value(return_twenty as *const u8, 0);
-    let scheduled_inside = closure_value(return_thirty as *const u8, 0);
+    let outer = closure_value(crate::fn_info!(reentrant_implementation, 0), 0);
+    let explicit_once = closure_value(crate::fn_info!(return_twenty, 0), 0);
+    let scheduled_inside = closure_value(crate::fn_info!(return_thirty, 0), 0);
     let mock = create_mock_function(outer, outer, None, MockRestoreTarget::None);
     let mock_ptr = raw_ptr_from_value(mock) as *const ClosureHeader;
     let id = closure_id(mock_ptr);
@@ -125,7 +131,10 @@ fn reentrant_dispatch_uses_completed_call_indices_like_node() {
         let state = states.iter_mut().find(|state| state.id == id).unwrap();
         schedule_mock_implementation_once(state, 1, explicit_once);
     });
-    assert_eq!(js_closure_call0(mock_ptr), 10.0);
+    assert_eq!(
+        js_closure_call0(mock_ptr, crate::closure::plain_call_receiver()),
+        10.0
+    );
 
     MOCK_STATES.with(|states| {
         let mut states = states.borrow_mut();
@@ -138,7 +147,10 @@ fn reentrant_dispatch_uses_completed_call_indices_like_node() {
         let current = mock_state_call_count(state);
         schedule_mock_implementation_once(state, current, scheduled_inside);
     });
-    assert_eq!(js_closure_call0(mock_ptr), 30.0);
+    assert_eq!(
+        js_closure_call0(mock_ptr, crate::closure::plain_call_receiver()),
+        30.0
+    );
 
     MOCK_STATES.with(|states| {
         let states = states.borrow();

@@ -131,8 +131,8 @@ pub(crate) fn get_field_by_name_object_tail(
                 return JSValue::undefined();
             }
             // A class constructor: its class lookup with this key header.
-            if crate::closure::shape::is_class_code(
-                (*(obj as *const crate::closure::ClosureHeader)).func_ptr,
+            if crate::closure::shape::is_class_info(
+                (*(obj as *const crate::closure::ClosureHeader)).info,
             ) {
                 if let Some(value) =
                     super::has_property::class_closure_read_by_key(obj as usize, key)
@@ -217,8 +217,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     return JSValue::number(length.unwrap_or(0) as f64);
                 }
                 if name_str == "name" {
-                    let func_ptr =
-                        (*(obj as *const crate::closure::ClosureHeader)).func_ptr as usize;
+                    let func_ptr = (*(obj as *const crate::closure::ClosureHeader)).code() as usize;
                     let fname =
                         crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
                     let s = crate::string::js_string_from_bytes(fname.as_ptr(), fname.len() as u32);
@@ -660,7 +659,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // read back `""`, matching Node, not `undefined`.
                     if name_str == "name" {
                         let func_ptr =
-                            (*(obj as *const crate::closure::ClosureHeader)).func_ptr as usize;
+                            (*(obj as *const crate::closure::ClosureHeader)).code() as usize;
                         let fname =
                             crate::builtins::function_name_for_ptr(func_ptr).unwrap_or_default();
                         let s =

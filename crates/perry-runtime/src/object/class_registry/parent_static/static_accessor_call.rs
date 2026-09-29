@@ -98,15 +98,12 @@ pub(crate) unsafe fn try_static_accessor_value_call(
     }
     let callee_handle = scope.root_nanbox_f64(callee);
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let receiver = receiver_handle.get_nanbox_f64();
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
+    Some(crate::closure::native_call_value_this(
         callee_handle.get_nanbox_f64(),
+        crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
         args.as_ptr(),
         args.len(),
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    Some(result)
+    ))
 }
 
 pub(crate) unsafe fn class_static_accessor_getter_value(
@@ -166,7 +163,7 @@ unsafe fn private_static_accessor_getter_value(
                 crate::object::field_get_set::accessor_receiver_override_take().unwrap_or(receiver);
             crate::object::static_this_arm_if_unarmed(receiver);
             crate::object::static_private_owner_push(owner);
-            let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
+            let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
             let result = f();
             crate::object::static_private_owner_pop();
             crate::object::static_this_disarm();
@@ -246,7 +243,7 @@ unsafe fn private_static_accessor_setter_apply(
             if setter != 0 {
                 crate::object::static_this_arm_if_unarmed(receiver);
                 crate::object::static_private_owner_push(receiver);
-                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
+                let f = crate::closure::body_call::js_bare_body_fn!(setter as *const u8; value);
                 let _ = f(value);
                 crate::object::static_private_owner_pop();
                 crate::object::static_this_disarm();
