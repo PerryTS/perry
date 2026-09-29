@@ -7,7 +7,20 @@ use objc2_app_kit::NSColor;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-type CGColorRef = *mut c_void;
+/// CoreGraphics' opaque colour. A typed pointer encodes as `^{CGColor=}`, the
+/// type CALayer's colour properties declare; a `c_void` pointer encodes as `^v`,
+/// which a debug build's message check rejects.
+#[repr(C)]
+pub struct CGColor {
+    _private: [u8; 0],
+}
+
+unsafe impl objc2::encode::RefEncode for CGColor {
+    const ENCODING_REF: objc2::encode::Encoding =
+        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColor", &[]));
+}
+
+type CGColorRef = *mut CGColor;
 type CGColorSpaceRef = *mut c_void;
 
 extern "C" {
