@@ -109,10 +109,15 @@ pub(super) fn emit_tower_pshape_call(
 ) -> String {
     // The global is read ONCE per function (entry-hoisted); the case block only
     // reloads it from the stack slot, which mem2reg folds away.
-    let shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(&route.keys_global);
-    let shape_slot = ctx.func.entry_init_load_global(&shape_global, I32);
-    let expected_shape_id = ctx.block().load(I32, &shape_slot);
+    let expected_shape_id = match crate::typed_shape::static_class_shape_id(&route.keys_global) {
+        Some(id) => id.to_string(),
+        None => {
+            let shape_global =
+                crate::typed_shape::shape_id_global_name_from_keys_global(&route.keys_global);
+            let shape_slot = ctx.func.entry_init_load_global(&shape_global, I32);
+            ctx.block().load(I32, &shape_slot)
+        }
+    };
 
     let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
     let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));

@@ -732,7 +732,7 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let field_idx_str = field_index.to_string();
     let expected_class_id_str = expected_class_id.to_string();
     let expected_shape_id =
-        crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
+        crate::typed_shape::class_shape_id_operand(ctx, &class_name, &keys_global_name);
     let (obj_bits, key_raw) = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
