@@ -1448,6 +1448,24 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_REGION_READS").as_deref().unwrap_or(""),
     );
 
+    // #11650 loop regions: three more compile-time switches on the same
+    // lowering, keyed here for the same reason (keying only one of the two
+    // caches leaves the other serving objects compiled the other way).
+    h.field(
+        "env_regions",
+        env_var("PERRY_REGIONS").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_region_nodes_per_bare",
+        env_var("PERRY_REGION_NODES_PER_BARE")
+            .as_deref()
+            .unwrap_or(""),
+    );
+    h.field(
+        "env_region_spill",
+        env_var("PERRY_REGION_SPILL").as_deref().unwrap_or(""),
+    );
+
     h.finish()
 }
 

@@ -765,6 +765,6 @@ unsafe fn elements_pop_tail(elements: *mut ArrayHeader) -> Option<f64> {
     if bits == crate::value::TAG_HOLE {
         return None;
     }
-    (*elements).length = index;
+    super::array_truncate_length(elements, index);
     Some(f64::from_bits(bits))
 }

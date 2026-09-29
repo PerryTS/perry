@@ -1841,10 +1841,19 @@ static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) ->
 #[used(compiler)]
 static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_refresh_local_head;
 
-/// Calculate the byte size for an array with N elements capacity
+/// The payload byte size of an array allocation with `slots` physical slots
+/// (capacity plus any named-property reserve).
+///
+/// Every array allocation sizes its block here, so this is where
+/// [`super::alloc::ARRAY_MAX_CAPACITY`] is enforced for the physical total:
+/// a larger request raises `RangeError: Invalid array length` and reserves
+/// nothing.
 #[inline]
-pub(crate) fn array_byte_size(capacity: usize) -> usize {
-    std::mem::size_of::<ArrayHeader>() + capacity * std::mem::size_of::<f64>()
+pub(crate) fn array_byte_size(slots: usize) -> usize {
+    if slots > super::alloc::ARRAY_MAX_CAPACITY as usize {
+        super::alloc::array_length_range_error()
+    }
+    std::mem::size_of::<ArrayHeader>() + slots * std::mem::size_of::<f64>()
 }
 
 #[inline]

@@ -226,7 +226,12 @@ pub extern "C" fn js_array_splice(
             // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
             // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
             super::push_pop::guard_writable_length(arr);
-            (*arr).length = new_len;
+            if new_len < len as u32 {
+                // The tail moved down: its old top slots are vacated.
+                super::array_truncate_length(arr, new_len);
+            } else {
+                (*arr).length = new_len;
+            }
             let moved_count = if items_count != actual_delete {
                 tail_len as usize
             } else {

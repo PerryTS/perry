@@ -66,6 +66,16 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // of one shape compare plus a slot load. Different emitted code, so an
     // object built with regions must not be served to a build without them.
     "PERRY_REGION_READS",
+    // #10884 step 4b loop regions (#11650). `PERRY_REGIONS=0|off|false`
+    // disables loop regions altogether (the A/B arm), so the same loop lowers
+    // as versioned-guard code or as plain per-access code.
+    "PERRY_REGIONS",
+    // `PERRY_REGION_NODES_PER_BARE=<n>` moves the size limit `pays` applies to
+    // a region candidate, so it decides which loops are versioned.
+    "PERRY_REGION_NODES_PER_BARE",
+    // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
+    // stored, which drops the spill-reading copies from the emitted loop.
+    "PERRY_REGION_SPILL",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.

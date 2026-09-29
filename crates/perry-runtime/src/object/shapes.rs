@@ -233,6 +233,40 @@ impl ShapeRecordRef {
     pub(crate) fn keys_slot(self) -> *mut u64 {
         self.0.as_ptr() as *mut u64
     }
+
+    /// The record's field-representation word (`field_rep`), deprecated
+    /// lanes included.
+    #[inline]
+    pub(crate) fn rep(self) -> u64 {
+        self.rep_word().load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
+    /// generalized it. A learned fact of the record, masked out of identity,
+    /// so the record's facts key and its `by_facts` bucket do not move, and
+    /// every object carrying the record still satisfies the `F64` invariant
+    /// at `slot`. The word is written atomically because readers of a
+    /// published record never take the table borrow.
+    #[inline]
+    pub(crate) fn deprecate_rep_slot(self, slot: u32) {
+        use super::field_rep::{slot_rep, with_slot_rep, REP_F64, REP_F64_DEPRECATED};
+        let word = self.rep_word();
+        let rep = word.load(std::sync::atomic::Ordering::Relaxed);
+        if slot_rep(rep, slot) == REP_F64 {
+            let next = with_slot_rep(rep, slot, REP_F64_DEPRECATED);
+            word.store(next, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[inline]
+    fn rep_word(self) -> &'static std::sync::atomic::AtomicU64 {
+        // SAFETY: a live slab record (type docs); `rep` is an 8-aligned u64
+        // (the record is `#[repr(C)]`, asserted 8-aligned), and a slab record
+        // is never moved while present.
+        unsafe {
+            &*std::ptr::addr_of_mut!((*self.0.as_ptr()).rep).cast::<std::sync::atomic::AtomicU64>()
+        }
+    }
 }
 
 /// Test instrument: reads the receiver's shape answered at a latched
@@ -1192,6 +1226,49 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
         } else {
             unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
         };
+    shape_descriptor_intern_with_rep(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        summary,
+        rep,
+        requested,
+    )
+}
+
+/// [`shape_descriptor_ensure_with_rep`] for a caller that supplies the
+/// shape's COMPLETE attribute summary: a lifted record's own `summary`
+/// (charter step 5's generalization, which re-interns a live record's facts
+/// with another rep). Nothing here reads the keys' attributes.
+///
+/// `requested` is the static id of these facts, exactly as for
+/// [`shape_descriptor_ensure_with_rep`]; a re-intern of a live record's facts
+/// names none.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_intern_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    summary: u8,
+    rep: u64,
+    requested: Option<u32>,
+) -> Result<u32, ShapeDescriptorError> {
+    if !super::field_rep::is_valid(rep) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    let keys_id = keys as usize as u64;
+    if keys_id == 0 && logical_key_count != 0 {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
