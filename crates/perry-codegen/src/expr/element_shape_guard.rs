@@ -505,11 +505,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     let expected_shape_id = match kind {
         ElementShapeGuardKind::Class {
             keys_global_name, ..
-        } => {
-            let shape_global =
-                crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
-            blk.load(I32, &format!("@{shape_global}"))
-        }
+        } => crate::typed_shape::class_shape_id_operand_on_block(blk, keys_global_name, false),
         // The query's answer, which dominates this block.
         ElementShapeGuardKind::Shape { .. } => queried_shape_id
             .clone()
