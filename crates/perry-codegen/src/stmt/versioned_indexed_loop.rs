@@ -563,7 +563,7 @@ pub(super) fn lower(
         .expect("matched class has a keys global")
         .clone();
     let expected_shape_id =
-        crate::typed_shape::load_class_shape_id(ctx, &candidate.class_name, &keys_global);
+        crate::typed_shape::class_shape_id_operand(ctx, &candidate.class_name, &keys_global);
     let key_idx = ctx.strings.intern(&candidate.method_name);
     let method_guard_slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
     let this_slot = ctx

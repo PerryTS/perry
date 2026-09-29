@@ -207,7 +207,7 @@ fn alloc_instance_keeping_keys_collecting(
 /// # Safety
 /// `prefix` is a live keys array with at least `prefix_len` slots, or null
 /// with `prefix_len == 0`, and was read with no allocation since.
-unsafe fn build_longlived_keys_array(
+pub(crate) unsafe fn build_longlived_keys_array(
     prefix: *mut ArrayHeader,
     prefix_len: u32,
     keys: &[&[u8]],

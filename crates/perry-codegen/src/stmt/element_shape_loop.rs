@@ -583,9 +583,23 @@ fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<S
     // preheader validates the receiver kind, array head, shape, and key token
     // before any representation-specific access, and falls back on failure.
     let elem = declared_array_element_type_hint(ctx, array_id)?;
+    anon_shape_class_for_object_type(ctx, elem)
+}
+
+/// The `__AnonShape_<hash>` class a declared CLOSED object type names (see
+/// [`anon_shape_class_for_element_type`] for why it is matched by property
+/// order, not recomputed), or `None` when no single anon shape matches. A
+/// candidate only: every consumer validates it against the receiver at run
+/// time (the element clone's preheader, a loop region's static supplier).
+pub(crate) fn anon_shape_class_for_object_type(
+    ctx: &FnCtx<'_>,
+    ty: &perry_hir::types::Type,
+) -> Option<String> {
+    use perry_hir::types::Type as HirType;
+
     // `type Node = {v: number; w: number}` — the annotation names the shape one
     // indirection away. Both levels are resolved (`type Row = Node[]` too).
-    let HirType::Object(obj) = resolve_type_alias(ctx, elem) else {
+    let HirType::Object(obj) = resolve_type_alias(ctx, ty) else {
         return None;
     };
     // Only a CLOSED shape names a layout: an index signature, a method
