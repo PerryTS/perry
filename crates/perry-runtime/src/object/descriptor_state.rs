@@ -644,6 +644,22 @@ pub(crate) fn note_attrs_born_with_keys(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    // A function object's own properties, and their attributes, live in
+    // its bag (`closure::props`): its keys answer.
+    if crate::closure::is_closure_ptr(obj) {
+        // SAFETY: a proven live closure; its bag is null or a live object.
+        let bag = unsafe { crate::closure::props::bag_of(obj) };
+        if !bag.is_null() {
+            let entry = unsafe {
+                super::key_attrs::object_key_entry(bag as *const ObjectHeader, key.as_bytes())
+            };
+            if entry != 0 {
+                return Some(PropertyAttrs {
+                    bits: super::key_attrs::entry_to_attr_bits(entry),
+                });
+            }
+        }
+    }
     // A STORED descriptor wins over the synthesized index default:
     // `Object.defineProperty` / `Object.freeze` on a wrapper installs a real
     // entry, and the §10.4.3 default must not shadow it. Synthesis therefore

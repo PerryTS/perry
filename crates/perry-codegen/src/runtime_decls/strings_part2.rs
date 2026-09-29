@@ -246,7 +246,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_register_class_computed_method",
         VOID,
-        &[I64, DOUBLE, I64, I64, I64, I64, I64],
+        &[I64, DOUBLE, I64, I64, I64, I64, I64, I64],
     );
     module.declare_function(
         "js_register_class_computed_accessor",

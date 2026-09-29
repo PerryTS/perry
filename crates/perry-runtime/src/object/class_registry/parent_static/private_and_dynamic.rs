@@ -319,7 +319,7 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    let (func_ptr, param_count, has_rest) = CLASS_STATIC_METHODS
+    let (func_ptr, param_count, has_rest, _) = CLASS_STATIC_METHODS
         .read()
         .ok()?
         .as_ref()?

@@ -118,7 +118,7 @@ fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
         if let Some(vtable) = reg.get(&cid) {
             // Honor `delete C.prototype.m`: a deleted key must report `false`
             // from `'m' in new C()`, matching the descriptor/static lookup paths.
-            if !super::class_registry::class_is_key_deleted(cid, name)
+            if !super::class_registry::class_proto_key_deleted(cid, name)
                 && (vtable.methods.contains_key(name)
                     || (accessors && vtable.accessor_decl(name).is_some()))
             {

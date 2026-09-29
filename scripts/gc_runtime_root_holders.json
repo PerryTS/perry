@@ -3716,10 +3716,6 @@
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_DELETED_KEYS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_DYNAMIC_PARENT_VALUE"
     },
     {

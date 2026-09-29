@@ -541,3 +541,36 @@ pub extern "C" fn js_derived_this_check_current() -> f64 {
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
+
+/// Prologue of a static method's closure-convention entry
+/// (`<static body>__clo`): the call's `this` (IMPLICIT_THIS, set by whatever
+/// called the function object: `C.m()`, `f.call(x)`, a bare `f()`) becomes the
+/// body's `this`; class `class_id` (the declaring class) is its
+/// static-private owner, whatever the receiver. Paired with
+/// [`js_static_method_entry_leave`] after the body returns.
+// #1561-style force-keep: only generated IR calls this.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_STATIC_METHOD_ENTRY_ENTER: extern "C" fn(u32) = js_static_method_entry_enter;
+
+#[no_mangle]
+pub extern "C" fn js_static_method_entry_enter(class_id: u32) {
+    // Minting the owner's function object allocates: root `this` across it.
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    let this = this_scope.root_nanbox_f64(js_implicit_this_get());
+    static_private_owner_push(super::class_value::class_value(class_id));
+    static_this_arm(this.get_nanbox_f64());
+}
+
+/// Epilogue of a static method's closure-convention entry: pops the owner the
+/// prologue pushed and drops an override the body never consumed.
+// #1561-style force-keep: only generated IR calls this.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_STATIC_METHOD_ENTRY_LEAVE: extern "C" fn() = js_static_method_entry_leave;
+
+#[no_mangle]
+pub extern "C" fn js_static_method_entry_leave() {
+    static_private_owner_pop();
+    static_this_disarm();
+}

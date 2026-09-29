@@ -17,6 +17,112 @@ use super::{
     import_origin_suffix_ns, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
 };
 
+/// A static-call site's guard (`js_class_static_call_guard`): the declared
+/// body runs directly only while the property the call reads is still that
+/// declaration's function object, a fact carried by the class function
+/// objects' shapes. The site's memo is a runtime `StaticCallMemo` (four
+/// words; thread-local when the program starts workers, so each agent arms
+/// its own). The hit is inline:
+///
+/// ```text
+///   c = memo.c ; c != 0 [&& receiver == memo.c_value]      else MISS
+///   k = [[c + PROPS] + SHAPE] | [[memo.owner + PROPS] + SHAPE] << 32
+///   k == memo.key                                          else MISS
+///   MISS: ok = miss_fn(miss_args..., memo)  (re-validates, re-arms)
+/// ```
+///
+/// `same_owner`: the class the call names declares the body itself, so one
+/// shape word is both halves. `receiver_bits`: a site whose receiver is a
+/// value must also be looking at the memo's class function object. Returns
+/// the i1 "the body may run directly".
+pub(crate) fn emit_static_call_guard(
+    ctx: &mut FnCtx<'_>,
+    receiver_bits: Option<&str>,
+    same_owner: bool,
+    miss_fn: &str,
+    miss_args: &[(crate::types::LlvmType, String)],
+) -> String {
+    use crate::types::I1;
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let memo = format!(
+        "@{}_smemo",
+        crate::expr::inline_cache_global_name(ctx, site)
+    );
+    let tls = if crate::codegen::program_has_worker() {
+        "thread_local "
+    } else {
+        ""
+    };
+    ctx.typed_parse_rodata.push(format!(
+        "{memo} = private {tls}global [4 x i64] [i64 -1, i64 0, i64 0, i64 0], align 8"
+    ));
+    let mut args: Vec<(crate::types::LlvmType, &str)> =
+        miss_args.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    args.push((PTR, &memo));
+    // The inline hit reads LP64 layouts (8-byte memo words, `ClosureHeader`
+    // props at 16); other targets always ask the runtime.
+    let triple = ctx.target_triple;
+    let lp64 =
+        (triple.starts_with("x86_64") || triple.starts_with("aarch64")) && !triple.contains("32");
+    if !lp64 {
+        let ok = ctx.block().call(I32, miss_fn, &args);
+        return ctx.block().icmp_ne(I32, &ok, "0");
+    }
+    let word = |ctx: &mut FnCtx<'_>, offset: usize| -> String {
+        let p = ctx
+            .block()
+            .gep(crate::types::I8, &memo, &[(I64, &offset.to_string())]);
+        ctx.block().load(I64, &p)
+    };
+    let shape_word = |ctx: &mut FnCtx<'_>, fo: &str| -> String {
+        let fo = ctx.block().inttoptr(I64, fo);
+        let props = crate::runtime_abi::CLOSURE_PROPS_OFFSET.to_string();
+        let pp = ctx.block().gep(crate::types::I8, &fo, &[(I64, &props)]);
+        let bag = ctx.block().load(PTR, &pp);
+        let shape = crate::runtime_abi::OBJECT_SHAPE_OFFSET.to_string();
+        let sp = ctx.block().gep(crate::types::I8, &bag, &[(I64, &shape)]);
+        let w = ctx.block().load(I32, &sp);
+        ctx.block().zext(I32, &w, I64)
+    };
+    let check_idx = ctx.new_block("static_guard.check");
+    let miss_idx = ctx.new_block("static_guard.miss");
+    let join_idx = ctx.new_block("static_guard.join");
+    let check_l = ctx.block_label(check_idx);
+    let miss_l = ctx.block_label(miss_idx);
+    let join_l = ctx.block_label(join_idx);
+    let c = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_C_OFFSET);
+    let mut armed = ctx.block().icmp_ne(I64, &c, "0");
+    if let Some(bits) = receiver_bits {
+        let v = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_VALUE_OFFSET);
+        let same = ctx.block().icmp_eq(I64, bits, &v);
+        armed = ctx.block().and(I1, &armed, &same);
+    }
+    ctx.block().cond_br(&armed, &check_l, &miss_l);
+    ctx.current_block = check_idx;
+    let sc = shape_word(ctx, &c);
+    let so = if same_owner {
+        sc.clone()
+    } else {
+        let o = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_OWNER_OFFSET);
+        shape_word(ctx, &o)
+    };
+    let hi = ctx.block().shl(I64, &so, "32");
+    let key = ctx.block().or(I64, &sc, &hi);
+    let memo_key = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_KEY_OFFSET);
+    let hit = ctx.block().icmp_eq(I64, &key, &memo_key);
+    let check_pred = ctx.block().label.clone();
+    ctx.block().cond_br(&hit, &join_l, &miss_l);
+    ctx.current_block = miss_idx;
+    let ok = ctx.block().call(I32, miss_fn, &args);
+    let ok = ctx.block().icmp_ne(I32, &ok, "0");
+    let miss_pred = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(I1, &[("true", &check_pred), (&ok, &miss_pred)])
+}
+
 fn downgrade_unknown_call_args(ctx: &mut FnCtx<'_>, args: &[Expr]) {
     for arg in args {
         downgrade_buffer_aliases_in_expr(ctx, arg, MaterializationReason::UnknownCallEscape);
@@ -131,17 +237,88 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .get(class_name)
                     .map(|c| c.static_methods.iter().any(|m| m.name == *method_name))
                     .unwrap_or(true);
-                if !owns_method {
-                    if let Some(&cid) = ctx.class_ids.get(class_name) {
-                        let cid_str = cid.to_string();
-                        ctx.block()
-                            .call_void("js_static_this_arm_classref", &[(I32, &cid_str)]);
+                // The shape is the authority: the body runs directly only while
+                // the property a call reads (`C.m`, on C or the class it is
+                // inherited from) is still this declaration's function object.
+                // The check precedes the arguments, as the property read does;
+                // otherwise the call reads the property and calls its value on
+                // the class function object (pinned, so it survives the
+                // argument evaluation).
+                // A `static { }` block's synthetic method is not a member: the
+                // class initializer calls it directly, it has no property.
+                let static_cid = if method_name.starts_with("__perry_static_init_") {
+                    None
+                } else {
+                    ctx.class_ids.get(class_name).copied()
+                };
+                // The class whose ClassBody declares the body this call runs.
+                let owner_cid = {
+                    let mut cur = class_name.clone();
+                    let mut found = 0u32;
+                    for _ in 0..32 {
+                        let Some(c) = ctx.classes.get(&cur) else {
+                            break;
+                        };
+                        if c.static_methods.iter().any(|m| m.name == *method_name) {
+                            found = ctx.class_ids.get(&cur).copied().unwrap_or(0);
+                            break;
+                        }
+                        match c.extends_name.clone() {
+                            Some(p) => cur = p,
+                            None => break,
+                        }
                     }
-                }
+                    found
+                };
+                let name_idx = ctx.strings.intern(method_name);
+                let name_entry = ctx.strings.entry(name_idx);
+                let name_bytes = format!("@{}", name_entry.bytes_global);
+                let name_len = name_entry.byte_len.to_string();
+                let guard = match static_cid {
+                    Some(cid) => {
+                        let cid_str = cid.to_string();
+                        // Per-site memo of the class function objects' shapes
+                        // that proved the declaration (validated per use).
+                        let body_i64 = ctx.block().ptrtoint(&format!("@{}", fn_name), I64);
+                        let ok = emit_static_call_guard(
+                            ctx,
+                            None,
+                            owner_cid == cid,
+                            "js_class_static_call_guard",
+                            &[
+                                (I32, cid_str.clone()),
+                                (I32, owner_cid.to_string()),
+                                (PTR, name_bytes.clone()),
+                                (I64, name_len.clone()),
+                                (I64, body_i64),
+                            ],
+                        );
+                        let recv_idx = ctx.new_block("static_call.receiver");
+                        let args_idx = ctx.new_block("static_call.args");
+                        let recv_label = ctx.block_label(recv_idx);
+                        let args_label = ctx.block_label(args_idx);
+                        let pre_label = ctx.block().label.clone();
+                        ctx.block().cond_br(&ok, &args_label, &recv_label);
+                        ctx.current_block = recv_idx;
+                        let recv = ctx
+                            .block()
+                            .call(DOUBLE, "js_class_value", &[(I32, &cid_str)]);
+                        let recv_pred = ctx.block().label.clone();
+                        ctx.block().br(&args_label);
+                        ctx.current_block = args_idx;
+                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        let recv = ctx
+                            .block()
+                            .phi(DOUBLE, &[(&undef, &pre_label), (&recv, &recv_pred)]);
+                        Some((ok, recv))
+                    }
+                    None => None,
+                };
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
                 }
+                let raw_args = lowered.clone();
                 // Issue #894: static methods with synthetic `...arguments`
                 // rest params (or any user-declared rest param) need their
                 // trailing args bundled into an array. Without this,
@@ -243,7 +420,55 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+                let Some((ok, recv)) = guard else {
+                    return Ok(ctx.block().call(DOUBLE, &fn_name, &arg_slices));
+                };
+                let direct_idx = ctx.new_block("static_call.direct");
+                let generic_idx = ctx.new_block("static_call.property");
+                let join_idx = ctx.new_block("static_call.join");
+                let direct_label = ctx.block_label(direct_idx);
+                let generic_label = ctx.block_label(generic_idx);
+                let join_label = ctx.block_label(join_idx);
+                ctx.block().cond_br(&ok, &direct_label, &generic_label);
+                ctx.current_block = direct_idx;
+                if !owns_method {
+                    let cid_str = static_cid.unwrap_or(0).to_string();
+                    ctx.block()
+                        .call_void("js_static_this_arm_classref", &[(I32, &cid_str)]);
+                }
+                let direct = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
+                let direct_pred = ctx.block().label.clone();
+                ctx.block().br(&join_label);
+                ctx.current_block = generic_idx;
+                let (args_ptr, args_len) = if raw_args.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, raw_args.len());
+                    let blk = ctx.block();
+                    for (i, value) in raw_args.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        blk.store(DOUBLE, value, &slot);
+                    }
+                    (buf, raw_args.len().to_string())
+                };
+                let via_property = ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method",
+                    &[
+                        (DOUBLE, &recv),
+                        (PTR, &name_bytes),
+                        (I64, &name_len),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                );
+                let generic_pred = ctx.block().label.clone();
+                ctx.block().br(&join_label);
+                ctx.current_block = join_idx;
+                return Ok(ctx.block().phi(
+                    DOUBLE,
+                    &[(&direct, &direct_pred), (&via_property, &generic_pred)],
+                ));
             }
             // #310: when the receiver is a namespace alias from an
             // `import { Foo } from "pkg"` where the source module did

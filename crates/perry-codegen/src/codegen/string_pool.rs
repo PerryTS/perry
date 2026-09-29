@@ -50,6 +50,12 @@ impl<'a> InitChunker<'a> {
     /// Start a fresh chunk function if the current one is full. Call ONCE at the
     /// top of each loop iteration (one independent init op), before
     /// [`current_block`]. Closes the previous chunk with `ret void`.
+    /// The module, for a definition an init op registers (the chunk being
+    /// filled is addressed by index, so appending functions is fine).
+    fn module(&mut self) -> &mut LlModule {
+        self.llmod
+    }
+
     fn roll_if_full(&mut self) {
         if self.ops_in_current >= self.ops_per_chunk {
             if !self.chunk_names.is_empty() {
@@ -867,7 +873,10 @@ pub(super) fn emit_string_pool(
     // subclass whose parent is a class-expression value inherits the parent's
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
-    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32, u32)> = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32, u32, bool, bool)> =
+        Vec::new();
+    let mut computed_static_entries: Vec<StaticMethodEntry> = Vec::new();
     // #1787: (cid, standalone-constructor symbol, total_param_count).
     // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
     // class-expression value constructed dynamically) can replay the class's
@@ -996,7 +1005,41 @@ pub(super) fn emit_string_pool(
                 has_rest,
                 spec_length,
                 sm.id,
+                sm.params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none()),
+                sm.params.iter().any(|p| p.arguments_object.is_some()),
             ));
+        }
+        // A computed-name static method is a ClassBody static method too: its
+        // own function object runs the same closure-convention entry. Its
+        // key (and so its `name`) exists only when the class definition
+        // evaluates, which registers the entry with it
+        // (`js_register_class_computed_method`).
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|m| m.is_static && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method))
+        {
+            let f = &member.function;
+            let mut spec_length = 0u32;
+            for p in &f.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
+            computed_static_entries.push(StaticMethodEntry {
+                cid,
+                llvm_name: scoped_static_method_name(module_prefix, cid, class_name, &f.name),
+                param_count: f.params.len() as u32,
+                spec_length,
+                has_user_rest: f
+                    .params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none()),
+                has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
+            });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
         // (emitted unconditionally in `artifacts.rs`). Its arity is the
@@ -1145,8 +1188,17 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_rest, spec_length, definition_order) in
-        static_method_triples
+    for (
+        cid,
+        method_name,
+        llvm_name,
+        param_count,
+        has_rest,
+        spec_length,
+        definition_order,
+        has_user_rest,
+        has_synth_args,
+    ) in static_method_triples
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
@@ -1193,6 +1245,37 @@ pub(super) fn emit_string_pool(
                 (I64, &spec_length.to_string()),
             ],
         );
+        let entry_ref = emit_static_method_entry(
+            &mut chunker,
+            &StaticMethodEntry {
+                cid,
+                llvm_name: llvm_name.clone(),
+                param_count,
+                spec_length,
+                has_user_rest,
+                has_synth_args,
+            },
+        );
+        let blk = chunker.current_block();
+        blk.call_void(
+            register_name_fn,
+            &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
+        );
+        let entry_i64 = blk.ptrtoint(&entry_ref, I64);
+        blk.call_void(
+            "js_register_class_static_method_entry",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &entry_i64),
+            ],
+        );
+    }
+    computed_static_entries.sort_unstable_by(|a, b| a.llvm_name.cmp(&b.llvm_name));
+    for e in &computed_static_entries {
+        chunker.roll_if_full();
+        emit_static_method_entry(&mut chunker, e);
     }
     // #1787: register each class's standalone constructor into
     // CLASS_CONSTRUCTORS. ptrtoint @symbol both stores the function pointer
@@ -1822,3 +1905,64 @@ pub(super) fn emit_string_pool(
 #[cfg(test)]
 #[path = "class_name_registration_tests.rs"]
 mod class_name_registration_tests;
+
+/// A ClassBody static method's closure-convention entry (`<body>__clo`).
+struct StaticMethodEntry {
+    cid: u32,
+    llvm_name: String,
+    param_count: u32,
+    spec_length: u32,
+    has_user_rest: bool,
+    has_synth_args: bool,
+}
+
+/// Define `<body>__clo(closure, args...)`, the code of a ClassBody static
+/// method's own function object: the call's `this` becomes the body's `this`
+/// (enter), the body runs, leave drops what enter set up. Arity, rest
+/// bundling, length and strictness are registered on the code, as for any
+/// function (the caller registers the name). Returns `@<body>__clo`.
+fn emit_static_method_entry(chunker: &mut InitChunker<'_>, e: &StaticMethodEntry) -> String {
+    let entry_name = format!("{}__clo", e.llvm_name);
+    {
+        let n = e.param_count as usize;
+        let mut params: Vec<(crate::types::LlvmType, String)> =
+            vec![(I64, "%this_closure".to_string())];
+        params.extend((0..n).map(|i| (DOUBLE, format!("%a{}", i))));
+        let f = chunker
+            .module()
+            .define_function(&entry_name, DOUBLE, params);
+        let _ = f.create_block("entry");
+        let b = f.block_mut(0).unwrap();
+        b.call_void("js_static_method_entry_enter", &[(I32, &e.cid.to_string())]);
+        let arg_names: Vec<String> = (0..n).map(|i| format!("%a{}", i)).collect();
+        let call_args: Vec<(crate::types::LlvmType, &str)> =
+            arg_names.iter().map(|a| (DOUBLE, a.as_str())).collect();
+        let r = b.call(DOUBLE, &e.llvm_name, &call_args);
+        b.call_void("js_static_method_entry_leave", &[]);
+        b.ret(DOUBLE, &r);
+    }
+    let blk = chunker.current_block();
+    let entry_ref = format!("@{}", entry_name);
+    let (shape_fn, shape_count) = match (e.has_user_rest, e.has_synth_args) {
+        (true, true) => (
+            "js_register_closure_rest_and_arguments",
+            e.param_count.saturating_sub(2),
+        ),
+        (true, false) => ("js_register_closure_rest", e.param_count.saturating_sub(1)),
+        (false, true) => (
+            "js_register_closure_synthetic_arguments",
+            e.param_count.saturating_sub(1),
+        ),
+        (false, false) => ("js_register_closure_arity", e.param_count),
+    };
+    blk.call_void(
+        shape_fn,
+        &[(PTR, &entry_ref), (I32, &shape_count.to_string())],
+    );
+    blk.call_void(
+        "js_register_closure_length",
+        &[(PTR, &entry_ref), (I32, &e.spec_length.to_string())],
+    );
+    blk.call_void("js_register_closure_strict_function", &[(PTR, &entry_ref)]);
+    entry_ref
+}

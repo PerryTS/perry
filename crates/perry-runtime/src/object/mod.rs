@@ -1761,6 +1761,9 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
 
 // 16-byte header with `meta` last (target_layout.rs): offset 8 LP64, 12 ILP32.
 const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 16 - size_of::<usize>());
+const _: () = assert!(
+    std::mem::offset_of!(ObjectHeader, parent_class_id) == crate::codegen_abi::OBJECT_SHAPE_OFFSET
+);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 pub(crate) mod cell_meta;

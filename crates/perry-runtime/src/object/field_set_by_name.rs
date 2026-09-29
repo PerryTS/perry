@@ -441,7 +441,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
                     if !is_prototype_ref
                         && name == "name"
-                        && !super::class_registry::class_is_key_deleted(class_id, &name)
+                        && !super::class_registry::class_static_key_deleted(class_id, &name)
                         && super::class_registry::lookup_static_method_in_chain(class_id, &name)
                             .is_none()
                         && super::class_registry::class_static_defined_attrs(class_id, &name)

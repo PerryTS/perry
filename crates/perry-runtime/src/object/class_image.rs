@@ -89,7 +89,8 @@ pub(crate) const PARENT_DENSE_CAP: usize = 1 << 16;
 /// OUTER map only takes the fast hasher (see `ClassImageTables`); the INNER
 /// `HashMap<String, _>` stays on SipHash because its keys are JS-supplied
 /// member names.
-pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool)>>;
+/// (body func_ptr, param_count, has_rest, closure-convention entry or 0).
+pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool, usize)>>;
 /// class_id -> { name -> (getter func_ptr, setter func_ptr) } for static accessors.
 /// Outer map fast-hashed, inner `String`-keyed map deliberately not — see above.
 pub type StaticAccessorTable = PtrHashMap<u32, HashMap<String, (usize, usize)>>;

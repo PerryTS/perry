@@ -29,6 +29,7 @@ pub(super) fn extend_class_method_source_text(
         .iter()
         .map(|(symbol, _, _)| symbol.clone())
         .collect();
+    let mut entry_sources: Vec<(String, String, bool)> = Vec::new();
     let mut push_defined = |func_id: FuncId, symbol: String| {
         let Some(source) = hir.closure_source_text.get(&func_id) else {
             return;
@@ -103,27 +104,59 @@ pub(super) fn extend_class_method_source_text(
             push_defined(setter.id, symbol);
         }
         for method in &class.static_methods {
-            push_defined(
-                method.id,
-                scoped_static_method_name(module_prefix, class.id, &class.name, &method.name),
-            );
+            let body =
+                scoped_static_method_name(module_prefix, class.id, &class.name, &method.name);
+            // The method's own function object runs `<body>__clo` (string
+            // pool): its toString is the method's source too.
+            if !method.name.starts_with("__perry_static_init_") && llmod.has_function(&body) {
+                if let Some(source) = hir.closure_source_text.get(&method.id) {
+                    entry_sources.push((
+                        format!("{body}__clo"),
+                        super::function_source_header::retained_function_text(
+                            hir,
+                            closures,
+                            method.id,
+                            &source.text,
+                        ),
+                        source.is_non_strict_ordinary,
+                    ));
+                }
+            }
+            push_defined(method.id, body);
         }
         for member in class
             .computed_members
             .iter()
             .filter(|member| member.is_static)
         {
-            push_defined(
-                member.function.id,
-                scoped_static_method_name(
-                    module_prefix,
-                    class.id,
-                    &class.name,
-                    &member.function.name,
-                ),
+            let body = scoped_static_method_name(
+                module_prefix,
+                class.id,
+                &class.name,
+                &member.function.name,
             );
+            // A computed-name static method's function object runs
+            // `<body>__clo` too (string pool).
+            if matches!(member.kind, perry_hir::ClassComputedMemberKind::Method)
+                && llmod.has_function(&body)
+            {
+                if let Some(source) = hir.closure_source_text.get(&member.function.id) {
+                    entry_sources.push((
+                        format!("{body}__clo"),
+                        super::function_source_header::retained_function_text(
+                            hir,
+                            closures,
+                            member.function.id,
+                            &source.text,
+                        ),
+                        source.is_non_strict_ordinary,
+                    ));
+                }
+            }
+            push_defined(member.function.id, body);
         }
     }
+    user_fn_source.extend(entry_sources);
 }
 
 /// Collect retained `Function.prototype.toString` source text for every user

@@ -246,7 +246,7 @@ pub(super) unsafe fn class_object_name_value(
         return Some(v);
     }
     let class_id = (*obj).class_id;
-    if super::super::class_registry::class_is_key_deleted(class_id, "name") {
+    if super::super::class_registry::class_static_key_deleted(class_id, "name") {
         return None;
     }
     let cname = super::super::class_registry::class_name_for_id(class_id)?;

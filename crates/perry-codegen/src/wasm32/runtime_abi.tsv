@@ -609,9 +609,11 @@ js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize
 js_class_register_static_field	void	i32u,ptr,usize,f64,ptr
 js_class_register_static_symbol	void	i32u,f64,f64
+js_class_static_call_guard	i32s	i32s,i32s,ptr,i64,i64,ptr
 js_class_static_field_get	f64	i32s,ptr,i64
 js_class_static_field_put	void	i32s,ptr,i64,f64
 js_class_static_method_call	f64	f64,ptr,usize,ptr,usize
+js_class_static_value_call_guard	i32s	f64,i32s,ptr,i64,i64,ptr
 js_class_value	f64	i32s
 js_clear_exception	void	
 js_clear_immediate_value	void	f64
@@ -3205,7 +3207,7 @@ js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr
 js_register_aux_tick_begin	void	ptr
 js_register_class_computed_accessor	void	i64,f64,i64,i64,i64,i64
-js_register_class_computed_method	void	i64,f64,i64,i64,i64,i64,i64
+js_register_class_computed_method	void	i64,f64,i64,i64,i64,i64,i64,i64
 js_register_class_constructor	void	i64,i64,i64,i64
 js_register_class_constructor_flags	void	i64,i64,i64
 js_register_class_extends_data_view	void	i32u
@@ -3227,6 +3229,7 @@ js_register_class_source_static	void	i32u,ptr,i32u
 js_register_class_static_getter	void	i64,ptr,i64,i64
 js_register_class_static_method	void	i64,ptr,i64,i64,i64,i64
 js_register_class_static_method_bind_length	void	i64,ptr,i64,i64
+js_register_class_static_method_entry	void	i64,ptr,i64,i64
 js_register_class_static_setter	void	i64,ptr,i64,i64
 js_register_class_string_member_order	void	i64,ptr,i64,i64,i64
 js_register_class_to_string_tag	void	i32u,i64
@@ -3526,6 +3529,8 @@ js_stack_overflow	void
 js_state_get	f64	f64
 js_state_init	void	f64,f64
 js_state_set	void	f64,f64
+js_static_method_entry_enter	void	i32u
+js_static_method_entry_leave	void	
 js_static_this_arm_classref	void	i32u
 js_static_this_arm_value	void	f64
 js_static_this_resolve	f64	f64

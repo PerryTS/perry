@@ -82,7 +82,7 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
         return;
     }
     let proto = class_decl_prototype_object(class_id);
-    if !proto.is_null() && !class_is_key_deleted(class_id, name) {
+    if !proto.is_null() && !class_proto_key_deleted(class_id, name) {
         install_decl_prototype_accessor(proto, class_id, name);
     }
 }
@@ -101,8 +101,8 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
         return None;
     }
     let obj = js.as_pointer::<ObjectHeader>();
-    let declared =
-        !class_is_key_deleted(class_id, name) && class_own_accessor_ptrs(class_id, name).is_some();
+    let declared = !class_proto_key_deleted(class_id, name)
+        && class_own_accessor_ptrs(class_id, name).is_some();
     // SAFETY: `obj` is the live decl prototype; nothing below allocates.
     let holds = declared
         || unsafe {

@@ -304,13 +304,15 @@ pub extern "C" fn js_object_delete_field(
                     {
                         return 0;
                     }
-                    if name != "constructor"
-                        && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
-                            || super::native_module::class_has_own_method(cid, name)
-                            || super::class_registry::lookup_own_prototype_method(cid, name)
-                                .is_some())
+                    if name == "constructor"
+                        || super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                        || super::native_module::class_has_own_method(cid, name)
+                        || super::class_registry::lookup_own_prototype_method(cid, name).is_some()
                     {
-                        super::class_registry::class_mark_key_deleted(cid, name);
+                        // The member's storage is this object's key (removed
+                        // by the scan below) plus, for a runtime prototype
+                        // assignment, its dispatch entry: remove both.
+                        super::class_registry::class_prototype_method_root_remove(cid, name);
                         super::class_registry::invalidate_class_string_member_order(
                             cid, name, false,
                         );
@@ -798,34 +800,33 @@ fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
         return 0;
     }
     super::class_registry::class_delete_own_dynamic_prop(class_id, name);
-    super::class_registry::class_mark_key_deleted(class_id, name);
+    crate::object::class_value::note_static_key_deleted(class_id, name);
     super::class_registry::invalidate_class_string_member_order(class_id, name, true);
     1
 }
 
 fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
-    if let Some(proto) = super::class_registry::decl_prototype_own_accessor(class_id, name) {
-        // S2: the accessor is a real property of the declared prototype
-        // object; delete it there (which also records the class key deleted).
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let proto = scope.root_nanbox_f64(proto);
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        return js_object_delete_field(
-            (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
-            key,
-        );
-    }
     let has_own = name == "constructor"
+        || super::class_registry::decl_prototype_own_accessor(class_id, name).is_some()
         || super::native_module::class_has_own_method(class_id, name)
         || super::class_registry::lookup_own_prototype_method(class_id, name).is_some();
     if !has_own {
         return 1;
     }
-    super::class_registry::class_mark_key_deleted(class_id, name);
-    super::class_registry::invalidate_class_string_member_order(class_id, name, false);
-    super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
-    crate::typed_feedback::invalidate_method_change(class_id);
-    1
+    // The members are real properties of the class's prototype object
+    // (materialized first): the delete happens there.
+    let proto = super::class_registry::class_decl_prototype_value(class_id);
+    let js = crate::JSValue::from_bits(proto.to_bits());
+    if !js.is_pointer() {
+        return 1;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_delete_field(
+        (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
+        key,
+    )
 }
 
 /// `delete prim.field` (static key): once RequireObjectCoercible has rejected

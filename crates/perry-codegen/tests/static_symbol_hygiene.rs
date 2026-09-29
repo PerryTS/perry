@@ -219,17 +219,38 @@ fn duplicate_class_static_methods_use_class_id_in_symbols() {
     let ir = String::from_utf8(compile_module(&duplicate_static_module(), empty_opts()).unwrap())
         .unwrap();
 
+    // The body: exactly one definition.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex"
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex("
+        ),
+        1
+    );
+    // This module hands codegen two classes of one name; the registration
+    // pass reads the name-keyed class table, which keeps the last (c12), so
+    // only its static method is registered and gets the function-object
+    // entry. (A real module's classes never share a table name.)
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex__clo("
+        ),
+        0
+    );
+    // The body, and its function object's closure-convention entry
+    // `<body>__clo`: exactly one definition each.
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex("
         ),
         1
     );
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex"
+            "define double @perry_static_marked_symbol_hygiene_ts__x__c12__lex__clo("
         ),
         1
     );
@@ -256,10 +277,19 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
         ),
         1
     );
+    // The body, and its function object's closure-convention entry
+    // `<body>__clo`: exactly one definition each.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex"
+            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex("
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex__clo("
         ),
         1
     );

@@ -118,8 +118,20 @@ unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_set(ptr: usize, key: &str, value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
+    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
     let bag = bag_ensure(ptr);
     object_own_set(bag, key, value);
+    declared_value_replaced(ptr, key, declared);
+}
+
+/// After a write to own `key`: when it held the declaration (`declared`) and
+/// no longer does, the shape transitions.
+unsafe fn declared_value_replaced(ptr: usize, key: &str, declared: Option<f64>) {
+    let Some(old) = declared else { return };
+    if bag_get(ptr, key.as_bytes()).is_some_and(|v| v.to_bits() == old.to_bits()) {
+        return;
+    }
+    crate::object::shapes::transition_object_shape_semantics(bag_of(ptr));
 }
 
 /// [[DefineOwnProperty]] of own data property `key` with just a value: the
@@ -132,9 +144,20 @@ pub(crate) unsafe fn bag_set(ptr: usize, key: &str, value: f64) {
 /// `ptr` is a proven, live closure cell.
 pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
+    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
     let bag = bag_ensure(ptr);
-    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    crate::object::object_ops::define_property_force_store_value(bag, key, value);
+    if !bag_has_own(ptr, key.as_bytes()) {
+        // A NEW property — including one `delete` removed earlier: it is
+        // appended as any new key is, so it enumerates last. The in-place
+        // store below would find the deleted key's tombstoned entry and
+        // bring the property back at its old position.
+        object_own_set(bag, key, value);
+        declared_value_replaced(ptr, key, declared);
+        return;
+    }
+    let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
+    declared_value_replaced(ptr, key, declared);
 }
 
 /// Remove the function's own data property `key`; true when it existed.
@@ -147,8 +170,12 @@ pub(crate) unsafe fn bag_remove(ptr: usize, key: &str) -> bool {
         return false;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
+    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::js_object_delete_field(bag, key_hdr);
+    // Deleting the declaration must not let a re-add reach the shape that
+    // proved it (a removed last key re-added lands on the same key list).
+    declared_value_replaced(ptr, key, declared);
     true
 }
 
@@ -196,6 +223,40 @@ pub(crate) unsafe fn bag_accessor_names(ptr: usize) -> Vec<String> {
     let mut out = Vec::new();
     for i in 0..keys.count() {
         if !crate::object::key_attrs::key_is_accessor_at(arr, i) {
+            continue;
+        }
+        let key = JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(bytes) = crate::string::js_string_key_bytes(key, &mut scratch) {
+            out.push(String::from_utf8_lossy(bytes).into_owned());
+        }
+    }
+    out
+}
+
+/// Every own property name (data AND accessor) in creation order — the
+/// order of the bag's key list. A deleted key is gone from that order; a
+/// key defined again after a delete is a new key and comes last.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
+    let bag = bag_of(ptr);
+    if bag.is_null() {
+        return Vec::new();
+    }
+    let keys = crate::object::object_keys(bag);
+    let arr = keys.arr();
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let live = crate::object::object_live_slot_count(bag);
+    let mut out = Vec::new();
+    for i in 0..keys.count() {
+        if !crate::object::key_attrs::key_is_accessor_at(arr, i)
+            && crate::object::object_field_at_with_live(bag, i, live).bits()
+                == crate::value::TAG_HOLE
+        {
             continue;
         }
         let key = JSValue::from_bits(crate::array::js_array_get_f64(arr, i).to_bits());

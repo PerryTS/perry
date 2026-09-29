@@ -7,8 +7,6 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 crate::perry_thread_local! {
-    pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
     /// Backing LLVM globals for declared static fields, keyed exactly like
     /// `CLASS_DYNAMIC_PROPS`. Direct compiled reads use these cells, while
     /// computed/member writes reach the runtime side table. Remembering the
@@ -42,33 +40,62 @@ pub(crate) fn throw_non_constructable_builtin_function() -> ! {
     super::super::object_ops::throw_object_type_error(b"Function is not a constructor")
 }
 
-pub(crate) fn class_mark_key_deleted(class_id: u32, key: &str) {
-    if class_id == 0 {
-        return;
+/// Has `delete` removed class `class_id`'s own ClassBody prototype member
+/// `name` (a method, an accessor, or `constructor`)? Derived from the object
+/// that owns the member: it was declared, the class's decl prototype exists,
+/// and neither that object nor a runtime prototype assignment holds the key.
+/// Every delete of a prototype member retires the per-name prototype fast
+/// guard first, so a name whose guard is intact was never deleted anywhere.
+pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
+    if class_id == 0
+        || !class_prototype_fast_guard_invalidated_for_method(class_prototype_method_guard_slot(
+            name,
+        ))
+    {
+        return false;
     }
-    CLASS_DELETED_KEYS.with(|m| {
-        m.borrow_mut()
-            .entry(class_id)
-            .or_default()
-            .insert(key.to_string());
-    });
-}
-
-pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
-    CLASS_DELETED_KEYS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .map(|keys| keys.contains(key))
+    let declared = name == "constructor"
+        || class_own_accessor_ptrs(class_id, name).is_some()
+        || super::super::native_module::class_has_own_method(class_id, name);
+    if !declared {
+        return false;
+    }
+    let proto = class_decl_prototype_object(class_id);
+    if proto.is_null() {
+        // Never materialized: nothing was deleted from it.
+        return false;
+    }
+    let assigned = CLASS_PROTOTYPE_METHODS.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|m| m.get(&class_id).is_some_and(|p| p.contains_key(name)))
+            })
             .unwrap_or(false)
-    })
+    });
+    // SAFETY: `proto` is this realm's live decl prototype; nothing below
+    // allocates.
+    !assigned
+        && !unsafe {
+            let keys = crate::object::object_keys(proto);
+            let arr = keys.arr();
+            !arr.is_null()
+                && crate::object::keys_find_slot_by_bytes_resolved(
+                    arr,
+                    keys.count(),
+                    name.as_bytes(),
+                )
+                .is_some()
+        }
 }
 
-pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
-    CLASS_DELETED_KEYS.with(|m| {
-        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
-            keys.remove(key);
-        }
-    });
+/// Has `delete` removed class `class_id`'s own static member `name` (a
+/// ClassBody static method or accessor, or the intrinsic `name` / `length`)?
+/// Derived from the class function object that owns it.
+pub(crate) fn class_static_key_deleted(class_id: u32, name: &str) -> bool {
+    crate::object::class_value::class_static_key_deleted(class_id, name)
 }
 
 /// Record `C.<name> = value` in the class-ref side table that dynamic reads
@@ -83,26 +110,10 @@ pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
 /// constructor runs it once per construction (144,000 times in
 /// gc-handoff/apps/shapes.ts) and the key exists after the first.
 ///
-/// The in-place update also skips the `CLASS_DELETED_KEYS` probe — but only
-/// when NO class key has ever been deleted, which is the state of essentially
-/// every program (`delete C.x` on a class constructor is vanishingly rare).
-/// Once anything has been deleted the original sequence runs verbatim, so the
-/// interaction between a deleted PROTOTYPE key and a same-named static field
-/// (`class C { m() {} static m = 1 }` — both land under one class_id) keeps
-/// whatever behaviour it had.
+/// A static store touches only the class function object: the prototype
+/// side lives on the prototype object, so `C.m = 1` can never resurrect a
+/// deleted `C.prototype.m`.
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
-    // Un-marking re-exposes a previously `delete`d prototype key to
-    // `class_instance_has_member` / `lookup_prototype_method` — the one
-    // direction a cached "this chain resolves nothing" verdict must not
-    // survive (#10696).
-    let was_deleted = CLASS_DELETED_KEYS.with(|m| {
-        m.borrow_mut()
-            .get_mut(&class_id)
-            .is_some_and(|keys| keys.remove(name))
-    });
-    if was_deleted {
-        super::class_lookup_surface_gen_bump();
-    }
     // The class function object's own-property bag (barriered, traced).
     crate::object::class_value::class_static_set(class_id, name, value);
     class_static_alias_sync(class_id, name);
@@ -125,8 +136,7 @@ pub(crate) fn class_static_alias_sync(class_id: u32, name: &str) {
     }) else {
         return;
     };
-    let plain = !class_is_key_deleted(class_id, name)
-        && class_static_defined_attrs(class_id, name).is_none_or(|(writable, _, _)| writable)
+    let plain = class_static_defined_attrs(class_id, name).is_none_or(|(writable, _, _)| writable)
         && !crate::object::class_value::class_static_has_own_accessor(class_id, name);
     let value = plain
         .then(|| crate::object::class_value::class_static_get(class_id, name))
@@ -1424,28 +1434,18 @@ mod class_dynamic_prop_store_tests {
         assert_eq!(keys, vec!["made".to_string(), "other".to_string()]);
     }
 
-    /// The fast path is gated on "nothing has ever been deleted". Once a key
-    /// IS deleted, a re-store must still clear it from the deleted set — the
-    /// behaviour the unconditional probe used to provide.
+    /// `delete C.k` removes the key from the class function object; a later
+    /// store defines it again.
     #[test]
-    fn store_after_delete_clears_the_deleted_mark() {
+    fn store_after_delete_defines_the_key_again() {
         let cid = 0x7c01_0002;
         class_dynamic_prop_root_store(cid, "k", 1.0);
-        // Delete the way `delete C.k` does: drop the value AND mark the key.
         class_delete_own_dynamic_prop(cid, "k");
-        class_mark_key_deleted(cid, "k");
-        assert!(class_is_key_deleted(cid, "k"));
         assert_eq!(stored(cid, "k"), None);
 
         class_dynamic_prop_root_store(cid, "k", 2.0);
-        assert!(
-            !class_is_key_deleted(cid, "k"),
-            "re-storing a deleted static key must un-delete it"
-        );
         assert_eq!(stored(cid, "k"), Some(2.0));
 
-        // And a subsequent store, now on the slow arm (the deleted-keys map
-        // is non-empty for the whole process), still updates the value.
         class_dynamic_prop_root_store(cid, "k", 3.0);
         assert_eq!(stored(cid, "k"), Some(3.0));
     }

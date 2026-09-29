@@ -503,6 +503,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let is_static_str = (*is_static as i64).to_string();
                         let has_rest_str = (*has_rest as i64).to_string();
                         let definition_order_str = definition_order.to_string();
+                        // A static one's own function object runs its
+                        // closure-convention entry (string pool).
+                        let entry_i64 = if *is_static {
+                            ctx.block().ptrtoint(&format!("@{}__clo", llvm_name), I64)
+                        } else {
+                            "0".to_string()
+                        };
                         ctx.block().call_void(
                             "js_register_class_computed_method",
                             &[
@@ -513,6 +520,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &is_static_str),
                                 (I64, &has_rest_str),
                                 (I64, &definition_order_str),
+                                (I64, &entry_i64),
                             ],
                         );
                     }

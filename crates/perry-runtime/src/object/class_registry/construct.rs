@@ -1949,9 +1949,6 @@ pub(super) fn is_arrow_function_value(value: f64) -> bool {
 /// parent-class chain so methods registered on a base class are found
 /// via subclass instances.
 pub(crate) fn lookup_own_prototype_method(class_id: u32, name: &str) -> Option<f64> {
-    if class_is_key_deleted(class_id, name) {
-        return None;
-    }
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let guard = table.read().ok()?;
         let bits = guard.as_ref()?.get(&class_id)?.get(name)?;
@@ -1966,7 +1963,7 @@ pub(crate) fn lookup_prototype_method(class_id: u32, name: &str) -> Option<f64> 
         let mut cid = class_id;
         let mut depth = 0usize;
         while depth < 32 {
-            if !class_is_key_deleted(cid, name) {
+            if !class_proto_key_deleted(cid, name) {
                 if let Some(per_class) = map.get(&cid) {
                     if let Some(&bits) = per_class.get(name) {
                         return Some(f64::from_bits(bits));

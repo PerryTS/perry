@@ -261,9 +261,25 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     for key in INTRINSIC_OWN_DATA_KEYS {
         install_intrinsic_own_data(class_id, key);
     }
-    // ClassBody static accessors, in ClassBody order.
+    // MakeConstructor: `prototype` { !w, !e, !c } is created with the class,
+    // after `length` and `name` and before every ClassBody static, so the own
+    // key order is the bag's creation order.
+    let proto = super::class_registry::class_decl_prototype_value(class_id);
+    if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+        // SAFETY: `ptr` is the class closure minted above.
+        unsafe { crate::closure::props::bag_define_value(ptr as usize, "prototype", proto) };
+        super::class_registry::class_static_set_defined_attrs(
+            class_id,
+            "prototype",
+            false,
+            false,
+            false,
+        );
+    }
+    // ClassBody static methods and accessors, in ClassBody order.
     for key in super::class_registry::class_own_string_member_names(class_id, true) {
         install_declared_static_accessor(class_id, &key);
+        install_declared_static_method(class_id, &key);
     }
     ptr
 }
@@ -353,9 +369,13 @@ pub(crate) fn note_intrinsic_registration(class_id: u32, key: &str) {
     if super::class_registry::class_registered_static_accessor_ptrs(class_id, key).is_some() {
         install_declared_static_accessor(class_id, key);
     }
-    if !INTRINSIC_OWN_DATA_KEYS.contains(&key) {
-        return;
+    if INTRINSIC_OWN_DATA_KEYS.contains(&key) {
+        note_intrinsic_key_registration(class_id, key);
     }
+    install_declared_static_method(class_id, key);
+}
+
+fn note_intrinsic_key_registration(class_id: u32, key: &str) {
     if holds_intrinsic(class_id, key) {
         if static_member_owns(class_id, key) {
             class_static_remove(class_id, key);
@@ -364,9 +384,355 @@ pub(crate) fn note_intrinsic_registration(class_id: u32, key: &str) {
             class_static_set(class_id, key, value);
         }
     } else if class_static_get(class_id, key).is_none()
-        && !super::class_registry::class_is_key_deleted(class_id, key)
+        // SAFETY: minted above (`class_value_cached`).
+        && !unsafe { crate::closure::props::state_is_deleted(class_value_ptr(class_id) as usize, key) }
     {
         install_intrinsic_own_data(class_id, key);
+    }
+}
+
+/// `delete C.<name>` removed own `name` of class `class_id`: an intrinsic
+/// `name` / `length` is remembered on the object (as for any function, #3655),
+/// so a later registration does not install it again.
+pub(crate) fn note_static_key_deleted(class_id: u32, name: &str) {
+    if INTRINSIC_OWN_DATA_KEYS.contains(&name) {
+        // SAFETY: this agent's live class closure.
+        unsafe {
+            crate::closure::props::state_mark_deleted(class_value_ptr(class_id) as usize, name)
+        };
+    }
+}
+
+/// Has `delete` removed class `class_id`'s own static member `name` — a
+/// ClassBody static method or accessor, or the intrinsic `name` / `length`?
+/// Derived from the function object: the member was declared and the object
+/// no longer has the key. A never-minted object has deleted nothing.
+pub(crate) fn class_static_key_deleted(class_id: u32, name: &str) -> bool {
+    if name.starts_with('#') || is_internal_static_key(name) {
+        return false;
+    }
+    let Some(ptr) = class_value_if_minted(class_id) else {
+        return false;
+    };
+    let declared = static_member_owns(class_id, name)
+        || (INTRINSIC_OWN_DATA_KEYS.contains(&name)
+            && intrinsic_own_data_registered(class_id, name));
+    // SAFETY: this agent's live class closure; the lookup does not allocate.
+    declared && !unsafe { crate::closure::props::bag_has_own(ptr as usize, name.as_bytes()) }
+}
+
+fn intrinsic_own_data_registered(class_id: u32, key: &str) -> bool {
+    match key {
+        "length" => super::class_registry::class_length_for_id(class_id).is_some(),
+        "name" => super::class_registry::class_name_for_id(class_id).is_some(),
+        _ => false,
+    }
+}
+
+/// What own property `name` of class `class_id`'s function object says about
+/// the ClassBody static method `name` whose code is `func_ptr`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StaticMethodProperty {
+    /// The property is still the declaration's function: dispatch it.
+    Live,
+    /// `delete` removed it: the lookup continues at the parent class.
+    Deleted,
+    /// The program redefined it: the property's value wins.
+    Replaced,
+}
+
+/// Class `class_id`'s answer for static method `name` during a chain walk.
+/// `declared` is its own ClassBody declaration of `name` (the declaration's
+/// closure-convention entry, 0 when it has none), `None` when it declares no
+/// such method.
+pub(crate) fn static_method_property(
+    class_id: u32,
+    name: &str,
+    declared: Option<usize>,
+) -> StaticMethodProperty {
+    let live_or_next = if declared.is_some() {
+        StaticMethodProperty::Live
+    } else {
+        StaticMethodProperty::Deleted
+    };
+    if name.starts_with('#') || is_internal_static_key(name) {
+        return live_or_next;
+    }
+    // A never-minted object owns exactly its declarations.
+    let Some(ptr) = class_value_if_minted(class_id) else {
+        return live_or_next;
+    };
+    let code = declared.unwrap_or(0);
+    // SAFETY: this agent's live class closure; nothing below allocates.
+    unsafe {
+        match crate::closure::props::bag_get(ptr as usize, name.as_bytes()) {
+            Some(v) if code != 0 && static_method_code_of(v) == Some(code) => {
+                StaticMethodProperty::Live
+            }
+            Some(_) => StaticMethodProperty::Replaced,
+            None if crate::closure::props::bag_has_own(ptr as usize, name.as_bytes()) => {
+                StaticMethodProperty::Replaced
+            }
+            // A declaration without an entry is never installed as a property.
+            None if declared == Some(0) => StaticMethodProperty::Live,
+            None => StaticMethodProperty::Deleted,
+        }
+    }
+}
+
+/// The code of `value` when it is a function object (a closure).
+unsafe fn static_method_code_of(value: f64) -> Option<usize> {
+    let js = crate::JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let f = js.as_pointer::<ClosureHeader>();
+    if !crate::closure::is_closure_ptr(f as usize) {
+        return None;
+    }
+    Some((*f).func_ptr as usize)
+}
+
+/// The class whose ClassBody static method `name` a read of `name` on class
+/// `class_id` finds, when the property found is still that declaration's
+/// function object: its value, minting the owner's function object (so every
+/// subclass reads the one own property, `Q.a === P.a`).
+pub(crate) fn inherited_static_method_value(class_id: u32, name: &str) -> Option<f64> {
+    let (owner, _) = super::class_registry::lookup_static_method_owner(class_id, name)?;
+    super::class_registry::class_own_static_method_code(owner, name)?;
+    class_value(owner);
+    class_static_get(owner, name)
+}
+
+/// Does own `key` of the class function object `ptr` hold its ClassBody
+/// static method's function object (the declaration's code)? That fact is
+/// part of the object's shape: a write that ends it transitions the shape
+/// (`object::class_value::js_class_static_call_guard`).
+pub(crate) unsafe fn holds_declared_static_method(ptr: usize, key: &str) -> Option<f64> {
+    let cid = class_closure_id_unchecked(ptr as *const ClosureHeader)?;
+    let code = super::class_registry::class_own_static_method_code(cid, key)?;
+    let v = crate::closure::props::bag_get(ptr, key.as_bytes())?;
+    let js = crate::JSValue::from_bits(v.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let f = js.as_pointer::<ClosureHeader>();
+    (crate::closure::is_closure_ptr(f as usize) && (*f).func_ptr as usize == code).then_some(v)
+}
+
+/// [`js_class_static_call_guard`] for a call whose receiver is a value
+/// (`(C as any).m()`, a local holding the class): the receiver must be its
+/// class's function object on this agent, or the call reads the property.
+///
+/// # Safety
+/// As [`js_class_static_call_guard`].
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_value_call_guard(
+    receiver: f64,
+    owner_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+    body: i64,
+    memo: *mut u64,
+) -> i32 {
+    let bits = receiver.to_bits();
+    let Some(cid) = class_value_id_bits(bits) else {
+        return 0;
+    };
+    if legacy_class_value_word(bits).is_none() {
+        let js = crate::JSValue::from_bits(bits);
+        if !js.is_pointer()
+            || class_value_cached(cid).map(|c| c as usize) != Some(js.as_pointer::<u8>() as usize)
+        {
+            return 0;
+        }
+    }
+    js_class_static_call_guard(cid as i32, owner_id, name_ptr, name_len, body, memo)
+}
+
+/// The shape code of class `class_id`'s function object for a static-call
+/// memo: 0 when this agent never minted it (it owns exactly its
+/// declarations), `u32::MAX - 1` when it has no own-property bag, else the
+/// bag's ShapeId.
+fn static_call_shape_code(class_id: u32) -> u32 {
+    match class_value_cached(class_id) {
+        None => 0,
+        // SAFETY: this agent's live class closure; a shape load.
+        Some(c) => unsafe {
+            let bag = crate::closure::props::bag_of(c as usize);
+            if bag.is_null() {
+                u32::MAX - 1
+            } else {
+                super::shapes::object_shape_stamp(bag)
+            }
+        },
+    }
+}
+
+/// Codegen's direct static call `C.m(..)` runs the declared body `body` only
+/// while the property the call reads — own `m` of C, or of the class `owner`
+/// it inherits from — is still that declaration's function object. The fact
+/// lives in the class function objects' shapes: installing a declaration,
+/// storing a different value over it, and deleting it each transition the
+/// shape (`closure::props`), so an unchanged pair of shapes proves it.
+///
+/// `memo` is the site's [`StaticCallMemo`]. The site's hit is inline in
+/// compiled code: it loads the two function objects' shape words through the
+/// memo's pointers and compares them with `key`; only a miss calls this,
+/// which re-validates by reading the property and re-arms the memo (only for
+/// a one-link chain, whose two shapes cover every object the read consults).
+///
+/// # Safety
+/// `name_ptr` points at `name_len` bytes; `memo` is null or the site's
+/// [`StaticCallMemo`] (thread-local when the program starts workers, so the
+/// function objects it names are this agent's).
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_call_guard(
+    class_id: i32,
+    owner_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+    body: i64,
+    memo: *mut u64,
+) -> i32 {
+    let cid = class_id as u32;
+    let owner = owner_id as u32;
+    // SAFETY: null or the site's memo (see `# Safety`).
+    let memo = (!memo.is_null()).then(|| &mut *(memo as *mut StaticCallMemo));
+    if name_ptr.is_null() || name_len <= 0 {
+        return 1;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
+    else {
+        return 1;
+    };
+    match super::class_registry::lookup_static_method_owner(cid, name) {
+        Some((found, (func_ptr, ..))) if func_ptr == body as usize => {
+            let one_link =
+                found == cid || super::class_registry::get_parent_class_id(cid) == Some(found);
+            if let Some(m) = memo {
+                if owner != 0 && found == owner && one_link {
+                    arm_static_call_memo(m, cid, owner);
+                }
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// A static-call site's memo (`perry-codegen/src/expr/static_method.rs`),
+/// four words the emitted hit reads (`perry_abi::STATIC_CALL_MEMO_*`):
+/// `key` = (C's shape word | owner's shape word << 32) of the last
+/// validation, and the two class function objects whose shape words the hit
+/// loads (pinned for the agent's life, so the pointers never go stale), plus
+/// C's function object as a value, for a site whose receiver is a value.
+/// `c == 0` means never armed: the hit tests it before any load.
+#[repr(C)]
+pub struct StaticCallMemo {
+    pub key: u64,
+    pub c: usize,
+    pub owner: usize,
+    pub c_value: u64,
+}
+
+const _: () = {
+    assert!(
+        std::mem::offset_of!(StaticCallMemo, key)
+            == crate::codegen_abi::STATIC_CALL_MEMO_KEY_OFFSET
+    );
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert!(
+            std::mem::offset_of!(StaticCallMemo, c)
+                == crate::codegen_abi::STATIC_CALL_MEMO_C_OFFSET
+        );
+        assert!(
+            std::mem::offset_of!(StaticCallMemo, owner)
+                == crate::codegen_abi::STATIC_CALL_MEMO_OWNER_OFFSET
+        );
+        assert!(
+            std::mem::offset_of!(StaticCallMemo, c_value)
+                == crate::codegen_abi::STATIC_CALL_MEMO_VALUE_OFFSET
+        );
+    }
+};
+
+/// Arm `memo` for the one-link chain (`cid`, `owner`) just validated. The
+/// inline hit compares raw shape words, so it is armed only when both are
+/// ShapeIds (a raw word equals a ShapeId only when it is that ShapeId); the
+/// function objects are minted here (an unobservable act: a fresh object owns
+/// exactly its declarations), so a class used only through static calls
+/// still gets the inline hit.
+fn arm_static_call_memo(memo: &mut StaticCallMemo, cid: u32, owner: u32) {
+    let c = class_value_ptr(cid);
+    let o = class_value_ptr(owner);
+    let (sc, so) = (static_call_shape_code(cid), static_call_shape_code(owner));
+    if !super::shapes::is_shape_id(sc) || !super::shapes::is_shape_id(so) {
+        return;
+    }
+    // GC_STORE_AUDIT(ROOT): a compiled site's memo naming PINNED class
+    // function objects (never move), also rooted by the class-value table.
+    memo.c = c as usize;
+    memo.owner = o as usize;
+    memo.c_value = crate::value::POINTER_TAG | (c as u64);
+    memo.key = u64::from(sc) | u64::from(so) << 32;
+}
+
+/// Does class `class_id`'s function object own static method `name` as a data
+/// property it has not deleted (the declaration, or a value put in its place)?
+pub(crate) fn class_static_owns_method(class_id: u32, name: &str) -> bool {
+    if class_static_get(class_id, name).is_some() {
+        return true;
+    }
+    super::class_registry::class_own_static_method_entry(class_id, name).is_some()
+        && class_value_if_minted(class_id).is_none_or(|_| {
+            super::class_registry::class_own_static_method_code(class_id, name).is_none()
+        })
+}
+
+/// ClassDefinitionEvaluation's static methods: ClassBody static method
+/// `name` of class `class_id` is an own data property of its function object,
+/// `{ writable: true, enumerable: false, configurable: true }`, whose value is
+/// one function object per (class, method) running exactly this
+/// declaration's code (a resolved entry, never a by-name dispatch). A
+/// property the program redefined is left alone; a re-registered entry
+/// (a class expression evaluated again) refreshes the function.
+fn install_declared_static_method(class_id: u32, name: &str) {
+    if name.starts_with('#') || is_internal_static_key(name) {
+        return;
+    }
+    let Some(code) = super::class_registry::class_own_static_method_code(class_id, name) else {
+        return;
+    };
+    let ptr = class_value_ptr(class_id) as usize;
+    // SAFETY: this agent's live class closure.
+    unsafe {
+        match crate::closure::props::bag_get(ptr, name.as_bytes()) {
+            // Already this declaration's function, or a value the program
+            // put in its place: leave it.
+            Some(_) => return,
+            None if crate::closure::props::bag_has_own(ptr, name.as_bytes())
+                || crate::closure::props::state_is_deleted(ptr, name) =>
+            {
+                return
+            }
+            None => {}
+        }
+    }
+    let _no_collect = crate::gc::GcSuppressScope::new();
+    let f = crate::closure::js_closure_alloc(code as *const u8, 0);
+    if f.is_null() {
+        return;
+    }
+    class_static_set(class_id, name, crate::value::js_nanbox_pointer(f as i64));
+    super::class_registry::class_static_set_defined_attrs(class_id, name, true, false, true);
+    // The object's shape now carries "own `name` is this declaration": a
+    // process-unique successor, so no object that got `name` any other way
+    // (and no other agent's object) shares it (`js_class_static_call_guard`).
+    // SAFETY: this agent's live class closure; the bag exists (just stored).
+    unsafe {
+        super::shapes::transition_object_shape_semantics(crate::closure::props::bag_of(ptr));
     }
 }
 
@@ -1098,10 +1464,30 @@ mod tests {
                 0,
             )
         };
+        extern "C" fn static_name_entry(_closure: i64) -> f64 {
+            0.0
+        }
+        unsafe {
+            crate::object::class_registry::parent_static::js_register_class_static_method_entry(
+                cid as i64,
+                b"name".as_ptr(),
+                4,
+                static_name_entry as *const () as usize as i64,
+            )
+        };
+        // node: `class Zed { static name() {} }` -> Zed.name is the method, an
+        // own data property { writable, !enumerable, configurable }.
+        let method = unsafe { crate::closure::props::bag_get(ptr, b"name") }
+            .expect("a static method named `name` is the class's own `name`");
         assert_eq!(
-            unsafe { crate::closure::props::bag_get(ptr, b"name") },
-            None,
-            "a static method named `name` is the class's own `name`"
+            unsafe { static_method_code_of(method) },
+            Some(static_name_entry as *const () as usize),
+            "its value is the method's function object"
+        );
+        assert_eq!(
+            crate::object::class_registry::class_static_defined_attrs(cid, "name"),
+            Some((true, false, true)),
+            "method attributes, not the intrinsic's"
         );
     }
 
