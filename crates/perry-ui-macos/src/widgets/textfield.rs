@@ -534,12 +534,11 @@ pub fn set_borderless(handle: i64, borderless: f64) {
 /// Set the background color of the text field.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
-        unsafe {
-            let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
-            tf.setDrawsBackground(true);
-            let color = srgb::ns_color(r, g, b, a);
-            tf.setBackgroundColor(Some(&color));
-        }
+        // The cell's own background fills only its text area, inside the
+        // padding. The layer fills the whole field, as a CSS background does.
+        let tf: &NSTextField = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+        tf.setDrawsBackground(false);
+        super::set_background_color(handle, r, g, b, a);
     }
 }
 

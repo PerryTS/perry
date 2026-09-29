@@ -3,26 +3,37 @@
 // - the idle text sits where the field editor draws it, for every font and
 //   control size (#11661);
 // - a long value stays on one line (#10155);
-// - `setPadding` moves the text by the top and left insets (#9954).
+// - `setPadding` moves the text by the top and left insets (#9954);
+// - `textfieldSetBackgroundColor` fills the whole field, padding included, as
+//   a CSS background does.
 //
 // AppKit must run on the process main thread, so this test has no Rust harness.
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2::rc::Retained;
-    use objc2::MainThreadOnly;
+    use objc2::{ClassType, MainThreadOnly};
     use objc2_app_kit::{
-        NSApplication, NSBackingStoreType, NSColor, NSControlSize, NSFont, NSTextField, NSTextView,
-        NSView, NSWindow, NSWindowStyleMask,
+        NSAppearance, NSAppearanceCustomization, NSApplication, NSBackingStoreType, NSColor,
+        NSControlSize, NSFont, NSTextField, NSTextView, NSView, NSWindow, NSWindowStyleMask,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_foundation::{MainThreadMarker, NSRange, NSString};
     use perry_ui_macos::widgets;
 
-    // Ink positions are read from a 2x bitmap, so one pixel is 0.5pt.
-    const PIXEL_TOLERANCE: f64 = 0.51;
+    /// How the test styles the field's border.
+    #[derive(Debug, Clone, Copy)]
+    enum Border {
+        /// `textfieldSetBorderless(f, 1)`.
+        Borderless,
+        /// The bezel that `textFieldWithString:` builds.
+        Default,
+        /// `textfieldSetBorderless(f, 0)`.
+        Bordered,
+    }
 
     struct Case {
         secure: bool,
+        border: Border,
         family: &'static str,
         size: f64,
         control_size: NSControlSize,
@@ -42,6 +53,8 @@ fn main() {
         top: f64,
         left: f64,
         bottom: f64,
+        /// The size of one bitmap pixel, in points.
+        pixel: f64,
     }
 
     if std::env::args().any(|arg| arg == "--list") {
@@ -54,49 +67,55 @@ fn main() {
     let long = "Hxg assignee = currentUser() AND statusCategory != Done AND project = SU";
     let mut cases = Vec::new();
     for secure in [false, true] {
-        for (family, size, control_size) in [
-            ("Helvetica", 16.0, NSControlSize::Regular),
-            ("Helvetica", 28.0, NSControlSize::Regular),
-            ("Helvetica", 10.0, NSControlSize::Regular),
-            ("Menlo", 16.0, NSControlSize::Small),
-            ("Times", 20.0, NSControlSize::Regular),
-        ] {
+        for border in [Border::Borderless, Border::Default, Border::Bordered] {
+            for (family, size, control_size) in [
+                ("Helvetica", 16.0, NSControlSize::Regular),
+                ("Helvetica", 28.0, NSControlSize::Regular),
+                ("Helvetica", 10.0, NSControlSize::Regular),
+                ("Menlo", 16.0, NSControlSize::Small),
+                ("Times", 20.0, NSControlSize::Regular),
+            ] {
+                cases.push(Case {
+                    secure,
+                    border,
+                    family,
+                    size,
+                    control_size,
+                    text: "Hxg",
+                    padding: None,
+                });
+            }
             cases.push(Case {
                 secure,
-                family,
-                size,
-                control_size,
-                text: "Hxg",
+                border,
+                family: "Helvetica",
+                size: 16.0,
+                control_size: NSControlSize::Regular,
+                text: long,
                 padding: None,
             });
+            cases.push(Case {
+                secure,
+                border,
+                family: "Helvetica",
+                size: 16.0,
+                control_size: NSControlSize::Regular,
+                text: "Hxg",
+                padding: Some((6.0, 10.0)),
+            });
         }
-        cases.push(Case {
-            secure,
-            family: "Helvetica",
-            size: 16.0,
-            control_size: NSControlSize::Regular,
-            text: long,
-            padding: None,
-        });
-        cases.push(Case {
-            secure,
-            family: "Helvetica",
-            size: 16.0,
-            control_size: NSControlSize::Regular,
-            text: "Hxg",
-            padding: Some((6.0, 10.0)),
-        });
     }
 
     let mut failures = Vec::new();
     for case in &cases {
         let name = format!(
-            "{} {} {} {:?} {:?}{}",
+            "{} {:?} {} {} {:?} {:?}{}",
             if case.secure {
                 "SecureField"
             } else {
                 "TextField"
             },
+            case.border,
             case.family,
             case.size,
             case.control_size,
@@ -106,13 +125,14 @@ fn main() {
         );
         let drawn = draw(case, mtm);
         println!("{name}: idle {:?}, editing {:?}", drawn.idle, drawn.editing);
+        let tolerance = drawn.idle.pixel + 0.01;
 
         // The field editor scrolls a value wider than the field 2pt left, as
         // it does in a stock NSTextField, so only a value that fits keeps its
         // left edge.
         let fits = case.text != long;
-        if (drawn.idle.top - drawn.editing.top).abs() > PIXEL_TOLERANCE
-            || fits && (drawn.idle.left - drawn.editing.left).abs() > PIXEL_TOLERANCE
+        if (drawn.idle.top - drawn.editing.top).abs() > tolerance
+            || fits && (drawn.idle.left - drawn.editing.left).abs() > tolerance
         {
             failures.push(format!("{name}: text moves when editing starts"));
         }
@@ -129,8 +149,8 @@ fn main() {
                 },
                 mtm,
             );
-            if (drawn.idle.top - unpadded.idle.top - top).abs() > PIXEL_TOLERANCE
-                || (drawn.idle.left - unpadded.idle.left - left).abs() > PIXEL_TOLERANCE
+            if (drawn.idle.top - unpadded.idle.top - top).abs() > tolerance
+                || (drawn.idle.left - unpadded.idle.left - left).abs() > tolerance
             {
                 failures.push(format!(
                     "{name}: padding moved the text by ({}, {})",
@@ -140,6 +160,45 @@ fn main() {
             }
         }
     }
+    for secure in [false, true] {
+        let empty = perry_runtime::string::js_string_from_bytes(b"".as_ptr(), 0);
+        let handle = if secure {
+            widgets::securefield::create(empty.cast(), 0.0)
+        } else {
+            widgets::textfield::create(empty.cast(), 0.0)
+        };
+        widgets::set_edge_insets(handle, 6.0, 10.0, 0.0, 0.0);
+        widgets::textfield::set_background_color(handle, 1.0, 1.0, 0.0, 1.0);
+        let view = widgets::get_widget(handle).unwrap();
+        let field = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+        // The cell's background would fill only the text area inside the
+        // padding; the layer's fills the whole field.
+        let layer_color: *const perry_ui_macos::srgb::CGColor = unsafe {
+            let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![field, layer];
+            assert!(!layer.is_null(), "the field is layer-backed");
+            objc2::msg_send![layer, backgroundColor]
+        };
+        let color: Option<Retained<NSColor>> =
+            unsafe { objc2::msg_send![NSColor::class(), colorWithCGColor: layer_color] };
+        let rgba = color
+            .and_then(|c| c.colorUsingColorSpace(&objc2_app_kit::NSColorSpace::sRGBColorSpace()))
+            .map(|c| {
+                (
+                    c.redComponent(),
+                    c.greenComponent(),
+                    c.blueComponent(),
+                    c.alphaComponent(),
+                )
+            });
+        if field.drawsBackground() || rgba != Some((1.0, 1.0, 0.0, 1.0)) {
+            failures.push(format!(
+                "{}: background drawsBackground={} layer={rgba:?}",
+                if secure { "SecureField" } else { "TextField" },
+                field.drawsBackground()
+            ));
+        }
+    }
+
     assert!(failures.is_empty(), "{failures:#?}");
     println!("PASS native TextField cell");
 
@@ -150,7 +209,11 @@ fn main() {
         } else {
             widgets::textfield::create(empty.cast(), 0.0)
         };
-        widgets::textfield::set_borderless(handle, 1.0);
+        match case.border {
+            Border::Borderless => widgets::textfield::set_borderless(handle, 1.0),
+            Border::Default => {}
+            Border::Bordered => widgets::textfield::set_borderless(handle, 0.0),
+        }
         widgets::textfield::set_text_str(handle, case.text);
         if let Some((top, left)) = case.padding {
             widgets::set_edge_insets(handle, top, left, 0.0, 0.0);
@@ -177,6 +240,10 @@ fn main() {
             )
         };
         unsafe { window.setReleasedWhenClosed(false) };
+        // A bezel draws its own background and ignores the white one set
+        // above, so in dark mode it would read as ink across the whole field.
+        let light = NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"));
+        window.setAppearance(light.as_deref());
         let content = window.contentView().unwrap();
         content.addSubview(&view);
 
@@ -220,6 +287,7 @@ fn main() {
             top: bounds.0 as f64 / scale,
             left: bounds.1 as f64 / scale,
             bottom: bounds.2 as f64 / scale,
+            pixel: 1.0 / scale,
         }
     }
 }
