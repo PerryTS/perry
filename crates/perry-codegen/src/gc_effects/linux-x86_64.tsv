@@ -2145,7 +2145,7 @@ js_object_get_symbol_property_ic_miss	Reenters
 js_object_get_symbol_then_field_ic_miss	Reenters
 js_object_group_by	Reenters
 js_object_has_own	Reenters
-js_object_has_own_symbol	Reenters
+js_object_has_own_symbol	AllocOnly
 js_object_has_property	Reenters
 js_object_is	Reenters
 js_object_is_extensible	Reenters

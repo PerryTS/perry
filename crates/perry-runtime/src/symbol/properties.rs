@@ -633,7 +633,7 @@ fn class_static_symbol_lookup_slow(class_id: u32, sym_f64: f64) -> Option<u64> {
     if class_id == 0 || sym_key == 0 {
         return None;
     }
-    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
+    let owner = crate::object::class_value::class_value_if_minted(class_id)? as usize;
     symbol_property_root_bits(owner, sym_key)
 }
 
@@ -664,8 +664,10 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
     if class_id == 0 {
         return Vec::new();
     }
-    let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
-    clone_symbol_entries_for_obj_ptr(owner)
+    let Some(owner) = crate::object::class_value::class_value_if_minted(class_id) else {
+        return Vec::new();
+    };
+    clone_symbol_entries_for_obj_ptr(owner as usize)
         .into_iter()
         .map(|(sym_key, _)| sym_key)
         .collect()

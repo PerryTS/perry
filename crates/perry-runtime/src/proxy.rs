@@ -1585,6 +1585,25 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     // allocation. Closures don't carry the flag, so keep consulting the side
     // tables for them (their `name`/`length` + user `defineProperty` descriptors
     // live there).
+    // A class function object's static accessor is an accessor property of
+    // its own-property object (#11521: a getter-only one refuses the write).
+    // Its own data properties live in the same object; anything else is not
+    // own, and the walk continues at the class's [[Prototype]].
+    if let Some(class_id) = crate::object::class_value::class_closure_id(obj_ptr) {
+        if let Some((acc, _, _)) =
+            crate::object::class_value::class_static_own_accessor(class_id, &key_name)
+        {
+            return Some(OwnSetDescriptor::Accessor {
+                setter_bits: acc.set,
+            });
+        }
+        if crate::object::class_value::class_static_get(class_id, &key_name).is_some() {
+            let writable = crate::object::class_static_defined_attrs(class_id, &key_name)
+                .is_none_or(|(writable, _, _)| writable);
+            return Some(OwnSetDescriptor::Data { writable });
+        }
+        return None;
+    }
     if crate::object::object_has_descriptors(obj_ptr) || crate::closure::is_closure_ptr(obj_ptr) {
         if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
             return Some(OwnSetDescriptor::Accessor {
@@ -1659,6 +1678,13 @@ fn prototype_of_for_set(value: f64) -> Option<f64> {
         // `is_valid_obj_ptr(obj)` -- a magnitude-only check whose own floor
         // is 0x1000 -- followed by an unconditional `(*obj).class_id` read,
         // so an admitted handle id reached that deref.
+        // A class function object is a closure, not an ObjectHeader: its
+        // [[Prototype]] is the class's (the parent class for `extends`).
+        if let Some(class_id) = crate::object::class_value::class_closure_id(raw) {
+            let proto = crate::object::class_value::class_prototype_addr(class_id);
+            return (proto != 0 && proto != raw)
+                .then(|| f64::from_bits(POINTER_TAG | proto as u64));
+        }
         if crate::value::addr_class::is_above_handle_band(raw) {
             if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw) {
                 if proto_bits == TAG_NULL || proto_bits == TAG_UNDEFINED || proto_bits == bits {
@@ -2286,7 +2312,14 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
             legacy_dunder_proto_set(receiver, value);
             return true;
         }
-        if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
+        // A class function object is not a leaf of the walk: its [[Prototype]]
+        // (the parent class) may hold the accessor (#11521).
+        if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize)
+            && crate::object::class_value::class_closure_id(
+                extract_pointer(current.to_bits()) as usize
+            )
+            .is_none()
+        {
             // ECMAScript poison pill: `fn.caller = v` / `fn.arguments = v` on
             // a strict-mode function throws via %ThrowTypeError%. A plain
             // non-strict function instead rejects the inherited setter-less
@@ -2368,6 +2401,11 @@ fn class_link_accessor_set(current: f64, key: f64, value: f64, receiver: f64) ->
     let link = extract_pointer(current.to_bits()) as *const crate::ObjectHeader;
     let recv = extract_pointer(receiver.to_bits()) as *const crate::ObjectHeader;
     if link.is_null() || crate::object::js_object_get_class_id(recv) != 0 {
+        return None;
+    }
+    // A class function object is a closure (no ObjectHeader class id): its
+    // static accessors are own properties `own_set_descriptor` reports.
+    if crate::object::class_value::class_closure_id(link as usize).is_some() {
         return None;
     }
     let class_id = crate::object::js_object_get_class_id(link);
