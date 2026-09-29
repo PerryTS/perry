@@ -4,25 +4,21 @@
 use anyhow::{anyhow, Result};
 
 use super::{
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_scalar_aware_store_gated_on_pointerness, emit_write_barrier_slot_on_block,
-    emit_write_barrier_slot_value_and_generation_tested, nanbox_pointer_inline,
-    raw_f64_layout_fact, FnCtx,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_scalar_aware_store_gated_on_pointerness,
+    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
+    nanbox_pointer_inline, raw_f64_layout_fact, FnCtx,
 };
 use crate::block::LlBlock;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64};
 
-fn canonicalize_raw_f64_numeric_store_value(blk: &mut LlBlock, value_double: &str) -> String {
-    blk.call(
-        DOUBLE,
-        "js_array_numeric_value_to_raw_f64",
-        &[(DOUBLE, value_double)],
-    )
-}
+use super::index_get::guarded_array::{
+    emit_array_guard_word, ARRAY_STORE_GUARD_EXPECT_I32, ARRAY_STORE_GUARD_MASK_I32,
+    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_STORE_BAND_SPAN_I64,
+};
 
 /// Inline fast-path lowering for `local_arr[i] = v`.
 ///
@@ -77,43 +73,6 @@ fn canonicalize_raw_f64_numeric_store_value(blk: &mut LlBlock, value_double: &st
 /// receiver is a live, non-forwarded plain array with a sane header. The realloc
 /// path also handles sparse extensions so holes are filled and numeric raw
 /// layout is downgraded before JavaScript can observe the gap.
-/// Skip `js_array_note_numeric_write` when the receiver's header already has
-/// both raw-f64 layout bits clear — the runtime note's own second early return.
-/// For a `boolean[]` that is every store after the first, because the first one
-/// is what cleared them (#9237). Mirrors `expr/index_set_guarded.rs`.
-///
-/// Nothing between the header load and the note can SET a raw-f64 bit: the slot
-/// store, string addref, layout note and write barrier only ever clear them, and
-/// the bits are set solely by the explicit verify/rebuild paths.
-fn emit_numeric_write_note_unless_downgraded(
-    ctx: &mut FnCtx<'_>,
-    arr_handle: &str,
-    value_bits: &str,
-    stem: &str,
-) {
-    let note_idx = ctx.new_block(&format!("{stem}.numnote"));
-    let done_idx = ctx.new_block(&format!("{stem}.numnote.done"));
-    let note_label = ctx.block_label(note_idx);
-    let done_label = ctx.block_label(done_idx);
-    {
-        let blk = ctx.block();
-        let reserved_addr = blk.sub(I64, arr_handle, "6");
-        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-        let reserved = blk.load(I16, &reserved_ptr);
-        // GC_ARRAY_RAW_F64_LAYOUT (0x80) | GC_ARRAY_RAW_F64_HOLES (0x1000).
-        let raw_bits = blk.and(I16, &reserved, "4224");
-        let has_raw_layout = blk.icmp_ne(I16, &raw_bits, "0");
-        blk.cond_br(&has_raw_layout, &note_label, &done_label);
-    }
-    ctx.current_block = note_idx;
-    {
-        let blk = ctx.block();
-        emit_array_numeric_write_note_on_block(blk, arr_handle, value_bits);
-        blk.br(&done_label);
-    }
-    ctx.current_block = done_idx;
-}
-
 pub(crate) fn lower_index_set_fast(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -128,7 +87,9 @@ pub(crate) fn lower_index_set_fast(
     // `js_string_addref_if_heap_string` call it can never use.
     string_addref_needed: bool,
     write_barrier_needed: bool,
-    value_is_numeric: bool,
+    // Unused since every store settles the element kind first
+    // (`emit_array_store_kind_value`); kept for the callers.
+    _value_is_numeric: bool,
     require_numeric_layout: bool,
     // Repsel 4a.0: RHS proven canonical-raw-f64 by
     // `expr_produces_canonical_raw_f64` — the slot store may skip the
@@ -239,97 +200,32 @@ pub(crate) fn lower_index_set_fast(
         let deref_label = ctx.block_label(deref_idx);
         {
             let blk = ctx.block();
-            let tag = blk.lshr(I64, &arr_bits, "48");
-            let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
-            let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
-            // #7396: `is_valid_obj_ptr`'s UPPER bound (0x8000_0000_0000), which
-            // `gc_header_for_user_addr` applies before the out-of-line guard
-            // dereferences anything. `arr_handle` is a 48-bit mask of the
-            // NaN-box payload, so without this a corrupted POINTER_TAG box
-            // carrying a payload in [2^47, 2^48) passes the inline tier and is
-            // dereferenced here while the helper it fronts would have rejected
-            // it. One `icmp` makes the tier provably no weaker than the guard
-            // it replaces. (The sibling read-side tier in
-            // `index_get/guarded_array.rs` still omits it — same latent gap,
-            // but a bad *load* rather than a bad *store*, and widening that one
-            // is out of scope here.)
-            let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
-            let mut heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
-            heap_candidate = blk.and(I1, &heap_candidate, &below_heap_limit);
+            // A heap pointer iff the box, less `POINTER_TAG << 48 | 1 MiB`,
+            // lands below 2^47 - 1 MiB (`is_valid_obj_ptr`'s ceiling, #7396).
+            let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
+            let heap_candidate = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_STORE_BAND_SPAN_I64);
             blk.cond_br(&heap_candidate, &deref_label, &cold_label);
         }
         ctx.current_block = deref_idx;
         {
             let blk = ctx.block();
-            let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-            let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-            let gc_type = blk.load(I8, &gc_type_ptr);
-            let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-
-            let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-            let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-            let gc_flags = blk.load(I8, &gc_flags_ptr);
-            let forwarded_bits = blk.and(I8, &gc_flags, "128");
-            let not_forwarded = blk.icmp_eq(I8, &forwarded_bits, "0");
-
-            // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400):
-            // integrity/descriptor-carrying arrays route through the runtime
-            // (writes may throw in strict mode / dispatch accessor setters).
-            let reserved_addr = blk.sub(I64, &arr_handle, "6");
-            let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-            let reserved = blk.load(I16, &reserved_ptr);
-            let integrity_bits = blk.and(I16, &reserved, "1031"); // 0x407
-            let integrity_clean = blk.icmp_eq(I16, &integrity_bits, "0");
-            // Repsel 4a.2: accept EITHER raw-f64 invariant — dense
-            // (GC_ARRAY_RAW_F64_LAYOUT, 0x80) or raw-f64-or-holes
-            // (GC_ARRAY_RAW_F64_HOLES, 0x1000). A canonical-numeric store
-            // preserves both invariants, and the extend arm below maintains
-            // the flag transition when it creates holes. This is what lets a
-            // `new Array(n)` mid-fill histogram write inline (the runtime
-            // set guard rejects holey arrays outright).
-            let dense_bits = blk.and(I16, &reserved, "4224"); // 0x1080
-            let is_dense = blk.icmp_ne(I16, &dense_bits, "0");
-
-            // #10593: the process-wide byte AND this array's own custom-proto bit.
-            let default_prototype_chain =
-                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
-
-            let arr_ptr = blk.inttoptr(I64, &arr_handle);
-            let hdr_length = blk.load(I32, &arr_ptr);
-            let cap_addr = blk.add(I64, &arr_handle, "4");
-            let cap_ptr = blk.inttoptr(I64, &cap_addr);
-            let hdr_capacity = blk.load(I32, &cap_ptr);
-            let index_nonnegative = blk.icmp_slt(I32, &idx_i32, "0");
-            let index_nonnegative = blk.icmp_eq(I1, &index_nonnegative, "false");
-            let capacity_sane = blk.icmp_ule(I32, &hdr_capacity, "16000000");
-            let length_within_capacity = blk.icmp_ule(I32, &hdr_length, &hdr_capacity);
-            let index_within_capacity = blk.icmp_ult(I32, &idx_i32, &hdr_capacity);
-            // #9371: `new Array(largeLength)` intentionally has length above
-            // capacity. A store into its allocated prefix is still safe; only
-            // the boundary write needs the runtime to grow that prefix.
-            let storage_safe = blk.or(I1, &length_within_capacity, &index_within_capacity);
-
-            let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
-            guard_ok = blk.and(I1, &guard_ok, &integrity_clean);
+            // ONE header word (DESIGN arrayread §3): an ordinary array, not a
+            // growth stub, no element descriptors, not frozen / sealed /
+            // non-extensible. The prototype facts matter only when the store
+            // adds an element (a hole or `index >= length`), so they are
+            // tested on that arm (`idxset.ext`), not here.
+            let word = emit_array_guard_word(blk, &arr_handle);
+            let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
+            let mut guard_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
             if require_numeric_layout {
-                // Raw-f64 layout is a precondition of the RAW store only: that
-                // arm writes an unboxed double into the slot, which is valid
-                // only while the receiver's layout says its elements are
-                // pointer-free. A tagged store writes a NaN-boxed JSValue and
-                // is correct whatever the layout says — and for a downgraded
-                // receiver these bits are clear by definition, which is exactly
-                // why requiring them kept `boolean[]` on the call tier forever.
-                guard_ok = blk.and(I1, &guard_ok, &is_dense);
+                // Raw-f64 layout is a precondition of the RAW store only
+                // (dense 0x80 or raw-f64-or-holes 0x1000, `_reserved` is the
+                // word's upper half). A tagged store is correct whatever the
+                // layout says.
+                let f64_bits = blk.and(I32, &word, "276824064"); // 0x1080 << 16
+                let is_f64 = blk.icmp_ne(I32, &f64_bits, "0");
+                guard_ok = blk.and(I1, &guard_ok, &is_f64);
             }
-            guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
-            guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
-            guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
-            guard_ok = blk.and(I1, &guard_ok, &storage_safe);
-            // #9237: kept exactly where it is load-bearing. The comment below
-            // is about the RAW store — a `number[]` slot can genuinely receive a
-            // non-number at runtime, and writing its NaN-boxed tag verbatim as a
-            // double is the bug being prevented. The tagged arm stores the box
-            // as a box, so the test is dead work there and only there.
             if require_numeric_layout && !value_is_canonical_raw_f64 {
                 // #7396: the out-of-line guard's `is_numeric_value_bits(value)`
                 // leg, inlined. It is load-bearing and NOT implied by
@@ -363,6 +259,7 @@ pub(crate) fn lower_index_set_fast(
     }
     if let Some(cold_idx) = cold_guard_idx {
         ctx.current_block = cold_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_GUARD_MISS);
         // Repsel 4a.2 (#6904): self-heal a stale growth-forwarded binding —
         // follow the chain and write the live head back to the local slot
         // (safe: this fast path is only taken for a plain stack local, and
@@ -398,6 +295,7 @@ pub(crate) fn lower_index_set_fast(
         .cond_br(&guard_ok, &guarded_label, &guard_fallback_label);
 
     ctx.current_block = guard_fallback_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_FALLBACK);
     {
         let strict_flag = if assignment_strict { "1" } else { "0" };
         let fallback_box = ctx.block().call(
@@ -454,11 +352,54 @@ pub(crate) fn lower_index_set_fast(
     }
 
     ctx.current_block = guarded_idx;
-    // Load length from offset 0 (null-guarded).
-    let length = ctx.block().safe_load_i32_from_ptr(&arr_handle);
-    let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &length);
-    ctx.block()
-        .cond_br(&in_bounds, &inbounds_label, &check_cap_label);
+    let probe_idx = ctx.new_block("idxset.probe");
+    let probe_label = ctx.block_label(probe_idx);
+    let ext_idx = ctx.new_block("idxset.ext");
+    let ext_label = ctx.block_label(ext_idx);
+    {
+        // `idx <u capacity` (a negative index wraps high). `[length,
+        // capacity)` holds `TAG_HOLE` (`array_truncate_length`), so a non-hole
+        // slot below capacity is an existing element below `length`.
+        let blk = ctx.block();
+        let cap_addr = blk.add(I64, &arr_handle, "4");
+        let cap_ptr = blk.inttoptr(I64, &cap_addr);
+        let capacity = blk.load(I32, &cap_ptr);
+        let within_capacity = blk.icmp_ult(I32, &idx_i32, &capacity);
+        blk.cond_br(&within_capacity, &probe_label, &ext_label);
+    }
+    ctx.current_block = probe_idx;
+    {
+        // An existing element is an own data property: overwriting it never
+        // consults the prototype chain.
+        let blk = ctx.block();
+        let (_, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
+        let old = blk.load(I64, &element_ptr);
+        let is_hole = blk.icmp_eq(I64, &old, crate::nanbox::TAG_HOLE_I64);
+        blk.cond_br(&is_hole, &ext_label, &inbounds_label);
+    }
+    ctx.current_block = ext_idx;
+    // `length` matters only to an add; an overwrite never reads it. Both guard
+    // tiers proved `arr_handle` a live array head.
+    let length = {
+        let blk = ctx.block();
+        let len_ptr = blk.inttoptr(I64, &arr_handle);
+        blk.load(I32, &len_ptr)
+    };
+    {
+        // An ADD (a hole, or `index >= length`): an inherited index setter
+        // could intercept it, so the prototype facts are required here (#10593:
+        // the process-wide byte and the array's own custom-proto bit). A hole
+        // below `length`, or a negative index, is not an extend: full `[[Set]]`.
+        let blk = ctx.block();
+        let reserved_addr = blk.sub(I64, &arr_handle, "6");
+        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+        let reserved = blk.load(I16, &reserved_ptr);
+        let default_prototype_chain =
+            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+        let at_or_past_length = blk.icmp_sge(I32, &idx_i32, &length);
+        let extend_ok = blk.and(I1, &default_prototype_chain, &at_or_past_length);
+        blk.cond_br(&extend_ok, &check_cap_label, &guard_fallback_label);
+    }
 
     // Helper: compute element_ptr = arr_ptr + 8 + idx*8.
     fn element_slot(blk: &mut LlBlock, arr_handle: &str, idx_i32: &str) -> (String, String) {
@@ -472,6 +413,20 @@ pub(crate) fn lower_index_set_fast(
 
     // FASTEST: in-bounds path. Store directly, jump to merge.
     ctx.current_block = inbounds_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_INBOUNDS);
+    // The element kind is settled BEFORE the value is written (DESIGN
+    // arrayread §3): an F64 array takes a Number as its canonical double and
+    // clears its F64 bits first for anything else.
+    let stored_value = if value_is_canonical_raw_f64 {
+        val_double.to_string()
+    } else {
+        super::index_set_guarded::emit_array_store_kind_value(
+            ctx,
+            &arr_handle,
+            val_double,
+            "idxset.inbounds",
+        )
+    };
     // #7715 B3: on the JSValue arm the barrier is emitted separately, behind an
     // inline live test of the stored VALUE and then of the parent array's
     // generation — see `emit_write_barrier_slot_value_and_generation_tested`.
@@ -484,16 +439,9 @@ pub(crate) fn lower_index_set_fast(
             // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
             // array is raw-f64 and the value is canonicalized to a plain f64 —
             // no GC pointer is written into the slot, so no write barrier.
-            if value_is_canonical_raw_f64 {
-                // Repsel 4a.0: the RHS is canonical by construction (literal /
-                // arithmetic / Math.* / coerce chain) — store verbatim.
-                blk.store(DOUBLE, val_double, &element_ptr);
-            } else {
-                // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
-                // returns a plain unboxed f64 — no GC pointer, so no barrier.
-                let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
-                blk.store(DOUBLE, &numeric_value, &element_ptr);
-            }
+            // Canonical by construction (Repsel 4a.0), or made canonical by
+            // `emit_array_store_kind_value` on this array's F64 kind.
+            blk.store(DOUBLE, &stored_value, &element_ptr);
             None
         } else {
             // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
@@ -514,7 +462,7 @@ pub(crate) fn lower_index_set_fast(
         let value_bits = emit_scalar_aware_store_gated_on_pointerness(
             ctx,
             &element_ptr,
-            val_double,
+            &stored_value,
             &arr_handle,
             &idx_i32,
             string_addref_needed,
@@ -524,14 +472,6 @@ pub(crate) fn lower_index_set_fast(
             false,
             "idxset.inbounds",
         );
-        if !value_is_numeric {
-            emit_numeric_write_note_unless_downgraded(
-                ctx,
-                &arr_handle,
-                &value_bits,
-                "idxset.inbounds",
-            );
-        }
         if write_barrier_needed {
             Some((element_addr, value_bits))
         } else {
@@ -555,10 +495,6 @@ pub(crate) fn lower_index_set_fast(
             &child_bits,
             "idxset.inbounds",
         );
-        if !value_is_numeric {
-            let blk = ctx.block();
-            emit_array_numeric_write_note_on_block(blk, &arr_handle, &child_bits);
-        }
     }
     ctx.block().br(&merge_label);
     if require_numeric_layout {
@@ -636,6 +572,18 @@ pub(crate) fn lower_index_set_fast(
         .cond_br(&can_extend_inline, &extend_inline_label, &realloc_label);
 
     ctx.current_block = extend_inline_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_APPEND);
+    // The kind first, exactly as the in-bounds arm.
+    let ext_value = if value_is_canonical_raw_f64 {
+        val_double.to_string()
+    } else {
+        super::index_set_guarded::emit_array_store_kind_value(
+            ctx,
+            &arr_handle,
+            val_double,
+            "idxset.extend",
+        )
+    };
     if widened_numeric_extend {
         // Hole-fill loop: for (j = length; j < idx; j++) slot[j] = TAG_HOLE.
         // The counter lives in an entry-block alloca (a non-entry alloca
@@ -680,14 +628,7 @@ pub(crate) fn lower_index_set_fast(
             // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
             // array is raw-f64(-or-holes) and the value is canonical — no GC
             // pointer is written, so no write barrier.
-            if value_is_canonical_raw_f64 {
-                blk.store(DOUBLE, val_double, &element_ptr);
-            } else {
-                // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
-                // returns a plain unboxed f64 — no GC pointer, so no barrier.
-                let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
-                blk.store(DOUBLE, &numeric_value, &element_ptr);
-            }
+            blk.store(DOUBLE, &ext_value, &element_ptr);
             // Bump length: store idx+1 to arr_ptr+0.
             let new_len = blk.add(I32, &idx_i32, "1");
             let len_ptr = blk.inttoptr(I64, &arr_handle);
@@ -717,14 +658,7 @@ pub(crate) fn lower_index_set_fast(
         // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
         // array is raw-f64 and the value is canonicalized to a plain f64 —
         // no GC pointer is written into the slot, so no write barrier.
-        if value_is_canonical_raw_f64 {
-            blk.store(DOUBLE, val_double, &element_ptr);
-        } else {
-            // GC_STORE_AUDIT(POINTER_FREE): js_array_numeric_value_to_raw_f64
-            // returns a plain unboxed f64 — no GC pointer, so no barrier.
-            let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
-            blk.store(DOUBLE, &numeric_value, &element_ptr);
-        }
+        blk.store(DOUBLE, &ext_value, &element_ptr);
         let new_len = blk.add(I32, &idx_i32, "1");
         let len_ptr = blk.inttoptr(I64, &arr_handle);
         blk.store(I32, &new_len, &len_ptr);
@@ -733,10 +667,11 @@ pub(crate) fn lower_index_set_fast(
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         {
-            let value_bits = emit_jsvalue_slot_store_with_flags_on_block(
+            // The kind was settled above; the returned bits are not needed.
+            let _ = emit_jsvalue_slot_store_with_flags_on_block(
                 blk,
                 &element_ptr,
-                val_double,
+                &ext_value,
                 &arr_handle,
                 &idx_i32,
                 string_addref_needed,
@@ -744,11 +679,7 @@ pub(crate) fn lower_index_set_fast(
                 &arr_handle,
                 &element_addr,
                 write_barrier_needed,
-            )
-            .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
-            if !value_is_numeric {
-                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
-            }
+            );
         }
         // Bump length: store idx+1 to arr_ptr+0.
         let new_len = blk.add(I32, &idx_i32, "1");
@@ -759,6 +690,7 @@ pub(crate) fn lower_index_set_fast(
 
     // SLOW: realloc needed. Call the runtime, write new ptr to local.
     ctx.current_block = realloc_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_FALLBACK);
     {
         let blk = ctx.block();
         crate::expr::emit_typed_feedback_record_call(

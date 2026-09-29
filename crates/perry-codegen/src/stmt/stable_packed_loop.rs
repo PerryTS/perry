@@ -1751,10 +1751,14 @@ pub(super) fn lower(
             .map(|installed| installed.common_length.clone()),
         u32_out_of_bounds_label: None,
         numeric_access,
-        numeric_accumulators,
         derived_locals: std::collections::HashSet::new(),
         u32_view_derived_locals: std::collections::HashMap::new(),
     });
+    // The fast preheader tag-tested every admitted accumulator and each
+    // in-clone write is Number-preserving: the clone's 5L scope.
+    let number_scope_id = ctx.next_loop_proof_scope_id();
+    ctx.receiver_descriptors
+        .materialize_number_locals(number_scope_id, &numeric_accumulators);
     super::loops::lower_for_after_init_with_i32_bound(
         ctx,
         init,
@@ -1765,6 +1769,8 @@ pub(super) fn lower(
         Some((candidate.counter_id, bound_i32)),
     )?;
     ctx.stable_packed_loop_facts.pop();
+    ctx.receiver_descriptors
+        .dematerialize_scope(number_scope_id);
     if let Some(installed) = installed_typed_array_views {
         super::stable_packed_typed_array::restore_views(ctx, installed);
     }

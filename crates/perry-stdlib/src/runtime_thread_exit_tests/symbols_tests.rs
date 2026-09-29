@@ -55,7 +55,7 @@ fn addr_of(value: f64) -> usize {
 #[test]
 fn thread_exit_releases_the_threads_symbol_side_table_entries() {
     const STATIC_SYMBOL_CLASS: u32 = 0x0B11_4711;
-    let ((owner, sym), alive) = std::thread::spawn(|| {
+    let ((owner, class_owner, sym), alive) = std::thread::spawn(|| {
         use perry_runtime::symbol as s;
         let scope = RuntimeHandleScope::new();
         let sym = scope.root_nanbox_f64(unsafe { s::js_symbol_new(string_value("t11471")) });
@@ -103,7 +103,8 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
             sym3.get_nanbox_f64(),
             js_nanbox_pointer(accessor.get_raw_mut_ptr::<u8>() as i64),
         );
-        // static [sym] = [] on a (process-global) class id (CLASS_STATIC_SYMBOLS).
+        // static [sym] = [] on a class id: an own symbol property of the class's
+        // function object, which this thread's agent mints in its own heap.
         unsafe {
             s::js_class_register_static_symbol(
                 STATIC_SYMBOL_CLASS,
@@ -113,6 +114,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         };
 
         let owner = obj.get_raw_mut_ptr::<u8>() as usize;
+        let class_owner = s::class_static_symbol_owner_for_test(STATIC_SYMBOL_CLASS);
         let (sym, sym2, sym3) = (
             addr_of(sym.get_nanbox_f64()),
             addr_of(sym2.get_nanbox_f64()),
@@ -122,9 +124,9 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
             s::symbol_property_tables_hold_for_test(owner, sym).0,
             s::symbol_property_tables_hold_for_test(owner, sym2).1,
             s::symbol_accessor_held_for_test(owner, sym3),
-            s::class_static_symbol_held_for_test(STATIC_SYMBOL_CLASS, sym),
+            s::symbol_property_tables_hold_for_test(class_owner, sym).0,
         ];
-        ((owner, [sym, sym2, sym3]), alive)
+        ((owner, class_owner, [sym, sym2, sym3]), alive)
     })
     .join()
     .unwrap();
@@ -147,7 +149,7 @@ fn thread_exit_releases_the_threads_symbol_side_table_entries() {
         "a dead thread's symbol accessor outlived its heap"
     );
     assert!(
-        !s::class_static_symbol_held_for_test(STATIC_SYMBOL_CLASS, sym[0]),
+        !s::symbol_property_tables_hold_for_test(class_owner, sym[0]).0,
         "a dead thread's class-static symbol member outlived its heap"
     );
 }

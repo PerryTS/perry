@@ -14,6 +14,33 @@ pub struct GcHeader {
 
 pub const GC_HEADER_SIZE: usize = std::mem::size_of::<GcHeader>(); // 8 bytes
 
+/// The value stored in [`GcHeader::size`]: the exact allocation total, which
+/// must fit the field's `u32`.
+///
+/// Arena walking and every size-derived address (an array's front offset,
+/// `array::storage::array_physical_capacity`) read this word back, so a
+/// truncated size is a wrong address, not a lost statistic. A kind whose size
+/// follows from a script-controlled count rejects an oversized request with its
+/// own JS error before it gets here (an array's capacity:
+/// `array::alloc::ARRAY_MAX_CAPACITY`, `RangeError: Invalid array length`).
+/// Reaching the panic means an allocation funnel skipped that check.
+#[inline]
+pub fn gc_header_size_word(total: usize) -> u32 {
+    match u32::try_from(total) {
+        Ok(size) => size,
+        Err(_) => gc_header_size_overflow(total),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn gc_header_size_overflow(total: usize) -> ! {
+    panic!(
+        "gc: an allocation of {total} bytes does not fit GcHeader.size (u32); \
+         its allocation funnel must reject the request first"
+    )
+}
+
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
 pub const GC_TYPE_OBJECT: u8 = 2;

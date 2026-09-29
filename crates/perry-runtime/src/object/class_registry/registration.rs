@@ -190,9 +190,15 @@ pub(crate) fn class_own_accessor_ptrs(class_id: u32, name: &str) -> Option<(usiz
     (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
 }
 
-/// Own static accessor func_ptrs for the class *constructor*. Mirrors
-/// `class_own_accessor_ptrs` against `CLASS_STATIC_ACCESSORS`.
-pub(crate) fn class_own_static_accessor_ptrs(class_id: u32, name: &str) -> Option<(usize, usize)> {
+/// The compiled entries of the ClassBody static accessor `name` of `class_id`
+/// as REGISTERED (`CLASS_STATIC_ACCESSORS`): the input the class function
+/// object's accessor property is built from, not the property itself — a
+/// deleted or redefined accessor is still registered. Private (`#x`) static
+/// accessors live only here.
+pub(crate) fn class_registered_static_accessor_ptrs(
+    class_id: u32,
+    name: &str,
+) -> Option<(usize, usize)> {
     let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
     let reg = guard.as_ref()?;
     let pair = reg.get(&class_id)?.get(name).copied()?;
@@ -503,21 +509,24 @@ unsafe fn register_class_static_accessor_half(
             Err(_) => return,
         }
     };
-    let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_ptr_hash_map());
-    }
-    let entry = guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id as u32)
-        .or_default()
-        .entry(name)
-        .or_insert((0, 0));
-    if is_getter {
-        entry.0 = func_ptr as usize;
-    } else {
-        entry.1 = func_ptr as usize;
+    {
+        let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        }
+        let entry = guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id as u32)
+            .or_default()
+            .entry(name.clone())
+            .or_insert((0, 0));
+        if is_getter {
+            entry.0 = func_ptr as usize;
+        } else {
+            entry.1 = func_ptr as usize;
+        }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
 }

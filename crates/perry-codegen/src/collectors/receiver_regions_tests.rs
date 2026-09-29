@@ -318,7 +318,6 @@ fn representation_payloads_use_the_common_scope_boundary() {
         store_side_exit_label: "slow".into(),
         array_kind: crate::expr::PackedNumericLoopKind::F64,
         allow_holes: false,
-        numeric_accumulators: vec![NUM2],
         window_validated: true,
         affine_indices: false,
     });
@@ -327,7 +326,6 @@ fn representation_payloads_use_the_common_scope_boundary() {
         .next()
         .expect("packed descriptor must be queryable");
     assert_eq!(fact.array_local_id, OBJ);
-    assert_eq!(fact.numeric_accumulators, vec![NUM2]);
     assert!(table.has_packed_f64_loop_facts());
     table.materialize_masked_window_array(crate::expr::MaskedWindowArrayFact {
         array_local_id: OBJ + 1,
@@ -336,7 +334,6 @@ fn representation_payloads_use_the_common_scope_boundary() {
         min_idx: 0,
         max_idx_exclusive: 16,
         values_i32: false,
-        numeric_accumulators: Vec::new(),
         elem: crate::expr::MaskedWindowElem::PlainF64,
         allows_stores: false,
     });
@@ -1217,4 +1214,42 @@ fn the_inventory_covers_every_claim_kind_and_every_boundary_mechanism() {
         16,
         "inventory size changed — see FnCtx declarations"
     );
+}
+
+#[test]
+fn a_number_local_scope_ends_with_its_clone() {
+    // 5L: a clone-scoped Number local is visible only while its clone lowers;
+    // the slow clone and post-loop code must not see it.
+    let mut table = ReceiverDescriptorTable::default();
+    table.materialize_number_locals(5, &[NUM]);
+    table.materialize_number_locals(6, &[NUM2]);
+    table.materialize_number_locals(7, &[]);
+    assert!(table.local_is_number_in_scope(NUM));
+    assert!(table.local_is_number_in_scope(NUM2));
+    assert_eq!(table.dematerialize_scope(6), 0);
+    assert!(table.local_is_number_in_scope(NUM));
+    assert!(!table.local_is_number_in_scope(NUM2));
+    table.dematerialize_scope(5);
+    assert!(!table.local_is_number_in_scope(NUM));
+}
+
+#[test]
+fn a_flow_refined_number_local_joins_and_leaves_its_copy_scope() {
+    // 5L: a masked-window fast copy admits a local at its refinement point and
+    // withdraws it at the first write it cannot prove Number. Withdrawal from
+    // one scope leaves another scope's own proof standing.
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.admit_number_local(9, NUM));
+    assert!(!table.admit_number_local(9, NUM));
+    assert!(table.local_is_number_in_scope(NUM));
+    assert!(table.withdraw_number_local(9, NUM));
+    assert!(!table.local_is_number_in_scope(NUM));
+    assert!(!table.withdraw_number_local(9, NUM));
+    table.materialize_number_locals(5, &[NUM2]);
+    assert!(table.admit_number_local(9, NUM2));
+    assert!(table.withdraw_number_local(9, NUM2));
+    assert!(table.local_is_number_in_scope(NUM2));
+    assert!(table.admit_number_local(9, NUM));
+    table.dematerialize_scope(9);
+    assert!(!table.local_is_number_in_scope(NUM));
 }

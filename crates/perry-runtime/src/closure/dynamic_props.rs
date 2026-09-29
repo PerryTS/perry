@@ -326,6 +326,16 @@ pub extern "C" fn js_value_is_closure(value_bits: i64) -> i32 {
 /// Get a dynamic property stored on a closure.
 /// Returns TAG_UNDEFINED if not found.
 pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
+    closure_get_dynamic_prop_keyed(ptr, prop, std::ptr::null())
+}
+
+/// [`closure_get_dynamic_prop`] with the caller's key header, when it has one
+/// (`key` may be null): a class constructor's read then builds no key string.
+pub(crate) fn closure_get_dynamic_prop_keyed(
+    ptr: usize,
+    prop: &str,
+    key: *const crate::StringHeader,
+) -> f64 {
     if !is_closure_ptr(ptr) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -350,6 +360,11 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
     let on_base = unsafe { super::shape::closure_on_base_shape(ptr as *const ClosureHeader) };
     if on_base {
         // fall through to the data lookups below
+    } else if super::shape::is_class_code(unsafe { (*(ptr as *const ClosureHeader)).func_ptr }) {
+        // A class constructor: its class lookup (statics, the parent chain,
+        // `name`/`length`/`prototype`, Function.prototype) — never the plain
+        // function fallbacks below.
+        return crate::object::class_value::class_static_read(ptr, prop, key);
     } else if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
         if acc.get == 0 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);

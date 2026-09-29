@@ -164,7 +164,7 @@
 //! # Hook points for lane 4
 //!
 //! Two, both one call wide:
-//!   * [`inherited_read_cache_hit`] — the guard-and-load. Called at the top of
+//!   * `inherited_read_cache_hit` (test-only) — the guard-and-load. Called at the top of
 //!     `js_object_get_field_by_name` and of `get_field_ic_miss_impl`.
 //!   * [`inherited_read_cache_prime`] — the chain walk. Called from
 //!     `get_field_ic_miss_impl` only, at the point where the own-key search has
@@ -446,6 +446,7 @@ fn address_is_prime_stable(addr: usize) -> bool {
 /// # Safety
 /// `obj` is a masked, non-null heap pointer the caller has already established
 /// is a plausible heap address; `key` may be null.
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn inherited_read_cache_hit(
     obj: *const ObjectHeader,
@@ -596,6 +597,29 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Lookup {
+    lookup_entry::<true>(obj, key)
+}
+
+/// [`inherited_read_cache_lookup`] for the DATA entries only: an accessor
+/// entry answers `Unknown`. This instance has no edge to [`accessor_hit`], so
+/// the GC-leaf callers (`js_inherited_read_cache_hit_f64`, and through it
+/// `js_class_field_get_ic_fast`) provably never run user code.
+///
+/// # Safety
+/// As [`inherited_read_cache_lookup`].
+#[inline]
+pub(crate) unsafe fn inherited_read_cache_lookup_data(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Lookup {
+    lookup_entry::<false>(obj, key)
+}
+
+#[inline(always)]
+unsafe fn lookup_entry<const SERVE_ACCESSORS: bool>(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Lookup {
     let entry = match proved_entry(obj, key) {
         Ok(entry) => entry,
         Err(answer) => return answer,
@@ -612,7 +636,10 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
         as *const u64;
     let bits = *field;
     if entry.accessor {
-        return accessor_hit(obj, bits);
+        if SERVE_ACCESSORS {
+            return accessor_hit(obj, bits);
+        }
+        return Lookup::Unknown;
     }
     // A deleted holder slot is a `TAG_HOLE`. `delete` bumps the semantic epoch
     // so this is unreachable today; it costs one compare and it is the check
@@ -1647,12 +1674,9 @@ pub unsafe extern "C" fn js_inherited_read_cache_hit_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
-    if matches!(proved_entry(obj, key), Ok(entry) if entry.accessor) {
-        return f64::from_bits(crate::value::TAG_HOLE);
-    }
-    match inherited_read_cache_hit(obj, key) {
-        Some(value) => f64::from_bits(value.bits()),
-        None => f64::from_bits(crate::value::TAG_HOLE),
+    match inherited_read_cache_lookup_data(obj, key) {
+        Lookup::Hit(value) => f64::from_bits(value.bits()),
+        Lookup::Declined | Lookup::Unknown => f64::from_bits(crate::value::TAG_HOLE),
     }
 }
 

@@ -383,8 +383,9 @@ pub(super) unsafe fn instance_constructor_value(
         );
     }
     if class_id != 0 && is_class_id_registered(class_id) {
-        let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
-        return Some(JSValue::from_bits(bits));
+        return Some(JSValue::from_bits(
+            crate::object::class_value::class_value(class_id).to_bits(),
+        ));
     }
     // class_id == 0 fallback: plain ObjectHeader allocated
     // without an HIR shape (Object.create(null) hybrids, raw

@@ -1037,6 +1037,7 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 
 /// Every live box whose current payload a minor can move, mark through, or
 /// sweep. This is the authoritative debug re-derivation of the remembered set.
+#[cfg(any(debug_assertions, test))]
 fn relevant_box_roots() -> Vec<usize> {
     let mut relevant = BOX_REGISTRY.with(|registry| {
         registry

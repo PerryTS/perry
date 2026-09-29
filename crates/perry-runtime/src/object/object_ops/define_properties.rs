@@ -360,19 +360,16 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         }
     }
 
-    // Declared ES classes are represented by INT32-tagged ClassRefs rather
-    // than heap Function objects. Preserve Object.setPrototypeOf on a ClassRef
-    // as the class object's static prototype. Effect's Schema.Opaque depends
-    // on this exact shape:
+    // A class constructor's own [[Prototype]]: recorded on its function object
+    // (the state record every function object uses). Effect's Schema.Opaque
+    // depends on this exact shape:
     //
     //   class Opaque {}
     //   Object.setPrototypeOf(Opaque, schema)
     //   class Partial extends Opaque {}
     //   Partial.ast
     //
-    // Ordinary object and closure targets already have prototype side tables,
-    // but the ClassRef previously fell through as a no-op. Record it in
-    // CLASS_STATIC_PROTOTYPES — the CONSTRUCTOR-side table.
+    // It is the CONSTRUCTOR-side link.
     //
     // It must not go in CLASS_PROTOTYPE_OBJECTS: that table means "what
     // INSTANCES of this class inherit from", so parking a constructor link
@@ -393,8 +390,9 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             // GC root table that the collector later dereferences — a segfault
             // there, silently hidden on macOS (#1843/#4004/#4665/#4800/#6271).
             // Require a real, readable GC header instead.
+            // A function (including another class) is a valid [[Prototype]]:
+            // the link is a traced edge of the function object, not a table.
             if !proto_ptr.is_null()
-                && !crate::closure::is_closure_ptr(proto_ptr as usize)
                 && crate::value::addr_class::is_above_handle_band(proto_ptr as usize)
                 && unsafe {
                     crate::value::addr_class::try_read_gc_header(proto_ptr as usize).is_some()

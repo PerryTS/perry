@@ -91,6 +91,9 @@ pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
                 _ => 0,
             }
         }
+    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+        // A class function object names its class.
+        class_id
     } else if tag == POINTER_TAG {
         // Object instance: read class_id from the ObjectHeader.
         let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
@@ -500,7 +503,6 @@ pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
 /// the constructor currently running inherits.
 pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -524,7 +526,7 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     // snapshot caps by the signature split.
     if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
         if parent_cid != 0 {
-            return f64::from_bits(INT32_TAG | parent_cid as u64);
+            return crate::object::class_value::class_value(parent_cid);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -608,16 +610,22 @@ pub unsafe extern "C" fn js_register_class_static_method(
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
-    let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_ptr_hash_map());
+    {
+        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id as u32)
+            .or_default()
+            .insert(
+                name.clone(),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
     }
-    guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id as u32)
-        .or_default()
-        .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
 }
 
 fn property_key_string(key: f64) -> Option<String> {
@@ -744,16 +752,17 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
     if is_static != 0 {
-        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        {
+            let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+            if guard.is_none() {
+                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            }
+            guard.as_mut().unwrap().entry(class_id).or_default().insert(
+                name.clone(),
+                (func_ptr as usize, param_count as u32, has_rest != 0),
+            );
         }
-        guard
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_default()
-            .insert(name, (func_ptr as usize, param_count as u32, has_rest != 0));
+        crate::object::class_value::note_intrinsic_registration(class_id, &name);
     } else {
         let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
         if registry.is_none() {
@@ -848,23 +857,26 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             drop(registry);
             super::decl_accessors::note_instance_accessor_registered(class_id, &name);
         } else {
-            let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(crate::fast_hash::new_ptr_hash_map());
+            {
+                let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+                if guard.is_none() {
+                    *guard = Some(crate::fast_hash::new_ptr_hash_map());
+                }
+                let entry = guard
+                    .as_mut()
+                    .unwrap()
+                    .entry(class_id)
+                    .or_default()
+                    .entry(name.clone())
+                    .or_insert((0, 0));
+                if getter_ptr != 0 {
+                    entry.0 = getter_ptr as usize;
+                }
+                if setter_ptr != 0 {
+                    entry.1 = setter_ptr as usize;
+                }
             }
-            let entry = guard
-                .as_mut()
-                .unwrap()
-                .entry(class_id)
-                .or_default()
-                .entry(name)
-                .or_insert((0, 0));
-            if getter_ptr != 0 {
-                entry.0 = getter_ptr as usize;
-            }
-            if setter_ptr != 0 {
-                entry.1 = setter_ptr as usize;
-            }
+            crate::object::class_value::note_intrinsic_registration(class_id, &name);
         }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
@@ -1116,117 +1128,6 @@ pub(crate) unsafe fn class_symbol_setter_apply(
         }
         false
     })
-}
-
-pub(crate) unsafe fn class_static_accessor_getter_value(
-    class_id: u32,
-    name: &str,
-    receiver: f64,
-) -> Option<f64> {
-    let guard = CLASS_STATIC_ACCESSORS.read().ok();
-    let map = guard.as_ref().and_then(|guard| guard.as_ref());
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        // A descriptor installed by `defineProperty` replaces an existing
-        // class-body accessor at the same inheritance level.
-        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
-            return Some(result);
-        }
-        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(getter, _)) = accessors.get(name) {
-                if getter == 0 {
-                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
-                }
-                // #10911: when this getter was reached by walking the STATIC
-                // prototype chain -- a subclass reading an accessor declared
-                // on its parent class OBJECT -- `receiver` is that parent, the
-                // object the getter lives on. `resolve_proto_chain_field_inner`
-                // stashes the class the read actually started from, exactly as
-                // it does for instance getters (see `class_getter_this`), and
-                // spec OrdinaryGet threads that Receiver through. Bind `this`
-                // to it, or `Sub.accessor` runs with `this === Base`.
-                //
-                // Effect's `static get ast() { return getClassSchema(this).ast }`
-                // is this shape: the schema memoised against the base class, so
-                // decoded errors were built from the base and were not
-                // `instanceof` their own class (#10891).
-                //
-                // `this` and the capture/private OWNER are two different
-                // things here and must not be collapsed: `this` is the class
-                // the read started from, while the owner is the evaluation the
-                // getter was FOUND on -- the object whose `__perry_ctor_caps`
-                // hold its captured variables and whose brand gates `#x`.
-                // `js_class_capture_value_for_receiver` prefers the owner, so
-                // binding it to the subclass would lose every capture.
-                let owner = receiver;
-                let receiver = crate::object::field_get_set::accessor_receiver_override_take()
-                    .unwrap_or(receiver);
-                // Static accessor bodies use the same receiver-resolving
-                // prologue as static methods. In particular, a fresh class
-                // expression must expose its per-evaluation class object as
-                // `this`, not the shared compile-time ClassRef.
-                crate::object::static_this_arm_if_unarmed(receiver);
-                crate::object::static_private_owner_push(owner);
-                let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
-                let result = f();
-                crate::object::static_private_owner_pop();
-                crate::object::static_this_disarm();
-                return Some(result);
-            }
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    None
-}
-
-pub(crate) unsafe fn class_static_accessor_setter_apply(
-    class_id: u32,
-    name: &str,
-    receiver: f64,
-    value: f64,
-) -> bool {
-    let guard = CLASS_STATIC_ACCESSORS.read().ok();
-    let map = guard.as_ref().and_then(|guard| guard.as_ref());
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        if let Some(applied) =
-            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
-        {
-            return applied;
-        }
-        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
-            if let Some(&(_, setter)) = accessors.get(name) {
-                if setter != 0 {
-                    // Mirror the getter path: the compiled static-accessor
-                    // prologue consumes this override and binds `this` to the
-                    // actual constructor value for this evaluation.
-                    crate::object::static_this_arm_if_unarmed(receiver);
-                    crate::object::static_private_owner_push(receiver);
-                    let f = crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
-                    let _ = f(value);
-                    crate::object::static_private_owner_pop();
-                    crate::object::static_this_disarm();
-                }
-                return true;
-            }
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
 }
 
 /// Apply an instance `set name(v)` accessor from the class vtable chain,
@@ -1602,8 +1503,9 @@ pub unsafe extern "C" fn js_class_static_method_call(
     // class_id stamped on a POINTER class object's ObjectHeader.
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
-    let class_id = if top16 == 0x7FFE {
-        (bits & 0xFFFF_FFFF) as u32
+    let _ = top16;
+    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+        cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
         js_object_get_class_id(obj)
@@ -1674,8 +1576,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
         let mut cid = class_id;
         let mut depth = 0u32;
         while cid != 0 && depth < 64 {
-            let field_val = CLASS_DYNAMIC_PROPS
-                .with(|m| m.borrow().get(&cid).and_then(|f| f.get(name).copied()));
+            let field_val = crate::object::class_value::class_static_get(cid, name);
             if let Some(v) = field_val {
                 let fv = crate::value::JSValue::from_bits(v.to_bits());
                 if !fv.is_undefined() && !fv.is_null() {

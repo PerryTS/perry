@@ -75,9 +75,10 @@ pub(super) unsafe fn dispatch_common(
             if crate::symbol::js_is_symbol(key_value) != 0 {
                 return Some(super::object_ops::js_object_has_own(object, key_value));
             }
-            if (object.to_bits() >> 48) == 0x7FFE {
+            if let Some(class_id) =
+                crate::object::class_value::legacy_class_value_word(object.to_bits())
+            {
                 let key_str = crate::builtins::js_string_coerce(key_value);
-                let class_id = (object.to_bits() & 0xFFFF_FFFF) as u32;
                 let present = if key_str.is_null() {
                     false
                 } else {
@@ -115,14 +116,12 @@ pub(super) unsafe fn dispatch_common(
                             {
                                 super::class_registry::class_name_for_id(class_id).is_some()
                             } else {
-                                CLASS_DYNAMIC_PROPS.with(|m| {
-                                    m.borrow()
-                                        .get(&class_id)
-                                        .is_some_and(|props| props.contains_key(key))
-                                }) || super::class_registry::lookup_static_method_in_chain(
-                                    class_id, key,
-                                )
-                                .is_some()
+                                crate::object::class_value::class_static_get(class_id, key)
+                                    .is_some()
+                                    || super::class_registry::lookup_static_method_in_chain(
+                                        class_id, key,
+                                    )
+                                    .is_some()
                             }
                         })
                         .unwrap_or(false);
@@ -717,8 +716,10 @@ pub(crate) unsafe fn dispatch_function_proto_method(
         "call" => {
             // Class constructors have no [[Call]] slot. `C.call(...)` must
             // reject instead of treating the INT32-tagged ClassRef payload as
-            // a closure pointer in the generic Function.prototype path.
-            if super::class_ref_id(object).is_some() {
+            // a closure pointer in the generic Function.prototype path. (A
+            // class FUNCTION OBJECT needs no gate: its code is the throwing
+            // [[Call]] `js_class_constructor_called`.)
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("call");
             }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
@@ -822,7 +823,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
         }
         "apply" => {
-            if super::class_ref_id(object).is_some() {
+            if (object.to_bits() >> 48) == 0x7FFE && super::class_ref_id(object).is_some() {
                 throw_fn_proto_not_callable("apply");
             }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes

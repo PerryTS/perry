@@ -1553,7 +1553,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 29] = [
+const RECV_ROUTE_NAMES: [&str; 32] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1594,11 +1594,23 @@ const RECV_ROUTE_NAMES: [&str; 29] = [
     // Step 4 (link-time shape ids), emitted: a region guard's static
     // supplier matched (`Route::RloopStatic`).
     "rloop_static",
+    // Runtime-counted: a class-field read whose inline guard missed, answered
+    // from the receiver's shape (the site's word or the inherited cache)...
+    "rt_class_miss_shape",
+    // ...or by the generic read ladder behind it (own miss, inherited cache,
+    // priming), where it used to take the site-less by-name walk.
+    "rt_class_miss_ladder",
+    // Runtime-counted: a by-name overwrite of a live inline slot on an object
+    // holding a typed layout, which keeps it (it used to declare it unknown).
+    "rt_overwrite_kept_typed",
 ];
 
 /// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
 pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
+pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 29;
+pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 30;
+pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
@@ -1609,13 +1621,20 @@ pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE: u32 = 25;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_RANGE: u32 = 26;
 pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 27;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 29] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 29];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 32] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 32];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
 /// relaxed load and a not-taken branch everywhere else.
 static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is this a census build (see [`RECV_ROUTES_ARMED`])? For a runtime route
+/// whose classification costs more than the count.
+#[inline]
+pub(crate) fn recv_routes_armed() -> bool {
+    RECV_ROUTES_ARMED.load(Ordering::Relaxed)
+}
 
 /// Count a runtime-side route in a census build (see
 /// [`RECV_ROUTES_ARMED`]); nothing otherwise.

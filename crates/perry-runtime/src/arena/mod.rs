@@ -17,6 +17,8 @@ pub(crate) use construction::ConstructionBatch;
 mod inline;
 mod map_allocations;
 mod page_meta;
+mod pinned;
+pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
 /// #7742: whole-block in-place promotion of a (near-)fully-live young
 /// generation, in place of object-by-object evacuation.
 mod promote;

@@ -205,8 +205,7 @@ pub(crate) unsafe fn reflect_symbol_getter_closure_bits(obj_f64: f64, sym_f64: f
 
 pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);
@@ -393,7 +392,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // below uses.
     if !has_own_data && !native_async_resource {
         let bits = obj_f64.to_bits();
-        if (bits >> 48) != 0x7FFE {
+        if crate::object::class_value::legacy_class_value_word(bits).is_none() {
             let jsval = crate::value::JSValue::from_bits(bits);
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
@@ -447,8 +446,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     }
     if !has_own_data {
         let bits = obj_f64.to_bits();
-        if (bits >> 48) == 0x7FFE {
-            let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
             if crate::object::class_symbol_setter_apply(class_id, sym_key, obj_f64, value_f64, true)
             {
                 return value_f64;
@@ -527,7 +525,7 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     // heap address — `set_symbol_property` keys the own-symbol side table by
     // `obj_key_from_f64`, which returns 0 for a non-pointer receiver, so the
     // write was silently dropped and `sym in C` / `C[sym]` came back undefined.
-    // Store it as a static Symbol-keyed member (CLASS_STATIC_SYMBOLS), the same
+    // Store it as a static Symbol-keyed member of the class function object, the same
     // table `static [sym] = v` uses and that the class-ref arms of
     // `js_object_get_symbol_property` / `js_object_has_property` already read.
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
@@ -631,53 +629,59 @@ pub fn class_static_symbol_lookup(class_id: u32, sym_f64: f64) -> Option<u64> {
 
 #[inline(never)]
 fn class_static_symbol_lookup_slow(class_id: u32, sym_f64: f64) -> Option<u64> {
-    unsafe {
-        let sym_key = sym_key_from_f64(sym_f64);
-        if class_id == 0 || sym_key == 0 {
-            return None;
-        }
-        let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
-        guard
-            .as_ref()
-            .and_then(|m| m.get(&(class_id, sym_key)).copied())
+    let sym_key = unsafe { sym_key_from_f64(sym_f64) };
+    if class_id == 0 || sym_key == 0 {
+        return None;
     }
+    let owner = crate::object::class_value::class_value_if_minted(class_id)? as usize;
+    symbol_property_root_bits(owner, sym_key)
 }
 
+/// [`class_static_symbol_lookup`] up the class's constructor chain: a
+/// subclass constructor inherits its parent's static symbol properties
+/// (its [[Prototype]] is the parent constructor).
+pub fn class_static_symbol_lookup_in_chain(class_id: u32, sym_f64: f64) -> Option<u64> {
+    if super::CLASS_STATIC_SYMBOLS_LATCH.is_idle() {
+        return None;
+    }
+    let mut cid = class_id;
+    let mut depth = 0;
+    while cid != 0 && depth < 64 {
+        if let Some(bits) = class_static_symbol_lookup_slow(cid, sym_f64) {
+            return Some(bits);
+        }
+        cid = match crate::object::get_parent_class_id(cid) {
+            Some(p) if p != cid => p,
+            _ => return None,
+        };
+        depth += 1;
+    }
+    None
+}
+
+/// A class's own static symbol data keys, in creation order.
 pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
-    let guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
-    let mut keys: Vec<usize> = guard
-        .as_ref()
-        .map(|map| {
-            map.keys()
-                .filter_map(|&(cid, sym_key)| (cid == class_id).then_some(sym_key))
-                .collect()
-        })
-        .unwrap_or_default();
-    drop(guard);
-    let order = CLASS_STATIC_SYMBOL_ORDER.lock().unwrap();
-    crate::cold_sort::sort_by_key(&mut keys, |sym_key| unsafe {
-        let symbol_id = (*sym_key as *const SymbolHeader)
-            .as_ref()
-            .map_or(u64::MAX, |symbol| symbol.id);
-        let position = order
-            .as_ref()
-            .and_then(|all| all.get(&class_id))
-            .and_then(|ids| ids.iter().position(|id| *id == symbol_id));
-        (position.unwrap_or(usize::MAX), symbol_id)
-    });
-    keys
+    if class_id == 0 {
+        return Vec::new();
+    }
+    let Some(owner) = crate::object::class_value::class_value_if_minted(class_id) else {
+        return Vec::new();
+    };
+    clone_symbol_entries_for_obj_ptr(owner as usize)
+        .into_iter()
+        .map(|(sym_key, _)| sym_key)
+        .collect()
 }
 
 /// `Object.prototype.hasOwnProperty.call(obj, sym)` for Symbol keys.
 /// Refs #420 — drizzle's `is(value, type)` checks entityKind which is a Symbol.
 ///
 /// When `obj` is an INT32-tagged class ref, also consult
-/// `CLASS_STATIC_SYMBOLS` for static-Symbol-keyed declarations.
+/// the class function object's static symbol properties.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);

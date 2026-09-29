@@ -32,6 +32,12 @@ pub(crate) const INTRINSIC_SERIAL_FUNCTION: u64 = 1;
 pub(crate) const INTRINSIC_SERIAL_ASYNC_FUNCTION: u64 = 2;
 pub(crate) const INTRINSIC_SERIAL_GENERATOR_FUNCTION: u64 = 3;
 pub(crate) const INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION: u64 = 4;
+/// Not a prototype: the marker `proto_id` of the class-constructor ShapeId
+/// ([`function_class_shape`]). Shapes are canonical per facts, so without a
+/// fact of its own the class shape would BE the FunctionDictionary id. No
+/// object is ever assigned this serial; a class constructor's real
+/// [[Prototype]] lives on the object (dictionary kind: "ask the object").
+pub(crate) const INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER: u64 = 5;
 
 /// Which intrinsic prototype a function BODY's closures inherit from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +102,9 @@ crate::perry_thread_local! {
     /// This agent's base Function ShapeIds, indexed by `FunctionProtoKind`,
     /// then the FunctionDictionary id (0 = not minted yet).
     static BASE_SHAPES: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
+    /// This agent's class-constructor ShapeId (0 = not minted yet). Its own
+    /// cell: the base-shape array is copied on every closure birth.
+    static CLASS_SHAPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// One-entry body cache: the last `func_ptr` born and its base shape.
     static LAST_BODY: std::cell::Cell<(usize, u32)> = const { std::cell::Cell::new((0, 0)) };
 }
@@ -178,6 +187,39 @@ pub(crate) fn function_dictionary_shape() -> u32 {
     )
 }
 
+/// The ShapeId of every class function object (`object::class_value`): its
+/// kind is a shape fact. Dictionary-kind ("ask the object": statics, the
+/// recorded [[Prototype]], accessors live on the object) and STICKY — no
+/// own-property transition moves a class function object off it, so a site
+/// that compares ShapeIds tells a class constructor from any other function
+/// with that one compare.
+#[inline]
+pub(crate) fn function_class_shape() -> u32 {
+    let mut id = CLASS_SHAPE.with(std::cell::Cell::get);
+    if id == 0 {
+        id = mint(
+            ShapeObjectKind::FunctionDictionary,
+            INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
+        );
+        CLASS_SHAPE.with(|c| c.set(id));
+    }
+    debug_assert_ne!(
+        id,
+        function_dictionary_shape(),
+        "the class shape is its own id"
+    );
+    id
+}
+
+/// Is `func_ptr` the class [[Call]] code — i.e. is a closure carrying it a
+/// class function object? Equivalent to its ShapeId being
+/// [`function_class_shape`] (both are set at mint and never change); used on
+/// hot paths where the shape id would need a thread-local read.
+#[inline(always)]
+pub(crate) fn is_class_code(func_ptr: *const u8) -> bool {
+    func_ptr == crate::object::class_value::js_class_constructor_called as *const u8
+}
+
 /// The ShapeId a fresh closure of `func_ptr` is born with.
 #[inline]
 pub(crate) fn birth_shape_for_body(func_ptr: *const u8) -> u32 {
@@ -214,10 +256,14 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
     let id = (*closure).shape_id;
     debug_assert!(
         id == function_dictionary_shape()
+            || id == function_class_shape()
             || shapes::shape_object_kind_by_id(id) == Some(ShapeObjectKind::Function),
-        "a closure carries a Function or the FunctionDictionary shape: {id:#x}"
+        "a closure carries a Function, FunctionDictionary or class shape: {id:#x}"
     );
-    id != function_dictionary_shape()
+    // The class shape is sticky and implies the class [[Call]] code pointer,
+    // so the code-pointer compare (a link-time constant, no thread-local
+    // read) excludes it for free on this hot path.
+    id != function_dictionary_shape() && !is_class_code((*closure).func_ptr)
 }
 
 /// Record that `closure` now answers something its base shape does not:
@@ -230,7 +276,9 @@ pub(crate) unsafe fn closure_on_base_shape(closure: *const ClosureHeader) -> boo
 #[inline]
 pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
     let dict = function_dictionary_shape();
-    if (*closure).shape_id != dict {
+    let id = (*closure).shape_id;
+    // A class function object keeps its (sticky, dictionary-kind) class shape.
+    if id != dict && !is_class_code((*closure).func_ptr) {
         // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
         (*closure).shape_id = dict;
     }
@@ -252,7 +300,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
     unsafe {
         let closure = ptr as *mut ClosureHeader;
         let dict = function_dictionary_shape();
-        if (*closure).shape_id == dict {
+        if (*closure).shape_id == dict || is_class_code((*closure).func_ptr) {
             return;
         }
         if super::props::has_state(ptr) {
@@ -310,7 +358,8 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     if id == function_dictionary_shape() {
         return false;
     }
-    // A keyed shape: its verdict for the three Function.prototype intrinsics
+    // A keyed shape (the class shape is dictionary-kind: the verdict below
+    // answers false for it without a compare of its own): its verdict for the three Function.prototype intrinsics
     // is a fact of the (immutable) ShapeId, cached per agent.
     let bit = match key {
         b"bind" => VERDICT_BIND,
@@ -319,7 +368,9 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
         _ => return keyed_shape_lacks_key(id, key),
     };
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
-    let cached = VERDICT_CACHE.with(|c| c.get()[slot]);
+    // Index in place: `Cell::get` would copy the whole 64-entry array.
+    // SAFETY: this agent's own cell; no reference to it outlives the read.
+    let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
     let mask = if cached.0 == id {
         cached.1
     } else {
@@ -339,11 +390,8 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
             } else {
                 0
             };
-        VERDICT_CACHE.with(|c| {
-            let mut all = c.get();
-            all[slot] = (id, mask);
-            c.set(all);
-        });
+        // SAFETY: as above; a single-entry store in place.
+        VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
         mask
     };
     mask & bit != 0
