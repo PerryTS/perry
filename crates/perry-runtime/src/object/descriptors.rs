@@ -523,15 +523,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     {
                         return js_object_get_own_property_descriptor(proto, key_value);
                     }
-                } else if let Some((g, s)) =
-                    super::class_registry::class_own_static_accessor_ptrs(class_id, &method_name)
-                {
-                    return super::class_registry::static_accessor_descriptor(
+                } else if let Some(desc) =
+                    crate::object::class_value::class_static_accessor_descriptor(
                         class_id,
                         &method_name,
-                        g,
-                        s,
-                    );
+                    )
+                {
+                    return desc;
                 }
                 if super::class_prototype_ref_id(obj_value).is_some()
                     && (method_name == "constructor"
@@ -1188,8 +1186,18 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 for name in super::class_registry::class_own_dynamic_prop_names(class_id) {
                     push_unique_name(&mut names, name);
                 }
+                // Accessor properties a `defineProperty` added.
+                for name in crate::object::class_value::class_static_accessor_names(class_id) {
+                    push_unique_name(&mut names, name);
+                }
             }
-            names.retain(|n| !super::field_get_set::is_internal_runtime_key(n));
+            names.retain(|n| {
+                !super::field_get_set::is_internal_runtime_key(n)
+                    // A deleted `length` / `name` is no longer own.
+                    && !(!is_prototype_ref
+                        && matches!(n.as_str(), "length" | "name")
+                        && super::class_registry::class_is_key_deleted(class_id, n))
+            });
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {

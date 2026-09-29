@@ -130,6 +130,16 @@ pub(crate) fn get_field_by_name_object_tail(
             if key.is_null() {
                 return JSValue::undefined();
             }
+            // A class constructor: its class lookup with this key header.
+            if crate::closure::shape::is_class_info(
+                (*(obj as *const crate::closure::ClosureHeader)).info,
+            ) {
+                if let Some(value) =
+                    super::has_property::class_closure_read_by_key(obj as usize, key)
+                {
+                    return JSValue::from_bits(value.to_bits());
+                }
+            }
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);

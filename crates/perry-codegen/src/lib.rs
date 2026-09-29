@@ -87,13 +87,15 @@ pub mod unit_cache;
 mod wasm32;
 
 pub use codegen::{
-    compile_module, context_free_ctor_abi, context_free_ctor_param_count,
-    namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
-    resolve_target_triple, short_spread_method_capabilities, user_function_symbol, AppMetadata,
-    CompileOptions, ConstructorContracts, CtorAbi, ExportedObjectLiteralCapability, FpContractMode,
-    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ResolvedConstructorContracts,
-    ShortSpreadMethodCandidate,
+    assign_static_shape_ids, compile_module, context_free_ctor_abi, context_free_ctor_param_count,
+    decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
+    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
+    short_spread_method_capabilities, take_module_static_seeds, user_function_symbol, AppMetadata,
+    BirthProto, BirthShape, CompileOptions, ConstructorContracts, CtorAbi, DefinedClassShape,
+    ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ResolvedConstructorContracts,
+    ShortSpreadMethodCandidate, TypedMasks,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
 pub use codegen::{program_has_worker, set_program_has_worker};

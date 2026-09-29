@@ -60,7 +60,11 @@ pub(crate) unsafe fn try_function_shape_method_call(
         return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
     }
     if !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name) {
-        return None;
+        // A class constructor (`C.m()` on a class value): the class arm —
+        // statics, callable static data, Function.prototype methods. Reached
+        // only once the ordinary function test failed, so no other receiver
+        // pays for it.
+        return function_shape_decline(object, addr, name, args_ptr, args_len);
     }
     // (2) The prototype the shape names, and its own data slot for the key.
     let proto =
@@ -89,6 +93,24 @@ pub(crate) unsafe fn try_function_shape_method_call(
 /// from the receiver's ACTUAL prototype (`reify_function_method_value`, which
 /// reads `getPrototypeOf(fn)`). The intrinsic runs the tower's semantics; any
 /// other callable (`p.call`) is invoked with the function as `this`.
+/// The shape arm declined an inherited Function.prototype method: a class
+/// constructor goes to the class arm; anything else back to the tower. Out of
+/// line so the inlined arm stays small.
+#[cold]
+#[inline(never)]
+unsafe fn function_shape_decline(
+    object: f64,
+    addr: usize,
+    name: &[u8],
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if crate::closure::shape::is_class_info((*(addr as *const ClosureHeader)).info) {
+        return super::primitive_methods::class_value_method_call(object, name, args_ptr, args_len);
+    }
+    None
+}
+
 unsafe fn dictionary_function_proto_method_call(
     object: f64,
     addr: usize,

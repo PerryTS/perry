@@ -407,25 +407,27 @@ pub(crate) fn try_lower_instance_method_call(
             // canonical shapes. Classes whose canonical layout itself may
             // contain `property` stay on the old probe, as do wide towers to
             // keep code-size growth bounded.
-            let shape_probe_arms: Vec<(u32, String)> = if implementors.len()
-                <= MAX_SUBCLASS_DISPATCH_ARMS
-            {
-                implementors
-                    .iter()
-                    .zip(impl_class.iter())
-                    .filter_map(|((class_id, _), class_name)| {
-                        if !canonical_shape_excludes_own_property(ctx, class_name, property) {
-                            return None;
-                        }
-                        let keys_global = ctx.class_keys_globals.get(class_name)?;
-                        let expected_shape =
-                            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global);
-                        Some((*class_id, expected_shape))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            let shape_probe_arms: Vec<(u32, String)> =
+                if implementors.len() <= MAX_SUBCLASS_DISPATCH_ARMS {
+                    implementors
+                        .iter()
+                        .zip(impl_class.iter())
+                        .filter_map(|((class_id, _), class_name)| {
+                            if !canonical_shape_excludes_own_property(ctx, class_name, property) {
+                                return None;
+                            }
+                            let keys_global = ctx.class_keys_globals.get(class_name)?;
+                            let expected_shape = crate::typed_shape::class_shape_id_operand(
+                                ctx,
+                                class_name,
+                                keys_global,
+                            );
+                            Some((*class_id, expected_shape))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             let mut shape_probe_cid: Option<String> = None;
             if !shape_probe_arms.is_empty() {
                 let (cid, shape_id) =

@@ -235,6 +235,10 @@ pub use html::{
     js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,
     js_string_strike, js_string_sub, js_string_sup,
 };
+pub(crate) use intern::atom_for_key;
+pub use intern::js_string_pool_atom;
+#[cfg(test)]
+pub(crate) use intern::{atom_lookup, is_atom_for_test, test_evict_interned};
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 #[cfg(test)]
 pub(crate) use intern::{

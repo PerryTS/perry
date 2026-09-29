@@ -1,0 +1,1 @@
+- Link-time ShapeIds: a structural view of a class never shares its typed layout's static id. The driver passes each module the defining module's ids (a program-wide map in `CompileOptions`, part of the object-cache key), so importer guards and short-spread foreign arms compare against the definer's id as an immediate; a refused typed install of a static id now aborts.

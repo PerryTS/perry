@@ -1543,10 +1543,8 @@ pub(super) fn emit_namespace_populator(
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalClass { class_id } => {
-                    // INT32-tagged class-id NaN-box: 0x7FFE_0000_0000_0000 |
-                    // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
-                    let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
-                    crate::nanbox::double_literal(f64::from_bits(bits))
+                    // The class's function object, as `Expr::ClassRef` lowers.
+                    crate::expr::emit_class_value_cached(ctx, *class_id)
                 }
                 NamespaceEntryKind::ForeignFunction {
                     source_prefix,

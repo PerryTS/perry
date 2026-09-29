@@ -33,6 +33,7 @@ pub use static_dispatch::js_instanceof;
 /// representation: heap closures (declarations / expressions / arrows /
 /// methods / bound functions / built-in constructors, all carrying
 /// `CLOSURE_MAGIC`) and small native function handles.
+#[inline]
 pub(crate) fn value_is_callable(value: f64) -> bool {
     if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
         return true;
@@ -44,13 +45,11 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     // user-crafted NaN payload sharing this tag band (e.g. via
     // `DataView.setFloat64` — a real JS number, not a class ref) is not
     // misclassified as callable.
-    if class_ref_id(value).is_some() {
-        return true;
-    }
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return class_ref_id(value).is_some();
     }
+    // A class function object is a closure: one probe answers both.
     crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
 }
 

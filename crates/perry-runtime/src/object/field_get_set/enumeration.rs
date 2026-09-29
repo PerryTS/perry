@@ -171,8 +171,14 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         if super::super::class_prototype_ref_id(value).is_none() {
             // Static accessors are defined before static fields, so an
             // enumerable one (#10480) precedes them.
-            let mut names =
-                super::super::class_registry::static_enumerable_accessor_names(class_id);
+            let mut names: Vec<String> =
+                crate::object::class_value::class_static_accessor_names(class_id)
+                    .into_iter()
+                    .filter(|name| {
+                        crate::object::class_value::class_static_own_accessor(class_id, name)
+                            .is_some_and(|(_, enumerable, _)| enumerable)
+                    })
+                    .collect();
             names.extend(super::super::class_registry::class_own_enumerable_field_names(class_id));
             super::super::descriptors::sort_property_names_ecma(&mut names);
             let arr = crate::array::js_array_alloc(names.len().max(1) as u32);

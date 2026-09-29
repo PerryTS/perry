@@ -1279,11 +1279,10 @@ pub(crate) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
     // Mark it
     unsafe {
         let header = header_from_user_ptr(ptr_val as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false; // Already marked
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
-            return false; // Pinned objects are always live
         }
         (*header).gc_flags |= GC_FLAG_MARKED;
         push_mark_seed(header);
@@ -1303,10 +1302,9 @@ pub(super) fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) 
     }
     unsafe {
         let header = header_from_user_ptr(addr as *const u8);
-        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
-            return false;
-        }
-        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0
+            || super::pin::pinned_counts_as_marked((*header).gc_flags)
+        {
             return false;
         }
         (*header).gc_flags |= GC_FLAG_MARKED;
@@ -1361,7 +1359,7 @@ pub(super) unsafe fn mark_field_into_worklist(
 
     let header = header_from_user_ptr(ptr_val as *const u8);
     let flags = (*header).gc_flags;
-    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+    if flags & GC_FLAG_MARKED != 0 || super::pin::pinned_counts_as_marked(flags) {
         return false;
     }
     (*header).gc_flags = flags | GC_FLAG_MARKED;
@@ -1500,7 +1498,7 @@ pub(super) fn try_mark_young_user_ptr_as_seed(
     unsafe {
         let header = header_from_user_ptr(ptr_val as *const u8);
         let flags = (*header).gc_flags;
-        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+        if flags & GC_FLAG_MARKED != 0 || super::pin::pinned_counts_as_marked(flags) {
             return false;
         }
         (*header).gc_flags = flags | GC_FLAG_MARKED;
@@ -1738,8 +1736,7 @@ pub(super) fn mark_block_persisting_arena_objects(
             |header_ptr, block_idx| {
                 let header = header_ptr as *mut GcHeader;
                 unsafe {
-                    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0
-                        && block_idx < block_has_live.len()
+                    if (*header).gc_flags & GC_FLAG_MARKED != 0 && block_idx < block_has_live.len()
                     {
                         block_has_live[block_idx] = true;
                     }
@@ -1775,7 +1772,7 @@ pub(super) fn mark_block_persisting_arena_objects(
             |header_ptr, _block_idx| {
                 let header = header_ptr as *mut GcHeader;
                 unsafe {
-                    if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                    if (*header).gc_flags & GC_FLAG_MARKED == 0 {
                         (*header).gc_flags |= GC_FLAG_MARKED;
                         worklist.push(header);
                         newly_marked += 1;

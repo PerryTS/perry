@@ -6,6 +6,14 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+/// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
+pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
+/// The compiler-assigned ("static") ShapeId band is
+/// `[SHAPE_ID_BASE, SHAPE_ID_BASE + STATIC_SHAPE_ID_COUNT)`: the driver
+/// assigns ids there by content and generated code embeds them as immediates;
+/// the runtime's counter never draws from it (design step 4).
+pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
+
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 8;
 

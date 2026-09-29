@@ -447,7 +447,7 @@ pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> 
     !ctx.shadow_slot_map.contains_key(&id)
         && !ctx.module_globals.contains_key(&id)
         && (ctx.integer_locals.contains(&id)
-            || ctx.number_by_construction_locals.contains(&id)
+            || crate::type_analysis::local_is_number(ctx, id)
             || matches!(
                 ctx.stable_local_type_proof(&id),
                 Some(

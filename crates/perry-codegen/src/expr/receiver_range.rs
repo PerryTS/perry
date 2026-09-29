@@ -103,6 +103,28 @@ pub(crate) enum Route {
     /// A generic read served from the receiver's SPILL buffer by the compact
     /// word's flipped entry (S5, `pic.spill.hit`).
     GenericSpillHit = 8,
+    // 9 and 10 are runtime-counted (`hot_diag::RT_ROUTE_*`).
+    /// Step 4b (#10884): a loop/body region's guard ran (loop entry, or one
+    /// body-region iteration).
+    RloopGuard = 11,
+    /// ...and its word was not retired, so the receiver was tested.
+    RloopOpen = 12,
+    /// A loop region's preheader chose the split loop (guard passed).
+    RloopSplit = 13,
+    /// ...or the plain loop (guard failed).
+    RloopPlain = 14,
+    /// One iteration of F-body.
+    RloopF = 15,
+    /// One iteration of G-body inside a split loop / body region.
+    RloopG = 16,
+    /// A latch re-check ran (dirty flag set, or `Recheck::Always`).
+    RloopRecheck = 17,
+    /// One bare access (read, store, or fact-tree leaf) executed.
+    RloopBare = 18,
+    // 19..=27 are runtime-counted (`hot_diag::RT_ROUTE_RLOOP_*`).
+    /// A region guard's STATIC supplier matched (DESIGN §4.1): the receiver
+    /// carries the driver's static id, so the region ran with no word.
+    RloopStatic = 28,
 }
 
 /// `PERRY_RECV_ROUTE_COUNT=1` at COMPILE time: emit one

@@ -275,6 +275,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // A class value (its function object, or the legacy immediate) constructs
+    // its class: decided first, one closure probe, before the exotic arms.
+    if let Some(class_cid) = constructor_class_ref_id(func_value) {
+        return construct_registered_class_ref(
+            class_cid, class_cid, func_value, args_ptr, args_len,
+        );
+    }
     // `new <primitive>()` is a TypeError — a primitive is never a constructor
     // (`new undefined()`, `new 5n()`, `new "s"()`, `new true()`). Checked via
     // the unambiguous NaN-box tags only (NOT `is_number`, whose f64 range
@@ -1274,10 +1281,7 @@ pub unsafe extern "C" fn js_new_function_construct_apply(func_value: f64, args_a
 }
 
 fn constructor_class_ref_id(value: f64) -> Option<u32> {
-    if super::super::class_prototype_ref_id(value).is_some() {
-        return None;
-    }
-    super::super::class_ref_id(value)
+    super::super::class_value::class_value_id(value)
 }
 
 /// Spec `IsConstructor(value)` — used by `NewPromiseCapability` (the Promise

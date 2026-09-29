@@ -439,7 +439,7 @@ impl CopyingNurseryCollector {
             CopyingPointerKind::Longlived | CopyingPointerKind::Malloc => {
                 unsafe {
                     let flags = (*ptr.header).gc_flags;
-                    if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                    if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                         (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
                         self.worklist.push(ptr.header);
                         self.survival_push();

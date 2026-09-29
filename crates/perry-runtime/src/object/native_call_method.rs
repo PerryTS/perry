@@ -718,8 +718,8 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
         if sym_key != 0 {
             let bits = object.to_bits();
             let top16 = bits >> 48;
-            if top16 == 0x7FFE {
-                let class_id = (bits & 0xFFFF_FFFF) as u32;
+            let _ = top16;
+            if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
                 let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
                 if is_prototype_ref {
                     if let Some((func_ptr, param_count, has_rest)) =

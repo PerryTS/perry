@@ -490,6 +490,10 @@ pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
 /// lazily here instead of at bind time is observationally identical.
 unsafe fn bound_target_declared_name(target_value: f64) -> String {
     use crate::value::JSValue;
+    // A class function object's declared name is its class's.
+    if let Some(class_id) = crate::object::class_value::class_value_id(target_value) {
+        return crate::object::class_name_for_id(class_id).unwrap_or_default();
+    }
     let target_jv = JSValue::from_bits(target_value.to_bits());
     if target_jv.is_pointer() {
         let target_closure = target_jv.as_pointer::<ClosureHeader>();
@@ -500,9 +504,10 @@ unsafe fn bound_target_declared_name(target_value: f64) -> String {
         return String::new();
     }
     let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        ((target_value.to_bits() >> 48) == 0x7FFE
-            && crate::object::class_prototype_ref_id(target_value).is_none())
-        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
+        crate::object::class_prototype_ref_id(target_value)
+            .is_none()
+            .then(|| crate::object::class_value::legacy_class_value_word(target_value.to_bits()))
+            .flatten()
     });
     target_class_id
         .and_then(crate::object::class_name_for_id)
@@ -621,11 +626,9 @@ pub unsafe extern "C" fn js_function_bind(
         let err = crate::error::js_typeerror_new(msg);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
-    let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
-        ((target_value.to_bits() >> 48) == 0x7FFE
-            && crate::object::class_prototype_ref_id(target_value).is_none())
-        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
-    });
+    // A pointer target is a closure (a class function object is one) or a
+    // callable native handle; only a non-pointer target can be the legacy
+    // INT32 class form, so only it pays the class probe.
     let target_is_closure = if target_jv.is_pointer() {
         let ptr = target_jv.as_pointer::<ClosureHeader>();
         if ptr.is_null() || !is_closure_ptr(ptr as usize) {
@@ -634,7 +637,17 @@ pub unsafe extern "C" fn js_function_bind(
             return target_value;
         }
         true
-    } else if target_class_id.is_some() {
+    } else if crate::object::class_ref_id(target_value)
+        .or_else(|| {
+            crate::object::class_prototype_ref_id(target_value)
+                .is_none()
+                .then(|| {
+                    crate::object::class_value::legacy_class_value_word(target_value.to_bits())
+                })
+                .flatten()
+        })
+        .is_some()
+    {
         // ClassRefs are callable/constructable INT32-tagged values rather
         // than heap closures. They still need a real BoundFunction wrapper
         // so `new C.bind(_, ...args)()` prepends its captured arguments.

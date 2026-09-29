@@ -564,7 +564,7 @@ fn root_scan_slices_many_registered_class_side_table_roots_with_tiny_budget() {
     const ROOTS: usize = 32;
     let children = (0..ROOTS).map(|_| young_leaf()).collect::<Vec<_>>();
     for (idx, &child) in children.iter().enumerate() {
-        crate::object::test_seed_class_dynamic_prop_root(
+        crate::object::test_seed_class_prototype_method_root(
             0x5300 + idx as u32,
             "root",
             string_bits(child),

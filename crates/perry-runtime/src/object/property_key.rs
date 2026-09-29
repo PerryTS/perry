@@ -366,29 +366,29 @@ pub unsafe extern "C" fn js_super_accessor_get(
     // class/super/in-static-{getter,methods,setter}.
     if super::class_ref_id(receiver).is_some() {
         if let Some(key_name) = key_name.as_ref() {
-            // (a) parent static getter, walking the class_id chain.
-            if let Ok(guard) = crate::object::CLASS_STATIC_ACCESSORS.read() {
-                if let Some(reg) = guard.as_ref() {
-                    let mut cid = parent_class_id;
-                    let mut depth = 0usize;
-                    while cid != 0 && depth < 32 {
-                        if let Some(getter_ptr) =
-                            reg.get(&cid).and_then(|m| m.get(key_name)).map(|d| d.get)
+            // (a) the parent's static accessor (an accessor property of its
+            // class function object), walking the class_id chain.
+            {
+                let mut cid = parent_class_id;
+                let mut depth = 0usize;
+                // Only a compiled class has a function object: a builtin parent
+                // (`extends Error`) ends the walk.
+                while cid != 0 && depth < 32 && crate::object::is_class_id_registered(cid) {
+                    if let Some((acc, _, _)) =
+                        crate::object::class_value::class_static_own_accessor(cid, key_name)
+                    {
+                        return crate::object::class_value::class_static_accessor_call_get(
+                            acc, receiver,
+                        );
+                    }
+                    match crate::object::get_parent_class_id(cid) {
+                        Some(p)
+                            if p != 0 && p != cid && crate::object::is_class_id_registered(p) =>
                         {
-                            if getter_ptr != 0 {
-                                // A static getter is a BARE body declaring no parameters; the
-                                // receiver passed below is ignored by it (over-application is safe).
-                                let f = crate::closure::body_call::js_bare_body_fn!(getter_ptr as *const u8; a0);
-                                return f(receiver);
-                            }
+                            cid = p;
+                            depth += 1;
                         }
-                        match crate::object::get_parent_class_id(cid) {
-                            Some(p) if p != 0 && p != cid => {
-                                cid = p;
-                                depth += 1;
-                            }
-                            _ => break,
-                        }
+                        _ => break,
                     }
                 }
             }
@@ -414,9 +414,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
             let mut cid = parent_class_id;
             let mut depth = 0usize;
             while cid != 0 && depth < 32 {
-                if let Some(v) = crate::object::CLASS_DYNAMIC_PROPS
-                    .with(|m| m.borrow().get(&cid).and_then(|f| f.get(key_name)).copied())
-                {
+                if let Some(v) = crate::object::class_value::class_static_get(cid, key_name) {
                     return v;
                 }
                 match crate::object::get_parent_class_id(cid) {

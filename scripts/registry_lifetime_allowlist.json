@@ -386,12 +386,6 @@
       "why": "Key includes the runtime SymbolHeader.id: a re-evaluated class expression with computed [Symbol()] members adds entries each time"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/static_accessor_attrs.rs",
-      "name": "STATIC_ACCESSOR_ATTRS",
-      "verdict": "bounded_by_program",
-      "why": "(class_id, declared static accessor name) -> attrs, set only on existing declared accessors"
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/verdict_classes.rs",
       "name": "VERDICT_CLASSES",
       "verdict": "open_leak",
@@ -420,12 +414,6 @@
       "name": "CLASS_PROTOTYPE_METHOD_VALUES",
       "verdict": "bounded_by_program",
       "why": "(class_id, method name) -> bound method closure cache, filled only for vtable-registered methods"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "CLASS_STATIC_DEFINED_ATTRS",
-      "verdict": "bounded_by_program",
-      "why": "(class_id, static key) -> attrs from Object.defineProperty(C,k): per distinct key, not per op"
     },
     {
       "file": "crates/perry-runtime/src/object/native_module.rs",
@@ -493,12 +481,6 @@
       "fn": "seen",
       "verdict": "bounded_by_constant",
       "why": "HashSet of &'static FFI stub symbol names for first-call warnings: the fixed set of stubs in the runtime"
-    },
-    {
-      "file": "crates/perry-runtime/src/symbol.rs",
-      "name": "CLASS_STATIC_SYMBOL_ORDER",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by class_id (one per declaration site) -> symbol ids of its static [sym] members"
     },
     {
       "file": "crates/perry-runtime/src/symbol.rs",
