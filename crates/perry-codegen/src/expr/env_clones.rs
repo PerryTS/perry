@@ -202,7 +202,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::DateParse(s) => {
             let s_box = lower_expr(ctx, s)?;
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
+            // #11519: an SSO string has no header behind its masked bits.
+            let s_handle = crate::expr::unbox_ffi_str_arg(blk, &s_box);
             Ok(blk.call(DOUBLE, "js_date_parse", &[(I64, &s_handle)]))
         }
         Expr::ProcessVersions => {

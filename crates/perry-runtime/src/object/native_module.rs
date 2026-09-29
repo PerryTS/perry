@@ -46,14 +46,14 @@ pub(crate) use callable_exports::{
     module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
     module_cjs_path_cache_value, module_cjs_prototype_for_instance, module_constants_value,
     native_string_value, prune_dead_builtin_closure_metadata_owners,
-    scan_builtin_closure_metadata_roots_mut, scan_tls_derived_prototype_roots_mut,
-    set_bound_native_closure_name, set_builtin_closure_length,
-    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
-    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
-    tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
-    zlib_codes_object,
+    prune_dead_builtin_closure_metadata_owners_young, scan_builtin_closure_metadata_roots_mut,
+    scan_tls_derived_prototype_roots_mut, set_bound_native_closure_name,
+    set_builtin_closure_length, set_builtin_closure_non_constructable,
+    sqlite_session_constructor_value, sqlite_statement_sync_constructor_value,
+    timers_promises_parent_namespace, tls_constructor_prototype_is_instance_of,
+    util_inspect_default_options_value, zlib_codes_object,
 };
-pub(crate) use constants::get_native_module_constant;
+pub(crate) use constants::{get_native_module_constant, native_module_constant_is_live};
 pub(crate) use constructor_exports::{
     bound_native_callable_is_constructor_value, is_native_module_constructor_export,
 };
@@ -1054,8 +1054,12 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             return value;
         }
     }
+    let live = native_module_constant_is_live(&module, &property);
     let key = format!("{module}\0{property}");
-    if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
+    let cached = (!live)
+        .then(|| NATIVE_ESM_EXPORT_VALUES.with(|v| v.borrow().get(&key).copied()))
+        .flatten();
+    if let Some(bits) = cached {
         return f64::from_bits(bits);
     }
     let value = unsafe {
@@ -1067,7 +1071,7 @@ fn native_module_export_value(module: f64, property: f64, observe_namespace_writ
             false,
         )
     };
-    if value.to_bits() == crate::value::TAG_UNDEFINED {
+    if live || value.to_bits() == crate::value::TAG_UNDEFINED {
         return value;
     }
     NATIVE_ESM_EXPORT_VALUES.with(|values| {

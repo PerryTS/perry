@@ -62,8 +62,6 @@ extern "C" {
 // ---------------------------------------------------------------------------
 
 extern "C" {
-    pub fn CGContextSetRGBFillColor(c: *mut c_void, r: f64, g: f64, b: f64, a: f64);
-    pub fn CGContextSetRGBStrokeColor(c: *mut c_void, r: f64, g: f64, b: f64, a: f64);
     pub fn CGContextSetLineWidth(c: *mut c_void, width: f64);
     pub fn CGContextFillRect(c: *mut c_void, rect: objc2_core_foundation::CGRect);
     pub fn CGContextStrokeRect(c: *mut c_void, rect: objc2_core_foundation::CGRect);

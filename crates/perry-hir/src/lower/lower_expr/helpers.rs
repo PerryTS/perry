@@ -23,7 +23,25 @@ use crate::lower::module_decl::native_default_import::is_cjs_style_native_defaul
 /// Node oracle's `vm.runInThisContext`, #5346/#5511); the default stays
 /// CJS so standalone builds match `node --experimental-strip-types`. Read
 /// once per process — the env is fixed for the lifetime of a compile (#5579).
+///
+/// #11625: in `cfg(test)` builds only, an active
+/// `ForceGlobalScriptThisForTest` guard on the calling thread wins over the
+/// cached env read. The env-backed `OnceLock` below is process-wide, and an
+/// ordinary identifier reassignment lowers through
+/// `expr_assign::lower_ident_assignment`'s `mirrors_script_var`, which reads
+/// this function unconditionally — so *some* test in the same `--lib`
+/// binary freezes the answer to `false` (no `PERRY_GLOBAL_SCRIPT_THIS` in
+/// the test environment) before any single test gets a chance to set the
+/// env var itself. A subprocess-based integration test (see
+/// `crates/perry/tests/issue_5848_annexb_global_init_reflection.rs` and
+/// siblings) sidesteps this by giving each check its own process; an
+/// in-process `perry-hir` unit test needs this thread-scoped override
+/// instead.
 pub(crate) fn global_script_this_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = test_only::forced_value() {
+        return forced;
+    }
     use std::sync::OnceLock;
     static FLAG: OnceLock<bool> = OnceLock::new();
     *FLAG.get_or_init(|| match std::env::var("PERRY_GLOBAL_SCRIPT_THIS") {
@@ -33,6 +51,42 @@ pub(crate) fn global_script_this_enabled() -> bool {
         }
         Err(_) => false,
     })
+}
+
+/// Test-only support for `global_script_this_enabled`'s override (#11625).
+/// Compiled only under `cfg(test)`, so it has no production footprint.
+#[cfg(test)]
+pub(crate) mod test_only {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FORCED: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn forced_value() -> Option<bool> {
+        FORCED.with(Cell::get)
+    }
+
+    /// RAII guard: forces `global_script_this_enabled()` to `true` for the
+    /// calling thread for as long as the guard is alive, then restores
+    /// `None` on drop — including on an unwinding panic (a failed
+    /// assertion in the guarded test must not leak the override onto
+    /// whatever test a libtest worker thread picks up next).
+    #[must_use]
+    pub(crate) struct ForceGlobalScriptThisForTest;
+
+    impl ForceGlobalScriptThisForTest {
+        pub(crate) fn enable() -> Self {
+            FORCED.with(|cell| cell.set(Some(true)));
+            Self
+        }
+    }
+
+    impl Drop for ForceGlobalScriptThisForTest {
+        fn drop(&mut self) {
+            FORCED.with(|cell| cell.set(None));
+        }
+    }
 }
 
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {

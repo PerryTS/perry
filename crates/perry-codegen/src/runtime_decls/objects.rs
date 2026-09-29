@@ -629,6 +629,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         "initialexec",
     );
     module.declare_function("perry_implicit_this_cell", PTR, &[]);
+    // #10812: the prologue stack check (`expr/stack_guard.rs`).
+    module.declare_function("js_stack_overflow", VOID, &[]);
     module.declare_function(
         "js_method_site_miss",
         DOUBLE,

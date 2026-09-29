@@ -59,7 +59,7 @@ fn coerce_time_overflow(v: f64, overflow: temporal_rs::options::Overflow) -> Pla
         _ => {}
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         let s = dispatch::read_string(v);
         return ok_or_throw(s.parse::<PlainTime>());
     }
@@ -102,7 +102,7 @@ pub fn from_static(args: &[f64]) -> f64 {
     // `overflow` LAST.
     let item = raw_arg(args, 0);
     let opts = raw_arg(args, 1);
-    if JSValue::from_bits(item.to_bits()).is_string() {
+    if JSValue::from_bits(item.to_bits()).is_any_string() {
         let t = ok_or_throw(dispatch::read_string(item).parse::<PlainTime>());
         let _ = super::options::overflow(opts);
         return wrap(t);
