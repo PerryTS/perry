@@ -27,6 +27,62 @@ pub(super) unsafe fn weak_holder_fact(header: *mut GcHeader) -> bool {
     crate::weakref::is_weak_holder_header(header)
 }
 
+/// The parent's half of `barrier_parent_needs_remembering`, decided once per
+/// traced object instead of once per slot.
+///
+/// `barrier_parent_needs_remembering(parent, external)` is
+/// `Old(parent) || (external && malloc_gc_parent_addr(parent))`. Both parent
+/// terms read only the parent's address and header, which do not change while
+/// that object's slots are visited (the visit moves CHILDREN), so the per-slot
+/// question reduces to this three-way answer plus, for a malloc parent only,
+/// the slot's own generation. `skip_remembering` — a per-cycle proof that no
+/// entry can be created — folds into `Never`, so a whole-block promoting cycle
+/// classifies neither the parent nor any slot. Before this every slot paid a
+/// page-map classification of its own address for an answer nothing read.
+///
+/// Witness: `gc::tests::copy_slot_hoists::the_per_object_remembering_fact_*`,
+/// which checks it against `barrier_parent_needs_remembering` itself, with a
+/// sabotaged twin that must disagree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ParentRemembering {
+    Never,
+    Always,
+    ExternalSlotsOnly,
+}
+
+impl ParentRemembering {
+    #[inline]
+    pub(super) unsafe fn of(parent_header: *mut GcHeader, skip_remembering: bool) -> Self {
+        if parent_header.is_null() || skip_remembering {
+            return Self::Never;
+        }
+        let parent = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        #[cfg(test)]
+        if copy_hoist_sabotage::forgetting_remembering() {
+            return Self::Never;
+        }
+        if matches!(
+            crate::arena::classify_heap_generation(parent),
+            crate::arena::HeapGeneration::Old
+        ) {
+            Self::Always
+        } else if super::barrier::malloc_gc_parent_addr(parent) {
+            Self::ExternalSlotsOnly
+        } else {
+            Self::Never
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn for_slot(self, slot: GcMutableSlot) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::ExternalSlotsOnly => slot.external(),
+        }
+    }
+}
+
 /// Test-only sabotage for [`weak_holder_fact`]: forgetting the per-object fact
 /// must change what the collector does, or the hoist is documentation
 /// (CLAUDE.md, a gate that cannot fail). Its witness is
@@ -37,11 +93,32 @@ pub(crate) mod copy_hoist_sabotage {
 
     thread_local! {
         static FORGET_WEAK: Cell<bool> = const { Cell::new(false) };
+        static FORGET_REMEMBERING: Cell<bool> = const { Cell::new(false) };
     }
 
     #[inline]
     pub(crate) fn forgetting_weak() -> bool {
         FORGET_WEAK.with(Cell::get)
+    }
+
+    /// `ParentRemembering::of` answers `Never` for every parent.
+    #[inline]
+    pub(crate) fn forgetting_remembering() -> bool {
+        FORGET_REMEMBERING.with(Cell::get)
+    }
+
+    pub(crate) struct RememberingGuard(bool);
+
+    impl RememberingGuard {
+        pub(crate) fn arm() -> Self {
+            Self(FORGET_REMEMBERING.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for RememberingGuard {
+        fn drop(&mut self) {
+            FORGET_REMEMBERING.with(|s| s.set(self.0));
+        }
     }
 
     pub(crate) struct WeakGuard(bool);
@@ -190,6 +267,58 @@ impl CopyingNurseryCollector {
         weak_holder: bool,
         external: bool,
     ) {
+        let skip_remembering = self.skip_remembering;
+        self.visit_slot_core(
+            slot,
+            parent_header,
+            weak_holder,
+            move || {
+                !parent_header.is_null()
+                    && !skip_remembering
+                    && barrier_parent_needs_remembering(
+                        (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
+                        external,
+                    )
+            },
+            move || external,
+        );
+    }
+
+    /// The drain's form of [`Self::visit_slot_with_weak_fact`]: the parent's
+    /// remembering question answered ONCE per traced object
+    /// ([`ParentRemembering`]), and the slot's own generation classified only
+    /// when an answer actually depends on it — never on a whole-block promoting
+    /// cycle, where `skip_remembering` settles every slot up front.
+    #[inline(always)]
+    pub(super) unsafe fn visit_slot_with_parent_facts(
+        &mut self,
+        slot: GcMutableSlot,
+        parent_header: *mut GcHeader,
+        weak_holder: bool,
+        remembering: ParentRemembering,
+    ) {
+        self.visit_slot_core(
+            slot.slot,
+            parent_header,
+            weak_holder,
+            move || remembering.for_slot(slot),
+            move || slot.external(),
+        );
+    }
+
+    /// The one slot visit. `remembering` and `external` are asked lazily, in
+    /// the order the visit has always asked them: remembering before the
+    /// child is decoded, the slot's generation only for a child that needs
+    /// tracking.
+    #[inline(always)]
+    unsafe fn visit_slot_core(
+        &mut self,
+        slot: *mut u64,
+        parent_header: *mut GcHeader,
+        weak_holder: bool,
+        remembering: impl FnOnce() -> bool,
+        external: impl FnOnce() -> bool,
+    ) {
         if slot.is_null() {
             return;
         }
@@ -214,12 +343,7 @@ impl CopyingNurseryCollector {
         // Asked BEFORE the visit: it reads only the parent and the slot's own
         // address, never the child. Asked after, the optimizer duplicated the
         // call into both decode arms and then stopped inlining it.
-        let remembering = !parent_header.is_null()
-            && !self.skip_remembering
-            && barrier_parent_needs_remembering(
-                (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
-                external,
-            );
+        let remembering = remembering();
         let visited = self.visit_value_bits_child(*slot);
         if let Some((_, Some(new_bits), _)) = visited {
             *slot = new_bits;
@@ -254,7 +378,7 @@ impl CopyingNurseryCollector {
             // CopyingPointerKind::Malloc) but the NEXT minor's malloc sweep
             // needs the edge again.
             if crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
-                self.sticky.remember_slot(parent_header, slot, external);
+                self.sticky.remember_slot(parent_header, slot, external());
             }
         }
     }

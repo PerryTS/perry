@@ -1,4 +1,4 @@
-use super::copying_parent_facts::weak_holder_fact;
+use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::copying_phase::{
     finalize_dead_copied_minor_from_space_side_allocations, CopyingMinorPhase as Phase,
     CopyingMinorPhaseDiag as PhaseDiag,
@@ -716,11 +716,17 @@ impl CopyingNurseryCollector {
         // traced objects — strings, pointer-free arrays — have no slot to
         // visit at all, and paid for an answer nobody then asked for.
         let mut weak_holder: Option<bool> = None;
-        visit_gc_rewrite_slots(header, |slot| unsafe {
+        // Same laziness as the weak fact, and the same per-object shape: see
+        // `ParentRemembering`.
+        let mut remembering: Option<ParentRemembering> = None;
+        let skip_remembering = self.skip_remembering;
+        visit_gc_rewrite_slots_inline(header, |slot| unsafe {
             slot.record_layout_read();
             let before = *slot.slot;
             let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
-            self.visit_slot_with_weak_fact(slot.slot, header, weak, slot.external());
+            let remembering = *remembering
+                .get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
+            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
             changed |= *slot.slot != before;
         });
         if changed {

@@ -79,6 +79,20 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     header: *mut GcHeader,
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
 ) {
+    visit_gc_layout_slot_descriptors_inline(header, visit);
+}
+
+/// The ONE body of [`visit_gc_layout_slot_descriptors`], generic over the
+/// visitor. Every caller but the copying minor's drain goes through the `dyn`
+/// wrapper above (one copy of this body); the drain instantiates it directly
+/// (`visit_gc_rewrite_slots_inline`) so its per-slot closure inlines instead of
+/// paying two indirect calls per visited slot. Same enumeration either way:
+/// there is no second copy of the slot logic to drift.
+#[inline(always)]
+pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(header: *mut GcHeader, visit: &mut F)
+where
+    F: FnMut(GcMutableSlotDescriptor) + ?Sized,
+{
     let mut child_slots = gc_child_slots(header);
     // #8213: drained async box cells are weak registry entries during a full
     // trace. A closure proven live by the mark set is their owner, so enumerate
@@ -232,8 +246,28 @@ impl GcMutableSlotDescriptor {
 
 pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     header: *mut GcHeader,
+    visit: impl FnMut(GcMutableSlotDescriptor),
+) {
+    visit_gc_rewrite_slot_descriptors_with::<false>(header, visit);
+}
+
+/// The one body of [`visit_gc_rewrite_slot_descriptors`]. `INLINE_LAYOUT`
+/// selects only HOW the layout-descriptor walk is called — through the shared
+/// `dyn` copy, or instantiated for this visitor — never what it enumerates.
+#[inline(always)]
+unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
+    header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
+    macro_rules! layout_descriptors {
+        () => {
+            if INLINE_LAYOUT {
+                visit_gc_layout_slot_descriptors_inline(header, &mut visit)
+            } else {
+                visit_gc_layout_slot_descriptors(header, &mut visit)
+            }
+        };
+    }
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
@@ -263,7 +297,7 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     }
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
-            visit_gc_layout_slot_descriptors(header, &mut visit);
+            layout_descriptors!();
             // #10166 (brief 4): an array's named properties live in reserve
             // slots in front of logical element 0 (`array/named_props.rs`):
             // a pairs pointer, or inline exec-result values. Those words sit
@@ -286,17 +320,17 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // already emits it — no explicit `gc_object_meta_slot` visit
             // here, or the rewrite pass would hand the same slot to the
             // visitor twice and double-count in verification statistics.
-            visit_gc_layout_slot_descriptors(header, &mut visit);
+            layout_descriptors!();
             crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
         }
         GcRewriteDescriptorKind::RegExp => {
-            visit_gc_layout_slot_descriptors(header, &mut visit);
+            layout_descriptors!();
         }
         GcRewriteDescriptorKind::Closure => {
             // Captures and the own-property bag edge (`ClosureCaptures`).
-            visit_gc_layout_slot_descriptors(header, &mut visit);
+            layout_descriptors!();
         }
         GcRewriteDescriptorKind::Promise => {
             let promise = user_ptr as *mut crate::promise::Promise;
@@ -498,6 +532,20 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
 ) {
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         descriptor.visit_slots(&mut visit);
+    });
+}
+
+/// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
+/// `visit`: the copying minor's drain, where the two per-slot indirect calls
+/// (descriptor visitor, slot visitor) were a measured share of the per-object
+/// trace cost. Enumerates exactly the same slots, in the same order.
+#[inline(always)]
+pub(super) unsafe fn visit_gc_rewrite_slots_inline(
+    header: *mut GcHeader,
+    mut visit: impl FnMut(GcMutableSlot),
+) {
+    visit_gc_rewrite_slot_descriptors_with::<true>(header, |descriptor| unsafe {
+        descriptor.visit_slots_inline(&mut visit);
     });
 }
 

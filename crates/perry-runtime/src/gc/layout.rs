@@ -1942,6 +1942,13 @@ pub(super) enum GcMutableSlotDescriptor {
 
 impl GcMutableSlotDescriptor {
     pub(super) unsafe fn visit_slots(self, visit: &mut dyn FnMut(GcMutableSlot)) {
+        self.visit_slots_inline(visit)
+    }
+
+    /// [`Self::visit_slots`] monomorphized for one visitor, so the copying
+    /// minor's per-slot closure inlines instead of taking a dyn call per slot.
+    #[inline(always)]
+    pub(super) unsafe fn visit_slots_inline<F: FnMut(GcMutableSlot) + ?Sized>(self, visit: &mut F) {
         match self {
             GcMutableSlotDescriptor::Slot(slot) => visit(slot),
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
