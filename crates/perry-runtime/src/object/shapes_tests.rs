@@ -1488,7 +1488,7 @@ mod field_rep_identity_tests {
     #[test]
     fn a_rep_typed_shape_carries_its_own_position_bound() {
         let _lock = crate::gc::global_side_table_test_lock();
-        let keys = unsafe { crate::array::js_array_alloc_with_length(3) };
+        let keys = crate::array::js_array_alloc_with_length(3);
         let mint_keys = |rep: u64| {
             publish_shape_result(shape_descriptor_ensure_with_rep(
                 keys,
