@@ -15,34 +15,30 @@
 //!
 //! # What the guard proves, and why the fast arm is then sound
 //!
-//! Exactly the conjunction `js_typed_feedback_plain_array_index_set_guard`
-//! evaluates, plus a strictly stronger bounds test:
-//!
 //! | tested here | why |
 //! |---|---|
-//! | `POINTER_TAG`, handle above the small-handle band, below `is_valid_obj_ptr`'s 2^47 ceiling | `gc_header_for_user_addr` applies all three before the helper dereferences anything (#7396) |
-//! | `obj_type == GC_TYPE_ARRAY`, `!GC_FLAG_FORWARDED` | a stale growth-forwarded head must follow its chain, which only the helper does |
-//! | `_reserved & (FROZEN\|SEALED\|NO_EXTEND\|ARRAY_DESCRIPTORS) == 0` | a write may throw in strict mode or dispatch an accessor setter |
-//! | `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED == 0` | a polluted `Array.prototype` can intercept the store |
-//! | `0 <= index < length` | **strictly** in bounds — the helper is the *extend* variant, so every growth, every hole-creating sparse write, and every `length` bump stays on the slow arm |
-//! | `length <= capacity`, both `<= 16e6` | header sanity, same constants as the read tier |
+//! | the box minus `POINTER_TAG << 48 \| 1 MiB` is below `2^48 - 1 MiB` | a heap pointer above the runtime-id band (the element read's band test) |
+//! | `([h-8] as i32) & 0x0407_80FF == GC_TYPE_ARRAY` | ONE header word: an ordinary array, not a growth stub, no element descriptors, not frozen / sealed / non-extensible (DESIGN arrayread §3) |
+//! | `index <u capacity`, then the slot is not `TAG_HOLE` | the slot holds an own data property. `[length, capacity)` holds holes (`array_truncate_length`), so this is also `index < length`: the store cannot add an element, change `length`, or reach a prototype setter, which is why the prototype facts are not tested here |
 //!
-//! In bounds and non-exotic, the store is a plain slot overwrite that cannot
-//! change `length` — which is the entire reason this arm may skip the
-//! realloc-capable helper without needing a writeback slot, and therefore the
-//! reason it works for receivers `lower_index_set_fast` cannot serve.
+//! A forwarded stub fails the word; the cold arm follows one edge (no binding
+//! to heal for `this.vals[i]`) and requires the destination's word. The
+//! element kind is settled before the value is written
+//! ([`emit_array_store_kind_value`]).
 //!
-//! The slot write itself reuses `emit_jsvalue_slot_store_scalar_aware_on_block`
-//! + `emit_array_numeric_write_note_on_block` **verbatim** from
-//! `lower_index_set_fast`'s own in-bounds arm, so the string addref, the GC
-//! layout note, the write barrier and the raw-f64 layout downgrade are the same
-//! code on both paths rather than a second implementation of them.
+//! The slot write itself reuses the store emitters of `lower_index_set_fast`'s
+//! in-bounds arm, and both paths settle the element kind through the same
+//! [`emit_array_store_kind_value`], so the string addref, the GC layout note,
+//! the write barrier and the F64 -> Any transition are one implementation.
 
 use anyhow::Result;
 
-use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
+use super::index_get::guarded_array::{
+    emit_array_guard_word, ARRAY_STORE_GUARD_EXPECT_I32, ARRAY_STORE_GUARD_MASK_I32,
+    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_BAND_SPAN_I64,
+};
 use super::write_barrier::{
     emit_jsvalue_slot_store_deferred_layout_note_without_addref_on_block,
     emit_layout_note_slot_aware_on_block, emit_layout_pointer_bearing_check,
@@ -83,6 +79,107 @@ pub(super) fn emit_canonical_element_index_i32(ctx: &mut FnCtx<'_>, idx_double: 
     let canonical = blk.or(I1, &raw_is_canonical, &boxed_is_canonical);
     let idx_i32 = blk.select(I1, &is_boxed_i32, I32, &boxed_i32, &raw_i32);
     blk.select(I1, &canonical, I32, &idx_i32, "-1")
+}
+
+/// The raw-f64 element-kind bits in `_reserved`: `GC_ARRAY_RAW_F64_LAYOUT`
+/// (0x80, dense) | `GC_ARRAY_RAW_F64_HOLES` (0x1000). Either one makes every
+/// non-hole slot a Number stored as its canonical double.
+const ARRAY_F64_KIND_BITS_I16: &str = "4224"; // 0x1080
+/// `0x7FF8_0000_0000_0000`, the one NaN an F64 slot may hold.
+const CANONICAL_NAN_I64: &str = "9221120237041090560";
+
+/// The array's `_reserved` half-word (its own flags), loaded from `handle`.
+pub(super) fn emit_array_reserved(blk: &mut crate::block::LlBlock, handle: &str) -> String {
+    let reserved_addr = blk.sub(I64, handle, "6");
+    let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+    blk.load(I16, &reserved_ptr)
+}
+
+/// The value an element store into the live array `arr_handle` must write,
+/// with the array's element kind settled first (DESIGN arrayread §3):
+///
+/// * kind Any (both F64 bits clear): `val_double` unchanged. This is the hot
+///   test, `reserved & 0x1080` and one branch.
+/// * kind F64, `val_double` a plain double: the double with any NaN collapsed
+///   to the canonical one (a select, no call).
+/// * kind F64, anything NaN-boxed: the cold arm. `js_array_note_numeric_write`
+///   runs BEFORE the store, so a non-Number clears the F64 bits before its
+///   bits land in a slot a raw-f64 reader trusts; a Number (an `INT32` box)
+///   keeps the kind and is written as its double.
+///
+/// Emits into the current block and leaves a fresh join block current.
+pub(super) fn emit_array_store_kind_value(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    val_double: &str,
+    block_prefix: &str,
+) -> String {
+    let f64_idx = ctx.new_block(&format!("{}.kind.f64", block_prefix));
+    let canon_idx = ctx.new_block(&format!("{}.kind.canon", block_prefix));
+    let cold_idx = ctx.new_block(&format!("{}.kind.cold", block_prefix));
+    let done_idx = ctx.new_block(&format!("{}.kind.done", block_prefix));
+    let f64_label = ctx.block_label(f64_idx);
+    let canon_label = ctx.block_label(canon_idx);
+    let cold_label = ctx.block_label(cold_idx);
+    let done_label = ctx.block_label(done_idx);
+    let entry_end = {
+        let blk = ctx.block();
+        let reserved = emit_array_reserved(blk, arr_handle);
+        let kind_bits = blk.and(I16, &reserved, ARRAY_F64_KIND_BITS_I16);
+        let is_f64 = blk.icmp_ne(I16, &kind_bits, "0");
+        blk.cond_br(&is_f64, &f64_label, &done_label);
+        blk.label.clone()
+    };
+    ctx.current_block = f64_idx;
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(val_double);
+        let top16 = blk.lshr(I64, &bits, "48");
+        // NaN-boxed iff the top 16 bits are in 0x7FF9..=0x7FFF.
+        let tag_offset = blk.sub(I64, &top16, "32761"); // 0x7FF9
+        let is_boxed = blk.icmp_ult(I64, &tag_offset, "7");
+        blk.cond_br(&is_boxed, &cold_label, &canon_label);
+    }
+    ctx.current_block = canon_idx;
+    let canonical = {
+        let blk = ctx.block();
+        let is_nan = blk.fcmp("uno", val_double, val_double);
+        let nan = blk.bitcast_i64_to_double(CANONICAL_NAN_I64);
+        let v = blk.select(I1, &is_nan, DOUBLE, &nan, val_double);
+        blk.br(&done_label);
+        v
+    };
+    ctx.current_block = cold_idx;
+    super::store_census::bump(ctx, super::store_census::ELEM_STORE_F64_COLD);
+    let cold_value = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(val_double);
+        // The header write comes first: this clears both F64 bits unless the
+        // value is a Number.
+        emit_array_numeric_write_note_on_block(blk, arr_handle, &bits);
+        let reserved = emit_array_reserved(blk, arr_handle);
+        let kind_bits = blk.and(I16, &reserved, ARRAY_F64_KIND_BITS_I16);
+        let still_f64 = blk.icmp_ne(I16, &kind_bits, "0");
+        let as_double = blk.call(
+            DOUBLE,
+            "js_array_numeric_value_to_raw_f64",
+            &[(DOUBLE, val_double)],
+        );
+        let v = blk.select(I1, &still_f64, DOUBLE, &as_double, val_double);
+        blk.br(&done_label);
+        v
+    };
+    ctx.current_block = done_idx;
+    let canon_end = ctx.block_label(canon_idx);
+    let cold_end = ctx.block_label(cold_idx);
+    ctx.block().phi(
+        DOUBLE,
+        &[
+            (val_double, &entry_end),
+            (&canonical, &canon_end),
+            (&cold_value, &cold_end),
+        ],
+    )
 }
 
 /// Emit the guarded diamond. `fallback` emits the original slow arm (the
@@ -136,7 +233,9 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     block_prefix: &str,
     layout_note_needed: bool,
     write_barrier_needed: bool,
-    value_is_numeric: bool,
+    // Unused since the kind is settled before the store for every value
+    // (`emit_array_store_kind_value`); kept for the callers' signature.
+    _value_is_numeric: bool,
     fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
 ) -> Result<()> {
     // An operand may have emitted a throw + unreachable. LlBlock drops
@@ -156,85 +255,92 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    {
+    let probe_idx = ctx.new_block(&format!("{}.probe", block_prefix));
+    let probe_label = ctx.block_label(probe_idx);
+    // ONE header word is the structural guard (DESIGN arrayread §3): the
+    // read's mask plus the integrity bits. The receiver is a heap pointer iff
+    // its box, less `POINTER_TAG << 48 | 1 MiB`, lands in the band below
+    // 2^48 - 1 MiB; the handle is then that offset plus 1 MiB.
+    let band_offset = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-        let tag = blk.lshr(I64, &arr_bits, "48");
-        let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
-        let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
-        // `is_valid_obj_ptr`'s upper bound (2^47), which
-        // `gc_header_for_user_addr` applies before the helper this fronts
-        // dereferences anything. Without it a corrupted POINTER_TAG box with a
-        // payload in [2^47, 2^48) would be dereferenced here but rejected
-        // there, making the inline tier weaker than the call it replaces.
-        let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
-        let mut heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
-        heap_candidate = blk.and(I1, &heap_candidate, &below_heap_limit);
-        blk.cond_br(&heap_candidate, &deref_label, &slow_label);
-    }
+        let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
+        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
+        blk.cond_br(&in_band, &deref_label, &slow_label);
+        band_offset
+    };
 
     ctx.current_block = deref_idx;
     let follow_idx = ctx.new_block(&format!("{}.deref.follow", block_prefix));
     let follow_label = ctx.block_label(follow_idx);
+    let follow_check_idx = ctx.new_block(&format!("{}.deref.follow.check", block_prefix));
+    let follow_check_label = ctx.block_label(follow_check_idx);
     let live_deref_idx = ctx.new_block(&format!("{}.deref.live", block_prefix));
     let live_deref_label = ctx.block_label(live_deref_idx);
-    // A receiver that is not an Array leaves on its brand byte alone, before
-    // the forwarding, integrity, prototype and bounds work below that it would
-    // only fail. On the untyped `obj[i] = v` route (#10513) that is every
-    // typed-array and Buffer store, which declines onto the typed-array tier.
-    {
+    let (arr_handle, deref_end) = {
         let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-        let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let arr_handle = blk.add(I64, &band_offset, "1048576");
+        let word = emit_array_guard_word(blk, &arr_handle);
+        let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
+        let word_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+        blk.cond_br(&word_ok, &live_deref_label, &follow_label);
+        (arr_handle, blk.label.clone())
+    };
+
+    // Cold: a growth/evacuation stub. `this.vals[i] = v` has no binding to
+    // heal, so the stub is followed one edge here, off the hot path, and the
+    // destination must pass the same word. A receiver that is not an Array
+    // (the untyped route's typed arrays and Buffers) leaves on its type byte.
+    ctx.current_block = follow_idx;
+    let forwarding_target = {
+        let blk = ctx.block();
+        let gc_type_ptr = {
+            let addr = blk.sub(I64, &arr_handle, "8");
+            blk.inttoptr(I64, &addr)
+        };
         let gc_type = blk.load(I8, &gc_type_ptr);
         let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-        blk.cond_br(&is_array, &follow_label, &slow_label);
-    }
-
-    ctx.current_block = follow_idx;
-    let live_handle = {
-        let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-
-        let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-        let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+        let gc_flags_ptr = {
+            let addr = blk.sub(I64, &arr_handle, "7");
+            blk.inttoptr(I64, &addr)
+        };
         let gc_flags = blk.load(I8, &gc_flags_ptr);
         let forwarded_bits = blk.and(I8, &gc_flags, "128");
         let is_forwarded = blk.icmp_ne(I8, &forwarded_bits, "0");
-
-        // Array growth (and GC evacuation) leave the live user address in the
-        // first payload word of a forwarded array stub. Follow one edge inline
-        // and re-brand/re-check the destination below, exactly as the guarded
-        // read tier does. This matters most for receivers that are NOT stack
-        // locals: `this.vals[i] = v` has no writeback slot, so once the array
-        // has grown past its initial capacity the object field keeps the
-        // pre-grow stub forever. Before this the stub failed `not_forwarded`
-        // on EVERY later store and the whole store went out of line through
-        // the extend helper and the allocator/registry resolver (the ECS
-        // add/remove hot path: `this._ent[id] = arch`, `this.sparse[x] = n`).
-        // Longer or corrupt chains still take the slow arm.
+        let is_stub = blk.and(I1, &is_array, &is_forwarded);
+        let target_idx = ctx.new_block(&format!("{}.deref.follow.target", block_prefix));
+        let target_label = ctx.block_label(target_idx);
+        ctx.block().cond_br(&is_stub, &target_label, &slow_label);
+        ctx.current_block = target_idx;
+        let blk = ctx.block();
         let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
-        let forwarding_target = blk.load(I64, &original_arr_ptr);
-        // `deref` branded the head as an Array.
-        let live_handle = blk.select(I1, &is_forwarded, I64, &forwarding_target, &arr_handle);
-
-        let live_top = blk.lshr(I64, &live_handle, "48");
-        let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
-        let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
-        let live_below_heap_limit = blk.icmp_ult(I64, &live_handle, "140737488355328");
-        let mut live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
-        live_heap_candidate = blk.and(I1, &live_heap_candidate, &live_below_heap_limit);
+        let target = blk.load(I64, &original_arr_ptr);
         // A forwarding word is not trusted until its address is in the heap
         // band: never read the destination header speculatively.
-        blk.cond_br(&live_heap_candidate, &live_deref_label, &slow_label);
-        live_handle
+        let target_top = blk.lshr(I64, &target, "48");
+        let target_top_clear = blk.icmp_eq(I64, &target_top, "0");
+        let target_above_band = blk.icmp_ugt(I64, &target, "1048575");
+        let target_ok = blk.and(I1, &target_top_clear, &target_above_band);
+        blk.cond_br(&target_ok, &follow_check_label, &slow_label);
+        target
     };
+    ctx.current_block = follow_check_idx;
+    {
+        let blk = ctx.block();
+        let word = emit_array_guard_word(blk, &forwarding_target);
+        let masked = blk.and(I32, &word, ARRAY_STORE_GUARD_MASK_I32);
+        let word_ok = blk.icmp_eq(I32, &masked, ARRAY_STORE_GUARD_EXPECT_I32);
+        blk.cond_br(&word_ok, &live_deref_label, &slow_label);
+    }
 
     ctx.current_block = live_deref_idx;
+    let live_handle = {
+        let follow_end = ctx.block_label(follow_check_idx);
+        ctx.block().phi(
+            I64,
+            &[(&arr_handle, &deref_end), (&forwarding_target, &follow_end)],
+        )
+    };
     let idx_i32 = match index {
         StoreIndex::I32(idx) => idx.to_string(),
         StoreIndex::CanonicalOfDouble(idx_double) => {
@@ -242,57 +348,35 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
         }
     };
     let idx_i32 = idx_i32.as_str();
-    let reserved = {
+    {
+        // `idx <u capacity` (a negative index wraps high). With the
+        // `[length, capacity)` hole invariant (`array_truncate_length`), a
+        // non-hole slot below capacity is below `length`, so the probe below
+        // is the whole bounds test.
         let blk = ctx.block();
-        let arr_handle = live_handle.clone();
-
-        let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-        let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-
-        let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-        let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-        let gc_flags = blk.load(I8, &gc_flags_ptr);
-        let forwarded_bits = blk.and(I8, &gc_flags, "128");
-        let not_forwarded = blk.icmp_eq(I8, &forwarded_bits, "0");
-
-        // FROZEN(0x1)|SEALED(0x2)|NO_EXTEND(0x4)|ARRAY_DESCRIPTORS(0x400).
-        let reserved_addr = blk.sub(I64, &arr_handle, "6");
-        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-        let reserved = blk.load(I16, &reserved_ptr);
-        let integrity_bits = blk.and(I16, &reserved, "1031"); // 0x407
-        let integrity_clean = blk.icmp_eq(I16, &integrity_bits, "0");
-
-        // #10593: the process-wide byte AND this array's own custom-proto bit.
-        let default_prototype_chain =
-            crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
-
-        let arr_ptr = blk.inttoptr(I64, &arr_handle);
-        let length = blk.load(I32, &arr_ptr);
+        let arr_ptr = blk.inttoptr(I64, &live_handle);
         let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
         let capacity = blk.load(I32, &capacity_ptr);
-        let index_negative = blk.icmp_slt(I32, idx_i32, "0");
-        let index_nonnegative = blk.icmp_eq(I1, &index_negative, "false");
-        // STRICTLY in bounds: `index == length` is an extend, which changes
-        // `length` and may need a realloc, so it belongs on the slow arm.
-        let index_in_bounds = blk.icmp_ult(I32, idx_i32, &length);
-        let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
-        let index_within_capacity = blk.icmp_ult(I32, idx_i32, &capacity);
+        let within_capacity = blk.icmp_ult(I32, idx_i32, &capacity);
+        blk.cond_br(&within_capacity, &probe_label, &slow_label);
+    }
 
-        let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
-        guard_ok = blk.and(I1, &guard_ok, &integrity_clean);
-        guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
-        guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
-        guard_ok = blk.and(I1, &guard_ok, &index_in_bounds);
-        guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
-        // #9371: a large pre-sized holey Array has `length > capacity`, but
-        // an in-bounds index below capacity still names allocated storage.
-        guard_ok = blk.and(I1, &guard_ok, &index_within_capacity);
-        blk.cond_br(&guard_ok, &fast_label, &slow_label);
-        // The live head's `_reserved` word dominates the fast arm; the numeric
-        // write note below is gated on it.
-        reserved
+    // The slot must hold a value: an own data property, so the store is a
+    // plain overwrite that never consults the prototype chain. A hole (or a
+    // slot past `length`) is an add, which may reach an inherited setter and
+    // may change `length`: the slow arm.
+    ctx.current_block = probe_idx;
+    let element_addr = {
+        let blk = ctx.block();
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let elements_addr = blk.array_elements_addr(&live_handle);
+        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        let old = blk.load(I64, &element_ptr);
+        let is_hole = blk.icmp_eq(I64, &old, crate::nanbox::TAG_HOLE_I64);
+        blk.cond_br(&is_hole, &slow_label, &fast_label);
+        element_addr
     };
 
     ctx.current_block = fast_idx;
@@ -310,15 +394,16 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     // stored over a pointer is exactly the store that must clear
     // `GC_ARRAY_ELEMENT_SHAPE`. Class fields have no such per-slot array
     // invariant, which is why that half of #7511's argument does not transfer.
+    // The kind is settled BEFORE the value is written: an F64 array takes a
+    // Number as its canonical double, and anything else clears the F64 bits
+    // first (`emit_array_store_kind_value`).
+    let stored_value = emit_array_store_kind_value(ctx, &live_handle, val_double, block_prefix);
+    let val_double = stored_value.as_str();
     let (arr_handle, element_addr, value_bits, layout_note) = {
+        let reserved = emit_array_reserved(ctx.block(), &live_handle);
         let blk = ctx.block();
-        // The live (possibly forwarded-once) head proved by `deref.live`,
-        // which is this block's only predecessor.
+        // The live (possibly forwarded-once) head proved by `deref.live`.
         let arr_handle = live_handle.clone();
-        let idx_i64 = blk.zext(I32, idx_i32, I64);
-        let byte_offset = blk.shl(I64, &idx_i64, "3");
-        let elements_addr = blk.array_elements_addr(&arr_handle);
-        let element_addr = blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = blk.inttoptr(I64, &element_addr);
         // Same call, same argument order, as `lower_index_set_fast`'s
         // in-bounds arm: the guard proved the slot holds a valid value, so the
@@ -417,37 +502,6 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             &value_bits,
             block_prefix,
         );
-    }
-    if !value_is_numeric {
-        // A non-numeric store into a raw-f64-flagged array downgrades the
-        // layout. The runtime note is exactly "clear GC_ARRAY_RAW_F64_LAYOUT |
-        // GC_ARRAY_RAW_F64_HOLES if the value is not a Number", so an array
-        // whose header already has both bits clear has nothing to note. Test
-        // the `_reserved` word `deref.live` just loaded and skip the call —
-        // which re-resolved the receiver through the allocator/registry
-        // resolver on EVERY pointer store (the ECS archetype moves) — unless a
-        // raw-f64 bit is actually set. Nothing between that load and here can
-        // SET a raw-f64 bit: the slot store, string addref, layout note and
-        // write barrier only ever clear them; the bits are set solely by the
-        // explicit verify/rebuild paths.
-        let note_idx = ctx.new_block(&format!("{}.numnote", block_prefix));
-        let note_done_idx = ctx.new_block(&format!("{}.numnote.done", block_prefix));
-        let note_label = ctx.block_label(note_idx);
-        let note_done_label = ctx.block_label(note_done_idx);
-        {
-            let blk = ctx.block();
-            // GC_ARRAY_RAW_F64_LAYOUT (0x80) | GC_ARRAY_RAW_F64_HOLES (0x1000).
-            let raw_bits = blk.and(I16, &reserved, "4224");
-            let has_raw_layout = blk.icmp_ne(I16, &raw_bits, "0");
-            blk.cond_br(&has_raw_layout, &note_label, &note_done_label);
-        }
-        ctx.current_block = note_idx;
-        {
-            let blk = ctx.block();
-            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
-            blk.br(&note_done_label);
-        }
-        ctx.current_block = note_done_idx;
     }
     ctx.block().br(&merge_label);
 

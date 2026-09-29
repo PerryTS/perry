@@ -328,7 +328,7 @@ const CENSUS_NAMES: [&str; 48] = [
     "emit.elem.store.append_inline",
     "emit.elem.store.guard_miss",
     "emit.elem.store.fallback_call",
-    "emit.elem.store.kind_change",
+    "emit.41",
     "emit.elem.store.f64_cold",
     "emit.43",
     "emit.44",

@@ -186,18 +186,26 @@ pub(super) fn lower_region_validated_array_index_get(
 
 /// `POINTER_TAG << 48 | 1 MiB`: subtracted from a NaN-boxed receiver, a heap
 /// array handle lands in `[0, HEAP_POINTER_BAND_SPAN)`.
-const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
 /// `2^48 - 1 MiB`: the handles above the runtime-id band.
-const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
 /// The array read's guard mask over the header word `[h-8]` read as an i32:
 /// the type byte, `GC_FLAG_FORWARDED` (0x80 in byte 1) and
 /// `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400 in `_reserved`, bytes 2..3).
 const ARRAY_READ_GUARD_MASK_I32: &str = "67141887"; // 0x0400_80FF
 /// The masked word of a readable array: `GC_TYPE_ARRAY`, every masked flag clear.
 const ARRAY_READ_GUARD_EXPECT_I32: &str = "1";
+/// The array STORE's guard mask: the read's, plus the integrity bits a
+/// write must respect, `FROZEN | SEALED | NO_EXTEND` (0x1..0x4 in `_reserved`).
+pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "67600639"; // 0x0407_80FF
+/// The masked word of a writable array (the read's expectation).
+pub(in crate::expr) const ARRAY_STORE_GUARD_EXPECT_I32: &str = ARRAY_READ_GUARD_EXPECT_I32;
 
 /// The GC header's first word, `{obj_type, gc_flags, _reserved}`, of `handle`.
-fn emit_array_guard_word(blk: &mut crate::block::LlBlock, handle: &str) -> String {
+pub(in crate::expr) fn emit_array_guard_word(
+    blk: &mut crate::block::LlBlock,
+    handle: &str,
+) -> String {
     let word_addr = blk.sub(I64, handle, "8");
     let word_ptr = blk.inttoptr(I64, &word_addr);
     blk.load(I32, &word_ptr)

@@ -63,9 +63,8 @@ pub(crate) const ELEM_STORE_APPEND: usize = 38;
 pub(crate) const ELEM_STORE_GUARD_MISS: usize = 39;
 /// Array element store: a runtime set / extend call.
 pub(crate) const ELEM_STORE_FALLBACK: usize = 40;
-/// Array element store: an F64 array took a non-Number (header cleared first).
-pub(crate) const ELEM_STORE_KIND_CHANGE: usize = 41;
-/// Array element store: an F64 array took a Number needing the cold convert.
+/// Array element store into an F64 array of a NaN-boxed value: the cold arm
+/// that clears the kind (header first) or converts an INT32 box.
 pub(crate) const ELEM_STORE_F64_COLD: usize = 42;
 
 pub(crate) fn enabled() -> bool {
