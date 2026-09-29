@@ -3,7 +3,12 @@
 use super::*;
 
 extern "C" {
-    fn js_closure_call_array(closure: i64, args: *const f64, args_len: i64) -> f64;
+    fn js_closure_call_array(
+        closure: i64,
+        this: perry_ffi::JsThis,
+        args: *const f64,
+        args_len: i64,
+    ) -> f64;
 }
 
 type HttpAgentSocketEventHook = extern "C" fn(i64, *const u8, usize);
@@ -56,23 +61,23 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
     let mut frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, &event));
     frame.set_payloads(&arg_bits);
     // #11227: `emit()` binds `this` to the socket, like every Node emitter.
-    let this = crate::socket_events::ListenerThis::bind(handle);
+    let this = crate::socket_events::ListenerThis::of(handle);
     for index in 0..frame.len() {
         let callback = frame.cb(index);
         if callback == 0 {
             continue;
         }
-        this.rebind();
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         match arg_bits.len() {
             0 => {
-                let _ = closure.call0();
+                let _ = closure.call0(this.receiver());
             }
             1 => {
-                let _ = closure.call1(f64::from_bits(frame.payload_bits()));
+                let _ = closure.call1(this.receiver(), f64::from_bits(frame.payload_bits()));
             }
             2 => {
                 let _ = closure.call2(
+                    this.receiver(),
                     f64::from_bits(frame.payload_bits_at(0)),
                     f64::from_bits(frame.payload_bits_at(1)),
                 );
@@ -81,12 +86,16 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
                 let args = (0..arg_bits.len())
                     .map(|index| f64::from_bits(frame.payload_bits_at(index)))
                     .collect::<Vec<_>>();
-                let _ = js_closure_call_array(callback, args.as_ptr(), args.len() as i64);
+                let _ = js_closure_call_array(
+                    callback,
+                    this.receiver(),
+                    args.as_ptr(),
+                    args.len() as i64,
+                );
             }
         }
     }
     let emitted = frame.len() != 0;
-    drop(this);
     drop(frame);
     lifecycle::drain_once_listeners(handle, &event);
     if statics::http_agent_phases()

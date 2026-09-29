@@ -7,11 +7,20 @@
 use perry_runtime::gc::RuntimeHandleScope;
 use perry_runtime::{ClosureHeader, JSValue, ObjectHeader};
 
-extern "C" fn thunk1(_closure: *const ClosureHeader, _a: f64) -> f64 {
+extern "C" fn thunk1(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _a: f64,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
-extern "C" fn thunk2(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn thunk2(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -29,7 +38,7 @@ fn thread_exit_disables_the_threads_v8_promise_hooks() {
     let (callback, live) = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let closure = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
-            thunk1 as *const u8,
+            perry_runtime::fn_info!(thunk1, 1),
             0,
         ));
         let addr = || closure.get_raw_mut_ptr::<ClosureHeader>() as usize;
@@ -52,7 +61,7 @@ fn thread_exit_disables_the_threads_async_hooks_create_hook_record() {
     let (callback, live) = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let closure = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
-            thunk1 as *const u8,
+            perry_runtime::fn_info!(thunk1, 1),
             0,
         ));
         let options = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 1));
@@ -210,7 +219,7 @@ fn thread_exit_releases_the_threads_tls_client_records() {
     let live = std::thread::spawn(|| {
         let scope = RuntimeHandleScope::new();
         let closure = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
-            thunk2 as *const u8,
+            perry_runtime::fn_info!(thunk2, 2),
             0,
         ));
         let options = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 1));

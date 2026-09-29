@@ -356,8 +356,11 @@ pub(crate) use write_file_input::*;
 
 /// Allocate a fresh ClosureHeader whose func_ptr is `func` and
 /// whose slot 0 holds the given stream id.
-pub(crate) fn make_stream_closure(func: extern "C" fn(), stream_id: usize) -> *mut ClosureHeader {
-    let closure = js_closure_alloc(func as *const u8, 1);
+pub(crate) fn make_stream_closure(
+    info: *const crate::closure::JsFunctionInfo,
+    stream_id: usize,
+) -> *mut ClosureHeader {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, stream_id as i64);
     closure
 }
@@ -366,7 +369,7 @@ pub(crate) fn make_stream_closure(func: extern "C" fn(), stream_id: usize) -> *m
 pub(crate) fn build_stream_object(
     stream_id: usize,
     class_id: u32,
-    method_funcs: &[(&str, extern "C" fn())],
+    method_funcs: &[(&str, *const crate::closure::JsFunctionInfo)],
 ) -> *mut ObjectHeader {
     let mut packed: Vec<u8> = Vec::new();
     for (name, _) in method_funcs {
@@ -436,8 +439,8 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
-fn current_receiver_value() -> f64 {
-    let this_value = crate::object::js_implicit_this_get();
+fn current_receiver_value(this: crate::closure::JsThis) -> f64 {
+    let this_value = this.as_f64();
     if object_ptr_from_value(this_value).is_some() {
         this_value
     } else {
@@ -649,7 +652,7 @@ fn emit_event0(id: usize, event: &str) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            js_closure_call0(cb_ptr);
+            js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
     bridge_to_stream_listeners(id, event, &[], handled_locally);
@@ -662,7 +665,7 @@ fn emit_event1(id: usize, event: &str, arg: f64) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            js_closure_call1(cb_ptr, arg);
+            js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
     bridge_to_stream_listeners(id, event, &[arg], handled_locally);
@@ -835,7 +838,7 @@ fn call_stream_callback0(callback: f64) {
     if is_callable_value(callback) {
         let cb_ptr = extract_closure_ptr(callback);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
 }
@@ -844,273 +847,17 @@ fn call_stream_callback1(callback: f64, arg: f64) {
     if is_callable_value(callback) {
         let cb_ptr = extract_closure_ptr(callback);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, arg);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
 }
 
-/// #9493: park one `WriteStream` turn on the callback-timer queue. At most one
-/// is pending per stream; a turn re-schedules while work remains.
-///
-/// This is the mechanism `fs::deferred` uses for `fs.writeFile`: the timer
-/// queue roots the closure; a pending refed callback timer is a live event
-/// source, so a program that ends by draining its loop still lands every byte
-/// and `'finish'` still fires; and `process.exit()` terminates through
-/// `libc::_exit` without ticking the queue, so an exit in the same tick
-/// abandons the parked open and writes the way Node abandons its not-yet-run
-/// thread-pool requests.
-fn schedule_write_stream_turn(id: usize) {
-    let should_schedule = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
-        if state.turn_pending || state.closed {
-            return false;
-        }
-        state.turn_pending = true;
-        true
-    });
-    if should_schedule {
-        let closure = js_closure_alloc(write_stream_turn_impl as *const u8, 1);
-        js_closure_set_capture_ptr(closure, 0, id as i64);
-        let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
-    }
-}
-
-extern "C" fn write_stream_turn_impl(closure: *const ClosureHeader) -> f64 {
-    let id = stream_id_of(closure);
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.turn_pending = false;
-        }
-    });
-    run_write_stream_turn(id);
-    undefined_value()
-}
-
-/// What a `WriteStream` turn does, decided from the state when it runs. One
-/// step per turn, each the analogue of one Node thread-pool request: the open
-/// (`_construct` → `fs.open`), then the queued writes ending in `'finish'`,
-/// then the close. A step schedules the next when more work remains, so a
-/// microtask queued by an `'open'` or `'finish'` listener runs before the
-/// first write callback / before `'close'`, as it does in Node.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WriteStreamStep {
-    Open,
-    Drain,
-    Close,
-    Idle,
-}
-
-fn write_stream_step(id: usize) -> WriteStreamStep {
-    STREAM_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let Some(state) = registry.get(&id) else {
-            return WriteStreamStep::Idle;
-        };
-        if state.kind != StreamKind::Write || state.closed {
-            return WriteStreamStep::Idle;
-        }
-        if state.destroyed {
-            return WriteStreamStep::Close;
-        }
-        if !state.opened && state.error_msg.is_none() && matches!(state.owner, FdOwner::Path) {
-            return WriteStreamStep::Open;
-        }
-        if !state.pending_writes.is_empty() || (state.ended && !state.finished) {
-            return WriteStreamStep::Drain;
-        }
-        if state.finished && state.auto_close {
-            return WriteStreamStep::Close;
-        }
-        WriteStreamStep::Idle
-    })
-}
-
-fn run_write_stream_turn(id: usize) {
-    match write_stream_step(id) {
-        WriteStreamStep::Open => write_stream_open_step(id),
-        WriteStreamStep::Drain => write_stream_drain_step(id),
-        WriteStreamStep::Close => write_stream_close_step(id),
-        WriteStreamStep::Idle => {}
-    }
-}
-
-fn schedule_next_write_stream_step(id: usize) {
-    if write_stream_step(id) != WriteStreamStep::Idle {
-        schedule_write_stream_turn(id);
-    }
-}
-
-/// The deferred `open(2)`: Node's `_construct` runs `fs.open` on the pool and
-/// then emits `'open'` and `'ready'`. The queued writes are performed on a
-/// LATER turn — their `fs.write` requests are only dispatched once the open
-/// callback has returned.
-fn write_stream_open_step(id: usize) {
-    let (path, flags) = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .map(|state| (state.path.clone(), state.flags.clone()))
-            .unwrap_or_default()
-    });
-    match fs_open_path_str_result(&path, &flags) {
-        Ok(fd) => {
-            STREAM_REGISTRY.with(|registry| {
-                if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                    state.fd = Some(fd);
-                    state.opened = true;
-                    if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") {
-                        state.position = end_position_for_fd(fd);
-                    }
-                    update_common_props(state);
-                }
-            });
-            emit_event1(id, "open", fd as f64);
-            emit_event0(id, "ready");
-            schedule_next_write_stream_step(id);
-        }
-        Err(err) => {
-            let message = err.to_string();
-            let error_value = unsafe { build_fs_error_value(&err, "open", &path) };
-            write_stream_fail(id, error_value, message);
-        }
-    }
-}
-
-/// The error cascade Node runs when the open fails: every pending write
-/// callback and the `end()` callback receive the error, then `'error'` fires,
-/// then the stream is destroyed and `'close'` follows on a later turn.
-fn write_stream_fail(id: usize, error_value: f64, message: String) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_nanbox_f64(error_value);
-    // The value goes into the state first — the registry is a GC root and the
-    // callbacks below allocate.
-    let (writes, end_callback) = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (Vec::new(), undefined_value());
-        };
-        state.errored = true;
-        state.error_msg = Some(message);
-        state.error_value = error_handle.get_nanbox_f64();
-        state.destroyed = true;
-        state.writable_length = 0;
-        state.writable_need_drain = false;
-        let writes = std::mem::take(&mut state.pending_writes);
-        let end_callback = std::mem::replace(&mut state.end_callback, undefined_value());
-        update_common_props(state);
-        (writes, end_callback)
-    });
-    let callbacks: Vec<_> = writes
-        .iter()
-        .map(|write| scope.root_nanbox_f64(write.callback))
-        .collect();
-    let end_handle = scope.root_nanbox_f64(end_callback);
-    for callback in &callbacks {
-        call_stream_callback1(callback.get_nanbox_f64(), error_handle.get_nanbox_f64());
-    }
-    call_stream_callback1(end_handle.get_nanbox_f64(), error_handle.get_nanbox_f64());
-    emit_event1(id, "error", error_handle.get_nanbox_f64());
-    schedule_next_write_stream_step(id);
-}
-
-/// The queued writes, in order — Node batches them into one `writev` — then
-/// Node's `afterWrite` order: `'drain'` (when a `write()` returned `false`
-/// and the stream is not ending) BEFORE the completed writes' callbacks. Once
-/// `end()` has been called and nothing is left: the `end()` callback and
-/// `'finish'`; with `autoClose`, the close lands on the next turn.
-fn write_stream_drain_step(id: usize) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let mut completed = Vec::new();
-    loop {
-        let next = STREAM_REGISTRY.with(|registry| {
-            let mut registry = registry.borrow_mut();
-            let state = registry.get_mut(&id)?;
-            if state.destroyed || state.pending_writes.is_empty() {
-                return None;
-            }
-            Some(state.pending_writes.remove(0))
-        });
-        let Some(write) = next else {
-            break;
-        };
-        let callback = scope.root_nanbox_f64(write.callback);
-        match write_to_stream_fd(id, &write.bytes) {
-            Ok(()) => completed.push(callback),
-            Err(message) => {
-                // The writes that did land complete normally; the failing one
-                // gets the error, then the rest of the queue does via the
-                // error cascade.
-                for done in &completed {
-                    call_stream_callback0(done.get_nanbox_f64());
-                }
-                let error_value = scope.root_nanbox_f64(make_error_value(&message));
-                call_stream_callback1(callback.get_nanbox_f64(), error_value.get_nanbox_f64());
-                write_stream_fail(id, error_value.get_nanbox_f64(), message);
-                return;
-            }
-        }
-    }
-    let (emit_drain, finish) = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (false, false);
-        };
-        if state.destroyed {
-            return (false, false);
-        }
-        state.writable_length = 0;
-        let emit_drain = state.writable_need_drain && !state.ended;
-        state.writable_need_drain = false;
-        let mut finish = false;
-        if state.ended && !state.finished {
-            if state.error_msg.is_none() {
-                state.finished = true;
-                finish = true;
-            } else {
-                state.destroyed = true;
-            }
-        }
-        update_common_props(state);
-        (emit_drain, finish)
-    });
-    if emit_drain {
-        emit_event0(id, "drain");
-    }
-    for callback in &completed {
-        call_stream_callback0(callback.get_nanbox_f64());
-    }
-    if finish {
-        let end_callback = STREAM_REGISTRY.with(|registry| {
-            registry
-                .borrow_mut()
-                .get_mut(&id)
-                .map(|state| std::mem::replace(&mut state.end_callback, undefined_value()))
-                .unwrap_or_else(undefined_value)
-        });
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let end_callback = scope.root_nanbox_f64(end_callback);
-        call_stream_callback0(end_callback.get_nanbox_f64());
-        emit_event0(id, "finish");
-    }
-    schedule_next_write_stream_step(id);
-}
-
-fn write_stream_close_step(id: usize) {
-    let force = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .map(|state| state.destroyed)
-            .unwrap_or(false)
-    });
-    maybe_close_stream(id, force);
-}
+mod write_turn;
+use write_turn::{schedule_next_write_stream_step, schedule_write_stream_turn};
 
 pub(crate) extern "C" fn write_stream_write_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -1155,6 +902,7 @@ pub(crate) extern "C" fn write_stream_write_impl(
 
 pub(crate) extern "C" fn write_stream_end_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     chunk: f64,
     encoding: f64,
     cb: f64,
@@ -1194,29 +942,32 @@ pub(crate) extern "C" fn write_stream_end_impl(
     } else {
         emit_stored_error(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn write_stream_on_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     stream_on_common(stream_id_of(closure), event, cb, false);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn write_stream_once_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     stream_on_common(stream_id_of(closure), event, cb, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn stream_emit_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
@@ -1245,7 +996,11 @@ use stream_errors::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
 
-pub(crate) extern "C" fn write_stream_close_impl(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn write_stream_close_impl(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     let id = stream_id_of(closure);
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);
@@ -1260,7 +1015,7 @@ pub(crate) extern "C" fn write_stream_close_impl(closure: *const ClosureHeader, 
         }
     });
     maybe_close_stream(id, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 fn read_chunk_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
@@ -1346,13 +1101,19 @@ fn finish_read_stream(id: usize) {
 }
 
 fn install_pipe_drain_resume(source_id: usize, dest: f64) {
-    let closure = js_closure_alloc(read_stream_resume_from_drain_impl as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(read_stream_resume_from_drain_impl, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, source_id as i64);
     let listener = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
     let _ = call_js_method2(dest, b"once", string_value(b"drain"), listener);
 }
 
-extern "C" fn read_stream_resume_from_drain_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn read_stream_resume_from_drain_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1474,6 +1235,7 @@ fn read_stream_pump(id: usize) {
 
 pub(crate) extern "C" fn read_stream_on_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1487,11 +1249,12 @@ pub(crate) extern "C" fn read_stream_on_impl(
         });
         schedule_read_stream_turn(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_once_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
@@ -1505,11 +1268,12 @@ pub(crate) extern "C" fn read_stream_once_impl(
         });
         schedule_read_stream_turn(id);
     }
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn read_stream_pipe_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     dest: f64,
     options: f64,
 ) -> f64 {
@@ -1528,16 +1292,22 @@ pub(crate) extern "C" fn read_stream_pipe_impl(
     dest
 }
 
-pub(crate) extern "C" fn read_stream_pause_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_pause_impl(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&stream_id_of(closure)) {
             state.paused = true;
         }
     });
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
-pub(crate) extern "C" fn read_stream_resume_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_resume_impl(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
@@ -1545,10 +1315,13 @@ pub(crate) extern "C" fn read_stream_resume_impl(closure: *const ClosureHeader) 
         }
     });
     schedule_read_stream_turn(id);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
-pub(crate) extern "C" fn read_stream_is_paused_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn read_stream_is_paused_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let paused = STREAM_REGISTRY.with(|registry| {
         registry
             .borrow()
@@ -1559,7 +1332,11 @@ pub(crate) extern "C" fn read_stream_is_paused_impl(closure: *const ClosureHeade
     bool_value(paused)
 }
 
-pub(crate) extern "C" fn read_stream_close_impl(closure: *const ClosureHeader, cb: f64) -> f64 {
+pub(crate) extern "C" fn read_stream_close_impl(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    cb: f64,
+) -> f64 {
     let id = stream_id_of(closure);
     if is_callable_value(cb) {
         add_listener(id, "close", cb, true);
@@ -1572,7 +1349,7 @@ pub(crate) extern "C" fn read_stream_close_impl(closure: *const ClosureHeader, c
         }
     });
     maybe_close_stream(id, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
@@ -1613,9 +1390,13 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
                 if name == "open" || name == "error" {
-                    crate::closure::js_closure_call1(cb_ptr, arg);
+                    crate::closure::js_closure_call1(
+                        cb_ptr,
+                        crate::closure::plain_call_receiver(),
+                        arg,
+                    );
                 } else {
-                    crate::closure::js_closure_call0(cb_ptr);
+                    crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
                 }
             }
         }
@@ -1645,55 +1426,40 @@ pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
 }
 
 fn create_write_stream_with_state(state: StreamState) -> f64 {
-    register_stream_method_arities();
     let id = alloc_stream(state);
-    let method_funcs: [(&str, extern "C" fn()); 8] = [
-        ("write", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_write_impl)
-        }),
-        ("end", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_end_impl)
-        }),
-        ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_on_impl)
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_once_impl)
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(write_stream_on_impl)
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                write_stream_close_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                write_stream_close_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(stream_emit_impl)
-        }),
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 8] = [
+        (
+            "write",
+            crate::fn_info!(write_stream_write_impl, 3; with_declared(3)),
+        ),
+        (
+            "end",
+            crate::fn_info!(write_stream_end_impl, 3; with_declared(3)),
+        ),
+        (
+            "on",
+            crate::fn_info!(write_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "once",
+            crate::fn_info!(write_stream_once_impl, 2; with_declared(2)),
+        ),
+        (
+            "addListener",
+            crate::fn_info!(write_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "close",
+            crate::fn_info!(write_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(write_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(stream_emit_impl, 2; with_declared(2)),
+        ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_WRITE_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1717,65 +1483,49 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
 }
 
 fn create_read_stream_with_state(state: StreamState) -> f64 {
-    register_stream_method_arities();
     let id = alloc_stream(state);
     store_open_failure(id);
-    let method_funcs: [(&str, extern "C" fn()); 10] = [
-        ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_on_impl)
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_once_impl)
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_on_impl)
-        }),
-        ("pipe", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(read_stream_pipe_impl)
-        }),
-        ("pause", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                read_stream_pause_impl,
-            )
-        }),
-        ("resume", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                read_stream_resume_impl,
-            )
-        }),
-        ("isPaused", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                read_stream_is_paused_impl,
-            )
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                read_stream_close_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                read_stream_close_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(stream_emit_impl)
-        }),
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 10] = [
+        (
+            "on",
+            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "once",
+            crate::fn_info!(read_stream_once_impl, 2; with_declared(2)),
+        ),
+        (
+            "addListener",
+            crate::fn_info!(read_stream_on_impl, 2; with_declared(2)),
+        ),
+        (
+            "pipe",
+            crate::fn_info!(read_stream_pipe_impl, 2; with_declared(2)),
+        ),
+        (
+            "pause",
+            crate::fn_info!(read_stream_pause_impl, 0; with_declared(0)),
+        ),
+        (
+            "resume",
+            crate::fn_info!(read_stream_resume_impl, 0; with_declared(0)),
+        ),
+        (
+            "isPaused",
+            crate::fn_info!(read_stream_is_paused_impl, 0; with_declared(0)),
+        ),
+        (
+            "close",
+            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "destroy",
+            crate::fn_info!(read_stream_close_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(stream_emit_impl, 2; with_declared(2)),
+        ),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_READ_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1815,97 +1565,57 @@ fn install_utf8_stream_dispose_symbol(value: f64, method: f64) {
 }
 
 fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
-    register_stream_method_arities();
     let periodic_flush = state.periodic_flush;
     let schedule_open = state.opening;
     let id = alloc_utf8_stream(state);
-    let method_funcs: [(&str, extern "C" fn()); 16] = [
-        ("write", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                utf8_stream_write_impl,
-            )
-        }),
-        ("flush", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                utf8_stream_flush_impl,
-            )
-        }),
-        ("flushSync", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                utf8_stream_flush_sync_impl,
-            )
-        }),
-        ("end", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                utf8_stream_end_impl,
-            )
-        }),
-        ("destroy", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
-        ("reopen", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                utf8_stream_reopen_impl,
-            )
-        }),
-        ("on", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_on_impl)
-        }),
-        ("once", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_once_impl)
-        }),
-        ("addListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_on_impl)
-        }),
-        ("off", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_off_impl)
-        }),
-        ("removeListener", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_off_impl)
-        }),
-        ("removeAllListeners", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                utf8_stream_remove_all_impl,
-            )
-        }),
-        ("listenerCount", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader, f64) -> f64, extern "C" fn()>(
-                utf8_stream_listener_count_impl,
-            )
-        }),
-        ("emit", unsafe {
-            std::mem::transmute::<
-                extern "C" fn(*const ClosureHeader, f64, f64) -> f64,
-                extern "C" fn(),
-            >(utf8_stream_emit_impl)
-        }),
-        ("close", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
-        ("@@__perry_wk_dispose", unsafe {
-            std::mem::transmute::<extern "C" fn(*const ClosureHeader) -> f64, extern "C" fn()>(
-                utf8_stream_destroy_impl,
-            )
-        }),
+    // Aliased methods share one info, so their bodies keep one identity.
+    let destroy = crate::fn_info!(utf8_stream_destroy_impl, 0; with_declared(0));
+    let on = crate::fn_info!(utf8_stream_on_impl, 2; with_declared(2));
+    let off = crate::fn_info!(utf8_stream_off_impl, 2; with_declared(2));
+    let method_funcs: [(&str, *const crate::closure::JsFunctionInfo); 16] = [
+        (
+            "write",
+            crate::fn_info!(utf8_stream_write_impl, 1; with_declared(1)),
+        ),
+        (
+            "flush",
+            crate::fn_info!(utf8_stream_flush_impl, 1; with_declared(1)),
+        ),
+        (
+            "flushSync",
+            crate::fn_info!(utf8_stream_flush_sync_impl, 0; with_declared(0)),
+        ),
+        (
+            "end",
+            crate::fn_info!(utf8_stream_end_impl, 0; with_declared(0)),
+        ),
+        ("destroy", destroy),
+        (
+            "reopen",
+            crate::fn_info!(utf8_stream_reopen_impl, 1; with_declared(1)),
+        ),
+        ("on", on),
+        (
+            "once",
+            crate::fn_info!(utf8_stream_once_impl, 2; with_declared(2)),
+        ),
+        ("addListener", on),
+        ("off", off),
+        ("removeListener", off),
+        (
+            "removeAllListeners",
+            crate::fn_info!(utf8_stream_remove_all_impl, 1; with_declared(1)),
+        ),
+        (
+            "listenerCount",
+            crate::fn_info!(utf8_stream_listener_count_impl, 1; with_declared(1)),
+        ),
+        (
+            "emit",
+            crate::fn_info!(utf8_stream_emit_impl, 2; with_declared(2)),
+        ),
+        ("close", destroy),
+        ("@@__perry_wk_dispose", destroy),
     ];
     let obj = build_stream_object(id, CLASS_ID_FS_UTF8_STREAM, &method_funcs);
     let value = object_value(obj);
@@ -1923,7 +1633,10 @@ fn create_utf8_stream_with_state(state: Utf8StreamState) -> f64 {
         utf8_start_async_open(id);
     }
     if periodic_flush > 0 {
-        let closure = js_closure_alloc(utf8_periodic_flush_impl as *const u8, 1);
+        let closure = js_closure_alloc(
+            crate::fn_info!(utf8_periodic_flush_impl, 0; with_declared(0)),
+            1,
+        );
         js_closure_set_capture_ptr(closure, 0, id as i64);
         let timer = crate::timer::setInterval(closure as i64, periodic_flush as f64);
         crate::timer::js_timer_unref(timer);

@@ -222,7 +222,10 @@ unsafe fn fs_dir_entries_iter_obj(arr: *const ArrayHeader, kind: i32) -> Option<
     if method_ptr == 0 || !crate::closure::is_closure_ptr(method_ptr as usize) {
         return None;
     }
-    let result = crate::closure::js_closure_call0(method_ptr as *const _);
+    let result = crate::closure::js_closure_call0(
+        method_ptr as *const _,
+        crate::closure::plain_call_receiver(),
+    );
     let result_ptr = crate::value::js_nanbox_get_pointer(result);
     (result_ptr != 0).then_some(result_ptr)
 }

@@ -97,8 +97,8 @@ pub(in crate::codegen) fn compile_static_method(
     // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
     // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
     // resolve against the class object via the normal dynamic-dispatch
-    // path. (Previously `this` fell through to `js_implicit_this_get` and
-    // read back `undefined`.)
+    // path. (Previously `this` fell through to a receiver-less read and came
+    // back `undefined`.)
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
@@ -287,7 +287,7 @@ pub(in crate::codegen) fn compile_static_method(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,

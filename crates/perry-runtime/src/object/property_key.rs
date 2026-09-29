@@ -129,10 +129,14 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-        let result =
-            crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+        // Re-read: the key allocation, the method read and the clone can all
+        // move the receiver.
+        let result = crate::closure::native_call_value_this(
+            f64::from_bits(bound),
+            crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
+            std::ptr::null(),
+            0,
+        );
         if js_value_is_not_object(result) {
             return Some(result);
         }
@@ -540,21 +544,22 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
-    let result = crate::closure::js_native_call_value(
+    crate::closure::native_call_value_this(
         f64::from_bits(bound_handle.get_nanbox_u64()),
+        crate::closure::JsThis::from_f64(receiver),
         args_ptr,
         args_len,
-    );
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    )
 }
 
 #[cfg(test)]
 mod property_key_tests {
     use super::*;
 
-    extern "C" fn accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    extern "C" fn accessor_getter(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
         123.0
     }
 
@@ -616,7 +621,7 @@ mod property_key_tests {
             let obj = js_object_alloc(0, 0);
             let obj_value = crate::value::js_nanbox_pointer(obj as i64);
             let sym = crate::symbol::js_symbol_new_empty();
-            let getter = crate::closure::js_closure_alloc(accessor_getter as *const u8, 0);
+            let getter = crate::closure::js_closure_alloc(crate::fn_info!(accessor_getter, 0), 0);
             let getter_value = crate::value::js_nanbox_pointer(getter as i64);
 
             js_object_define_accessor(

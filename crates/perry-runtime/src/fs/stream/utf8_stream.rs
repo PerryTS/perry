@@ -470,7 +470,7 @@ pub(crate) fn utf8_emit_event0(id: usize, event: &str) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
     }
 }
@@ -480,7 +480,7 @@ fn utf8_emit_event1(id: usize, event: &str, arg: f64) {
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call1(cb_ptr, arg);
+            crate::closure::js_closure_call1(cb_ptr, crate::closure::plain_call_receiver(), arg);
         }
     }
 }
@@ -504,7 +504,7 @@ fn utf8_add_listener(id: usize, event: &str, cb: f64, once: bool) {
     if let Some((_name, _arg)) = immediate {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
-            crate::closure::js_closure_call0(cb_ptr);
+            crate::closure::js_closure_call0(cb_ptr, crate::closure::plain_call_receiver());
         }
         return;
     }
@@ -754,7 +754,11 @@ fn utf8_stream_write_by_id(id: usize, data: f64) -> f64 {
     bool_value(len_after < high_water_mark)
 }
 
-pub(crate) extern "C" fn utf8_stream_write_impl(closure: *const ClosureHeader, data: f64) -> f64 {
+pub(crate) extern "C" fn utf8_stream_write_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     utf8_stream_write_by_id(stream_id_of(closure), data)
 }
 
@@ -798,7 +802,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, err);
+                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
             }
             return undefined_value();
         }
@@ -808,7 +812,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call0(cb);
+                crate::closure::js_closure_call0(cb, crate::closure::plain_call_receiver());
             }
         }
         return undefined_value();
@@ -825,13 +829,13 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, err);
+                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
             }
         }
     } else if is_callable_value(callback) {
         let cb = extract_closure_ptr(callback);
         if !cb.is_null() {
-            crate::closure::js_closure_call0(cb);
+            crate::closure::js_closure_call0(cb, crate::closure::plain_call_receiver());
         }
     }
     undefined_value()
@@ -839,6 +843,7 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_stream_flush_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     callback: f64,
 ) -> f64 {
     utf8_stream_flush_by_id(stream_id_of(closure), callback)
@@ -879,7 +884,10 @@ fn utf8_stream_flush_sync_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_flush_sync_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_flush_sync_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_flush_sync_by_id(stream_id_of(closure))
 }
 
@@ -898,7 +906,10 @@ fn utf8_emit_close_events(id: usize, emit_finish: bool) {
     utf8_emit_event0(id, "close");
 }
 
-pub(crate) extern "C" fn utf8_close_events_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_close_events_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let emit_finish = js_closure_get_capture_ptr(closure, 1) != 0;
     utf8_emit_close_events(id, emit_finish);
@@ -906,7 +917,10 @@ pub(crate) extern "C" fn utf8_close_events_impl(closure: *const ClosureHeader) -
 }
 
 fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
-    let closure = js_closure_alloc(utf8_close_events_impl as *const u8, 2);
+    let closure = js_closure_alloc(
+        crate::fn_info!(utf8_close_events_impl, 0; with_declared(0)),
+        2,
+    );
     js_closure_set_capture_ptr(closure, 0, id as i64);
     js_closure_set_capture_ptr(closure, 1, if emit_finish { 1 } else { 0 });
     crate::builtins::js_queue_microtask(closure as i64);
@@ -970,7 +984,10 @@ fn utf8_stream_end_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_end_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_end_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_end_by_id(stream_id_of(closure))
 }
 
@@ -992,7 +1009,10 @@ fn utf8_stream_destroy_by_id(id: usize) -> f64 {
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_stream_destroy_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_stream_destroy_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     utf8_stream_destroy_by_id(stream_id_of(closure))
 }
 
@@ -1085,6 +1105,7 @@ fn utf8_stream_reopen_by_id(id: usize, file_value: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_stream_reopen_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     file_value: f64,
 ) -> f64 {
     utf8_stream_reopen_by_id(stream_id_of(closure), file_value)
@@ -1100,35 +1121,39 @@ pub extern "C" fn js_fs_utf8_stream_reopen(stream_value: f64, file_value: f64) -
 
 pub(crate) extern "C" fn utf8_stream_on_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
     utf8_add_listener(id, &event_name(event), cb, false);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_once_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
     utf8_add_listener(id, &event_name(event), cb, true);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_off_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     cb: f64,
 ) -> f64 {
     utf8_remove_listener(stream_id_of(closure), &event_name(event), cb);
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_remove_all_impl(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1141,11 +1166,12 @@ pub(crate) extern "C" fn utf8_stream_remove_all_impl(
             }
         }
     });
-    current_receiver_value()
+    current_receiver_value(this)
 }
 
 pub(crate) extern "C" fn utf8_stream_listener_count_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1162,6 +1188,7 @@ pub(crate) extern "C" fn utf8_stream_listener_count_impl(
 
 pub(crate) extern "C" fn utf8_stream_emit_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     arg: f64,
 ) -> f64 {
@@ -1260,7 +1287,10 @@ pub extern "C" fn js_fs_utf8_stream_emit(stream_value: f64, event: f64, arg: f64
     utf8_stream_emit_value(stream_value, event, arg).unwrap_or_else(|| bool_value(false))
 }
 
-pub(crate) extern "C" fn utf8_periodic_flush_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_periodic_flush_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let destroyed = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
@@ -1369,6 +1399,7 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
 
 pub(crate) extern "C" fn utf8_async_open_done_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     fd_value: f64,
 ) -> f64 {
@@ -1391,7 +1422,10 @@ fn utf8_custom_open(id: usize) -> bool {
     if is_undefined_value(custom_fs) || !object_has_callable_field(custom_fs, b"open") {
         return false;
     }
-    let cb = js_closure_alloc(utf8_async_open_done_impl as *const u8, 1);
+    let cb = js_closure_alloc(
+        crate::fn_info!(utf8_async_open_done_impl, 2; with_declared(2)),
+        1,
+    );
     js_closure_set_capture_ptr(cb, 0, id as i64);
     let cb_value = crate::value::js_nanbox_pointer(cb as i64);
     let flags_value = string_value_str(if append { "a" } else { "w" });
@@ -1406,6 +1440,7 @@ fn utf8_custom_open(id: usize) -> bool {
 
 pub(crate) extern "C" fn utf8_async_mkdir_done_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     let id = stream_id_of(closure);
@@ -1443,7 +1478,10 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
     let key = js_string_from_bytes(b"recursive".as_ptr(), 9);
     crate::object::js_object_set_field_by_name(options_obj, key, bool_value(true));
     let options_value = object_value(options_obj);
-    let cb = js_closure_alloc(utf8_async_mkdir_done_impl as *const u8, 1);
+    let cb = js_closure_alloc(
+        crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_ptr(cb, 0, id as i64);
     let cb_value = crate::value::js_nanbox_pointer(cb as i64);
     let parent_value = string_value_str(parent_str);
@@ -1470,7 +1508,7 @@ fn utf8_needs_native_mkdir_before_custom_open(id: usize) -> bool {
 
 fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
     let closure = js_closure_alloc(
-        utf8_async_native_mkdir_then_custom_open_impl as *const u8,
+        crate::fn_info!(utf8_async_native_mkdir_then_custom_open_impl, 0),
         1,
     );
     js_closure_set_capture_ptr(closure, 0, id as i64);
@@ -1478,7 +1516,10 @@ fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
 }
 
 fn utf8_schedule_native_open(id: usize) {
-    let closure = js_closure_alloc(utf8_async_open_impl as *const u8, 1);
+    let closure = js_closure_alloc(
+        crate::fn_info!(utf8_async_open_impl, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
@@ -1497,7 +1538,10 @@ pub(crate) fn utf8_start_async_open(id: usize) {
     utf8_schedule_native_open(id);
 }
 
-extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let Some(file) = UTF8_STREAM_REGISTRY.with(|registry| {
         registry
@@ -1517,7 +1561,10 @@ extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(closure: *const Clos
     undefined_value()
 }
 
-pub(crate) extern "C" fn utf8_async_open_impl(closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn utf8_async_open_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = stream_id_of(closure);
     let Some(file) = UTF8_STREAM_REGISTRY.with(|registry| {
         registry

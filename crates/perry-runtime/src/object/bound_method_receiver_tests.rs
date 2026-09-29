@@ -61,6 +61,7 @@ unsafe fn register_class() -> (f64, f64) {
         ACCESSOR.as_ptr(),
         ACCESSOR.len() as i64,
         record_setter_11201 as *const () as usize as i64,
+        1,
     );
     let proto_ref = super::native_module::class_prototype_ref_value(RECEIVER_TEST_CLASS_ID);
     let method =
@@ -77,12 +78,14 @@ unsafe fn register_class() -> (f64, f64) {
     (method, proto)
 }
 
-/// `method.call(receiver)`: IMPLICIT_THIS bound to `receiver` for the call.
+/// `method.call(receiver)`: `receiver` passed as the call's `this`.
 unsafe fn call_with_this(method: f64, receiver: f64) -> f64 {
-    let prev = crate::object::js_implicit_this_set(receiver);
-    let result = crate::closure::js_native_call_value(method, std::ptr::null(), 0);
-    crate::object::js_implicit_this_set(prev);
-    result
+    crate::closure::native_call_value_this(
+        method,
+        crate::closure::JsThis::from_f64(receiver),
+        std::ptr::null(),
+        0,
+    )
 }
 
 /// `Object.setPrototypeOf(Object.create(null), proto)`.

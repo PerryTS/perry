@@ -22,7 +22,7 @@
 //! and call `widgets::add_child`.
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -48,7 +48,8 @@ pub extern "C" fn render_handler(container_handle: i64, render_closure: f64, cou
         return;
     }
     for i in 0..n {
-        let child_f64 = unsafe { js_closure_call1(closure_ptr, i as f64) };
+        let child_f64 =
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64) };
         let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
         if child_handle != 0 {
             crate::widgets::add_child(container_handle, child_handle);

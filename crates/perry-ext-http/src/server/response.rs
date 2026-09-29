@@ -1334,7 +1334,7 @@ pub unsafe extern "C" fn js_node_http_res_on(
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     handle_to_pointer_f64(handle)
@@ -1376,7 +1376,7 @@ pub unsafe extern "C" fn js_node_http_res_once(
         let raw = callback as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
     handle_to_pointer_f64(handle)

@@ -53,7 +53,7 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call0(cb);
+                        js_closure_call0(cb, perry_runtime::closure::plain_call_receiver());
                     }
                 }
                 drain_once_listeners(server_id, "listening");
@@ -69,7 +69,11 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                     for cb in callbacks {
                         let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                         if !cb.is_null() {
-                            js_closure_call1(cb, socket);
+                            js_closure_call1(
+                                cb,
+                                perry_runtime::closure::plain_call_receiver(),
+                                socket,
+                            );
                         }
                     }
                     drain_once_listeners(server_id, event_name);
@@ -90,7 +94,7 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call0(cb);
+                        js_closure_call0(cb, perry_runtime::closure::plain_call_receiver());
                     }
                 }
                 if let Some(server) = servers().lock().unwrap().remove(&server_id) {
@@ -109,7 +113,11 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call1(cb, err.get_nanbox_f64());
+                        js_closure_call1(
+                            cb,
+                            perry_runtime::closure::plain_call_receiver(),
+                            err.get_nanbox_f64(),
+                        );
                     }
                 }
                 drain_once_listeners(server_id, "error");
@@ -126,7 +134,12 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call2(cb, err.get_nanbox_f64(), socket.get_nanbox_f64());
+                        js_closure_call2(
+                            cb,
+                            perry_runtime::closure::plain_call_receiver(),
+                            err.get_nanbox_f64(),
+                            socket.get_nanbox_f64(),
+                        );
                     }
                 }
                 drain_once_listeners(server_id, "tlsClientError");
@@ -141,7 +154,11 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call1(cb, data.get_nanbox_f64());
+                        js_closure_call1(
+                            cb,
+                            perry_runtime::closure::plain_call_receiver(),
+                            data.get_nanbox_f64(),
+                        );
                     }
                 }
                 drain_once_listeners(socket_id, "data");
@@ -155,7 +172,7 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call0(cb);
+                        js_closure_call0(cb, perry_runtime::closure::plain_call_receiver());
                     }
                 }
                 drain_once_listeners(socket_id, "end");
@@ -169,7 +186,7 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call0(cb);
+                        js_closure_call0(cb, perry_runtime::closure::plain_call_receiver());
                     }
                 }
                 if let Some(socket) = sockets().lock().unwrap().remove(&socket_id) {
@@ -188,7 +205,11 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 for cb in callbacks {
                     let cb = cb.get_raw_const_ptr::<ClosureHeader>();
                     if !cb.is_null() {
-                        js_closure_call1(cb, err.get_nanbox_f64());
+                        js_closure_call1(
+                            cb,
+                            perry_runtime::closure::plain_call_receiver(),
+                            err.get_nanbox_f64(),
+                        );
                     }
                 }
                 drain_once_listeners(socket_id, "error");

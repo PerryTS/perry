@@ -335,13 +335,13 @@ fn emit_server_event(handle: Handle, event: &str, first: f64, second: f64, argc:
             let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             match argc {
                 0 => {
-                    closure.call0();
+                    closure.call0(perry_ffi::JsThis::UNDEFINED);
                 }
                 1 => {
-                    closure.call1(first.get());
+                    closure.call1(perry_ffi::JsThis::UNDEFINED, first.get());
                 }
                 _ => {
-                    closure.call2(first.get(), second.get());
+                    closure.call2(perry_ffi::JsThis::UNDEFINED, first.get(), second.get());
                 }
             }
         }

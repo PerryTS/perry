@@ -354,17 +354,17 @@ pub(crate) fn string(
     dispatch::call_one(&method, &re, &argument)
 }
 
-pub(crate) extern "C" fn match_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
-    api::finish(regexp(
-        Operation::Match,
-        crate::object::js_implicit_this_get(),
-        arg,
-    ))
+pub(crate) extern "C" fn match_thunk(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    api::finish(regexp(Operation::Match, this.as_f64(), arg))
 }
-pub(crate) extern "C" fn search_thunk(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
-    api::finish(regexp(
-        Operation::Search,
-        crate::object::js_implicit_this_get(),
-        arg,
-    ))
+pub(crate) extern "C" fn search_thunk(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    api::finish(regexp(Operation::Search, this.as_f64(), arg))
 }

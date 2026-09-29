@@ -235,9 +235,12 @@ pub(super) unsafe fn tee_source_enqueue(
         g.get(&id).map(|s| s.strategy_size_cb).unwrap_or(0)
     };
     let size = if size_cb != 0 {
-        let size = super::readable_strategy_size_to_number(
-            perry_runtime::closure::js_closure_call1(size_cb as *const ClosureHeader, chunk),
-        );
+        let size =
+            super::readable_strategy_size_to_number(perry_runtime::closure::js_closure_call1(
+                size_cb as *const ClosureHeader,
+                perry_runtime::closure::plain_call_receiver(),
+                chunk,
+            ));
         if size.is_nan() || size < 0.0 || size.is_infinite() {
             super::throw_invalid_readable_strategy_size(id, size);
         }
@@ -271,9 +274,10 @@ pub(super) unsafe fn tee_schedule_pull(source: usize) {
     if !TEE_PULLING.lock().unwrap().insert(source) {
         return;
     }
-    let f = tee_pull_microtask as *const u8;
-    perry_runtime::closure::js_register_closure_arity(f, 0);
-    let job = perry_runtime::closure::js_closure_alloc(f, 1);
+    let job = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(tee_pull_microtask, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
     perry_runtime::builtins::js_queue_microtask(job as i64);
 }
@@ -313,9 +317,10 @@ pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
     if !TEE_PULLING.lock().unwrap().insert(source) {
         return;
     }
-    let f = tee_demand_hop as *const u8;
-    perry_runtime::closure::js_register_closure_arity(f, 0);
-    let job = perry_runtime::closure::js_closure_alloc(f, 1);
+    let job = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(tee_demand_hop, 0; with_declared(0)),
+        1,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
     perry_runtime::builtins::js_queue_microtask(job as i64);
 }
@@ -324,7 +329,10 @@ pub(super) unsafe fn tee_schedule_pull_demand(source: usize) {
 /// later. `TEE_PULLING` stays held across the hop (single-threaded microtask
 /// dispatch — the remove+insert below has no interleaving window), so
 /// coalescing against enqueue/close reroutes keeps working.
-extern "C" fn tee_demand_hop(closure: *const ClosureHeader) -> f64 {
+extern "C" fn tee_demand_hop(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         TEE_PULLING.lock().unwrap().remove(&source);
@@ -335,7 +343,10 @@ extern "C" fn tee_demand_hop(closure: *const ClosureHeader) -> f64 {
 
 /// The extra tick a byte-stream tee's CHAINED pull pays before the next
 /// cycle (see the chain decision in `tee_pull_microtask`).
-extern "C" fn tee_byte_chain_hop(closure: *const ClosureHeader) -> f64 {
+extern "C" fn tee_byte_chain_hop(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         tee_schedule_pull(source);
@@ -343,7 +354,10 @@ extern "C" fn tee_byte_chain_hop(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
 }
 
-extern "C" fn tee_close_tick(closure: *const ClosureHeader) -> f64 {
+extern "C" fn tee_close_tick(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         tee_close_branches(source);
@@ -351,7 +365,10 @@ extern "C" fn tee_close_tick(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
 }
 
-extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
+extern "C" fn tee_pull_microtask(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     let undef = f64::from_bits(0x7FFC_0000_0000_0001); // TAG_UNDEFINED
     unsafe {
         let source = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
@@ -425,9 +442,10 @@ extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
                         // the final delivery pair). Each extra hop cedes a
                         // task-generation to racing promise cascades (the
                         // Next.js module-require chain must win that race).
-                        let f = tee_byte_chain_hop as *const u8;
-                        perry_runtime::closure::js_register_closure_arity(f, 0);
-                        let job = perry_runtime::closure::js_closure_alloc(f, 1);
+                        let job = perry_runtime::closure::js_closure_alloc(
+                            perry_runtime::fn_info!(tee_byte_chain_hop, 0; with_declared(0)),
+                            1,
+                        );
                         perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
                         perry_runtime::builtins::js_queue_microtask(job as i64);
                     } else {
@@ -449,9 +467,10 @@ extern "C" fn tee_pull_microtask(closure: *const ClosureHeader) -> f64 {
                 // 6/12/20-tick chains), i.e. it travels the nextTick queue,
                 // which runs when the microtask queue exhausts. A plain
                 // (non-tee) stream's close stays prompt. Defer via nextTick.
-                let f = tee_close_tick as *const u8;
-                perry_runtime::closure::js_register_closure_arity(f, 0);
-                let job = perry_runtime::closure::js_closure_alloc(f, 1);
+                let job = perry_runtime::closure::js_closure_alloc(
+                    perry_runtime::fn_info!(tee_close_tick, 0; with_declared(0)),
+                    1,
+                );
                 perry_runtime::closure::js_closure_set_capture_ptr(job, 0, source as i64);
                 perry_runtime::builtins::js_queue_next_tick(job as i64);
             }

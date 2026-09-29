@@ -75,7 +75,8 @@ pub(crate) struct NmEeOps {
     /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
     /// installs the EE methods on the fresh instance. `None` when the callee
     /// is not the bound events export (fall through to normal call dispatch).
-    pub ee_dynamic_super: unsafe fn(f64, *const f64, usize) -> Option<f64>,
+    /// The second argument is the call's `this` (the fresh instance).
+    pub ee_dynamic_super: unsafe fn(f64, crate::closure::JsThis, *const f64, usize) -> Option<f64>,
 }
 
 static NM_EE_OPS: AtomicPtr<NmEeOps> = AtomicPtr::new(std::ptr::null_mut());

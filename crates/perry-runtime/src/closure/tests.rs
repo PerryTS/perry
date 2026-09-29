@@ -1,15 +1,21 @@
 use super::*;
 
-extern "C" fn test_closure_func(closure: *const ClosureHeader) -> f64 {
+extern "C" fn test_closure_func(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let captured = js_closure_get_capture_f64(closure, 0);
     captured * 2.0
 }
 
+static TEST_CLOSURE_FUNC: JsFunctionInfo =
+    JsFunctionInfo::of(test_closure_func as crate::codegen_abi::JsBody0<ClosureHeader>);
+
 #[test]
 fn test_closure_basic() {
-    let closure = js_closure_alloc(test_closure_func as *const u8, 1);
+    let closure = js_closure_alloc(&TEST_CLOSURE_FUNC, 1);
     js_closure_set_capture_f64(closure, 0, 21.0);
-    let result = js_closure_call0(closure);
+    let result = js_closure_call0(closure, crate::closure::plain_call_receiver());
     assert_eq!(result, 42.0);
 }
 
@@ -26,7 +32,7 @@ fn test_closure_capture_bits_roundtrip_tagged_values() {
             .bits(),
         (-0.0f64).to_bits(),
     ];
-    let closure = js_closure_alloc(test_closure_func as *const u8, captures.len() as u32);
+    let closure = js_closure_alloc(&TEST_CLOSURE_FUNC, captures.len() as u32);
 
     for (index, &bits) in captures.iter().enumerate() {
         js_closure_set_capture_bits(closure, index as u32, bits);
@@ -57,7 +63,7 @@ fn test_closure_alloc_with_captures_singleton_preserves_capture_bits() {
     ];
 
     let closure = js_closure_alloc_with_captures_singleton(
-        test_closure_func as *const u8,
+        &TEST_CLOSURE_FUNC,
         captures.len() as u32,
         captures.as_ptr(),
     );

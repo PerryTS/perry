@@ -612,7 +612,7 @@ pub(super) fn compile_method(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
@@ -804,7 +804,7 @@ pub(super) fn compile_method(
     };
 
     // Resolve each immutable callback parameter/arity once, before the method
-    // body. The runtime answers null unless the actual value is a plain arrow
+    // body. The runtime answers null unless the actual value is a closure
     // whose declared/rest shape can use this exact call ABI. Exact immutable
     // aliases (`const cb = callback`) reuse the same answer: every successful
     // read has that identity by construction, while a pre-initialisation read
@@ -824,7 +824,7 @@ pub(super) fn compile_method(
         let source_handle = crate::expr::unbox_to_i64(ctx.block(), &source_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &source_handle), (I32, &arity.to_string())],
         );
         resolved_callback_ptrs.insert((source_param, arity), fn_ptr);
@@ -842,7 +842,7 @@ pub(super) fn compile_method(
         else {
             continue;
         };
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((call.callee_local, call.arity), fn_ptr);
         if let Some(versioned_fn_ptr) = resolved_versioned_callback_ptrs
             .get(&(call.source_param, call.arity))

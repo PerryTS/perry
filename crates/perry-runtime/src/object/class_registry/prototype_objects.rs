@@ -109,7 +109,7 @@ pub(crate) fn ensure_function_prototype_object(
     // synthetic prototype must carry the EventEmitter methods (`emit`/`on`/`once`/
     // …) so the `Object.setPrototypeOf(x, EventEmitter.prototype)` mixin pattern
     // (pino's logger prototype) gives `x` a working `emit`/`on`. The installed
-    // closures read IMPLICIT_THIS, so a plain object that merely inherits this
+    // closures read their `this` argument, so a plain object that merely inherits this
     // prototype dispatches against ITSELF (listener state is keyed by the receiver
     // object, not a captured instance). Mirrors what `Stream.prototype` already
     // does. This proto is cached (`class_prototype_object_root_store` above), so
@@ -565,11 +565,11 @@ unsafe fn inherited_proto_accessor_value(
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
-    // Route through `invoke_accessor_getter` rather than a bare
-    // `js_implicit_this_set` + `js_closure_call0`. A getter installed via
+    // Route through `invoke_accessor_getter` rather than a bare closure call
+    // with the receiver as `this`. A getter installed via
     // `Object.defineProperty(Class.prototype, name, { get })` is an ORDINARY
     // method closure whose body reads `this` from its captured receiver slot —
-    // not from IMPLICIT_THIS — so merely setting IMPLICIT_THIS left the getter
+    // not from its `this` argument — so merely passing `this` left the getter
     // observing the prototype it lives on instead of the instance (winston's
     // `get transports()` saw the prototype, whose `this._readableState` is
     // undefined → "Cannot convert undefined or null to object").
@@ -851,8 +851,6 @@ unsafe fn resolve_proto_chain_field_inner(
                 }
             }
             let field_val = if let Some(receiver) = receiver {
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-                let previous_this = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
                 // The recursive `get_field(proto_obj, key)` re-derives a class
                 // getter's `this` from `proto_obj`; stash the real instance so an
                 // inherited getter (object-literal `get x()` on an
@@ -861,7 +859,6 @@ unsafe fn resolve_proto_chain_field_inner(
                     super::super::field_get_set::accessor_receiver_override_begin(receiver);
                 let value = js_object_get_field_by_name(proto_obj as *const _, key);
                 super::super::field_get_set::accessor_receiver_override_end(prev_override);
-                js_implicit_this_set(previous_this.get_nanbox_f64());
                 value
             } else {
                 js_object_get_field_by_name(proto_obj as *const _, key)
@@ -931,12 +928,9 @@ unsafe fn bound_native_parent_prototype_field(
     {
         return None;
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new();
-    let previous_this = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
     let prev_override = super::super::field_get_set::accessor_receiver_override_begin(receiver);
     let value = js_object_get_field_by_name(proto_obj as *const _, key);
     super::super::field_get_set::accessor_receiver_override_end(prev_override);
-    js_implicit_this_set(previous_this.get_nanbox_f64());
     (!value.is_undefined() && !value.is_null()).then_some(value)
 }
 

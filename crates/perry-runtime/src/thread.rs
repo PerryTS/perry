@@ -244,9 +244,11 @@ pub enum SerializedValue {
         keys: Option<Vec<Vec<u8>>>,
     },
 
-    /// A closure: function pointer (global code, safe to share) + serialized captures.
+    /// A closure: its body's static `JsFunctionInfo` (process-global, safe
+    /// to share: the receiving thread sees every fact about the body) +
+    /// serialized captures.
     Closure {
-        func_ptr: usize,
+        info: usize,
         capture_count: u32, // includes CAPTURES_THIS_FLAG
         captures: Vec<SerializedValue>,
     },
@@ -308,8 +310,8 @@ pub enum SerializedValue {
 }
 
 // Safety: SerializedValue contains no raw pointers to arena memory.
-// func_ptr in Closure points to compiled code in the executable's text segment,
-// which is process-global and immutable.
+// `info` in Closure points to a body's static JsFunctionInfo, which is
+// process-global and immutable.
 unsafe impl Send for SerializedValue {}
 unsafe impl Sync for SerializedValue {}
 
@@ -762,7 +764,7 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
         return SerializedValue::Inline(TAG_UNDEFINED);
     }
 
-    let func_ptr = (*closure).func_ptr as usize;
+    let info = (*closure).info as usize;
     let capture_count_raw = (*closure).capture_count;
     let actual_count = real_capture_count(capture_count_raw) as usize;
 
@@ -775,7 +777,7 @@ unsafe fn serialize_closure(closure: *const ClosureHeader) -> SerializedValue {
     }
 
     SerializedValue::Closure {
-        func_ptr,
+        info,
         capture_count: capture_count_raw,
         captures,
     }
@@ -919,11 +921,14 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
         }
 
         SerializedValue::Closure {
-            func_ptr,
+            info,
             capture_count,
             captures,
         } => {
-            let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
+            let closure = closure::js_closure_alloc(
+                *info as *const crate::closure::JsFunctionInfo,
+                *capture_count,
+            );
             for (i, cap) in captures.iter().enumerate() {
                 let bits = deserialize_nanbox_on_current_thread(cap);
                 crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
@@ -1013,7 +1018,7 @@ pub(crate) unsafe fn test_deserialize_bigint_limbs(limbs: [u64; BIGINT_LIMBS]) -
 /// This matches Perry's closure calling convention where the first parameter
 /// is a pointer to the ClosureHeader (for accessing captures) and the second
 /// is the f64 argument.
-type ClosureCallFn = unsafe extern "C" fn(*const ClosureHeader, f64) -> f64;
+type ClosureCallFn = crate::closure::body_call::js_body_fn_ty!(argument);
 
 /// Process an array in parallel across multiple OS threads.
 ///
@@ -1042,7 +1047,7 @@ type ClosureCallFn = unsafe extern "C" fn(*const ClosureHeader, f64) -> f64;
 ///
 /// Both arguments are NaN-boxed f64 values as produced by the compiler:
 /// - `array_val`: POINTER_TAG'd ArrayHeader pointer
-/// - `closure_val`: POINTER_TAG'd ClosureHeader pointer (contains func_ptr + captures)
+/// - `closure_val`: POINTER_TAG'd ClosureHeader pointer (its body info + captures)
 ///
 /// Returns a POINTER_TAG'd ArrayHeader pointer to the result array.
 #[no_mangle]
@@ -1053,7 +1058,7 @@ pub extern "C" fn js_thread_parallel_map(array_val: f64, closure_val: f64) -> f6
 }
 
 unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
-    // ── 1. Extract closure pointer and func_ptr, and root the closure ─
+    // ── 1. Extract closure pointer and code, and root the closure ─
     // The closure is validated and rooted BEFORE `clean_arr_ptr`: resolving
     // the array can force-materialize a lazy array — a GC point — and a
     // moving minor there would strand a raw closure pointer held in an
@@ -1064,7 +1069,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
         // No valid closure — can't call anything
         return crate::array::js_array_alloc(0) as i64;
     }
-    let func = (*closure).func_ptr;
+    let func = (*closure).code();
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
 
@@ -1125,7 +1130,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     // ── 5. Serialize closure captures (shared across all threads) ────
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
         if !closure.is_null() && (closure as usize) >= 0x1000 {
-            let fp = (*closure).func_ptr as usize;
+            let fp = (*closure).info as usize;
             let cc = (*closure).capture_count;
             let actual = real_capture_count(cc) as usize;
             let base =
@@ -1201,7 +1206,8 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
-                    let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let c =
+                        closure::js_closure_alloc(fp as *const crate::closure::JsFunctionInfo, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
@@ -1216,7 +1222,8 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                     None
                 };
 
-                let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
+                let call_fn: ClosureCallFn =
+                    crate::closure::body_call::js_body_fn!(func_usize as *const u8; argument);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
@@ -1224,7 +1231,7 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
                         .as_ref()
                         .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
                         .unwrap_or(ptr::null());
-                    let result = call_fn(local_closure, arg);
+                    let result = call_fn(local_closure, crate::closure::plain_call_receiver(), arg);
                     results.push(serialize_nanbox_for_thread(result.to_bits()));
                 }
 
@@ -1296,7 +1303,8 @@ unsafe fn single_thread_map(
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
-    let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
+    let call_fn: ClosureCallFn =
+        crate::closure::body_call::js_body_fn!(func as *const u8; argument);
 
     for i in 0..len {
         // Sparse-safe element read (see `parallel_map_impl`); re-derived from
@@ -1308,7 +1316,7 @@ unsafe fn single_thread_map(
         let closure = closure_handle
             .as_ref()
             .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
-        let result = call_fn(closure, arg);
+        let result = call_fn(closure, crate::closure::plain_call_receiver(), arg);
         let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
         // GC_STORE_AUDIT(BARRIERED): single-thread map result slot uses the shared array slot-store helper.
         store_thread_array_slot(result_arr, i, result.to_bits());
@@ -1345,7 +1353,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     if closure.is_null() || (closure as usize) < 0x1000 {
         return crate::array::js_array_alloc(0) as i64;
     }
-    let func = (*closure).func_ptr;
+    let func = (*closure).code();
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
 
@@ -1392,7 +1400,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
 
     // Serialize closure captures
     let serialized_captures: Option<(usize, u32, Vec<SerializedValue>)> = {
-        let fp = (*closure).func_ptr as usize;
+        let fp = (*closure).info as usize;
         let cc = (*closure).capture_count;
         let actual = real_capture_count(cc) as usize;
         let base = (closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const f64;
@@ -1452,7 +1460,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                 let gc_scope = crate::gc::RuntimeHandleScope::new();
                 let closure_handle = if let Some(ref caps) = captures_ref {
                     let (fp, cc, ref cap_vals) = **caps;
-                    let c = closure::js_closure_alloc(fp as *const u8, cc);
+                    let c =
+                        closure::js_closure_alloc(fp as *const crate::closure::JsFunctionInfo, cc);
                     let h = gc_scope.root_raw_mut_ptr(c);
                     for (i, cap) in cap_vals.iter().enumerate() {
                         let bits = deserialize_nanbox_on_current_thread(cap);
@@ -1467,7 +1476,8 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                     None
                 };
 
-                let call_fn: ClosureCallFn = std::mem::transmute(func_usize);
+                let call_fn: ClosureCallFn =
+                    crate::closure::body_call::js_body_fn!(func_usize as *const u8; argument);
 
                 for elem_sv in &chunk {
                     let arg = f64::from_bits(deserialize_nanbox_on_current_thread(elem_sv));
@@ -1475,7 +1485,7 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
                         .as_ref()
                         .map(|h| h.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader)
                         .unwrap_or(ptr::null());
-                    let result = call_fn(local_closure, arg);
+                    let result = call_fn(local_closure, crate::closure::plain_call_receiver(), arg);
                     let keep = is_truthy_bits(result.to_bits());
                     if keep {
                         kept.push(serialize_nanbox_for_thread(arg.to_bits()));
@@ -1541,7 +1551,8 @@ unsafe fn single_thread_filter(
     let result_arr = crate::array::js_array_alloc(len as u32);
     let result_handle = scope.root_raw_mut_ptr(result_arr);
 
-    let call_fn: ClosureCallFn = std::mem::transmute(func as usize);
+    let call_fn: ClosureCallFn =
+        crate::closure::body_call::js_body_fn!(func as *const u8; argument);
     let mut count = 0u32;
 
     for i in 0..len {
@@ -1554,7 +1565,7 @@ unsafe fn single_thread_filter(
         let closure = closure_handle
             .as_ref()
             .map_or(ptr::null(), |h| h.get_raw_const_ptr::<ClosureHeader>());
-        let result = call_fn(closure, arg);
+        let result = call_fn(closure, crate::closure::plain_call_receiver(), arg);
         let keep = is_truthy_bits(result.to_bits());
         if keep {
             let result_arr = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
@@ -1577,7 +1588,7 @@ static ACTIVE_THREAD_JOBS: AtomicUsize = AtomicUsize::new(0);
 
 /// The compiled closure function signature for zero-argument closures.
 /// Takes only the closure header pointer, returns f64 result.
-type ClosureCall0Fn = unsafe extern "C" fn(*const ClosureHeader) -> f64;
+type ClosureCall0Fn = crate::closure::body_call::js_body_fn_ty!();
 
 /// FFI entry point for `spawn(closure)`.
 ///
@@ -1603,11 +1614,11 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         let err = crate::error::js_error_new_with_message(s);
         return crate::promise::js_promise_rejected(crate::value::js_nanbox_pointer(err as i64));
     }
-    // ── 0. Extract closure pointer and func_ptr ──────────────────────
+    // ── 0. Extract closure pointer and body info ──────────────────────
     let closure_bits = closure_val.to_bits();
     let closure = (closure_bits & POINTER_MASK) as *const ClosureHeader;
-    let func_usize = if !closure.is_null() && (closure as usize) >= 0x1000 {
-        (*closure).func_ptr as usize
+    let info_usize = if !closure.is_null() && (closure as usize) >= 0x1000 {
+        (*closure).info as usize
     } else {
         // No valid closure — return a resolved promise with undefined
         let promise = crate::promise::js_promise_new();
@@ -1671,7 +1682,8 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
         // capture-deserialization allocations.
         let gc_scope = crate::gc::RuntimeHandleScope::new();
         let closure_handle = if let Some((cc, ref cap_vals)) = serialized_captures {
-            let c = closure::js_closure_alloc(func_usize as *const u8, cc);
+            let c =
+                closure::js_closure_alloc(info_usize as *const crate::closure::JsFunctionInfo, cc);
             let h = gc_scope.root_raw_mut_ptr(c);
             for (i, cap) in cap_vals.iter().enumerate() {
                 unsafe {
@@ -1686,15 +1698,19 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
             h
         } else {
             // No captures — create a minimal closure header
-            gc_scope.root_raw_mut_ptr(closure::js_closure_alloc(func_usize as *const u8, 0))
+            gc_scope.root_raw_mut_ptr(closure::js_closure_alloc(
+                info_usize as *const crate::closure::JsFunctionInfo,
+                0,
+            ))
         };
 
         // Call the function — catch panics to avoid aborting across FFI boundary
         let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let call_fn: ClosureCall0Fn = unsafe { std::mem::transmute(func_usize) };
+            let code = unsafe { (*(info_usize as *const crate::closure::JsFunctionInfo)).code };
+            let call_fn: ClosureCall0Fn = unsafe { crate::closure::body_call::js_body_fn!(code;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
-            unsafe { call_fn(local_closure) }
+            call_fn(local_closure, crate::closure::plain_call_receiver())
         }));
 
         match call_result {

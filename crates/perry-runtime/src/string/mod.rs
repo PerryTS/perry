@@ -237,6 +237,7 @@ pub use html::{
 };
 pub(crate) use intern::atom_for_key;
 pub use intern::js_string_pool_atom;
+pub(crate) use intern::INTERN_MAX_BYTE_LEN;
 #[cfg(test)]
 pub(crate) use intern::{atom_lookup, is_atom_for_test, test_evict_interned};
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};

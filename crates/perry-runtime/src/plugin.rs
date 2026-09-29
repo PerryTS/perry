@@ -458,7 +458,7 @@ unsafe fn call_closure_1(handler_bits: u64, arg: f64) -> f64 {
     if closure_ptr.is_null() {
         return f64::from_bits(JSValue::undefined().bits());
     }
-    crate::closure::js_closure_call1(closure_ptr, arg)
+    crate::closure::js_closure_call1(closure_ptr, crate::closure::plain_call_receiver(), arg)
 }
 
 // ============================================================================
@@ -694,7 +694,7 @@ pub extern "C" fn perry_plugin_unregister_service(api_handle: i64, name: f64) ->
                 reg.services.remove(idx);
             } else {
                 drop(reg);
-                crate::closure::js_closure_call0(stop_ptr);
+                crate::closure::js_closure_call0(stop_ptr, crate::closure::plain_call_receiver());
                 let mut reg = REGISTRY.lock().unwrap();
                 if let Some(idx2) = reg
                     .services

@@ -201,38 +201,65 @@ pub(crate) fn class_registered_static_accessor_ptrs(
 ) -> Option<(usize, usize)> {
     let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
     let reg = guard.as_ref()?;
-    let pair = reg.get(&class_id)?.get(name).copied()?;
-    if pair.0 == 0 && pair.1 == 0 {
-        None
+    let decl = reg.get(&class_id)?.get(name).copied()?;
+    (decl.get != 0 || decl.set != 0).then_some((decl.get, decl.set))
+}
+
+/// The recorded spec `.length` of `class_id`'s own setter `name` (static when
+/// `is_static`), for [`class_accessor_function_value`].
+pub(crate) fn class_own_setter_length(class_id: u32, name: &str, is_static: bool) -> Option<u32> {
+    if is_static {
+        let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
+        guard.as_ref()?.get(&class_id)?.get(name)?.set_length
     } else {
-        Some(pair)
+        let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+        guard
+            .as_ref()?
+            .get(&class_id)?
+            .accessor_decl(name)?
+            .set_length
     }
 }
 
+/// The accessor trampolines' infos: every reflected accessor value shares one
+/// per body, so [`class_accessor_source_func_ptr`]'s code compare holds.
+static CLASS_ACCESSOR_GETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_accessor_getter_thunk as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+static CLASS_ACCESSOR_SETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_accessor_setter_thunk as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    );
+
 /// Trampoline giving a raw vtable getter func_ptr (`fn(this) -> f64`) the
-/// closure calling convention. The receiver comes from `IMPLICIT_THIS`, set
+/// closure calling convention. The receiver is the `this` argument passed
 /// by the method-call dispatch the closure value travels through.
-extern "C" fn class_accessor_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn class_accessor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
     if raw == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let this = crate::object::js_implicit_this_get();
-    let f: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    let this = this.as_f64();
+    let f = unsafe { crate::closure::body_call::js_method_body_fn!(raw as *const u8;) };
     f(this)
 }
 
 /// Trampoline for a raw vtable setter func_ptr (`fn(this, value) -> f64`).
 extern "C" fn class_accessor_setter_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
     if raw == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let this = crate::object::js_implicit_this_get();
-    let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(raw) };
+    let this = this.as_f64();
+    let f = unsafe { crate::closure::body_call::js_method_body_fn!(raw as *const u8; a0) };
     f(this, value)
 }
 
@@ -245,7 +272,7 @@ pub(crate) unsafe fn class_accessor_source_func_ptr(
     if closure.is_null() || crate::closure::real_capture_count((*closure).capture_count) < 1 {
         return None;
     }
-    let thunk = (*closure).func_ptr;
+    let thunk = (*closure).code();
     if thunk != class_accessor_getter_thunk as *const u8
         && thunk != class_accessor_setter_thunk as *const u8
     {
@@ -262,18 +289,22 @@ pub(crate) unsafe fn class_accessor_source_func_ptr(
 /// `.name` of a `get`/`set` accessor is the key prefixed with `"get "`/`"set "`
 /// (Function Definitions: SetFunctionName with the "get"/"set" prefix), e.g.
 /// `Object.getOwnPropertyDescriptor(C.prototype, "x").get.name === "get x"`.
+///
+/// `setter_length` is the setter's spec `.length` as the class accessor table
+/// recorded it ([`AccessorDecl::set_length`]); ignored for a getter.
 pub(crate) fn class_accessor_function_value(
     raw_ptr: usize,
     is_setter: bool,
     prop_name: &str,
+    setter_length: Option<u32>,
 ) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let thunk = if is_setter {
-        class_accessor_setter_thunk as *const u8
+        &CLASS_ACCESSOR_SETTER_THUNK_INFO
     } else {
-        class_accessor_getter_thunk as *const u8
+        &CLASS_ACCESSOR_GETTER_THUNK_INFO
     };
     let closure = crate::closure::js_closure_alloc(thunk, 1);
     if closure.is_null() {
@@ -282,13 +313,15 @@ pub(crate) fn class_accessor_function_value(
     crate::closure::js_closure_set_capture_ptr(closure, 0, raw_ptr as i64);
     // Spec `.length`: params before the first default/rest. A getter takes no
     // params (0); a setter takes exactly one formal param — but `set m(x = 42)`
-    // has `.length === 0` (defaults don't count). Codegen registers the raw
-    // accessor func_ptr's default-aware spec length via
-    // `js_register_closure_length`; consult it so a defaulted setter reports 0.
-    // Fall back to the fixed 1/0 when no registration exists (e.g. native or
-    // cross-module accessors whose length wasn't emitted).
-    let spec_length = crate::closure::lookup_closure_length(raw_ptr as *const u8)
-        .unwrap_or(if is_setter { 1 } else { 0 });
+    // has `.length === 0` (defaults don't count). Codegen records the setter's
+    // default-aware spec length with the setter in the class accessor table
+    // (`js_register_class_setter`'s `spec_length`). Fall back to the fixed 1
+    // when none was recorded (e.g. a `defineProperty`-installed half).
+    let spec_length = if is_setter {
+        setter_length.unwrap_or(1)
+    } else {
+        0
+    };
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     // Spec `.name` = "get <key>" / "set <key>" with attributes
@@ -352,11 +385,15 @@ pub unsafe extern "C" fn js_register_class_getter(
 /// Setter signature: `fn(this_f64, value_f64) -> f64` (returns ignored, but
 /// codegen emits a return so the LLVM signature matches a regular method body).
 #[no_mangle]
+///
+/// `spec_length` is the setter's spec `.length` (0 for `set m(x = 1)`), kept
+/// with the setter for descriptor reflection.
 pub unsafe extern "C" fn js_register_class_setter(
     class_id: i64,
     name_ptr: *const u8,
     name_len: i64,
     func_ptr: i64,
+    spec_length: i32,
 ) {
     // `name_len == 0` is a legal empty-string member key (`get ''()`), so only
     // reject a negative length / null pointer.
@@ -374,7 +411,12 @@ pub unsafe extern "C" fn js_register_class_setter(
     }
     let reg = registry.as_mut().unwrap();
     let vtable = reg.entry(class_id as u32).or_default();
-    vtable.declare_accessor_half(&name, func_ptr as usize, true);
+    vtable.declare_accessor_half_with_length(
+        &name,
+        func_ptr as usize,
+        true,
+        u32::try_from(spec_length).ok(),
+    );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
     drop(registry);
@@ -394,7 +436,7 @@ pub unsafe extern "C" fn js_register_class_static_getter(
     name_len: i64,
     func_ptr: i64,
 ) {
-    register_class_static_accessor_half(class_id, name_ptr, name_len, func_ptr, true);
+    register_class_static_accessor_half(class_id, name_ptr, name_len, func_ptr, true, None);
 }
 
 /// Register a `static set name(v)` accessor. See `js_register_class_static_getter`.
@@ -404,8 +446,16 @@ pub unsafe extern "C" fn js_register_class_static_setter(
     name_ptr: *const u8,
     name_len: i64,
     func_ptr: i64,
+    spec_length: i32,
 ) {
-    register_class_static_accessor_half(class_id, name_ptr, name_len, func_ptr, false);
+    register_class_static_accessor_half(
+        class_id,
+        name_ptr,
+        name_len,
+        func_ptr,
+        false,
+        u32::try_from(spec_length).ok(),
+    );
 }
 
 // These two are only ever called from codegen-emitted module-init IR (no Rust
@@ -417,7 +467,7 @@ static KEEP_REGISTER_STATIC_GETTER: unsafe extern "C" fn(i64, *const u8, i64, i6
     js_register_class_static_getter;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64) =
+static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i64, i32) =
     js_register_class_static_setter;
 
 /// Record the spec `.length` (params before the first default/rest) for a class
@@ -494,6 +544,7 @@ unsafe fn register_class_static_accessor_half(
     name_len: i64,
     func_ptr: i64,
     is_getter: bool,
+    set_length: Option<u32>,
 ) {
     // Empty-string keys (`static get ''()`) are legal — admit `name_len == 0`
     // as long as the pointer is non-null.
@@ -516,11 +567,12 @@ unsafe fn register_class_static_accessor_half(
             .entry(class_id as u32)
             .or_default()
             .entry(name.clone())
-            .or_insert((0, 0));
+            .or_default();
         if is_getter {
-            entry.0 = func_ptr as usize;
+            entry.get = func_ptr as usize;
         } else {
-            entry.1 = func_ptr as usize;
+            entry.set = func_ptr as usize;
+            entry.set_length = set_length;
         }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);

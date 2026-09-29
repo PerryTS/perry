@@ -615,7 +615,14 @@ fn measure_leaf(
     let (h, hmode) = measure_axis(known_dims.height, available_space.height);
     let args = [w, wmode, h, hmode];
 
-    let result = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 4) };
+    let result = unsafe {
+        crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            4,
+        )
+    };
 
     // result is a NaN-boxed object {width, height}; read both numbers.
     let bits = result.to_bits();

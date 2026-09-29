@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -161,7 +161,7 @@ pub fn set_index(handle: i64, index: i64) {
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure) } as *const u8;
             if !closure_ptr.is_null() {
                 unsafe {
-                    js_closure_call1(closure_ptr, idx as f64);
+                    js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, idx as f64);
                 }
             }
         }

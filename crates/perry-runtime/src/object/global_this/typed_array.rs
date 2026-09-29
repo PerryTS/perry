@@ -1,7 +1,7 @@
 use super::*;
 
-fn array_buffer_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn array_buffer_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -25,8 +25,9 @@ fn array_buffer_brand_error() -> ! {
 
 pub(crate) extern "C" fn array_buffer_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match array_buffer_receiver_addr() {
+    match array_buffer_receiver_addr(this) {
         Some(addr) => {
             let buf = addr as *const crate::buffer::BufferHeader;
             f64::from_bits(
@@ -41,8 +42,8 @@ pub(crate) extern "C" fn array_buffer_byte_length_getter_thunk(
 /// getter. Mirrors `array_buffer_receiver_addr` but accepts only buffers in the
 /// shared registry, so the getter rejects a plain `ArrayBuffer` `this`
 /// (test262 SharedArrayBuffer/prototype/byteLength/this-is-arraybuffer).
-fn shared_array_buffer_receiver_addr() -> Option<usize> {
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+fn shared_array_buffer_receiver_addr(this: crate::closure::JsThis) -> Option<usize> {
+    let this_bits = this.bits();
     let this_jsv = JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -60,8 +61,9 @@ fn shared_array_buffer_receiver_addr() -> Option<usize> {
 
 pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match shared_array_buffer_receiver_addr() {
+    match shared_array_buffer_receiver_addr(this) {
         Some(addr) => {
             let buf = addr as *const crate::buffer::BufferHeader;
             f64::from_bits(
@@ -81,10 +83,11 @@ pub(crate) extern "C" fn shared_array_buffer_byte_length_getter_thunk(
 /// is shared with the instance dispatch in `buffer_dispatch`.
 pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    match shared_array_buffer_receiver_addr() {
+    match shared_array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
             let args = [start, end];
             super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
@@ -97,10 +100,11 @@ pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
 
 pub(crate) extern "C" fn array_buffer_slice_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    match array_buffer_receiver_addr() {
+    match array_buffer_receiver_addr(this) {
         Some(addr) => unsafe {
             let args = [start, end];
             super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
@@ -115,8 +119,13 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
 /// reflectively (`ArrayBuffer.prototype.resize.call(ab, n)`). Instances
 /// dispatch through `buffer_dispatch` directly; these only brand-check the
 /// receiver and forward to the same arm, so the two cannot disagree (#10873).
-fn array_buffer_method_via_dispatch(method: &'static str, arg: f64, brand_error: &[u8]) -> f64 {
-    match array_buffer_receiver_addr() {
+fn array_buffer_method_via_dispatch(
+    this: crate::closure::JsThis,
+    method: &'static str,
+    arg: f64,
+    brand_error: &[u8],
+) -> f64 {
+    match array_buffer_receiver_addr(this) {
         Some(addr)
             if !crate::buffer::is_shared_array_buffer(addr)
                 && !crate::buffer::is_data_view(addr) =>
@@ -130,9 +139,11 @@ fn array_buffer_method_via_dispatch(method: &'static str, arg: f64, brand_error:
 
 pub(crate) extern "C" fn array_buffer_resize_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
+        this,
         "resize",
         new_length,
         b"Method ArrayBuffer.prototype.resize called on incompatible receiver",
@@ -141,9 +152,11 @@ pub(crate) extern "C" fn array_buffer_resize_thunk(
 
 pub(crate) extern "C" fn array_buffer_transfer_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
+        this,
         "transfer",
         new_length,
         b"Method ArrayBuffer.prototype.transfer called on incompatible receiver",
@@ -152,9 +165,11 @@ pub(crate) extern "C" fn array_buffer_transfer_thunk(
 
 pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     new_length: f64,
 ) -> f64 {
     array_buffer_method_via_dispatch(
+        this,
         "transferToFixedLength",
         new_length,
         b"Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver",
@@ -165,8 +180,8 @@ pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
 /// accessors on `ArrayBuffer.prototype`. Instance reads are answered by
 /// `get_field_by_name_tail`; this is the `Object.getOwnPropertyDescriptor(
 /// ArrayBuffer.prototype, "resizable").get.call(ab)` route.
-fn array_buffer_flag_getter(key: &[u8]) -> f64 {
-    let Some(addr) = array_buffer_receiver_addr() else {
+fn array_buffer_flag_getter(this: crate::closure::JsThis, key: &[u8]) -> f64 {
+    let Some(addr) = array_buffer_receiver_addr(this) else {
         super::super::object_ops::throw_object_type_error(
             b"Method ArrayBuffer.prototype getter called on incompatible receiver",
         )
@@ -191,20 +206,23 @@ fn array_buffer_flag_getter(key: &[u8]) -> f64 {
 
 pub(crate) extern "C" fn array_buffer_resizable_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    array_buffer_flag_getter(b"resizable")
+    array_buffer_flag_getter(this, b"resizable")
 }
 
 pub(crate) extern "C" fn array_buffer_max_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    array_buffer_flag_getter(b"maxByteLength")
+    array_buffer_flag_getter(this, b"maxByteLength")
 }
 
 pub(crate) extern "C" fn array_buffer_detached_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    array_buffer_flag_getter(b"detached")
+    array_buffer_flag_getter(this, b"detached")
 }
 
 pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
@@ -292,6 +310,7 @@ pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
 
 pub(crate) extern "C" fn array_buffer_is_view_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     // #11239: the same classifier `util.types.isArrayBufferView` and the
@@ -344,14 +363,14 @@ impl TypedArrayAccessorReceiver {
     }
 }
 
-/// Resolve the `IMPLICIT_THIS` receiver for the reflected
+/// Resolve the `this` receiver for the reflected
 /// `%TypedArray%.prototype` accessors installed by #2060. A Perry
 /// `Uint8Array` (and Node's `Buffer` subclass) uses `BufferHeader`, so a miss
 /// in `lookup_typed_array_kind` must continue through the strict buffer brand
 /// check instead of becoming a `TypeError` (#9347).
-fn typed_array_receiver() -> Option<TypedArrayAccessorReceiver> {
+fn typed_array_receiver(this: crate::closure::JsThis) -> Option<TypedArrayAccessorReceiver> {
     use crate::value::JSValue;
-    let this_bits = IMPLICIT_THIS.with(|c| c.get());
+    let this_bits = this.bits();
     let this_jsv = JSValue::from_bits(this_bits);
     let raw = if this_jsv.is_pointer() {
         (this_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -394,8 +413,8 @@ fn string_value_to_owned(value: f64) -> Option<String> {
     }
 }
 
-pub(crate) fn typed_array_constructor_this_kind() -> Option<u8> {
-    let this_value = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+pub(crate) fn typed_array_constructor_this_kind(this: crate::closure::JsThis) -> Option<u8> {
+    let this_value = f64::from_bits(this.bits());
     let ptr = crate::value::js_nanbox_get_pointer(this_value) as usize;
     if ptr == 0 || !crate::closure::is_closure_ptr(ptr) {
         return None;
@@ -416,8 +435,9 @@ fn typed_array_buffer_value(receiver: TypedArrayAccessorReceiver) -> f64 {
 /// `%TypedArray%.prototype.length` getter — element count of the receiver.
 extern "C" fn typed_array_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match typed_array_receiver() {
+    match typed_array_receiver(this) {
         Some(receiver) => {
             f64::from_bits(crate::value::JSValue::number(receiver.length() as f64).bits())
         }
@@ -428,8 +448,9 @@ extern "C" fn typed_array_length_getter_thunk(
 /// `%TypedArray%.prototype.byteLength` getter — `length * BYTES_PER_ELEMENT`.
 extern "C" fn typed_array_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match typed_array_receiver() {
+    match typed_array_receiver(this) {
         Some(receiver) => {
             f64::from_bits(crate::value::JSValue::number(receiver.byte_length() as f64).bits())
         }
@@ -440,8 +461,9 @@ extern "C" fn typed_array_byte_length_getter_thunk(
 /// `%TypedArray%.prototype.byteOffset` getter.
 extern "C" fn typed_array_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match typed_array_receiver() {
+    match typed_array_receiver(this) {
         Some(receiver) => {
             f64::from_bits(crate::value::JSValue::number(receiver.byte_offset() as f64).bits())
         }
@@ -453,8 +475,9 @@ extern "C" fn typed_array_byte_offset_getter_thunk(
 /// identity as the direct property path.
 extern "C" fn typed_array_buffer_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    match typed_array_receiver() {
+    match typed_array_receiver(this) {
         Some(receiver) => typed_array_buffer_value(receiver),
         None => typed_array_brand_error(),
     }
@@ -470,8 +493,9 @@ extern "C" fn typed_array_buffer_getter_thunk(
 /// `Cannot read properties of undefined (reading 'get')`.
 extern "C" fn typed_array_to_string_tag_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     match crate::object::typed_array_to_string_tag_name(this) {
         Some(name) => {
             let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -495,8 +519,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
         return;
     }
     unsafe {
-        let f = typed_array_to_string_tag_getter_thunk as *const u8;
-        crate::closure::js_register_closure_arity(f, 0);
+        let f = crate::fn_info!(typed_array_to_string_tag_getter_thunk, 0; with_declared(0));
         let c = crate::closure::js_closure_alloc(f, 0);
         if c.is_null() {
             return;
@@ -522,8 +545,7 @@ fn install_typed_array_to_string_tag(proto_obj: *mut ObjectHeader) {
 fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
     unsafe {
         // 0-arg getters: `.call(this)` forwards 0 user args.
-        let mk = |f: *const u8| -> u64 {
-            crate::closure::js_register_closure_arity(f, 0);
+        let mk = |f: *const crate::closure::JsFunctionInfo| -> u64 {
             let c = crate::closure::js_closure_alloc(f, 0);
             if c.is_null() {
                 0
@@ -534,22 +556,22 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "length",
-            mk(typed_array_length_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteLength",
-            mk(typed_array_byte_length_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_byte_length_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteOffset",
-            mk(typed_array_byte_offset_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_byte_offset_getter_thunk, 0; with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "buffer",
-            mk(typed_array_buffer_getter_thunk as *const u8),
+            mk(crate::fn_info!(typed_array_buffer_getter_thunk, 0; with_declared(0))),
         );
     }
 }
@@ -565,8 +587,7 @@ pub(crate) fn install_function_has_instance_symbol(proto_obj: *mut ObjectHeader)
         return;
     }
     unsafe {
-        let func_ptr = super::super::instanceof::function_prototype_has_instance_thunk as *const u8;
-        crate::closure::js_register_closure_arity(func_ptr, 1);
+        let func_ptr = crate::fn_info!(super::super::instanceof::function_prototype_has_instance_thunk, 1; with_declared(1));
         let closure = crate::closure::js_closure_alloc(func_ptr, 0);
         if closure.is_null() {
             return;
@@ -646,12 +667,15 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // `typedarray_props.rs:812` on the allocation-point route. See
     // `gc::tests::lazy_intrinsic_towers` for the gate.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let ctor = crate::closure::js_closure_alloc(typed_array_constructor_call_thunk as *const u8, 0);
+    let ctor = crate::closure::js_closure_alloc(
+        crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0)),
+        0,
+    );
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
-    crate::closure::js_register_closure_arity(typed_array_constructor_call_thunk as *const u8, 0);
+
     super::super::native_module::set_bound_native_closure_name(ctor, "TypedArray");
     super::super::native_module::set_builtin_closure_length(ctor as usize, 0);
     super::super::set_builtin_property_attrs(
@@ -725,15 +749,18 @@ pub(crate) fn ensure_typed_array_intrinsic(
     // that it captures the final `values` closure (the `%TypedArray%.prototype
     // [@@iterator] === %TypedArray%.prototype.values` identity invariant).
     install_typed_array_iterator_symbol(proto);
-    install_constructor_static_with_call_arity(
+    install_constructor_static(
         ctor,
         "from",
-        typed_array_from_thunk as *const u8,
+        crate::fn_info!(typed_array_from_thunk, 3; with_declared(3)),
         1,
-        3,
-        false,
     );
-    install_constructor_static(ctor, "of", typed_array_of_thunk as *const u8, 0, true);
+    install_constructor_static(
+        ctor,
+        "of",
+        crate::fn_info!(typed_array_of_thunk, 1; with_rest(0)),
+        0,
+    );
     crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
     (ctor, proto)

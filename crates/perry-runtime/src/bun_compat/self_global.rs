@@ -1,7 +1,7 @@
 //! Bun's replaceable `self` accessor (#10306). The platform hook runs before
 //! every module, but must never undo a user's assignment or deletion.
 
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use crate::value::{js_nanbox_pointer, JSValue};
 
@@ -19,10 +19,8 @@ pub(super) fn install_once() {
     let global = JSValue::from_bits(crate::object::js_get_global_this().to_bits())
         .as_pointer::<ObjectHeader>()
         .cast_mut();
-    let getter_fn = get_self as *const u8;
-    let setter_fn = set_self as *const u8;
-    js_register_closure_arity(getter_fn, 0);
-    js_register_closure_arity(setter_fn, 1);
+    let getter_fn = crate::fn_info!(get_self, 0; with_declared(0));
+    let setter_fn = crate::fn_info!(set_self, 1; with_declared(1));
     let getter = js_closure_alloc(getter_fn, 0);
     let setter = js_closure_alloc(setter_fn, 0);
     for (closure, name, arity) in [(getter, "get", 0), (setter, "set", 1)] {
@@ -49,11 +47,15 @@ pub(super) fn install_once() {
     );
 }
 
-extern "C" fn get_self(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn get_self(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     crate::object::js_get_global_this()
 }
 
-extern "C" fn set_self(_closure: *const ClosureHeader, value: f64) -> f64 {
+extern "C" fn set_self(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     // Like Bun, even a borrowed setter replaces the current realm's property.
     // Once replaced, subsequent assignments are ordinary writable data stores.
     let _no_move = crate::gc::GcSuppressScope::new();
@@ -96,7 +98,7 @@ mod tests {
             global_value.to_bits()
         );
 
-        set_self(std::ptr::null(), 42.0);
+        set_self(std::ptr::null(), crate::closure::JsThis::UNDEFINED, 42.0);
         assert!(crate::object::get_accessor_descriptor(global as usize, "self").is_none());
         super::super::js_set_bun_platform();
         assert_eq!(
