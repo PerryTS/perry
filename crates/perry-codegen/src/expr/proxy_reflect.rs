@@ -1418,6 +1418,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 return Ok(value);
             }
+            // Step 4b: a planned-bare store inside a region's F-body.
+            if same_put_value_receiver_expr(target, receiver) {
+                if let Some(v) =
+                    crate::stmt::region_loop::try_lower_bare_put(ctx, expr, target, key, value)?
+                {
+                    return Ok(v);
+                }
+            }
             if let Expr::String(property) = key.as_ref() {
                 if matches!(property.as_str(), "caller" | "arguments")
                     && same_side_effect_free_receiver(target, receiver)

@@ -3129,6 +3129,7 @@ js_string_normalize	Reenters
 js_string_pad_end	Reenters
 js_string_pad_fill	Reenters
 js_string_pad_start	Reenters
+js_string_pool_atom	Reenters
 js_string_position_to_index	Leaf
 js_string_print	Leaf
 js_string_raw	Reenters

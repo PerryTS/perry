@@ -745,7 +745,7 @@ fn emit_key_add_hit(
 /// `scripts/gc_store_site_inventory.py` resolves the literal at every call
 /// (`STEM_EMITTER_ARG_INDEX`) and requires it in `VERIFIED_BARRIER_STEMS`.
 #[allow(clippy::too_many_arguments)]
-fn emit_static_store_ic_bookkeeping(
+pub(crate) fn emit_static_store_ic_bookkeeping(
     ctx: &mut FnCtx<'_>,
     handle: &str,
     slot: &str,
