@@ -28,7 +28,11 @@ unsafe fn push_or_own(arr: *mut ArrayHeader, value: f64) -> (u64, u32) {
     (bits, own)
 }
 
-extern "C" fn own_push_fixture(_closure: *const crate::closure::ClosureHeader, x: f64) -> f64 {
+extern "C" fn own_push_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    x: f64,
+) -> f64 {
     x * 10.0
 }
 
@@ -114,8 +118,11 @@ fn a_forwarded_alias_answers_from_the_live_head() {
 fn an_own_user_method_takes_the_own_exit_with_its_return_value() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
-        let method = crate::closure::js_closure_alloc(own_push_fixture as *const u8, 0);
-        crate::closure::js_register_closure_arity(own_push_fixture as *const u8, 1);
+        let method = crate::closure::js_closure_alloc(
+            crate::fn_info!(own_push_fixture, 1; with_declared(1)),
+            0,
+        );
+
         let arr = set_named(
             pushed(&[1.0]),
             "push",

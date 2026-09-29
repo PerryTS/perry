@@ -64,9 +64,11 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
         return None;
     }
     // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
-    // at least 16 bytes; +8 is the code pointer of a closure.
-    let code = unsafe { *((ptr as *const u8).add(8) as *const *const u8) };
-    if code != js_class_constructor_called as *const u8 {
+    // at least 16 bytes; +8 is the info word of a closure (compared, never
+    // dereferenced here).
+    let info =
+        unsafe { *((ptr as *const u8).add(8) as *const *const crate::closure::JsFunctionInfo) };
+    if !std::ptr::eq(info, &CLASS_CONSTRUCTOR_INFO) {
         return None;
     }
     class_closure_id_exotic(ptr)
@@ -90,7 +92,7 @@ fn class_closure_id_exotic(ptr: usize) -> Option<u32> {
 /// `closure` is a live, non-forwarded `GC_TYPE_CLOSURE` cell.
 #[inline]
 pub(crate) unsafe fn class_closure_id_unchecked(closure: *const ClosureHeader) -> Option<u32> {
-    if (*closure).func_ptr != js_class_constructor_called as *const u8 {
+    if !std::ptr::eq((*closure).info, &CLASS_CONSTRUCTOR_INFO) {
         return None;
     }
     let slot0 = *((closure as *const u8).add(std::mem::size_of::<ClosureHeader>()) as *const u64);
@@ -102,13 +104,24 @@ pub(crate) unsafe fn class_closure_id_unchecked(closure: *const ClosureHeader) -
 /// class function object (and how one is recognized); [[Construct]] never
 /// reaches it — `new` decodes the class id and runs the class's constructor.
 #[no_mangle]
-pub unsafe extern "C" fn js_class_constructor_called(closure: *const ClosureHeader) -> f64 {
+pub unsafe extern "C" fn js_class_constructor_called(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let name = unsafe { class_closure_id_unchecked(closure) }
         .and_then(super::class_registry::class_name_for_id)
         .unwrap_or_default();
     let message = format!("Class constructor {name} cannot be invoked without 'new'");
     crate::node_submodules::diagnostics::throw_type_error_no_code(message.as_bytes())
 }
+
+/// The one info of every class function object: its body is
+/// [`js_class_constructor_called`]. A class function object is recognized by
+/// its info word being exactly this static (one pointer compare, no deref).
+pub(crate) static CLASS_CONSTRUCTOR_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        js_class_constructor_called as crate::codegen_abi::JsBody0<ClosureHeader>,
+    );
 
 /// The PRE-MIGRATION gate spelling, kept exact for the legacy form while it
 /// also admits the function-object form: any INT32 word (registered or not,
@@ -241,7 +254,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // is an INT32 class id and the props edge is null — pointer-free.
         (*ptr).capture_count = 1;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
-        (*ptr).func_ptr = js_class_constructor_called as *const u8;
+        (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr),
@@ -586,7 +599,18 @@ fn install_declared_static_accessor(class_id: u32, name: &str) {
         } else if raw == have_raw && have != 0 {
             have
         } else {
-            super::class_registry::class_accessor_function_value(raw, is_setter, name).to_bits()
+            let setter_length = if is_setter {
+                super::class_registry::class_own_setter_length(class_id, name, true)
+            } else {
+                None
+            };
+            super::class_registry::class_accessor_function_value(
+                raw,
+                is_setter,
+                name,
+                setter_length,
+            )
+            .to_bits()
         }
     };
     let get = half(raw_get, have.raw_get, have.get, false);
@@ -694,7 +718,7 @@ pub(crate) unsafe fn class_static_accessor_call_get(
     if acc.raw_get != 0 {
         crate::object::static_this_arm_if_unarmed(this);
         crate::object::static_private_owner_push(receiver);
-        let f: extern "C" fn() -> f64 = std::mem::transmute(acc.raw_get);
+        let f = crate::closure::body_call::js_bare_body_fn!(acc.raw_get as *const u8;);
         let result = f();
         crate::object::static_private_owner_pop();
         crate::object::static_this_disarm();
@@ -718,7 +742,7 @@ pub(crate) unsafe fn class_static_accessor_call_set(
     if acc.raw_set != 0 {
         crate::object::static_this_arm_if_unarmed(receiver);
         crate::object::static_private_owner_push(receiver);
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f = crate::closure::body_call::js_bare_body_fn!(acc.raw_set as *const u8; value);
         let _ = f(value);
         crate::object::static_private_owner_pop();
         crate::object::static_this_disarm();
@@ -985,8 +1009,10 @@ mod tests {
         class_static_set(cid, "s", 1.0);
         crate::closure::shape::note_function_own_state_changed(ptr as usize);
         assert_eq!(unsafe { (*ptr).shape_id }, class_shape, "sticky");
-        extern "C" fn body() {}
-        let f = crate::closure::js_closure_alloc(body as *const u8, 0);
+        extern "C" fn body(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+            0.0
+        }
+        let f = crate::closure::js_closure_alloc(crate::fn_info!(body, 0), 0);
         crate::closure::shape::note_function_own_state_changed(f as usize);
         assert_ne!(
             unsafe { (*f).shape_id },
@@ -1095,8 +1121,10 @@ mod tests {
     /// Only the function object's own code pointer names a class.
     #[test]
     fn ordinary_closures_and_numbers_are_not_class_values() {
-        extern "C" fn body() {}
-        let c = crate::closure::js_closure_alloc(body as *const u8, 0);
+        extern "C" fn body(_: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+            0.0
+        }
+        let c = crate::closure::js_closure_alloc(crate::fn_info!(body, 0), 0);
         assert_eq!(class_closure_id(c as usize), None);
         assert_eq!(class_value_id(42.0), None);
         assert_eq!(

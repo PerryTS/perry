@@ -363,7 +363,7 @@ pub(super) unsafe fn instance_constructor_value(
         // The prototype's OWN `constructor` data field answers the common
         // shapes directly — `Object.prototype`, a declared `C.prototype`, a
         // materialized `F.prototype`, a `{ constructor: F }` literal — so take
-        // it without the general chain walk, whose implicit-`this` juggling,
+        // it without the general chain walk, whose receiver juggling,
         // accessor-receiver override and registry probes cost ~3000
         // instructions per read. Skipped when an accessor owns the key, which
         // must run through the walk to fire with the right receiver.

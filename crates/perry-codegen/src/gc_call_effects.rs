@@ -487,7 +487,6 @@ mod tests {
         "js_i32_box_get",
         "js_box_release",
         "js_box_scope_release",
-        "js_implicit_this_get",
         "js_tdz_suppress_begin",
         "js_tdz_suppress_end",
     ];
@@ -807,7 +806,7 @@ mod tests {
             "js_object_get_field_ic_miss_packed",
             "js_object_get_field_ic_slow",
             "js_object_get_field_ic_nonptr",
-            "js_implicit_this_get_sloppy",
+            "js_this_coerce_sloppy",
             "js_box_get_bits",
             "js_box_get_bits_trusted",
             "js_box_get_bits_named",

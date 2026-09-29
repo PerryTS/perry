@@ -23,10 +23,12 @@ fn regex<'s>(scope: &'s RuntimeHandleScope, source: &[u8], flags: &[u8]) -> Runt
         flags.get_nanbox_f64(),
     ) as i64))
 }
-fn function<'s>(scope: &'s RuntimeHandleScope, fp: *const u8, arity: u32) -> RuntimeHandle<'s> {
-    crate::closure::js_register_closure_arity(fp, arity);
+fn function<'s>(
+    scope: &'s RuntimeHandleScope,
+    info: *const crate::closure::JsFunctionInfo,
+) -> RuntimeHandle<'s> {
     scope.root_nanbox_f64(js_nanbox_pointer(
-        crate::closure::js_closure_alloc_singleton(fp) as i64,
+        crate::closure::js_closure_alloc_singleton(info) as i64,
     ))
 }
 fn get(owner: &RuntimeHandle<'_>, name: &[u8]) -> f64 {
@@ -83,13 +85,11 @@ fn bytes(value: f64) -> Vec<u8> {
 }
 fn captured<'s>(
     scope: &'s RuntimeHandleScope,
-    fp: *const u8,
-    arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     state: &RuntimeHandle<'_>,
 ) -> RuntimeHandle<'s> {
-    crate::closure::js_register_closure_arity(fp, arity);
     let f = scope.root_nanbox_f64(js_nanbox_pointer(
-        crate::closure::js_closure_alloc(fp, 1) as i64
+        crate::closure::js_closure_alloc(info, 1) as i64
     ));
     crate::closure::js_closure_set_capture_f64(
         js_nanbox_get_pointer(f.get_nanbox_f64()) as *mut _,
@@ -134,7 +134,10 @@ fn getter(owner: &RuntimeHandle<'_>, name: &[u8], value: &RuntimeHandle<'_>) {
         f64::from_bits(TAG_UNDEFINED),
     );
 }
-extern "C" fn throwing(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throwing(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(983.0)
 }
 
@@ -239,7 +242,12 @@ fn perex_split_literal_half_pairs_nonoverlap_and_uint32_limits() {
     assert_eq!(bytes(item(&result, 4095)), b"\xed\xb8\x80");
 }
 
-extern "C" fn hook(_: *const crate::closure::ClosureHeader, input: f64, limit: f64) -> f64 {
+extern "C" fn hook(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+    limit: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_f64(input);
     let limit = scope.root_nanbox_f64(limit);
@@ -251,11 +259,15 @@ extern "C" fn hook(_: *const crate::closure::ClosureHeader, input: f64, limit: f
     ));
     input.get_nanbox_f64()
 }
-extern "C" fn primitive_hook(_: *const crate::closure::ClosureHeader) -> f64 {
-    assert_eq!(crate::object::js_implicit_this_get(), 23.0);
+extern "C" fn primitive_hook(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    assert_eq!(this.as_f64(), 23.0);
     gc_collect_minor();
-    crate::closure::js_register_closure_arity(hook as *const u8, 2);
-    js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(hook as *const u8) as i64)
+    js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(hook, 2; with_declared(2)),
+    ) as i64)
 }
 
 #[test]
@@ -268,11 +280,11 @@ fn perex_split_symbol_hook_precedes_coercion_and_preserves_arbitrary_result() {
     let scope = RuntimeHandleScope::new();
     let input = object(&scope);
     let lim = object(&scope);
-    let throws = function(&scope, throwing as *const u8, 0);
+    let throws = function(&scope, crate::fn_info!(throwing, 0; with_declared(0)));
     put(&input, b"toString", throws.get_nanbox_f64());
     put(&lim, b"valueOf", throws.get_nanbox_f64());
     let sep = object(&scope);
-    let method = function(&scope, hook as *const u8, 2);
+    let method = function(&scope, crate::fn_info!(hook, 2; with_declared(2)));
     symbol(&sep, "split", method.get_nanbox_f64());
     let result = run(&scope, &input, &sep, lim.get_nanbox_f64());
     assert_eq!(
@@ -282,7 +294,7 @@ fn perex_split_symbol_hook_precedes_coercion_and_preserves_arbitrary_result() {
     // Exact Node 26.5.1 skips primitive-prototype hooks. Keep the original
     // throwing receiver: its coercion must now be reached and propagated.
     let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Number"));
-    let get_hook = function(&scope, primitive_hook as *const u8, 0);
+    let get_hook = function(&scope, crate::fn_info!(primitive_hook, 0; with_declared(0)));
     let key = js_nanbox_pointer(crate::symbol::well_known_symbol("split") as i64);
     accessor(
         &proto,
@@ -310,14 +322,22 @@ fn event(n: u64) {
     ORDER.with(|o| o.set(o.get() * 10 + n));
 }
 
-extern "C" fn matrix_third(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(2, b"value")
+extern "C" fn matrix_third(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 2, b"value")
 }
 
-extern "C" fn matrix_hook(_: *const crate::closure::ClosureHeader, input: f64, _: f64) -> f64 {
+extern "C" fn matrix_hook(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    input: f64,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let input = scope.root_nanbox_f64(input);
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     assert!(crate::proxy::reflect_value_is_object(
         receiver.get_nanbox_f64()
     ));
@@ -328,14 +348,16 @@ extern "C" fn matrix_hook(_: *const crate::closure::ClosureHeader, input: f64, _
     input.get_nanbox_f64()
 }
 
-extern "C" fn matrix_hook_getter(_: *const crate::closure::ClosureHeader) -> f64 {
-    assert!(crate::proxy::reflect_value_is_object(
-        crate::object::js_implicit_this_get()
-    ));
+extern "C" fn matrix_hook_getter(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    assert!(crate::proxy::reflect_value_is_object(this.as_f64()));
     event(3);
     gc_collect_minor();
-    crate::closure::js_register_closure_arity(matrix_hook as *const u8, 2);
-    js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(matrix_hook as *const u8) as i64)
+    js_nanbox_pointer(crate::closure::js_closure_alloc_singleton(
+        crate::fn_info!(matrix_hook, 2; with_declared(2)),
+    ) as i64)
 }
 
 fn matrix_call(method: &str, receiver: f64, argument: f64, third: f64) -> f64 {
@@ -400,7 +422,10 @@ fn perex_string_methods_ignore_primitive_hooks_and_preserve_boxed_hooks_after_gc
                 let key = scope.root_nanbox_f64(js_nanbox_pointer(
                     crate::symbol::well_known_symbol(symbol_name) as i64,
                 ));
-                let getter = function(&scope, matrix_hook_getter as *const u8, 0);
+                let getter = function(
+                    &scope,
+                    crate::fn_info!(matrix_hook_getter, 0; with_declared(0)),
+                );
                 accessor(
                     &proto,
                     key.get_nanbox_f64(),
@@ -410,7 +435,7 @@ fn perex_string_methods_ignore_primitive_hooks_and_preserve_boxed_hooks_after_gc
                 let input = object(&scope);
                 let source = text(&scope, b"x23y23true");
                 put(&input, b"text", source.get_nanbox_f64());
-                let convert = function(&scope, input_text as *const u8, 0);
+                let convert = function(&scope, crate::fn_info!(input_text, 0; with_declared(0)));
                 put(&input, b"toString", convert.get_nanbox_f64());
                 let third = object(&scope);
                 let replacement = text(&scope, b"R");
@@ -423,7 +448,7 @@ fn perex_string_methods_ignore_primitive_hooks_and_preserve_boxed_hooks_after_gc
                         replacement.get_nanbox_f64()
                     },
                 );
-                let convert = function(&scope, matrix_third as *const u8, 0);
+                let convert = function(&scope, crate::fn_info!(matrix_third, 0; with_declared(0)));
                 put(
                     &third,
                     if method == "split" {
@@ -552,29 +577,49 @@ fn perex_string_methods_ignore_primitive_hooks_and_preserve_boxed_hooks_after_gc
     }
 }
 
-fn field_event(n: u64, name: &[u8]) -> f64 {
+fn field_event(this: crate::closure::JsThis, n: u64, name: &[u8]) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     event(n);
     gc_collect_minor();
     get(&receiver, name)
 }
-extern "C" fn input_text(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(1, b"text")
+extern "C" fn input_text(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 1, b"text")
 }
-extern "C" fn constructor_get(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(2, b"holder")
+extern "C" fn constructor_get(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 2, b"holder")
 }
-extern "C" fn species_get(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(3, b"factory")
+extern "C" fn species_get(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 3, b"factory")
 }
-extern "C" fn flags_get(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(4, b"flagText")
+extern "C" fn flags_get(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 4, b"flagText")
 }
-extern "C" fn limit_get(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(6, b"number")
+extern "C" fn limit_get(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 6, b"number")
 }
-extern "C" fn factory(_: *const crate::closure::ClosureHeader, receiver: f64, flags: f64) -> f64 {
+extern "C" fn factory(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    receiver: f64,
+    flags: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let flags = scope.root_nanbox_f64(flags);
@@ -584,7 +629,11 @@ extern "C" fn factory(_: *const crate::closure::ClosureHeader, receiver: f64, fl
     put(&matcher, b"seenFlags", flags.get_nanbox_f64());
     matcher.get_nanbox_f64()
 }
-extern "C" fn empty_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn empty_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     event(7);
     gc_collect_minor();
     f64::from_bits(TAG_NULL)
@@ -609,36 +658,48 @@ fn perex_split_species_order_zero_limit_and_empty_input() {
     put(&receiver, b"holder", holder.get_nanbox_f64());
     put(&receiver, b"matcher", matcher.get_nanbox_f64());
     put(&receiver, b"flagText", flags.get_nanbox_f64());
-    let ctor = function(&scope, factory as *const u8, 2);
+    let ctor = function(&scope, crate::fn_info!(factory, 2; with_declared(2)));
     put(&holder, b"factory", ctor.get_nanbox_f64());
     for (owner, name, fp) in [
-        (&input, b"toString".as_slice(), input_text as *const u8),
-        (&lim, b"valueOf", limit_get as *const u8),
+        (
+            &input,
+            b"toString".as_slice(),
+            crate::fn_info!(input_text, 0; with_declared(0)),
+        ),
+        (
+            &lim,
+            b"valueOf",
+            crate::fn_info!(limit_get, 0; with_declared(0)),
+        ),
     ] {
-        let f = function(&scope, fp, 0);
+        let f = function(&scope, fp);
         put(owner, name, f.get_nanbox_f64());
     }
     for (owner, name, fp) in [
         (
             &receiver,
             b"constructor".as_slice(),
-            constructor_get as *const u8,
+            crate::fn_info!(constructor_get, 0; with_declared(0)),
         ),
-        (&receiver, b"flags", flags_get as *const u8),
+        (
+            &receiver,
+            b"flags",
+            crate::fn_info!(flags_get, 0; with_declared(0)),
+        ),
     ] {
-        let f = function(&scope, fp, 0);
+        let f = function(&scope, fp);
         getter(owner, name, &f);
     }
-    let f = function(&scope, species_get as *const u8, 0);
+    let f = function(&scope, crate::fn_info!(species_get, 0; with_declared(0)));
     accessor(
         &holder,
         js_nanbox_pointer(crate::symbol::well_known_symbol("species") as i64),
         f.get_nanbox_f64(),
         f64::from_bits(TAG_UNDEFINED),
     );
-    let f = function(&scope, empty_exec as *const u8, 1);
+    let f = function(&scope, crate::fn_info!(empty_exec, 1; with_declared(1)));
     put(&matcher, b"exec", f.get_nanbox_f64());
-    let f = function(&scope, throwing as *const u8, 0);
+    let f = function(&scope, crate::fn_info!(throwing, 0; with_declared(0)));
     getter(&receiver, b"lastIndex", &f);
     getter(&matcher, b"lastIndex", &f);
     let forward_before = forward_splits();
@@ -661,11 +722,15 @@ fn perex_split_species_order_zero_limit_and_empty_input() {
     );
 }
 
-extern "C" fn custom_exec(c: *const crate::closure::ClosureHeader, input: f64) -> f64 {
+extern "C" fn custom_exec(
+    c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    input: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     let input = scope.root_nanbox_f64(input);
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     gc_collect_minor();
     assert_eq!(
         input.get_nanbox_f64().to_bits(),
@@ -682,7 +747,10 @@ extern "C" fn custom_exec(c: *const crate::closure::ClosureHeader, input: f64) -
     check(&nested, &[Some(b"a"), Some(b"c")]);
     get(&state, b"result")
 }
-extern "C" fn capture_get(c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn capture_get(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     gc_collect_minor();
@@ -708,17 +776,25 @@ fn perex_split_custom_exec_capture_values_reentrancy_and_limit_short_circuit() {
     put(&re, b"matcher", matcher.get_nanbox_f64());
     put(&re, b"constructor", holder.get_nanbox_f64());
     put(&re, b"flags", flags.get_nanbox_f64());
-    let ctor = function(&scope, factory as *const u8, 2);
+    let ctor = function(&scope, crate::fn_info!(factory, 2; with_declared(2)));
     symbol(&holder, "species", ctor.get_nanbox_f64());
     put(&state, b"input", input.get_nanbox_f64());
     put(&state, b"result", result.get_nanbox_f64());
     put(&state, b"capture", capture.get_nanbox_f64());
-    let exec = captured(&scope, custom_exec as *const u8, 1, &state);
+    let exec = captured(
+        &scope,
+        crate::fn_info!(custom_exec, 1; with_declared(1)),
+        &state,
+    );
     put(&matcher, b"exec", exec.get_nanbox_f64());
     put(&result, b"length", 3.0);
-    let getter_fn = captured(&scope, capture_get as *const u8, 0, &state);
+    let getter_fn = captured(
+        &scope,
+        crate::fn_info!(capture_get, 0; with_declared(0)),
+        &state,
+    );
     getter(&result, b"1", &getter_fn);
-    let throws = function(&scope, throwing as *const u8, 0);
+    let throws = function(&scope, crate::fn_info!(throwing, 0; with_declared(0)));
     getter(&result, b"0", &throws);
     getter(&result, b"index", &throws);
     put(&capture, b"toString", throws.get_nanbox_f64());
@@ -749,12 +825,17 @@ fn perex_split_custom_exec_capture_values_reentrancy_and_limit_short_circuit() {
     );
 }
 
-extern "C" fn throwing_hook(_: *const crate::closure::ClosureHeader, _: f64, _: f64) -> f64 {
+extern "C" fn throwing_hook(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(984.0)
 }
 #[test]
-fn perex_split_collecting_throw_releases_native_arguments_and_restores_this() {
+fn perex_split_collecting_throw_releases_native_arguments() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -763,11 +844,10 @@ fn perex_split_collecting_throw_releases_native_arguments_and_restores_this() {
     let scope = RuntimeHandleScope::new();
     let input = text(&scope, b"abc");
     let sep = object(&scope);
-    let method = function(&scope, throwing_hook as *const u8, 2);
+    let method = function(&scope, crate::fn_info!(throwing_hook, 2; with_declared(2)));
     symbol(&sep, "split", method.get_nanbox_f64());
+    // A young object whose move proves the throwing hook's collection ran.
     let previous = object(&scope);
-    let displaced = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     let roots = RuntimeHandleScope::active_len_for_tests();
     let live = external_side_live_bytes();
     let before = previous.get_nanbox_f64().to_bits();
@@ -779,11 +859,6 @@ fn perex_split_collecting_throw_releases_native_arguments_and_restores_this() {
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(external_side_live_bytes(), live);
     assert_ne!(previous.get_nanbox_f64().to_bits(), before);
-    assert_eq!(
-        crate::object::js_implicit_this_get().to_bits(),
-        previous.get_nanbox_f64().to_bits()
-    );
-    crate::object::js_implicit_this_set(displaced.get_nanbox_f64());
 }
 
 #[test]
@@ -908,19 +983,30 @@ fn perex_split_raw_copy_reacquires_moved_storage_and_cleans_up_partial_output() 
     assert_eq!(external_side_live_bytes(), live);
 }
 
-extern "C" fn primitive_result(c: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn primitive_result(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     gc_collect_minor();
     value.get_nanbox_f64()
 }
-extern "C" fn primitive_number_hint(c: *const crate::closure::ClosureHeader, hint: f64) -> f64 {
+extern "C" fn primitive_number_hint(
+    c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    hint: f64,
+) -> f64 {
     assert_eq!(bytes(hint), b"number");
-    primitive_result(c)
+    primitive_result(c, this)
 }
-extern "C" fn primitive_string_hint(c: *const crate::closure::ClosureHeader, hint: f64) -> f64 {
+extern "C" fn primitive_string_hint(
+    c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    hint: f64,
+) -> f64 {
     assert_eq!(bytes(hint), b"string");
-    primitive_result(c)
+    primitive_result(c, this)
 }
 
 #[test]
@@ -933,9 +1019,6 @@ fn perex_abstract_string_conversion_rejects_symbols_after_collecting_object_hook
     let scope = RuntimeHandleScope::new();
     let symbol_value = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new_empty() });
     let string_value = text(&scope, b"23");
-    let previous = object(&scope);
-    let displaced = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     for value in [&symbol_value, &string_value] {
         for mode in 0..4 {
             let local = RuntimeHandleScope::new();
@@ -946,11 +1029,10 @@ fn perex_abstract_string_conversion_rejects_symbols_after_collecting_object_hook
                 let method = captured(
                     &local,
                     if mode == 1 {
-                        primitive_string_hint as *const u8
+                        crate::fn_info!(primitive_string_hint, 1; with_declared(1))
                     } else {
-                        primitive_result as *const u8
+                        crate::fn_info!(primitive_result, 0; with_declared(0))
                     },
-                    if mode == 1 { 1 } else { 0 },
                     value,
                 );
                 if mode == 1 {
@@ -959,8 +1041,11 @@ fn perex_abstract_string_conversion_rejects_symbols_after_collecting_object_hook
                     put(&input, b"toString", method.get_nanbox_f64());
                 } else {
                     let other_object = object(&local);
-                    let nonprimitive =
-                        captured(&local, primitive_result as *const u8, 0, &other_object);
+                    let nonprimitive = captured(
+                        &local,
+                        crate::fn_info!(primitive_result, 0; with_declared(0)),
+                        &other_object,
+                    );
                     put(&input, b"toString", nonprimitive.get_nanbox_f64());
                     put(&input, b"valueOf", method.get_nanbox_f64());
                 }
@@ -979,13 +1064,8 @@ fn perex_abstract_string_conversion_rejects_symbols_after_collecting_object_hook
                 let result = local.root_string_ptr(result.unwrap());
                 assert_eq!(bytes(handle_string_value(&result)), b"23");
             }
-            assert_eq!(
-                crate::object::js_implicit_this_get().to_bits(),
-                previous.get_nanbox_f64().to_bits()
-            );
         }
     }
-    crate::object::js_implicit_this_set(displaced.get_nanbox_f64());
 }
 
 #[test]
@@ -1001,7 +1081,11 @@ fn perex_construction_uses_strict_string_conversion_for_pattern_and_flags() {
         let local = RuntimeHandleScope::new();
         let value = if converted {
             let value = object(&local);
-            let method = captured(&local, primitive_string_hint as *const u8, 1, &symbol_value);
+            let method = captured(
+                &local,
+                crate::fn_info!(primitive_string_hint, 1; with_declared(1)),
+                &symbol_value,
+            );
             symbol(&value, "toPrimitive", method.get_nanbox_f64());
             value
         } else {
@@ -1048,8 +1132,11 @@ fn perex_construction_uses_strict_string_conversion_for_pattern_and_flags() {
         }
     }
 }
-extern "C" fn separator_text(_: *const crate::closure::ClosureHeader) -> f64 {
-    field_event(8, b"text")
+extern "C" fn separator_text(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_event(this, 8, b"text")
 }
 
 #[test]
@@ -1068,11 +1155,23 @@ fn perex_split_fallback_coercion_order_including_zero_limit() {
     put(&input, b"text", abc.get_nanbox_f64());
     put(&sep, b"text", b.get_nanbox_f64());
     for (owner, name, fp) in [
-        (&input, b"toString".as_slice(), input_text as *const u8),
-        (&sep, b"toString", separator_text as *const u8),
-        (&lim, b"valueOf", limit_get as *const u8),
+        (
+            &input,
+            b"toString".as_slice(),
+            crate::fn_info!(input_text, 0; with_declared(0)),
+        ),
+        (
+            &sep,
+            b"toString",
+            crate::fn_info!(separator_text, 0; with_declared(0)),
+        ),
+        (
+            &lim,
+            b"valueOf",
+            crate::fn_info!(limit_get, 0; with_declared(0)),
+        ),
     ] {
-        let f = function(&scope, fp, 0);
+        let f = function(&scope, fp);
         put(owner, name, f.get_nanbox_f64());
     }
     for limit in [0.0, 1.0] {
@@ -1083,7 +1182,7 @@ fn perex_split_fallback_coercion_order_including_zero_limit() {
         assert_eq!(get(&out, b"length"), limit);
     }
     // A throwing separator conversion is still observed with limit zero.
-    let throws = function(&scope, throwing as *const u8, 0);
+    let throws = function(&scope, crate::fn_info!(throwing, 0; with_declared(0)));
     put(&sep, b"toString", throws.get_nanbox_f64());
     let err = crate::exception::catch_js_throw(|| {
         crate::regex::js_string_split_js(input.get_nanbox_f64(), sep.get_nanbox_f64(), 0.0)
@@ -1104,14 +1203,22 @@ fn perex_numeric_arguments_reject_bigint_after_observable_primitive_conversion()
         crate::bigint::js_bigint_from_i64(1) as i64,
     ));
     let ordinary = object(&scope);
-    let f = captured(&scope, primitive_result as *const u8, 0, &big);
+    let f = captured(
+        &scope,
+        crate::fn_info!(primitive_result, 0; with_declared(0)),
+        &big,
+    );
     put(&ordinary, b"valueOf", f.get_nanbox_f64());
     let exotic = object(&scope);
-    let f = captured(&scope, primitive_number_hint as *const u8, 1, &big);
+    let f = captured(
+        &scope,
+        crate::fn_info!(primitive_number_hint, 1; with_declared(1)),
+        &big,
+    );
     symbol(&exotic, "toPrimitive", f.get_nanbox_f64());
     let input = text(&scope, b"abc");
     let separator = object(&scope);
-    let throws = function(&scope, throwing as *const u8, 0);
+    let throws = function(&scope, crate::fn_info!(throwing, 0; with_declared(0)));
     put(&separator, b"toString", throws.get_nanbox_f64());
     let re = regex(&scope, b"a", b"");
     for value in [&big, &ordinary, &exotic] {
@@ -1146,7 +1253,11 @@ fn perex_numeric_arguments_reject_bigint_after_observable_primitive_conversion()
     );
     // An overridden array valueOf precedes inherited toString/join.
     let array = scope.root_nanbox_f64(js_nanbox_pointer(crate::array::js_array_alloc(0) as i64));
-    let f = captured(&scope, primitive_result as *const u8, 0, &big);
+    let f = captured(
+        &scope,
+        crate::fn_info!(primitive_result, 0; with_declared(0)),
+        &big,
+    );
     put(&array, b"valueOf", f.get_nanbox_f64());
     assert!(matches!(
         dispatch::to_number(&array),
@@ -1242,6 +1353,7 @@ fn perex_split_forward_search_matches_the_sticky_specification() {
 /// JavaScript can reach it afterwards, as any user factory could.
 extern "C" fn recording_regexp_species(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     receiver: f64,
     flags: f64,
 ) -> f64 {
@@ -1270,7 +1382,10 @@ fn perex_split_user_species_regexp_keeps_the_observable_sticky_loop() {
     let scope = RuntimeHandleScope::new();
     let re = regex(&scope, b",", b"");
     let holder = object(&scope);
-    let species = function(&scope, recording_regexp_species as *const u8, 2);
+    let species = function(
+        &scope,
+        crate::fn_info!(recording_regexp_species, 2; with_declared(2)),
+    );
     symbol(&holder, "species", species.get_nanbox_f64());
     put(&re, b"constructor", holder.get_nanbox_f64());
     let input = text(&scope, b"a,");

@@ -104,7 +104,12 @@ unsafe fn read_value(kind: u8, pointer: f64, offset: f64) -> f64 {
 
 macro_rules! reader {
     ($name:ident, $kind:expr) => {
-        extern "C" fn $name(_closure: *const ClosureHeader, pointer: f64, offset: f64) -> f64 {
+        extern "C" fn $name(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            pointer: f64,
+            offset: f64,
+        ) -> f64 {
             unsafe { read_value($kind, pointer, offset) }
         }
     };
@@ -122,27 +127,26 @@ reader!(read_u64, super::types::T_U64);
 reader!(read_f32, super::types::T_F32);
 reader!(read_f64, super::types::T_F64);
 
-fn reader_function(kind: u8) -> *const u8 {
+/// The reader body for `kind`. Every reader takes `(pointer, offset)` and
+/// reports `.length` 1.
+fn reader_function(kind: u8) -> *const crate::closure::JsFunctionInfo {
     match kind {
-        super::types::T_PTR => read_ptr as *const u8,
-        super::types::T_I8 => read_i8 as *const u8,
-        super::types::T_I16 => read_i16 as *const u8,
-        super::types::T_I32 => read_i32 as *const u8,
-        super::types::T_I64 => read_i64 as *const u8,
-        super::types::T_U8 => read_u8 as *const u8,
-        super::types::T_U16 => read_u16 as *const u8,
-        super::types::T_U32 => read_u32 as *const u8,
-        super::types::T_U64 => read_u64 as *const u8,
-        super::types::T_F32 => read_f32 as *const u8,
-        _ => read_f64 as *const u8,
+        super::types::T_PTR => crate::fn_info!(read_ptr, 2; with_declared(2), with_length(1)),
+        super::types::T_I8 => crate::fn_info!(read_i8, 2; with_declared(2), with_length(1)),
+        super::types::T_I16 => crate::fn_info!(read_i16, 2; with_declared(2), with_length(1)),
+        super::types::T_I32 => crate::fn_info!(read_i32, 2; with_declared(2), with_length(1)),
+        super::types::T_I64 => crate::fn_info!(read_i64, 2; with_declared(2), with_length(1)),
+        super::types::T_U8 => crate::fn_info!(read_u8, 2; with_declared(2), with_length(1)),
+        super::types::T_U16 => crate::fn_info!(read_u16, 2; with_declared(2), with_length(1)),
+        super::types::T_U32 => crate::fn_info!(read_u32, 2; with_declared(2), with_length(1)),
+        super::types::T_U64 => crate::fn_info!(read_u64, 2; with_declared(2), with_length(1)),
+        super::types::T_F32 => crate::fn_info!(read_f32, 2; with_declared(2), with_length(1)),
+        _ => crate::fn_info!(read_f64, 2; with_declared(2), with_length(1)),
     }
 }
 
 fn closure(name: &str, kind: u8) -> f64 {
-    let function = reader_function(kind);
-    crate::closure::js_register_closure_arity(function, 2);
-    crate::closure::js_register_closure_length(function, 1);
-    let closure = crate::closure::js_closure_alloc(function, 0);
+    let closure = crate::closure::js_closure_alloc(reader_function(kind), 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, 1);
     crate::value::js_nanbox_pointer(closure as i64)

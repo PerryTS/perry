@@ -711,7 +711,8 @@ fn test_small_js_string_alloc_uses_managed_nursery_page() {
 #[test]
 fn test_small_js_closure_alloc_uses_managed_nursery_page() {
     let _guard = CopyingNurseryTestGuard::new(0);
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 2);
+    let closure =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 2);
     let header = unsafe { header_from_user_ptr(closure as *const u8) };
 
     unsafe {
@@ -805,7 +806,7 @@ fn test_large_js_closure_alloc_remains_malloc_tracked() {
         - std::mem::size_of::<crate::closure::ClosureHeader>())
         / std::mem::size_of::<u64>();
     let closure = crate::closure::js_closure_alloc(
-        test_captured_singleton_func as *const u8,
+        crate::fn_info!(test_captured_singleton_func, 0),
         (max_managed_captures + 1) as u32,
     );
     let header = unsafe { header_from_user_ptr(closure as *const u8) };

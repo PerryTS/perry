@@ -1,5 +1,5 @@
 use crate::array::ArrayHeader;
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
@@ -164,16 +164,21 @@ fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
     if !is_callable_value(callback) {
         return undefined();
     }
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    // The rebind clone allocates, so the receiver is re-read from a root.
+    let this_h = this_scope.root_nanbox_f64(this);
     let rebound = f64::from_bits(crate::closure::clone_closure_rebind_this(
         callback.to_bits(),
         this,
     ));
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
-    let result =
-        unsafe { crate::closure::js_native_call_value(rebound, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    unsafe {
+        crate::closure::native_call_value_this(
+            rebound,
+            crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn call_method(receiver: f64, name: &str, args: &[f64]) -> f64 {
@@ -359,32 +364,43 @@ fn display_prompt_for(server: f64) {
     output_write(server, &prompt_string(server));
 }
 
-fn fn_value(func: *const u8, name: &str, arity: u32) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 0);
+/// `info` records the body's declared arity.
+fn fn_value(info: *const crate::closure::JsFunctionInfo, name: &str) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-extern "C" fn repl_on_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+extern "C" fn repl_on_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let server = this.as_f64();
     add_listener(server, event, listener, false);
     server
 }
 
-extern "C" fn repl_once_thunk(_closure: *const ClosureHeader, event: f64, listener: f64) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+extern "C" fn repl_once_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let server = this.as_f64();
     add_listener(server, event, listener, true);
     server
 }
 
 extern "C" fn repl_emit_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     arg0: f64,
     arg1: f64,
 ) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+    let server = this.as_f64();
     let Some(event_name) = string_to_rust(event) else {
         return bool_value(false);
     };
@@ -398,23 +414,28 @@ extern "C" fn repl_emit_thunk(
 
 extern "C" fn repl_display_prompt_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     _preserve_cursor: f64,
 ) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+    let server = this.as_f64();
     display_prompt_for(server);
     undefined()
 }
 
-extern "C" fn repl_clear_buffered_command_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn repl_clear_buffered_command_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     undefined()
 }
 
 extern "C" fn repl_setup_history_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     _path: f64,
     callback: f64,
 ) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+    let server = this.as_f64();
     if let Some(obj) = object_ptr_from_value(server) {
         set_field(obj, "history", array_value(crate::array::js_array_alloc(0)));
         set_field(obj, "historySize", 30.0);
@@ -425,10 +446,11 @@ extern "C" fn repl_setup_history_thunk(
 
 extern "C" fn repl_define_command_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     keyword: f64,
     command: f64,
 ) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+    let server = this.as_f64();
     let Some(name) = string_to_rust(keyword) else {
         return undefined();
     };
@@ -439,8 +461,12 @@ extern "C" fn repl_define_command_thunk(
     undefined()
 }
 
-extern "C" fn repl_write_thunk(_closure: *const ClosureHeader, chunk: f64) -> f64 {
-    let server = crate::object::js_implicit_this_get();
+extern "C" fn repl_write_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
+    let server = this.as_f64();
     let input = string_to_rust(chunk).unwrap_or_default();
     for line in input.split_inclusive('\n') {
         let line = line.strip_suffix('\n').unwrap_or(line);
@@ -450,50 +476,74 @@ extern "C" fn repl_write_thunk(_closure: *const ClosureHeader, chunk: f64) -> f6
 }
 
 fn install_server_methods(obj: *mut ObjectHeader) {
-    set_field(obj, "on", fn_value(repl_on_thunk as *const u8, "on", 2));
+    set_field(
+        obj,
+        "on",
+        fn_value(crate::fn_info!(repl_on_thunk, 2; with_declared(2)), "on"),
+    );
     set_field(
         obj,
         "addListener",
-        fn_value(repl_on_thunk as *const u8, "addListener", 2),
+        fn_value(
+            crate::fn_info!(repl_on_thunk, 2; with_declared(2)),
+            "addListener",
+        ),
     );
     set_field(
         obj,
         "once",
-        fn_value(repl_once_thunk as *const u8, "once", 2),
+        fn_value(
+            crate::fn_info!(repl_once_thunk, 2; with_declared(2)),
+            "once",
+        ),
     );
     set_field(
         obj,
         "emit",
-        fn_value(repl_emit_thunk as *const u8, "emit", 1),
+        fn_value(
+            crate::fn_info!(repl_emit_thunk, 3; with_declared(1)),
+            "emit",
+        ),
     );
     set_field(
         obj,
         "defineCommand",
-        fn_value(repl_define_command_thunk as *const u8, "defineCommand", 2),
+        fn_value(
+            crate::fn_info!(repl_define_command_thunk, 2; with_declared(2)),
+            "defineCommand",
+        ),
     );
     set_field(
         obj,
         "displayPrompt",
-        fn_value(repl_display_prompt_thunk as *const u8, "displayPrompt", 1),
+        fn_value(
+            crate::fn_info!(repl_display_prompt_thunk, 1; with_declared(1)),
+            "displayPrompt",
+        ),
     );
     set_field(
         obj,
         "clearBufferedCommand",
         fn_value(
-            repl_clear_buffered_command_thunk as *const u8,
+            crate::fn_info!(repl_clear_buffered_command_thunk, 0; with_declared(0)),
             "clearBufferedCommand",
-            0,
         ),
     );
     set_field(
         obj,
         "setupHistory",
-        fn_value(repl_setup_history_thunk as *const u8, "setupHistory", 2),
+        fn_value(
+            crate::fn_info!(repl_setup_history_thunk, 2; with_declared(2)),
+            "setupHistory",
+        ),
     );
     set_field(
         obj,
         "write",
-        fn_value(repl_write_thunk as *const u8, "write", 1),
+        fn_value(
+            crate::fn_info!(repl_write_thunk, 1; with_declared(1)),
+            "write",
+        ),
     );
 }
 

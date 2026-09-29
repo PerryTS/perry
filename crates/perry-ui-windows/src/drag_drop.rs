@@ -49,8 +49,8 @@ use std::sync::Once;
 // about unused items.
 #[cfg(target_os = "windows")]
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -101,7 +101,7 @@ unsafe fn call_provider(cb: f64) -> Option<String> {
     if p == 0 {
         return None;
     }
-    let ret = js_closure_call0(p as *const u8);
+    let ret = js_closure_call0(p as *const u8, perry_ffi::JsThis::UNDEFINED);
     let sh = js_jsvalue_to_string(ret);
     if sh.is_null() {
         None
@@ -455,7 +455,7 @@ mod imp {
         let payload = js_nanbox_pointer(obj as i64);
         let cb_ptr = js_nanbox_get_pointer(cb);
         if cb_ptr != 0 {
-            js_closure_call1(cb_ptr as *const u8, payload);
+            js_closure_call1(cb_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, payload);
         }
     }
 

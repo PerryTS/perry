@@ -1,7 +1,7 @@
 //! File open dialog — COM-based IFileOpenDialog
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
@@ -34,7 +34,7 @@ pub fn open_dialog(callback: f64) {
                                 bytes.len() as u32,
                             );
                             let nanboxed = js_nanbox_string(str_ptr as i64);
-                            js_closure_call1(callback_ptr, nanboxed);
+                            js_closure_call1(callback_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
                             CoTaskMemFree(Some(path.0 as *const _));
                             return;
                         }
@@ -44,13 +44,13 @@ pub fn open_dialog(callback: f64) {
 
             // Cancelled or error — call with undefined
             let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-            js_closure_call1(callback_ptr, undefined);
+            js_closure_call1(callback_ptr, perry_ffi::JsThis::UNDEFINED, undefined);
         }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         let undefined = f64::from_bits(0x7FFC_0000_0000_0001);
-        unsafe { js_closure_call1(callback_ptr, undefined) };
+        unsafe { js_closure_call1(callback_ptr, perry_ffi::JsThis::UNDEFINED, undefined) };
     }
 }

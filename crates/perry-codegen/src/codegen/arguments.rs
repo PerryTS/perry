@@ -158,10 +158,10 @@ pub(crate) fn materialize_arguments_object(
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             }
             ArgumentsCallee::FunctionWrapper(wrapper) => {
-                let wrap_ref = format!("@{}", wrapper);
+                let wrap_info = ctx.block().fn_info_ref(wrapper);
                 let closure_ptr =
                     ctx.block()
-                        .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ref)]);
+                        .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
                 nanbox_pointer_inline(ctx.block(), &closure_ptr)
             }
             ArgumentsCallee::CurrentClosure => {
@@ -437,10 +437,11 @@ pub(crate) fn try_lower_elided_arguments_index_get(
         } else {
             match &elided.callee {
                 ElidedArgumentsCallee::Undefined => (undefined, "null".to_string()),
-                // The runtime materializes the singleton after rooting its
-                // operands, so no allocation sits between `key` and the call.
+                // The runtime materializes the singleton (from the wrapper's
+                // `JsFunctionInfo`) after rooting its operands, so no
+                // allocation sits between `key` and the call.
                 ElidedArgumentsCallee::FunctionWrapper(wrapper) => {
-                    (undefined, format!("@{wrapper}"))
+                    (undefined, ctx.block().fn_info_ref(wrapper))
                 }
                 ElidedArgumentsCallee::CurrentClosure => {
                     let ptr = crate::expr::try_current_closure_ptr_value(ctx)

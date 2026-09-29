@@ -477,13 +477,15 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
                         name,
                         member,
                     );
-                    ctx.pending_declares
-                        .push((wrapper.clone(), DOUBLE, vec![I64]));
-                    let handle = ctx.block().call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{wrapper}"))],
-                    );
+                    ctx.pending_declares.push((
+                        wrapper.clone(),
+                        DOUBLE,
+                        crate::expr::body_call::js_body_param_types(0),
+                    ));
+                    let info = ctx.block().fn_info_ref(&wrapper);
+                    let handle =
+                        ctx.block()
+                            .call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     nanbox_pointer_inline(ctx.block(), &handle)
                 } else {
                     lower_expr(ctx, &member_get)?
@@ -967,8 +969,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // const-bound closures already use: ONE module-level
                 // singleton observed via stable address from every
                 // module. `js_closure_alloc_singleton` keys its
-                // pool by func_ptr, so calling it with the source's
-                // wrapper symbol from any module returns the same
+                // pool by the body's `JsFunctionInfo`, which only the
+                // source module defines (every other module declares it
+                // `external`, `crate::fn_info`), so calling it with the
+                // source wrapper's info from any module returns the same
                 // ClosureHeader the source returned for its
                 // `Expr::FuncRef(id)` value-reads. The pre-fix
                 // `__perry_extern_closure_<src>__<name>` global is no
@@ -993,16 +997,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .copied()
                     .unwrap_or(0)
                     .min(5);
-                let mut wrap_param_types: Vec<crate::types::LlvmType> = vec![I64];
-                for _ in 0..param_count {
-                    wrap_param_types.push(DOUBLE);
-                }
+                let wrap_param_types = crate::expr::body_call::js_body_param_types(param_count);
                 ctx.pending_declares
                     .push((wrap_name.clone(), DOUBLE, wrap_param_types));
                 let blk = ctx.block();
-                let wrap_ptr = format!("@{}", wrap_name);
+                let wrap_info = blk.fn_info_ref(&wrap_name);
                 let closure_handle =
-                    blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                    blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
                 return Ok(nanbox_pointer_inline(blk, &closure_handle));
             }
             // Issue #841 companion: namespace imports for the same five

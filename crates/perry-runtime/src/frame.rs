@@ -180,7 +180,12 @@ pub extern "C" fn js_frame_tick(timestamp_ms: f64) -> i32 {
         let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
         let cb_ptr = cb_handle.get_raw_const_ptr::<ClosureHeader>();
         with_frame_uncaught_trap(|| {
-            js_closure_call2(cb_ptr, timestamp_ms, delta_ms);
+            js_closure_call2(
+                cb_ptr,
+                crate::closure::plain_call_receiver(),
+                timestamp_ms,
+                delta_ms,
+            );
         });
         crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
         crate::async_context::restore_context(previous);

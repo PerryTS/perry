@@ -2,7 +2,11 @@ use super::*;
 
 /// Simulate the runtime-root rewrite performed by a moving collection inside
 /// the first listener, without requiring a native stack map in a Rust test.
-extern "C" fn relocate(closure: *const ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn relocate(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     for pair in 0..2 {
         let source = js_closure_get_capture_ptr(closure, pair * 2) as *mut u8;
         let destination = js_closure_get_capture_ptr(closure, pair * 2 + 1) as *mut u8;
@@ -16,8 +20,12 @@ extern "C" fn relocate(closure: *const ClosureHeader, _arg: f64) -> f64 {
     cp_undefined()
 }
 
-extern "C" fn observe(_closure: *const ClosureHeader, arg: f64) -> f64 {
-    let target = crate::object::js_implicit_this_get();
+extern "C" fn observe(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
+    let target = this.as_f64();
     cp_set_field(target, b"seen", arg);
     cp_undefined()
 }
@@ -50,9 +58,6 @@ fn child_dispatch_forwards_relocated_receiver_and_arguments_to_stream_listeners(
 }
 
 fn dispatch_after_listener_relocation(shared_stream_listener: bool) {
-    cp_register_arities();
-    js_register_closure_arity(relocate as *const u8, 1);
-    js_register_closure_arity(observe as *const u8, 1);
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     let destination =
@@ -61,10 +66,11 @@ fn dispatch_after_listener_relocation(shared_stream_listener: bool) {
     let moved_argument =
         scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
     let first = scope.root_nanbox_f64(cp_box_ptr(
-        js_closure_alloc(relocate as *const u8, 4).cast(),
+        js_closure_alloc(crate::fn_info!(relocate, 1; with_declared(1)), 4).cast(),
     ));
-    let second =
-        scope.root_nanbox_f64(cp_box_ptr(js_closure_alloc(observe as *const u8, 0).cast()));
+    let second = scope.root_nanbox_f64(cp_box_ptr(
+        js_closure_alloc(crate::fn_info!(observe, 1; with_declared(1)), 0).cast(),
+    ));
     let event = scope.root_nanbox_f64(cp_box_string("end"));
     for target in [&source, &destination] {
         if shared_stream_listener {

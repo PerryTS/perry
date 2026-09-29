@@ -20,8 +20,7 @@ use std::sync::Once;
 use super::watch_backend::{self, Backend, RawEvent, Source, WatchError, WatchEvent};
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 
 const WATCH_FILE_DEFAULT_INTERVAL_MS: f64 = 5007.0;
@@ -228,15 +227,11 @@ fn signal_abort_reason(signal: f64) -> f64 {
     }
 }
 
-fn add_abort_listener(
-    signal: f64,
-    id: usize,
-    func: extern "C" fn(*const ClosureHeader) -> f64,
-) -> f64 {
+fn add_abort_listener(signal: f64, id: usize, func: *const crate::closure::JsFunctionInfo) -> f64 {
     let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
         return undefined_value();
     };
-    let closure = js_closure_alloc(func as *const u8, 1);
+    let closure = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     let listener = boxed_ptr(closure as *const u8);
     crate::url::js_abort_signal_add_listener(signal_ptr, string_value(b"abort"), listener);
@@ -412,13 +407,12 @@ fn emit_listener0(object_value: f64, callback: f64) {
     if cb.is_null() {
         return;
     }
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        object_handle.get_nanbox_f64(),
-    ));
     with_watcher_uncaught_trap(|| {
-        crate::closure::js_closure_call0(cb);
+        crate::closure::js_closure_call0(
+            cb,
+            crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+        );
     });
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 fn emit_fs_watch_event(
@@ -442,18 +436,19 @@ fn emit_fs_watch_event(
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
     let refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
-            crate::closure::js_closure_call2(cb, refreshed_args[0], refreshed_args[1]);
+            crate::closure::js_closure_call2(
+                cb,
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                refreshed_args[0],
+                refreshed_args[1],
+            );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -479,18 +474,19 @@ fn emit_watch_file_change(
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
     let refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
-            crate::closure::js_closure_call2(cb, refreshed_args[0], refreshed_args[1]);
+            crate::closure::js_closure_call2(
+                cb,
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                refreshed_args[0],
+                refreshed_args[1],
+            );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -900,17 +896,18 @@ fn emit_fs_watch_error(
     let err_handle = scope.root_nanbox_f64(err_value);
     let refreshed_callbacks =
         crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
-    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for callback in refreshed_callbacks {
         let cb = extract_closure_ptr(callback);
         if cb.is_null() {
             continue;
         }
-        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
         with_watcher_uncaught_trap(|| {
-            crate::closure::js_closure_call1(cb, err_handle.get_nanbox_f64());
+            crate::closure::js_closure_call1(
+                cb,
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                err_handle.get_nanbox_f64(),
+            );
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -923,7 +920,10 @@ fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
     state.active = true;
 }
 
-extern "C" fn watch_file_poll_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn watch_file_poll_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let delivery = WATCH_FILE_STATES.with(|states| {
         let mut states = states.borrow_mut();
@@ -946,13 +946,19 @@ extern "C" fn watch_file_poll_impl(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn fs_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_abort_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     close_fs_watcher(id);
     undefined_value()
 }
 
-extern "C" fn promise_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_abort_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let signal = PROMISE_WATCHERS.with(|watchers| {
         watchers
@@ -969,14 +975,20 @@ extern "C" fn promise_watcher_abort_impl(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn fs_watcher_close_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_close_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     close_fs_watcher(id);
     self_value
 }
 
-extern "C" fn fs_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_ref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
@@ -987,7 +999,10 @@ extern "C" fn fs_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
     self_value
 }
 
-extern "C" fn fs_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn fs_watcher_unref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
@@ -1000,6 +1015,7 @@ extern "C" fn fs_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn fs_watcher_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1017,6 +1033,7 @@ extern "C" fn fs_watcher_on_impl(
 
 extern "C" fn fs_watcher_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1034,6 +1051,7 @@ extern "C" fn fs_watcher_once_impl(
 
 extern "C" fn fs_watcher_off_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1049,7 +1067,10 @@ extern "C" fn fs_watcher_off_impl(
     self_value
 }
 
-extern "C" fn stat_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stat_watcher_ref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     WATCH_FILE_STATES.with(|states| {
@@ -1060,7 +1081,10 @@ extern "C" fn stat_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
     self_value
 }
 
-extern "C" fn stat_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stat_watcher_unref_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     WATCH_FILE_STATES.with(|states| {
@@ -1073,6 +1097,7 @@ extern "C" fn stat_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn stat_watcher_on_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1090,6 +1115,7 @@ extern "C" fn stat_watcher_on_impl(
 
 extern "C" fn stat_watcher_once_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1107,6 +1133,7 @@ extern "C" fn stat_watcher_once_impl(
 
 extern "C" fn stat_watcher_off_impl(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     event_value: f64,
     listener: f64,
 ) -> f64 {
@@ -1135,7 +1162,10 @@ enum GlobNextAction {
     Entry(FsGlobMatch, bool),
 }
 
-extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = GLOB_ITERATORS.with(|iterators| {
         let mut iterators = iterators.borrow_mut();
@@ -1163,7 +1193,10 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn glob_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().remove(&id);
@@ -1171,11 +1204,17 @@ extern "C" fn glob_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
     resolved_iterator_promise(undefined_value(), true)
 }
 
-extern "C" fn glob_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn glob_iterator_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
-extern "C" fn bun_glob_sync_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = GLOB_ITERATORS.with(|iterators| {
         let mut iterators = iterators.borrow_mut();
@@ -1205,7 +1244,10 @@ extern "C" fn bun_glob_sync_iterator_next_impl(closure: *const ClosureHeader) ->
     }
 }
 
-extern "C" fn bun_glob_sync_iterator_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().remove(&id);
@@ -1213,11 +1255,17 @@ extern "C" fn bun_glob_sync_iterator_return_impl(closure: *const ClosureHeader) 
     iterator_result(undefined_value(), true)
 }
 
-extern "C" fn bun_glob_sync_iterator_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_glob_sync_iterator_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
-extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_next_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let action = PROMISE_WATCHERS.with(|watchers| {
         let mut watchers = watchers.borrow_mut();
@@ -1255,7 +1303,10 @@ extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
     }
 }
 
-extern "C" fn promise_watcher_return_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_return_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let pending = close_promise_watcher_return(id);
     for promise in pending {
@@ -1264,159 +1315,205 @@ extern "C" fn promise_watcher_return_impl(closure: *const ClosureHeader) -> f64 
     resolved_iterator_promise(undefined_value(), true)
 }
 
-extern "C" fn promise_watcher_self_impl(closure: *const ClosureHeader) -> f64 {
+extern "C" fn promise_watcher_self_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     js_closure_get_capture_f64(closure, 1)
 }
 
-fn ensure_watch_method_arities() {
-    static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| {
-        js_register_closure_arity(watch_file_poll_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_abort_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_abort_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_close_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_ref_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_unref_impl as *const u8, 0);
-        js_register_closure_arity(fs_watcher_on_impl as *const u8, 2);
-        js_register_closure_arity(fs_watcher_once_impl as *const u8, 2);
-        js_register_closure_arity(fs_watcher_off_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_ref_impl as *const u8, 0);
-        js_register_closure_arity(stat_watcher_unref_impl as *const u8, 0);
-        js_register_closure_arity(stat_watcher_on_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_once_impl as *const u8, 2);
-        js_register_closure_arity(stat_watcher_off_impl as *const u8, 2);
-        js_register_closure_arity(promise_watcher_next_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_return_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_self_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_next_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_return_impl as *const u8, 0);
-        js_register_closure_arity(glob_iterator_self_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_next_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_return_impl as *const u8, 0);
-        js_register_closure_arity(bun_glob_sync_iterator_self_impl as *const u8, 0);
-    });
-}
-
-fn method_value(func: *const u8, id: usize, self_value: f64) -> f64 {
+fn method_value(func: *const crate::closure::JsFunctionInfo, id: usize, self_value: f64) -> f64 {
     let closure = js_closure_alloc(func, 2);
     js_closure_set_capture_f64(closure, 0, id as f64);
     js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
 }
 
-fn poll_closure_value(func: *const u8, id: usize) -> *mut ClosureHeader {
+fn poll_closure_value(
+    func: *const crate::closure::JsFunctionInfo,
+    id: usize,
+) -> *mut ClosureHeader {
     let closure = js_closure_alloc(func, 1);
     js_closure_set_capture_f64(closure, 0, id as f64);
     closure
 }
 
 fn build_fs_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 8);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"close",
-        method_value(fs_watcher_close_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_close_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"ref",
-        method_value(fs_watcher_ref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_ref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"unref",
-        method_value(fs_watcher_unref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_unref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"on",
-        method_value(fs_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"once",
-        method_value(fs_watcher_once_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_once_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"addListener",
-        method_value(fs_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"removeListener",
-        method_value(fs_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"off",
-        method_value(fs_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(fs_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     self_value
 }
 
 fn build_stat_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 7);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"ref",
-        method_value(stat_watcher_ref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_ref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"unref",
-        method_value(stat_watcher_unref_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_unref_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"on",
-        method_value(stat_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"once",
-        method_value(stat_watcher_once_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_once_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"addListener",
-        method_value(stat_watcher_on_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_on_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"removeListener",
-        method_value(stat_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"off",
-        method_value(stat_watcher_off_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(stat_watcher_off_impl, 2; with_declared(2)),
+            id,
+            self_value,
+        ),
     );
     self_value
 }
 
 fn build_promise_watcher_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 2);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
-        method_value(promise_watcher_next_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(promise_watcher_next_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"return",
-        method_value(promise_watcher_return_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(promise_watcher_return_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
         let symbol_value = boxed_ptr(async_iterator as *const u8);
-        let method = method_value(promise_watcher_self_impl as *const u8, id, self_value);
+        let method = method_value(
+            crate::fn_info!(promise_watcher_self_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        );
         unsafe {
             crate::symbol::js_object_set_symbol_property(self_value, symbol_value, method);
         }
@@ -1425,23 +1522,34 @@ fn build_promise_watcher_object(id: usize) -> f64 {
 }
 
 fn build_glob_iterator_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 3);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
-        method_value(glob_iterator_next_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(glob_iterator_next_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     set_named_field(
         obj,
         b"return",
-        method_value(glob_iterator_return_impl as *const u8, id, self_value),
+        method_value(
+            crate::fn_info!(glob_iterator_return_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        ),
     );
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if !async_iterator.is_null() {
         let symbol_value = boxed_ptr(async_iterator as *const u8);
-        let method = method_value(glob_iterator_self_impl as *const u8, id, self_value);
+        let method = method_value(
+            crate::fn_info!(glob_iterator_self_impl, 0; with_declared(0)),
+            id,
+            self_value,
+        );
         unsafe {
             crate::symbol::js_object_set_symbol_property(self_value, symbol_value, method);
         }
@@ -1450,14 +1558,13 @@ fn build_glob_iterator_object(id: usize) -> f64 {
 }
 
 fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
-    ensure_watch_method_arities();
     let obj = crate::object::js_object_alloc(0, 3);
     let self_value = boxed_ptr(obj as *const u8);
     set_named_field(
         obj,
         b"next",
         method_value(
-            bun_glob_sync_iterator_next_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_next_impl, 0; with_declared(0)),
             id,
             self_value,
         ),
@@ -1466,7 +1573,7 @@ fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
         obj,
         b"return",
         method_value(
-            bun_glob_sync_iterator_return_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_return_impl, 0; with_declared(0)),
             id,
             self_value,
         ),
@@ -1475,7 +1582,7 @@ fn build_bun_glob_sync_iterator_object(id: usize) -> f64 {
     if !iterator.is_null() {
         let symbol_value = boxed_ptr(iterator as *const u8);
         let method = method_value(
-            bun_glob_sync_iterator_self_impl as *const u8,
+            crate::fn_info!(bun_glob_sync_iterator_self_impl, 0; with_declared(0)),
             id,
             self_value,
         );
@@ -1590,7 +1697,7 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     ensure_pump_registered();
     let backend = Backend::start(id, &path, recursive);
     let abort_listener = signal
-        .map(|signal| add_abort_listener(signal, id, fs_watcher_abort_impl))
+        .map(|signal| add_abort_listener(signal, id, crate::fn_info!(fs_watcher_abort_impl, 0)))
         .unwrap_or_else(undefined_value);
     let signal_value = signal.unwrap_or_else(undefined_value);
     let mut listeners = HashMap::new();
@@ -1654,7 +1761,10 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     let interval = option_interval_ms(options_value);
     let persistent = option_bool_default_local(options_value, b"persistent", true);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
-    let timer_callback = poll_closure_value(watch_file_poll_impl as *const u8, id);
+    let timer_callback = poll_closure_value(
+        crate::fn_info!(watch_file_poll_impl, 0; with_declared(0)),
+        id,
+    );
     let timer_id = crate::timer::setInterval(timer_callback as i64, interval);
     if !persistent {
         crate::timer::js_timer_unref(timer_id);
@@ -1736,7 +1846,9 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
     let object_value = build_promise_watcher_object(id);
     let abort_listener = signal
         .filter(|signal| !signal_is_aborted(*signal))
-        .map(|signal| add_abort_listener(signal, id, promise_watcher_abort_impl))
+        .map(|signal| {
+            add_abort_listener(signal, id, crate::fn_info!(promise_watcher_abort_impl, 0))
+        })
         .unwrap_or_else(undefined_value);
     let signal_value = signal.unwrap_or_else(undefined_value);
     let abort_reason = if signal.map(signal_is_aborted).unwrap_or(false) {

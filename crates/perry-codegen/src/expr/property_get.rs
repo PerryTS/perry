@@ -1245,16 +1245,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .copied()
                             .unwrap_or(0)
                             .min(5);
-                        let mut wrap_param_types: Vec<crate::types::LlvmType> = vec![I64];
-                        for _ in 0..param_count {
-                            wrap_param_types.push(DOUBLE);
-                        }
+                        let wrap_param_types =
+                            crate::expr::body_call::js_body_param_types(param_count);
                         ctx.pending_declares
                             .push((wrap_name.clone(), DOUBLE, wrap_param_types));
                         let blk = ctx.block();
-                        let wrap_ptr = format!("@{}", wrap_name);
+                        let wrap_info = blk.fn_info_ref(&wrap_name);
                         let closure_handle =
-                            blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                            blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
                         return Ok(nanbox_pointer_inline(blk, &closure_handle));
                     }
                 }

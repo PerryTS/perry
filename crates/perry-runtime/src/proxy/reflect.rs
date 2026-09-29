@@ -1,9 +1,9 @@
 use super::{
     closure_from, coerce_trap_bool, extract_pointer, handler_trap, is_callable_function,
-    js_closure_call0, js_closure_call2, js_proxy_delete, js_proxy_get, js_proxy_has, lookup,
-    nanbox_bool, reflect_non_object_typeerror, reflect_ordinary_delete_property_key,
-    reflect_ordinary_set_with_receiver, reflect_value_is_object, revoked_return,
-    target_get_property_key, throw_type_error, PROXIES, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    js_proxy_delete, js_proxy_get, js_proxy_has, lookup, nanbox_bool, reflect_non_object_typeerror,
+    reflect_ordinary_delete_property_key, reflect_ordinary_set_with_receiver,
+    reflect_value_is_object, revoked_return, target_get_property_key, throw_type_error, PROXIES,
+    TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 /// `Reflect.get(target, key, receiver)` (#2766).
@@ -51,7 +51,7 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
     }
     // #2766: if `key` resolves to an accessor *getter* on `target`, rebind its
     // `this` to the receiver and invoke it - object-literal getters capture
-    // `this` in a reserved closure slot (not `IMPLICIT_THIS`), so plain
+    // `this` in a reserved closure slot (not only the `this` parameter), so plain
     // forwarding would read the target's fields, not the receiver's. When the
     // receiver equals the target we can skip the clone and use the ordinary
     // read.
@@ -76,22 +76,20 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
                 crate::closure::clone_closure_rebind_this(getter.get_nanbox_f64().to_bits(), recv);
             let closure = closure_from(f64::from_bits(rebound));
             if !closure.is_null() {
-                // Also set IMPLICIT_THIS for free-function getters that read
-                // `this` from the implicit-this fallback rather than a slot.
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                // Also pass the receiver as the `this` parameter for
+                // free-function getters that read it rather than a slot.
                 let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
                     target_handle.get_nanbox_f64()
                 } else {
                     receiver_handle.get_nanbox_f64()
                 };
-                let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-                let result = js_closure_call0(closure);
-                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-                return result;
+                return crate::closure::js_closure_call0(
+                    closure,
+                    crate::closure::JsThis::from_f64(recv),
+                );
             }
         }
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let recv = if receiver_handle.get_nanbox_f64().to_bits() == TAG_UNDEFINED {
         target_handle.get_nanbox_f64()
     } else {
@@ -109,13 +107,10 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
             )
         };
     }
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
-    let result = target_get_property_key(
+    target_get_property_key(
         target_handle.get_nanbox_f64(),
         property_key_handle.get_nanbox_f64(),
-    );
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
-    result
+    )
 }
 
 /// `Reflect.set(target, key, value, receiver?)` - returns the boolean result
@@ -444,16 +439,12 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
     if closure.is_null() {
         return throw_type_error("proxy getOwnPropertyDescriptor trap is not a function");
     }
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        handler_handle.get_nanbox_f64(),
-    ));
-    let result = js_closure_call2(
+    let result = crate::closure::js_closure_call2(
         closure,
+        crate::closure::JsThis::from_f64(handler_handle.get_nanbox_f64()),
         inner_handle.get_nanbox_f64(),
         property_key_handle.get_nanbox_f64(),
     );
-    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     let result_handle = scope.root_nanbox_f64(result);
 
     let target_desc = crate::object::js_object_get_own_property_descriptor(

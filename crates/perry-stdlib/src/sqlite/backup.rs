@@ -326,6 +326,7 @@ pub(crate) unsafe fn call_backup_progress(
     );
     js_closure_call1(
         progress,
+        perry_runtime::closure::plain_call_receiver(),
         f64::from_bits(JSValue::object_ptr(info as *mut u8).bits()),
     );
 }

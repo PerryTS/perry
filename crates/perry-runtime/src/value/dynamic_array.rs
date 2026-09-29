@@ -113,7 +113,11 @@ pub extern "C" fn js_dynamic_array_find(
         let length = js_dynamic_array_length(arr_value);
         for i in 0..length {
             let element = js_dynamic_array_get(arr_value, i);
-            let result = crate::closure::js_closure_call1(callback, element);
+            let result = crate::closure::js_closure_call1(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if js_is_truthy(result) != 0 {
                 return element;
@@ -148,7 +152,11 @@ pub extern "C" fn js_dynamic_array_findIndex(
         let length = js_dynamic_array_length(arr_value);
         for i in 0..length {
             let element = js_dynamic_array_get(arr_value, i);
-            let result = crate::closure::js_closure_call1(callback, element);
+            let result = crate::closure::js_closure_call1(
+                callback,
+                crate::closure::plain_call_receiver(),
+                element,
+            );
             // Proper truthy check: handles NaN-boxed booleans
             if js_is_truthy(result) != 0 {
                 return i as f64;

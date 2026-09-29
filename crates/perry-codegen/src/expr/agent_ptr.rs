@@ -179,7 +179,6 @@ pub(crate) fn emit_slot_addr(
 fn agent_ptr_accessor(slot: usize) -> &'static str {
     match slot {
         crate::runtime_abi::AGENT_PTR_SHAPE_DIR => "perry_shape_dir_cell",
-        crate::runtime_abi::AGENT_PTR_IMPLICIT_THIS => "perry_implicit_this_cell",
         _ => unreachable!("agent pointer slot {slot} has no accessor"),
     }
 }

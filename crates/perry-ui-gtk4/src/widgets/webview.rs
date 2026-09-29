@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use webkit6::prelude::*;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
@@ -174,7 +174,8 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
             let url_nb = nanbox_str(&url);
             let closure_ptr = unsafe { js_nanbox_get_pointer(on_should) } as *const u8;
             if !closure_ptr.is_null() {
-                let result = unsafe { js_closure_call1(closure_ptr, url_nb) };
+                let result =
+                    unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb) };
                 let bits = result.to_bits();
                 let is_undefined = bits == 0x7FFC_0000_0000_0001;
                 let allow = is_undefined || unsafe { js_is_truthy(result) != 0 };
@@ -206,7 +207,7 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
         let closure_ptr = unsafe { js_nanbox_get_pointer(on_loaded) } as *const u8;
         if !closure_ptr.is_null() {
             unsafe {
-                js_closure_call1(closure_ptr, url_nb);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb);
             }
         }
     });
@@ -226,7 +227,7 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
         let closure_ptr = unsafe { js_nanbox_get_pointer(on_error) } as *const u8;
         if !closure_ptr.is_null() {
             unsafe {
-                js_closure_call2(closure_ptr, code, msg_nb);
+                js_closure_call2(closure_ptr, perry_ffi::JsThis::UNDEFINED, code, msg_nb);
             }
         }
         false
@@ -299,7 +300,7 @@ pub fn evaluate_js(handle: i64, js_ptr: *const u8, callback: f64) {
         let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
         if !closure_ptr.is_null() {
             unsafe {
-                js_closure_call1(closure_ptr, nb);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb);
             }
         }
     });

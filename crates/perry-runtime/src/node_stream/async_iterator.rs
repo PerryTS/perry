@@ -54,6 +54,7 @@ fn readable_iterator_done() -> f64 {
 
 extern "C" fn ns_readable_iterator_chunk_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
@@ -65,6 +66,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
 
 extern "C" fn ns_readable_iterator_chunk_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
@@ -76,6 +78,7 @@ extern "C" fn ns_readable_iterator_chunk_rejected(
 
 extern "C" fn ns_readable_source_iterator_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     result: f64,
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
@@ -99,6 +102,7 @@ extern "C" fn ns_readable_source_iterator_fulfilled(
 
 extern "C" fn ns_readable_source_iterator_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
@@ -122,8 +126,14 @@ fn readable_iterator_chunk_result(value: f64) -> f64 {
 
     let inner = crate::value::js_nanbox_get_pointer(value) as *mut crate::promise::Promise;
     let outer = crate::promise::js_promise_new();
-    let fulfill = js_closure_alloc(ns_readable_iterator_chunk_fulfilled as *const u8, 1);
-    let reject = js_closure_alloc(ns_readable_iterator_chunk_rejected as *const u8, 1);
+    let fulfill = js_closure_alloc(
+        crate::fn_info!(ns_readable_iterator_chunk_fulfilled, 1; with_declared(1)),
+        1,
+    );
+    let reject = js_closure_alloc(
+        crate::fn_info!(ns_readable_iterator_chunk_rejected, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_ptr(fulfill, 0, outer as i64);
     js_closure_set_capture_ptr(reject, 0, outer as i64);
     crate::promise::js_promise_attach_handlers(inner, fulfill, reject);
@@ -339,7 +349,11 @@ fn iterator_from_listener(closure: *const ClosureHeader) -> f64 {
 }
 
 /// `data` listener: resolve a waiting `next()` or buffer the chunk.
-extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
+extern "C" fn ns_readable_iter_on_data(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    chunk: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -377,7 +391,10 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
 
 /// `end` listener: a waiting `next()` resolves to `{done:true}`; otherwise the
 /// end is recorded so a later `next()` (after the queue drains) reports done.
-extern "C" fn ns_readable_iter_on_end(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iter_on_end(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -400,7 +417,11 @@ extern "C" fn ns_readable_iter_on_end(closure: *const ClosureHeader) -> f64 {
 
 /// `error` listener: reject a waiting `next()` or store the error for the next
 /// pull.
-extern "C" fn ns_readable_iter_on_error(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn ns_readable_iter_on_error(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -421,10 +442,10 @@ fn attach_iterator_listener(
     iterator: f64,
     stream: f64,
     event: &[u8],
-    func: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     store_key: &[u8],
 ) {
-    let cb = js_closure_alloc(func, 1);
+    let cb = js_closure_alloc(info, 1);
     js_closure_set_capture_f64(cb, 0, iterator);
     let cb_value = box_pointer(cb as *const u8);
     set_hidden_value(iterator, hidden_key(store_key), cb_value);
@@ -469,21 +490,21 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
         iterator,
         stream,
         b"data",
-        ns_readable_iter_on_data as *const u8,
+        crate::fn_info!(ns_readable_iter_on_data, 1; with_declared(1)),
         READABLE_ITERATOR_DATA_CB_KEY,
     );
     attach_iterator_listener(
         iterator,
         stream,
         b"end",
-        ns_readable_iter_on_end as *const u8,
+        crate::fn_info!(ns_readable_iter_on_end, 0; with_declared(0)),
         READABLE_ITERATOR_END_CB_KEY,
     );
     attach_iterator_listener(
         iterator,
         stream,
         b"error",
-        ns_readable_iter_on_error as *const u8,
+        crate::fn_info!(ns_readable_iter_on_error, 1; with_declared(1)),
         READABLE_ITERATOR_ERROR_CB_KEY,
     );
 
@@ -572,9 +593,12 @@ pub(super) fn call_source_iterator_return(stream: f64) {
     settle_iterator_return_value(returned);
 }
 
-extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
+extern "C" fn ns_readable_iterator_next(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let iterator = scope.root_nanbox_f64(this_value(closure));
+    let iterator = scope.root_nanbox_f64(this_value(closure, this));
     if iterator_is_done(iterator.get_nanbox_f64()) {
         return readable_iterator_done();
     }
@@ -618,9 +642,15 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
                 crate::promise::js_promise_resolved(next.get_nanbox_f64())
             };
             let promise = scope.root_raw_mut_ptr(promise);
-            let fulfilled = js_closure_alloc(ns_readable_source_iterator_fulfilled as *const u8, 1);
+            let fulfilled = js_closure_alloc(
+                crate::fn_info!(ns_readable_source_iterator_fulfilled, 1; with_declared(1)),
+                1,
+            );
             let fulfilled = scope.root_raw_mut_ptr(fulfilled);
-            let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
+            let rejected = js_closure_alloc(
+                crate::fn_info!(ns_readable_source_iterator_rejected, 1; with_declared(1)),
+                1,
+            );
             let rejected = scope.root_raw_mut_ptr(rejected);
             js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
             js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
@@ -675,8 +705,11 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     box_pointer(promise.get_raw_const_ptr())
 }
 
-extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 {
-    let iterator = this_value(closure);
+extern "C" fn ns_readable_iterator_return(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let iterator = this_value(closure, this);
     let already_done = iterator_is_done(iterator);
     iterator_mark_done(iterator);
     iterator_remove_listeners(iterator);
@@ -692,26 +725,39 @@ extern "C" fn ns_readable_iterator_return(closure: *const ClosureHeader) -> f64 
     readable_iterator_done()
 }
 
-extern "C" fn ns_readable_iterator_self(closure: *const ClosureHeader) -> f64 {
-    this_value(closure)
+extern "C" fn ns_readable_iterator_self(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    this_value(closure, this)
 }
 
-pub(super) extern "C" fn ns_async_iterator(closure: *const ClosureHeader) -> f64 {
-    build_readable_async_iterator(this_value(closure), true)
+pub(super) extern "C" fn ns_async_iterator(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    build_readable_async_iterator(this_value(closure, this), true)
 }
 
-pub(super) extern "C" fn ns_iterator1(closure: *const ClosureHeader, opts: f64) -> f64 {
-    build_readable_async_iterator(this_value(closure), destroy_on_return_from_options(opts))
+pub(super) extern "C" fn ns_iterator1(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    opts: f64,
+) -> f64 {
+    build_readable_async_iterator(
+        this_value(closure, this),
+        destroy_on_return_from_options(opts),
+    )
 }
 
-fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const ClosureHeader) -> f64) {
+fn install_async_iterator_symbol(target: f64, info: *const crate::closure::JsFunctionInfo) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if async_iterator.is_null() {
         return;
     }
-    let closure = scope.root_raw_mut_ptr(js_closure_alloc(func as *const u8, 1));
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(info, 1));
     closure.with_mut_ptr(|closure| {
         js_closure_set_capture_ptr(closure, 0, target.get_nanbox_f64().to_bits() as i64)
     });
@@ -742,8 +788,14 @@ pub(super) fn build_readable_async_iterator(stream: f64, destroy_on_return: bool
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let methods = [
-        ("next", cast0(ns_readable_iterator_next)),
-        ("return", cast0(ns_readable_iterator_return)),
+        (
+            "next",
+            crate::fn_info!(ns_readable_iterator_next, 0; with_declared(0)),
+        ),
+        (
+            "return",
+            crate::fn_info!(ns_readable_iterator_return, 0; with_declared(0)),
+        ),
     ];
     let obj = build_object(&methods, READABLE_ITERATOR_SHAPE_ID + methods.len() as u32);
     let iterator = scope.root_nanbox_f64(box_pointer(obj as *const u8));
@@ -767,7 +819,10 @@ pub(super) fn build_readable_async_iterator(stream: f64, destroy_on_return: bool
             TAG_FALSE
         }),
     );
-    install_async_iterator_symbol(iterator.get_nanbox_f64(), ns_readable_iterator_self);
+    install_async_iterator_symbol(
+        iterator.get_nanbox_f64(),
+        crate::fn_info!(ns_readable_iterator_self, 0; with_declared(0)),
+    );
     iterator.get_nanbox_f64()
 }
 
@@ -788,8 +843,8 @@ pub(super) fn build_readable_async_iterator(stream: f64, destroy_on_return: bool
 #[no_mangle]
 pub extern "C" fn js_make_single_value_async_iterator(value: f64) -> f64 {
     let methods = [
-        ("next", cast0(single_value_iterator_next)),
-        ("return", cast0(single_value_iterator_return)),
+        ("next", crate::fn_info!(single_value_iterator_next, 0)),
+        ("return", crate::fn_info!(single_value_iterator_return, 0)),
     ];
     let obj = build_object(
         &methods,
@@ -804,12 +859,18 @@ pub extern "C" fn js_make_single_value_async_iterator(value: f64) -> f64 {
         hidden_key(READABLE_ITERATOR_DONE_KEY),
         f64::from_bits(if empty { TAG_TRUE } else { TAG_FALSE }),
     );
-    install_async_iterator_symbol(iterator, ns_readable_iterator_self);
+    install_async_iterator_symbol(
+        iterator,
+        crate::fn_info!(ns_readable_iterator_self, 0; with_declared(0)),
+    );
     iterator
 }
 
-extern "C" fn single_value_iterator_next(closure: *const ClosureHeader) -> f64 {
-    let iterator = this_value(closure);
+extern "C" fn single_value_iterator_next(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let iterator = this_value(closure, this);
     if iterator_is_done(iterator) {
         return readable_iterator_done();
     }
@@ -819,8 +880,11 @@ extern "C" fn single_value_iterator_next(closure: *const ClosureHeader) -> f64 {
     resolved_promise(iterator_result(value, false))
 }
 
-extern "C" fn single_value_iterator_return(closure: *const ClosureHeader) -> f64 {
-    iterator_mark_done(this_value(closure));
+extern "C" fn single_value_iterator_return(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    iterator_mark_done(this_value(closure, this));
     readable_iterator_done()
 }
 
@@ -858,7 +922,10 @@ pub(crate) fn mark_foreign_readable_ended(stream: f64) {
 }
 
 pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
-    install_async_iterator_symbol(stream, ns_async_iterator);
+    install_async_iterator_symbol(
+        stream,
+        crate::fn_info!(ns_async_iterator, 0; with_declared(0)),
+    );
 }
 
 /// #9400: make a readable that owns its own listener registry async-iterable —
@@ -877,24 +944,6 @@ pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64
         f64::from_bits(TAG_TRUE),
     );
     install_foreign_readable_async_iterator_symbol(stream);
-}
-
-pub(super) fn register_arities() {
-    crate::closure::js_register_closure_arity(ns_async_iterator as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_iterator1 as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_readable_iterator_next as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_readable_iterator_return as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_readable_iterator_self as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_fulfilled as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_readable_iterator_chunk_rejected as *const u8, 1);
-    crate::closure::js_register_closure_arity(
-        ns_readable_source_iterator_fulfilled as *const u8,
-        1,
-    );
-    crate::closure::js_register_closure_arity(ns_readable_source_iterator_rejected as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_readable_iter_on_data as *const u8, 1);
-    crate::closure::js_register_closure_arity(ns_readable_iter_on_end as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_readable_iter_on_error as *const u8, 1);
 }
 
 #[cfg(test)]
@@ -928,13 +977,16 @@ mod fifo_pending_tests {
         iterator_push_pending(iterator, p1);
         iterator_push_pending(iterator, p2);
 
-        let data_cb = js_closure_alloc(ns_readable_iter_on_data as *const u8, 1);
+        let data_cb = js_closure_alloc(
+            crate::fn_info!(ns_readable_iter_on_data, 1; with_declared(1)),
+            1,
+        );
         js_closure_set_capture_f64(data_cb, 0, iterator);
 
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-        ns_readable_iter_on_data(data_cb, 1.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::UNDEFINED, 1.0);
         assert!(readable_is_flowing(stream));
-        ns_readable_iter_on_data(data_cb, 2.0);
+        ns_readable_iter_on_data(data_cb, crate::closure::JsThis::UNDEFINED, 2.0);
         assert!(readable_is_paused(stream));
 
         assert_eq!(
@@ -1003,10 +1055,14 @@ mod fifo_pending_tests {
     fn retained_source_rejection_finishes_iterator_and_destroys_stream() {
         let stream = readable_from_chunks(crate::array::js_array_alloc(0));
         let iterator = build_readable_async_iterator(stream, true);
-        let rejected = js_closure_alloc(ns_readable_source_iterator_rejected as *const u8, 1);
+        let rejected = js_closure_alloc(
+            crate::fn_info!(ns_readable_source_iterator_rejected, 1; with_declared(1)),
+            1,
+        );
         js_closure_set_capture_f64(rejected, 0, iterator);
 
-        let result = ns_readable_source_iterator_rejected(rejected, 7.0);
+        let result =
+            ns_readable_source_iterator_rejected(rejected, crate::closure::JsThis::UNDEFINED, 7.0);
         let promise = crate::value::js_nanbox_get_pointer(result) as *mut crate::promise::Promise;
         assert!(iterator_is_done(iterator));
         assert!(stream_destroyed(stream));

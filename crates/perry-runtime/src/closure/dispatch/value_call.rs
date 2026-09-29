@@ -1,6 +1,8 @@
-//! Dynamic value-call entry points: `js_native_call_value` (the generic
-//! NaN-boxed callee dispatcher), the V8 trampoline bridge `js_closure_call_array`,
-//! and the spread-apply bridge `js_closure_call_apply_with_spread`.
+//! Dynamic value-call entry points, each taking the receiver after the
+//! function: `js_native_call_value` (the generic NaN-boxed callee
+//! dispatcher), `js_closure_call_array` (any argument count) and the
+//! spread-apply bridge `js_closure_call_apply_with_spread`; plus the V8
+//! trampoline adapter `js_closure_v8_callback`.
 
 use super::*;
 
@@ -26,14 +28,18 @@ use super::*;
 // throw trips ("panic in a function that cannot unwind"). #8416 introduced
 // the first two such guards here; #8464 added ~40 more and measurably
 // regressed main (+20 gap crashes, gc-stress) before being reverted.
+/// Call function value `func_value` with receiver `this`
+/// (`JsThis::UNDEFINED` for a plain call) and `args_len` arguments at
+/// `args_ptr`: what `func.call(this, ...args)` does.
 #[cfg(panic = "abort")]
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_value(
     func_value: f64,
+    this: crate::closure::JsThis,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    unsafe { js_native_call_value_impl(func_value, args_ptr, args_len) }
+    unsafe { native_call_value_this_impl(func_value, this, args_ptr, args_len) }
 }
 
 // Debug/test static archives transport Perry exceptions with Rust unwinding,
@@ -43,14 +49,38 @@ pub unsafe extern "C" fn js_native_call_value(
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_native_call_value(
     func_value: f64,
+    this: crate::closure::JsThis,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    unsafe { js_native_call_value_impl(func_value, args_ptr, args_len) }
+    unsafe { native_call_value_this_impl(func_value, this, args_ptr, args_len) }
 }
 
+/// Call function value `func_value` with receiver `this` and `args_len`
+/// arguments at `args_ptr`: the one value-call dispatcher, for runtime callers.
+///
+/// This calls the exported `js_native_call_value` instead of inlining the
+/// dispatcher: the runtime has over a hundred callers, and inlining the whole
+/// dispatch into each of them grew every linked program by ~190 KB.
 #[inline(always)]
-unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+pub(crate) unsafe fn native_call_value_this(
+    func_value: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    unsafe { js_native_call_value(func_value, this, args_ptr, args_len) }
+}
+
+/// The dispatcher body, inlined only into the two `js_native_call_value`
+/// definitions (one per panic strategy).
+#[inline(always)]
+unsafe fn native_call_value_this_impl(
+    func_value: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     use crate::value::JSValue;
 
     let jsval = JSValue::from_bits(func_value.to_bits());
@@ -78,8 +108,7 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        let this_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
-        return crate::proxy::js_proxy_apply(func_value, this_arg, arr_box);
+        return crate::proxy::js_proxy_apply(func_value, this.as_f64(), arr_box);
     }
 
     // Dynamic `super()` for `class X extends <runtime value holding
@@ -90,14 +119,16 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
     // the direct `class X extends EventEmitter` form (#5137) — never fires, and
     // `js_register_class_parent_dynamic` early-returns for bound native parents.
     // The dynamic super lowering (expr/this_super_call.rs) dispatches the parent
-    // VALUE here with IMPLICIT_THIS bound to the fresh subclass instance. Install
+    // VALUE here with `this` = the fresh subclass instance. Install
     // the EventEmitter listener/emit methods onto that instance, exactly as the
     // direct form does, so `this.setMaxListeners(…)`/`.on`/`.emit` resolve.
     // Routed through the armed ops table (see `nm_namespace_hooks`): the
     // probe can only match a bound native callable, which exists only once
     // `callable_exports` minted one (arming the table).
     if let Some(ops) = crate::object::nm_ee_ops() {
-        if let Some(result) = unsafe { (ops.ee_dynamic_super)(func_value, args_ptr, args_len) } {
+        if let Some(result) =
+            unsafe { (ops.ee_dynamic_super)(func_value, this, args_ptr, args_len) }
+        {
             return result;
         }
     }
@@ -132,9 +163,9 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
     // #3716: a built-in prototype method invoked *as a value* (the uncurry-this
     // idiom `Function.prototype.call.bind(method)`) lands here as a no-op-backed
     // closure that would just return `undefined`. Re-dispatch it by name through
-    // `js_native_call_method`, with the receiver taken from `IMPLICIT_THIS`.
+    // `js_native_call_method`, with the call's receiver.
     if let Some(result) =
-        crate::object::try_dispatch_value_called_proto_method(closure, args_ptr, args_len)
+        crate::object::try_dispatch_value_called_proto_method(closure, this, args_ptr, args_len)
     {
         return result;
     }
@@ -147,9 +178,9 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
     // from random stack memory, which evaluated truthy and fell into the
     // slow-path `#newResponse` chain that ended in `(number).set is not a
     // function`. Closures with rest params (`(a, ...rest) => …`) have their
-    // own registry path via `lookup_closure_rest` which already pads, so we
-    // skip the arity lookup when the rest registry has an entry.
-    let func_ptr = get_valid_func_ptr(closure);
+    // own path (`dispatch_rest_bundled`) which already pads.
+    let info = crate::closure::closure_info(closure);
+    let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
     // %Function.prototype% is itself callable: it accepts any arguments and
     // returns `undefined` (ECMA-262 20.2.3). It is stored as a plain object,
     // so it lands here with no valid func_ptr — short-circuit before the
@@ -175,13 +206,11 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
         }
         return crate::object::js_new_function_construct(func_value, args_ptr, args_len);
     }
-    let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
-        match lookup_closure_arity(func_ptr) {
-            Some(declared) if (declared as usize) > args_len => declared as usize,
-            _ => args_len,
+    let dispatch_args_len = match info {
+        Some(info) if crate::closure::info_rest(info).is_none() => {
+            args_len.max(usize::from(info.params))
         }
-    } else {
-        args_len
+        _ => args_len,
     };
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -213,225 +242,73 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
     // args) would silently drop the overflow. Route through the rest-bundler
     // with the full slice up front. (The arity-specific `js_closure_callN`
     // helpers do their own rest check, but only see the truncated arg list.)
-    if !func_ptr.is_null() {
-        if let Some((fixed_arity, synth)) = lookup_closure_rest_full(func_ptr) {
-            let all: Vec<f64> = (0..args_len).map(arg_at).collect();
-            return dispatch_rest_bundled(closure, func_ptr, &all, fixed_arity, synth);
-        }
+    if let Some((fixed_arity, synth)) = info.and_then(crate::closure::info_rest) {
+        let all: Vec<f64> = (0..args_len).map(arg_at).collect();
+        return dispatch_rest_bundled(closure, func_ptr, this, &all, fixed_arity, synth);
     }
 
-    // Call with the appropriate arity
-    match dispatch_args_len {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, arg_at(0)),
-        2 => js_closure_call2(closure, arg_at(0), arg_at(1)),
-        3 => js_closure_call3(closure, arg_at(0), arg_at(1), arg_at(2)),
-        4 => js_closure_call4(closure, arg_at(0), arg_at(1), arg_at(2), arg_at(3)),
-        5 => js_closure_call5(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-        ),
-        6 => js_closure_call6(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-        ),
-        7 => js_closure_call7(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-        ),
-        8 => js_closure_call8(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-        ),
-        // Arities 9..=16 must each dispatch through their own
-        // `js_closure_call{N}` so the func-ptr is transmuted to a signature
-        // with the matching number of `f64` params. Collapsing these into
-        // `js_closure_call8` (the pre-fix `_` arm) silently dropped args 9+ for
-        // any closure VALUE / method invoked with >8 args — the codegen-side
-        // wrapper now carries up to 16 params (see artifacts.rs), so the runtime
-        // dispatch must reach them. >16 args fall back to the array path.
-        9 => js_closure_call9(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-        ),
-        10 => js_closure_call10(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-        ),
-        11 => js_closure_call11(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-        ),
-        12 => js_closure_call12(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-            arg_at(11),
-        ),
-        13 => js_closure_call13(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-            arg_at(11),
-            arg_at(12),
-        ),
-        14 => js_closure_call14(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-            arg_at(11),
-            arg_at(12),
-            arg_at(13),
-        ),
-        15 => js_closure_call15(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-            arg_at(11),
-            arg_at(12),
-            arg_at(13),
-            arg_at(14),
-        ),
-        16 => js_closure_call16(
-            closure,
-            arg_at(0),
-            arg_at(1),
-            arg_at(2),
-            arg_at(3),
-            arg_at(4),
-            arg_at(5),
-            arg_at(6),
-            arg_at(7),
-            arg_at(8),
-            arg_at(9),
-            arg_at(10),
-            arg_at(11),
-            arg_at(12),
-            arg_at(13),
-            arg_at(14),
-            arg_at(15),
-        ),
-        // >16 args: marshal into a stack buffer and dispatch via the variadic
-        // array path (which itself fans back out to `js_closure_call{N}`).
-        _ => {
-            let mut buf: Vec<f64> = Vec::with_capacity(dispatch_args_len);
-            for i in 0..dispatch_args_len {
-                buf.push(arg_at(i));
-            }
-            js_closure_call_array(closure as i64, buf.as_ptr(), buf.len() as i64)
+    // Call with the appropriate arity (padded with `undefined` up to the
+    // body's declared arity).
+    if dispatch_args_len <= 16 {
+        let mut buf = [undef; 16];
+        for (i, slot) in buf.iter_mut().enumerate().take(dispatch_args_len) {
+            *slot = arg_at(i);
         }
+        return super::calln::dispatch_call_slice(closure, this, &buf[..dispatch_args_len]);
     }
+    // >16 args: marshal into a buffer and dispatch via the variadic array
+    // path.
+    let buf: Vec<f64> = (0..dispatch_args_len).map(arg_at).collect();
+    call_array_this(closure, this, buf.as_ptr(), buf.len() as i64)
+}
+
+/// Call a closure with receiver `this` (`JsThis::UNDEFINED` for a plain
+/// call) and `args_len` arguments at `args_ptr` — any count, including more
+/// than the 16 `js_closure_callN` covers. Takes the closure pointer already
+/// unboxed (an integer register), unlike [`js_native_call_value`].
+#[no_mangle]
+pub unsafe extern "C" fn js_closure_call_array(
+    closure_env: i64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: i64,
+) -> f64 {
+    call_array_this(
+        closure_env as *const ClosureHeader,
+        this,
+        args_ptr,
+        args_len,
+    )
 }
 
 /// Adapter for V8's `native_callback_trampoline` (perry-jsruntime).
 ///
 /// `js_create_callback(func_ptr, closure_env, param_count)` registers a JS
 /// callable whose trampoline invokes `func_ptr(closure_env, args_ptr,
-/// args_len)`. Perry closure bodies have signature
-/// `(closure_ptr, arg0, arg1, ...)` per arity instead, so the codegen
-/// arm for `Expr::JsCreateCallback` (issue #248 Phase 2B) passes
-/// `js_closure_call_array` as the trampoline `func_ptr` and the raw
-/// `*const ClosureHeader` (NaN-boxing stripped) as `closure_env`. The
-/// trampoline then ends up calling THIS function, which dispatches to
-/// the right `js_closure_callN` per `args_len`.
-///
-/// Mirrors `js_native_call_value` exactly but takes an i64 closure
-/// pointer (already unboxed) instead of an f64 NaN-boxed value, so the
-/// SysV-x64 / Win64 first-arg register lands in rdi/rcx (integer)
-/// rather than xmm0 — matching the trampoline's `extern "C"` int-arg
-/// expectation.
+/// args_len)` — a contract with no receiver. The codegen arm for
+/// `Expr::JsCreateCallback` (issue #248 Phase 2B) passes THIS function as
+/// `func_ptr` and the raw `*const ClosureHeader` (NaN-boxing stripped) as
+/// `closure_env`; it calls the closure as a plain call.
 #[no_mangle]
-pub unsafe extern "C" fn js_closure_call_array(
+pub unsafe extern "C" fn js_closure_v8_callback(
     closure_env: i64,
     args_ptr: *const f64,
     args_len: i64,
 ) -> f64 {
-    let closure = closure_env as *const ClosureHeader;
+    call_array_this(
+        closure_env as *const ClosureHeader,
+        crate::closure::JsThis::UNDEFINED,
+        args_ptr,
+        args_len,
+    )
+}
+
+unsafe fn call_array_this(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: i64,
+) -> f64 {
     if closure.is_null() {
         throw_not_callable();
     }
@@ -458,8 +335,9 @@ pub unsafe extern "C" fn js_closure_call_array(
     // affected here — we never see BOUND_METHOD_FUNC_PTR through this
     // entry because `js_closure_call_apply_with_spread`'s caller always
     // resolves a real closure pointer first.
-    let fp_for_rest = get_valid_func_ptr(closure);
-    if let Some((fixed_arity, synth)) = lookup_closure_rest_full(fp_for_rest) {
+    let info_for_rest = crate::closure::closure_info(closure);
+    let fp_for_rest = info_for_rest.map_or(std::ptr::null(), |info| info.code);
+    if let Some((fixed_arity, synth)) = info_for_rest.and_then(crate::closure::info_rest) {
         let mut tmp: Vec<f64> = Vec::with_capacity(n);
         if !args_ptr.is_null() && n > 0 {
             for i in 0..n {
@@ -484,7 +362,7 @@ pub unsafe extern "C" fn js_closure_call_array(
                 tmp.push(unboxed);
             }
         }
-        return dispatch_rest_bundled(closure, fp_for_rest, &tmp, fixed_arity, synth);
+        return dispatch_rest_bundled(closure, fp_for_rest, this, &tmp, fixed_arity, synth);
     }
     // Perry's closure-body arithmetic uses plain `fadd`/`fmul`/etc on
     // f64 inputs and assumes its arguments arrive as plain doubles, not
@@ -516,140 +394,14 @@ pub unsafe extern "C" fn js_closure_call_array(
         }
         raw
     };
+    if n <= 16 {
+        let mut buf = [0.0f64; 16];
+        for (i, slot) in buf.iter_mut().enumerate().take(n) {
+            *slot = a(i);
+        }
+        return super::calln::dispatch_call_slice(closure, this, &buf[..n]);
+    }
     match n {
-        0 => js_closure_call0(closure),
-        1 => js_closure_call1(closure, a(0)),
-        2 => js_closure_call2(closure, a(0), a(1)),
-        3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        4 => js_closure_call4(closure, a(0), a(1), a(2), a(3)),
-        5 => js_closure_call5(closure, a(0), a(1), a(2), a(3), a(4)),
-        6 => js_closure_call6(closure, a(0), a(1), a(2), a(3), a(4), a(5)),
-        7 => js_closure_call7(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6)),
-        8 => js_closure_call8(closure, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7)),
-        9 => js_closure_call9(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-        ),
-        10 => js_closure_call10(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-        ),
-        11 => js_closure_call11(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-        ),
-        12 => js_closure_call12(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-        ),
-        13 => js_closure_call13(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-        ),
-        14 => js_closure_call14(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-        ),
-        15 => js_closure_call15(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-            a(14),
-        ),
-        16 => js_closure_call16(
-            closure,
-            a(0),
-            a(1),
-            a(2),
-            a(3),
-            a(4),
-            a(5),
-            a(6),
-            a(7),
-            a(8),
-            a(9),
-            a(10),
-            a(11),
-            a(12),
-            a(13),
-            a(14),
-            a(15),
-        ),
         // #3527: arities above 16 can't go through a fixed per-arity
         // `js_closure_callN` (none exist past 16). Build the full unboxed
         // arg slice and dispatch through the strategy resolver so the
@@ -657,35 +409,28 @@ pub unsafe extern "C" fn js_closure_call_array(
         // js_closure_call16(...)` silently dropped args 16.. — breaking
         // qs's recursive `stringify`, which self-calls with 18 args).
         //
-        // #10420: ONE memoized strategy probe decides the route, as in
-        // `js_closure_callN` — the registry helpers this arm used to chain
-        // re-read the body record on every call. A body with a registered
-        // arity is called at exactly that width: padded when it declares
-        // more than `n`, and never handed slots it does not declare (so a
-        // `fn.apply(null, arr)` with thousands of elements costs the body's
-        // own width). An unregistered body is a runtime-provided callee with
-        // a handful of params; clamp it to the widest dynamic call.
+        // #10420: the body's info decides the route, as in
+        // `js_closure_callN`. A body is called at exactly its declared
+        // width: padded when it declares more than `n`, and never handed
+        // slots it does not declare (so a `fn.apply(null, arr)` with
+        // thousands of elements costs the body's own width).
         _ => {
             let mut full: Vec<f64> = Vec::with_capacity(n);
             for i in 0..n {
                 full.push(a(i));
             }
-            let func_ptr = get_valid_func_ptr(closure);
-            if func_ptr.is_null() {
+            let Some(info) = crate::closure::closure_info(closure) else {
                 throw_not_callable();
-            }
-            match resolve_strategy(func_ptr).kind() {
-                DispatchKind::BoundMethod => dispatch_bound_method(closure, &full),
+            };
+            let func_ptr = info.code;
+            match resolve_strategy(info).kind() {
+                DispatchKind::BoundMethod => dispatch_bound_method(closure, this, &full),
                 DispatchKind::BoundFunction => dispatch_bound_function(closure, &full),
                 DispatchKind::Rest(fixed_arity, synth) => {
-                    dispatch_rest_bundled(closure, func_ptr, &full, fixed_arity, synth)
+                    dispatch_rest_bundled(closure, func_ptr, this, &full, fixed_arity, synth)
                 }
                 DispatchKind::Arity(declared) => {
-                    dispatch_with_arity(closure, func_ptr, &full, declared)
-                }
-                DispatchKind::Direct => {
-                    let width = n.min(crate::closure::MAX_DYNAMIC_CALL_WIDTH) as u32;
-                    dispatch_with_arity(closure, func_ptr, &full, width)
+                    dispatch_with_arity(closure, func_ptr, this, &full, declared)
                 }
             }
         }
@@ -707,6 +452,7 @@ pub unsafe extern "C" fn js_closure_call_array(
 #[no_mangle]
 pub unsafe extern "C" fn js_closure_call_apply_with_spread(
     closure_box: f64,
+    this: crate::closure::JsThis,
     regular_args: *const f64,
     regular_count: i64,
     spread_arr_handle: i64,
@@ -774,5 +520,5 @@ pub unsafe extern "C" fn js_closure_call_apply_with_spread(
         heap_buf.as_ptr()
     };
 
-    js_closure_call_array(closure_ptr as i64, buf_ptr, total as i64)
+    js_closure_call_array(closure_ptr as i64, this, buf_ptr, total as i64)
 }

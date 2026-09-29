@@ -510,6 +510,7 @@ pub(crate) unsafe fn node_sqlite_call_closure(callback: f64, args: &[f64]) -> f6
     };
     js_closure_call_array(
         closure as i64,
+        perry_runtime::closure::plain_call_receiver(),
         if args.is_empty() {
             std::ptr::null()
         } else {

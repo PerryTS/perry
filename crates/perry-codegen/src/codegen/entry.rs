@@ -34,13 +34,14 @@ fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
             Some(n) => n.clone(),
             None => continue,
         };
-        let wrap_ptr = format!("@__perry_wrap_{}", func_name);
+        let wrap_body = format!("__perry_wrap_{}", func_name);
         let key_idx = ctx.strings.intern(name);
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let blk = ctx.block();
         let global_box = blk.call(DOUBLE, "js_get_global_this", &[]);
         let obj_raw = crate::expr::unbox_to_i64(blk, &global_box);
-        let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+        let wrap_info = blk.fn_info_ref(&wrap_body);
+        let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
         let closure_box = crate::expr::nanbox_pointer_inline(blk, &closure_handle);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
@@ -724,7 +725,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
             local_closure_param_counts: HashMap::new(),
-            resolved_arrow_callback_targets: HashMap::new(),
+            resolved_plain_callback_targets: HashMap::new(),
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             versioned_loop_deopt_context: None,
@@ -1587,7 +1588,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             guard_free_closure_bindings: std::collections::HashSet::new(),
             local_closure_param_counts: HashMap::new(),
-            resolved_arrow_callback_targets: HashMap::new(),
+            resolved_plain_callback_targets: HashMap::new(),
             resolved_versioned_loop_callback_targets: HashMap::new(),
             trusted_box_captures: false,
             versioned_loop_deopt_context: None,

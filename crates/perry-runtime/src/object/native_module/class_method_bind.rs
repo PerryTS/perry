@@ -78,7 +78,7 @@ pub extern "C" fn js_class_method_bind(
     // `class_prototype_method_value_for_name` instead of minting a fresh
     // per-receiver closure here. The canonical captures the OWNER class's
     // prototype-ref (capture 0); `dispatch_bound_method` recognises that marker
-    // and supplies the call-site `this` (IMPLICIT_THIS) so invocations still see
+    // and supplies the call-site `this` argument so invocations still see
     // the right receiver — e.g. the `this.m = this.m.bind(this)` idiom rebinds
     // correctly, and a bare `const f = c.m; f()` runs with the spec `this`.
     //
@@ -266,7 +266,7 @@ pub(super) fn build_bound_method_closure_with_private_brand(
     let instance_handle = scope.root_nanbox_f64(instance);
     let private_brand_handle = private_brand.map(|brand| scope.root_nanbox_f64(brand));
     let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::closure::BOUND_METHOD_FUNC_PTR,
+        &crate::closure::BOUND_METHOD_INFO,
         if private_brand_handle.is_some() { 4 } else { 3 },
     ));
     // Capture-slot writes are scoped arguments to non-allocating stores, so

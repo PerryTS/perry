@@ -30,7 +30,8 @@ pub unsafe extern "C" fn js_events_on(
     if signal.is_some_and(signal_is_aborted) {
         js_throw(js_abort_error_value());
     }
-    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 1);
+    let listener =
+        perry_ffi::alloc_closure(perry_ffi::js_function_info!(events_on_queue_listener, 1), 1);
     js_closure_set_capture_ptr(
         listener,
         0,
@@ -92,7 +93,10 @@ pub unsafe extern "C" fn js_events_on(
                     };
                     let close_ptr =
                         js_string_from_bytes(close_name.as_ptr(), close_name.len() as u32);
-                    let close_listener = js_closure_alloc(events_on_close_listener as *const u8, 1);
+                    let close_listener = perry_ffi::alloc_closure(
+                        perry_ffi::js_function_info!(events_on_close_listener, 0),
+                        1,
+                    );
                     js_closure_set_capture_ptr(
                         close_listener,
                         0,
@@ -136,7 +140,10 @@ pub unsafe extern "C" fn js_events_on(
     }
     if let Some(signal) = signal {
         if let Some(signal_ptr) = object_ptr_from_value(signal) {
-            let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 5);
+            let abort_listener = perry_ffi::alloc_closure(
+                perry_ffi::js_function_info!(events_on_abort_listener, 0),
+                5,
+            );
             js_closure_set_capture_ptr(abort_listener, 0, handle);
             js_closure_set_capture_ptr(abort_listener, 1, listener_root.get());
             js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
@@ -156,7 +163,10 @@ pub unsafe extern "C" fn js_events_on(
     (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader
 }
 
-extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) -> f64 {
+extern "C" fn events_abort_listener_dispose(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+) -> f64 {
     unsafe {
         let signal_ptr = js_closure_get_capture_ptr(closure, 0);
         let callback_ptr = js_closure_get_capture_ptr(closure, 1);
@@ -190,7 +200,10 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
         abort_event_value(),
         nanbox_pointer_bits(callback_ptr),
     );
-    let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+    let dispose_closure = perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(events_abort_listener_dispose, 0),
+        2,
+    );
     let dispose_closure_root = root_scope.root_addr(dispose_closure as i64);
     let signal_ptr = object_ptr_from_value(signal_root.get())
         .expect("validated AbortSignal remained a rooted object");

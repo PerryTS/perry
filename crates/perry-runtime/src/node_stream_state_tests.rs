@@ -128,9 +128,10 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
 
 #[test]
 fn passthrough_subclass_uses_override_or_identity_transform() {
-    crate::closure::js_register_closure_arity(super::tests::noop_listener as *const u8, 0);
-    let callback =
-        box_pointer(js_closure_alloc(super::tests::noop_listener as *const u8, 0) as *const u8);
+    let callback = box_pointer(js_closure_alloc(
+        crate::fn_info!(super::tests::noop_listener, 0; with_declared(0)),
+        0,
+    ) as *const u8);
 
     let overridden_obj = crate::object::js_object_alloc(0, 1);
     js_object_set_field_by_name(overridden_obj, hidden_key(b"_transform"), callback);

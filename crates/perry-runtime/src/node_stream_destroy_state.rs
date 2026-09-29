@@ -9,7 +9,10 @@ use super::{
     stream_value_from_handle, this_value, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
-pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_destroy_error_microtask(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -25,7 +28,11 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_destroy_option_done(closure: *const ClosureHeader, err: f64) -> f64 {
+extern "C" fn ns_destroy_option_done(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -41,7 +48,7 @@ extern "C" fn ns_destroy_option_done(closure: *const ClosureHeader, err: f64) ->
 }
 
 fn queue_destroy_events(stream: f64, err: f64) {
-    let closure = js_closure_alloc(ns_destroy_error_microtask as *const u8, 2);
+    let closure = js_closure_alloc(crate::fn_info!(ns_destroy_error_microtask, 0), 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_f64(closure, 1, err);
     crate::builtins::js_queue_microtask(closure as i64);
@@ -55,8 +62,10 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     super::refresh_readable_aborted_flag(stream);
     if let Some(destroy) = get_hidden_value(stream, hidden_key(b"__perryStreamDestroy")) {
         if super::is_callable_value(destroy) {
-            crate::closure::js_register_closure_arity(ns_destroy_option_done as *const u8, 1);
-            let cb = js_closure_alloc(ns_destroy_option_done as *const u8, 2);
+            let cb = js_closure_alloc(
+                crate::fn_info!(ns_destroy_option_done, 1; with_declared(1)),
+                2,
+            );
             js_closure_set_capture_f64(cb, 0, stream);
             js_closure_set_capture_f64(cb, 1, err);
             let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
@@ -66,20 +75,26 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
                 err
             };
             let args = [destroy_arg, cb_value];
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(stream));
             unsafe {
-                let _ = crate::closure::js_native_call_value(destroy, args.as_ptr(), args.len());
+                let _ = crate::closure::native_call_value_this(
+                    destroy,
+                    crate::closure::JsThis::from_f64(stream),
+                    args.as_ptr(),
+                    args.len(),
+                );
             }
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return;
         }
     }
     queue_destroy_events(stream, err);
 }
 
-pub(super) extern "C" fn ns_destroy1(closure: *const ClosureHeader, err: f64) -> f64 {
-    let stream = this_value(closure);
+pub(super) extern "C" fn ns_destroy1(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    err: f64,
+) -> f64 {
+    let stream = this_value(closure, this);
     destroy_stream(stream, err);
     stream
 }

@@ -554,49 +554,64 @@ fn make_locale_instance(proto_bits: u64, p: &ParsedLocale) -> f64 {
     // prototype chain, so install bound `toString`/`maximize`/`minimize` (and
     // the `Intl.Locale-info` getters) on the instance (mirroring the other
     // `Intl.*` constructors).
-    install_bound_instance_function(obj, "toString", locale_bound_to_string as *const u8, 0);
-    install_bound_instance_function(obj, "maximize", locale_bound_maximize as *const u8, 0);
-    install_bound_instance_function(obj, "minimize", locale_bound_minimize as *const u8, 0);
+    install_bound_instance_function(
+        obj,
+        "toString",
+        crate::fn_info!(locale_bound_to_string, 0; with_declared(0)),
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "maximize",
+        crate::fn_info!(locale_bound_maximize, 0; with_declared(0)),
+        0,
+    );
+    install_bound_instance_function(
+        obj,
+        "minimize",
+        crate::fn_info!(locale_bound_minimize, 0; with_declared(0)),
+        0,
+    );
     install_bound_instance_function(
         obj,
         "getCalendars",
-        locale_bound_get_calendars as *const u8,
+        crate::fn_info!(locale_bound_get_calendars, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getCollations",
-        locale_bound_get_collations as *const u8,
+        crate::fn_info!(locale_bound_get_collations, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getHourCycles",
-        locale_bound_get_hour_cycles as *const u8,
+        crate::fn_info!(locale_bound_get_hour_cycles, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getNumberingSystems",
-        locale_bound_get_numbering_systems as *const u8,
+        crate::fn_info!(locale_bound_get_numbering_systems, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getTimeZones",
-        locale_bound_get_time_zones as *const u8,
+        crate::fn_info!(locale_bound_get_time_zones, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getTextInfo",
-        locale_bound_get_text_info as *const u8,
+        crate::fn_info!(locale_bound_get_text_info, 0; with_declared(0)),
         0,
     );
     install_bound_instance_function(
         obj,
         "getWeekInfo",
-        locale_bound_get_week_info as *const u8,
+        crate::fn_info!(locale_bound_get_week_info, 0; with_declared(0)),
         0,
     );
 
@@ -606,44 +621,74 @@ fn make_locale_instance(proto_bits: u64, p: &ParsedLocale) -> f64 {
     js_nanbox_pointer(obj as i64)
 }
 
-extern "C" fn locale_bound_to_string(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_to_string(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = captured_intl_object(closure, "toString", KIND_LOCALE);
     string_value(&get_string_field(obj, KEY_FULL).unwrap_or_default())
 }
 
-extern "C" fn locale_bound_maximize(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_maximize(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = captured_intl_object(closure, "maximize", KIND_LOCALE);
     transform_instance(obj, likely_subtags::maximize)
 }
 
-extern "C" fn locale_bound_minimize(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_minimize(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let obj = captured_intl_object(closure, "minimize", KIND_LOCALE);
     transform_instance(obj, likely_subtags::minimize)
 }
 
-extern "C" fn locale_bound_get_calendars(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_calendars(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     calendars_of(captured_intl_object(closure, "getCalendars", KIND_LOCALE))
 }
-extern "C" fn locale_bound_get_collations(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_collations(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     collations_of(captured_intl_object(closure, "getCollations", KIND_LOCALE))
 }
-extern "C" fn locale_bound_get_hour_cycles(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_hour_cycles(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     hour_cycles_of(captured_intl_object(closure, "getHourCycles", KIND_LOCALE))
 }
-extern "C" fn locale_bound_get_numbering_systems(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_numbering_systems(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     numbering_systems_of(captured_intl_object(
         closure,
         "getNumberingSystems",
         KIND_LOCALE,
     ))
 }
-extern "C" fn locale_bound_get_time_zones(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_time_zones(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     time_zones_of(captured_intl_object(closure, "getTimeZones", KIND_LOCALE))
 }
-extern "C" fn locale_bound_get_text_info(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_text_info(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     text_info_of(captured_intl_object(closure, "getTextInfo", KIND_LOCALE))
 }
-extern "C" fn locale_bound_get_week_info(closure: *const ClosureHeader) -> f64 {
+extern "C" fn locale_bound_get_week_info(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     week_info_of(captured_intl_object(closure, "getWeekInfo", KIND_LOCALE))
 }
 
@@ -656,7 +701,11 @@ fn transform_instance(obj: *const ObjectHeader, transform: fn(&mut ParsedLocale)
     make_locale_instance(proto, &p)
 }
 
-pub(super) extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
+pub(super) extern "C" fn locale_constructor_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest: f64,
+) -> f64 {
     super::require_new_target("Locale");
     let tag_value = super::rest_arg(rest, 0);
     let options_value = super::rest_arg(rest, 1);
@@ -712,8 +761,8 @@ pub(super) extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader,
 
 // ---- prototype methods & getters ------------------------------------------
 
-fn locale_this(method: &str) -> *mut ObjectHeader {
-    let this = crate::object::js_implicit_this_get();
+fn locale_this(this: crate::closure::JsThis, method: &str) -> *mut ObjectHeader {
+    let this = this.as_f64();
     let Some(obj) = object_ptr_from_value(this) else {
         throw_type_error(&format!(
             "Intl.Locale.prototype.{method} called on incompatible receiver"
@@ -736,39 +785,69 @@ fn field_or_undefined(obj: *const ObjectHeader, key: &str) -> f64 {
     }
 }
 
-extern "C" fn locale_to_string_thunk(_closure: *const ClosureHeader) -> f64 {
-    let obj = locale_this("toString");
+extern "C" fn locale_to_string_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let obj = locale_this(this, "toString");
     string_value(&get_string_field(obj, KEY_FULL).unwrap_or_default())
 }
 
-extern "C" fn locale_maximize_thunk(_closure: *const ClosureHeader) -> f64 {
-    transform_instance(locale_this("maximize"), likely_subtags::maximize)
+extern "C" fn locale_maximize_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    transform_instance(locale_this(this, "maximize"), likely_subtags::maximize)
 }
 
-extern "C" fn locale_minimize_thunk(_closure: *const ClosureHeader) -> f64 {
-    transform_instance(locale_this("minimize"), likely_subtags::minimize)
+extern "C" fn locale_minimize_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    transform_instance(locale_this(this, "minimize"), likely_subtags::minimize)
 }
 
-extern "C" fn locale_get_calendars_thunk(_closure: *const ClosureHeader) -> f64 {
-    calendars_of(locale_this("getCalendars"))
+extern "C" fn locale_get_calendars_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    calendars_of(locale_this(this, "getCalendars"))
 }
-extern "C" fn locale_get_collations_thunk(_closure: *const ClosureHeader) -> f64 {
-    collations_of(locale_this("getCollations"))
+extern "C" fn locale_get_collations_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    collations_of(locale_this(this, "getCollations"))
 }
-extern "C" fn locale_get_hour_cycles_thunk(_closure: *const ClosureHeader) -> f64 {
-    hour_cycles_of(locale_this("getHourCycles"))
+extern "C" fn locale_get_hour_cycles_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    hour_cycles_of(locale_this(this, "getHourCycles"))
 }
-extern "C" fn locale_get_numbering_systems_thunk(_closure: *const ClosureHeader) -> f64 {
-    numbering_systems_of(locale_this("getNumberingSystems"))
+extern "C" fn locale_get_numbering_systems_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    numbering_systems_of(locale_this(this, "getNumberingSystems"))
 }
-extern "C" fn locale_get_time_zones_thunk(_closure: *const ClosureHeader) -> f64 {
-    time_zones_of(locale_this("getTimeZones"))
+extern "C" fn locale_get_time_zones_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    time_zones_of(locale_this(this, "getTimeZones"))
 }
-extern "C" fn locale_get_text_info_thunk(_closure: *const ClosureHeader) -> f64 {
-    text_info_of(locale_this("getTextInfo"))
+extern "C" fn locale_get_text_info_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    text_info_of(locale_this(this, "getTextInfo"))
 }
-extern "C" fn locale_get_week_info_thunk(_closure: *const ClosureHeader) -> f64 {
-    week_info_of(locale_this("getWeekInfo"))
+extern "C" fn locale_get_week_info_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    week_info_of(locale_this(this, "getWeekInfo"))
 }
 
 // ---- Intl.Locale-info computations -----------------------------------------
@@ -896,38 +975,44 @@ fn parsed_from_instance(obj: *const ObjectHeader) -> ParsedLocale {
     parse_language_tag(&full).unwrap_or_default()
 }
 
-extern "C" fn getter_base_name(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("baseName"), KEY_BASENAME)
+extern "C" fn getter_base_name(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "baseName"), KEY_BASENAME)
 }
-extern "C" fn getter_language(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("language"), KEY_LANGUAGE)
+extern "C" fn getter_language(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "language"), KEY_LANGUAGE)
 }
-extern "C" fn getter_script(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("script"), KEY_SCRIPT)
+extern "C" fn getter_script(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "script"), KEY_SCRIPT)
 }
-extern "C" fn getter_region(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("region"), KEY_REGION)
+extern "C" fn getter_region(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "region"), KEY_REGION)
 }
-extern "C" fn getter_calendar(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("calendar"), KEY_CALENDAR)
+extern "C" fn getter_calendar(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "calendar"), KEY_CALENDAR)
 }
-extern "C" fn getter_case_first(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("caseFirst"), KEY_CASEFIRST)
+extern "C" fn getter_case_first(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "caseFirst"), KEY_CASEFIRST)
 }
-extern "C" fn getter_collation(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("collation"), KEY_COLLATION)
+extern "C" fn getter_collation(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "collation"), KEY_COLLATION)
 }
-extern "C" fn getter_hour_cycle(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("hourCycle"), KEY_HOURCYCLE)
+extern "C" fn getter_hour_cycle(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    field_or_undefined(locale_this(this, "hourCycle"), KEY_HOURCYCLE)
 }
-extern "C" fn getter_numbering_system(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("numberingSystem"), KEY_NUMBERINGSYSTEM)
+extern "C" fn getter_numbering_system(
+    _c: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_or_undefined(locale_this(this, "numberingSystem"), KEY_NUMBERINGSYSTEM)
 }
-extern "C" fn getter_first_day_of_week(_c: *const ClosureHeader) -> f64 {
-    field_or_undefined(locale_this("firstDayOfWeek"), KEY_FIRSTDAYOFWEEK)
+extern "C" fn getter_first_day_of_week(
+    _c: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    field_or_undefined(locale_this(this, "firstDayOfWeek"), KEY_FIRSTDAYOFWEEK)
 }
-extern "C" fn getter_numeric(_c: *const ClosureHeader) -> f64 {
-    let obj = locale_this("numeric");
+extern "C" fn getter_numeric(_c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let obj = locale_this(this, "numeric");
     let value = get_field(obj, KEY_NUMERIC);
     if value.to_bits() == crate::value::TAG_TRUE {
         bool_value(true)
@@ -936,10 +1021,13 @@ extern "C" fn getter_numeric(_c: *const ClosureHeader) -> f64 {
     }
 }
 
-fn install_getter(proto: *mut ObjectHeader, name: &str, thunk: *const u8) {
+fn install_getter(
+    proto: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     unsafe {
-        crate::closure::js_register_closure_arity(thunk, 0);
-        let closure = crate::closure::js_closure_alloc(thunk, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -951,12 +1039,13 @@ fn install_getter(proto: *mut ObjectHeader, name: &str, thunk: *const u8) {
 }
 
 pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
-    let ctor_ptr = locale_constructor_thunk as *const u8;
-    let ctor = crate::closure::js_closure_alloc(ctor_ptr, 0);
+    let ctor = crate::closure::js_closure_alloc(
+        crate::fn_info!(locale_constructor_thunk, 1; with_rest(0)),
+        0,
+    );
     if ctor.is_null() {
         return;
     }
-    crate::closure::js_register_closure_rest(ctor_ptr, 0);
     crate::object::set_bound_native_closure_name(ctor, "Locale");
     crate::object::set_builtin_closure_length(ctor as usize, 1);
     crate::object::set_builtin_property_attrs(
@@ -982,102 +1071,118 @@ pub(super) fn install_locale(ns_obj: *mut ObjectHeader) {
     install_function(
         proto,
         "toString",
-        locale_to_string_thunk as *const u8,
+        crate::fn_info!(locale_to_string_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "maximize",
-        locale_maximize_thunk as *const u8,
+        crate::fn_info!(locale_maximize_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "minimize",
-        locale_minimize_thunk as *const u8,
+        crate::fn_info!(locale_minimize_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getCalendars",
-        locale_get_calendars_thunk as *const u8,
+        crate::fn_info!(locale_get_calendars_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getCollations",
-        locale_get_collations_thunk as *const u8,
+        crate::fn_info!(locale_get_collations_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getHourCycles",
-        locale_get_hour_cycles_thunk as *const u8,
+        crate::fn_info!(locale_get_hour_cycles_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getNumberingSystems",
-        locale_get_numbering_systems_thunk as *const u8,
+        crate::fn_info!(locale_get_numbering_systems_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getTimeZones",
-        locale_get_time_zones_thunk as *const u8,
+        crate::fn_info!(locale_get_time_zones_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getTextInfo",
-        locale_get_text_info_thunk as *const u8,
+        crate::fn_info!(locale_get_text_info_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
     install_function(
         proto,
         "getWeekInfo",
-        locale_get_week_info_thunk as *const u8,
+        crate::fn_info!(locale_get_week_info_thunk, 0; with_declared(0)),
         0,
-        0,
-        false,
     );
 
-    install_getter(proto, "baseName", getter_base_name as *const u8);
-    install_getter(proto, "language", getter_language as *const u8);
-    install_getter(proto, "script", getter_script as *const u8);
-    install_getter(proto, "region", getter_region as *const u8);
-    install_getter(proto, "calendar", getter_calendar as *const u8);
-    install_getter(proto, "caseFirst", getter_case_first as *const u8);
-    install_getter(proto, "collation", getter_collation as *const u8);
-    install_getter(proto, "hourCycle", getter_hour_cycle as *const u8);
-    install_getter(proto, "numeric", getter_numeric as *const u8);
+    install_getter(
+        proto,
+        "baseName",
+        crate::fn_info!(getter_base_name, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "language",
+        crate::fn_info!(getter_language, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "script",
+        crate::fn_info!(getter_script, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "region",
+        crate::fn_info!(getter_region, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "calendar",
+        crate::fn_info!(getter_calendar, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "caseFirst",
+        crate::fn_info!(getter_case_first, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "collation",
+        crate::fn_info!(getter_collation, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "hourCycle",
+        crate::fn_info!(getter_hour_cycle, 0; with_declared(0)),
+    );
+    install_getter(
+        proto,
+        "numeric",
+        crate::fn_info!(getter_numeric, 0; with_declared(0)),
+    );
     install_getter(
         proto,
         "firstDayOfWeek",
-        getter_first_day_of_week as *const u8,
+        crate::fn_info!(getter_first_day_of_week, 0; with_declared(0)),
     );
     install_getter(
         proto,
         "numberingSystem",
-        getter_numbering_system as *const u8,
+        crate::fn_info!(getter_numbering_system, 0; with_declared(0)),
     );
 
     set_proto_to_string_tag(proto, "Intl.Locale");
