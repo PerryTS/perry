@@ -591,6 +591,13 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
             PIC_WAY_BASE + v as usize * 2
         }
     };
+    // First-read Q1: a way never holds a spill or overflow entry, so the miss
+    // front answers a way with a plain inline load and no spill re-test.
+    // `cascade` above is what guarantees it.
+    debug_assert!(
+        (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) == 0,
+        "an overflow-encoded slot must never enter a way"
+    );
     c[ti] = prev_tok;
     c[ti + 1] = prev_slot;
 }

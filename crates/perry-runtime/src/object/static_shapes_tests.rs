@@ -151,6 +151,17 @@ fn pool_atom(text: &str) -> *const crate::StringHeader {
     crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
 }
 
+/// The megamorphic confirm as the miss entry asks it: this agent's directory,
+/// the site's key as NaN-boxed bits.
+unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> bool {
+    shapes::slot_guess_confirmed(
+        shapes::ordinary_dir_addr(),
+        id,
+        crate::JSValue::string_ptr(key as *mut _).bits(),
+        guess,
+    )
+}
+
 /// A seeded literal shape answers the megamorphic read's slot-guess confirm
 /// (`shapes::slot_guess_confirmed`: the position bound, then ONE pointer
 /// compare of the listed key against the site's key atom) exactly as a shape
@@ -181,17 +192,20 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
         (minted, a, 0, "minted `a` at 0"),
         (minted, k1, 1, "minted `k1` at 1"),
     ] {
-        assert_eq!(
-            shapes::test_positional_of_id(id),
-            Some((true, true)),
-            "{what}: the record must answer by position"
+        // POSBOUND is a fact of the record: a seeded shape (built by the
+        // slab insert, like every other) carries it, nonzero, equal to its
+        // definition.
+        let (stored, by_facts) = shapes::test_positional_of_id(id).expect("a record");
+        assert!(
+            stored > 0 && stored == by_facts,
+            "{what}: the record must answer by position (POSBOUND {stored}, by facts {by_facts})"
         );
         assert!(
-            unsafe { shapes::slot_guess_confirmed(id, key, guess) },
+            unsafe { confirmed(id, key, guess) },
             "{what}: the megamorphic confirm must accept the key atom"
         );
     }
     // And refutes a wrong guess or another key.
-    assert!(!unsafe { shapes::slot_guess_confirmed(seeded, a, 1) });
-    assert!(!unsafe { shapes::slot_guess_confirmed(seeded, k1, 1) });
+    assert!(!unsafe { confirmed(seeded, a, 1) });
+    assert!(!unsafe { confirmed(seeded, k1, 1) });
 }

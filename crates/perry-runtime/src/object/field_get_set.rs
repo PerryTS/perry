@@ -347,6 +347,11 @@ pub use ic_slow::{js_object_get_field_ic_nonptr, js_object_get_field_ic_slow};
 #[path = "field_get_set/ic_miss/outline_split.rs"]
 mod outline_split;
 pub use outline_split::{js_object_get_field_ic_fast, js_object_get_field_ic_fast_miss};
+/// First-read D3: the megamorphic read confirm, a GC-leaf stub a latched
+/// generic read site calls before the slow entry.
+#[path = "field_get_set/ic_miss/read_confirm.rs"]
+mod read_confirm;
+pub use read_confirm::js_object_get_field_ic_front;
 
 #[cfg(test)]
 mod buffer_ic_miss_tests {

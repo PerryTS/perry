@@ -7129,13 +7129,22 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. A signed comparison rejects that whole suffix
-    // while admitting every negative IEEE value, including negative NaNs.
-    // INT32 boxes remain excluded: their payload still needs unboxing before
-    // floating-point arithmetic. This is exactly JSValue::is_number's range.
-    ctx.block().icmp_slt(
+    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
+    // still needs unboxing before floating-point arithmetic.
+    //
+    // The test ignores the sign bit, so it also rejects the MIRROR of the tag
+    // band (negative NaNs whose magnitude lies in it). A value that passes
+    // flows into raw-double arithmetic and may become a Number local, which
+    // owns no root slot (step5 DESIGN §3.4): `fneg`/`fabs`/`copysign` flip only
+    // the sign, and an IEEE operation on a NaN keeps its payload, so an
+    // admitted negative `0xFFFD_...` NaN would reach a local as the pointer
+    // tag `0x7FFD_...`. The admitted set, {x : |x| below the band}, is closed
+    // under those operations, and it contains both default NaNs
+    // (`0x7FF8_0000_0000_0000`, x86's `0xFFF8_0000_0000_0000`).
+    let magnitude = ctx.block().and(I64, &n_bits, "9223372036854775807");
+    ctx.block().icmp_ult(
         I64,
-        &n_bits,
+        &magnitude,
         &crate::nanbox::i64_literal(crate::nanbox::SHORT_STRING_TAG),
     )
 }

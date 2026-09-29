@@ -2590,6 +2590,7 @@ js_object_get_field_f64	f64	ptr,i32u
 js_object_get_field_ic	f64	i64,ptr,i64,ptr
 js_object_get_field_ic_fast	f64	i64,ptr,i64,ptr
 js_object_get_field_ic_fast_miss	f64	i64,ptr,i64,ptr
+js_object_get_field_ic_front	f64	ptr,i64,i64,ptr,ptr
 js_object_get_field_ic_miss	f64	ptr,ptr,ptr
 js_object_get_field_ic_miss_packed	f64	ptr,ptr,ptr,ptr
 js_object_get_field_ic_nonptr	f64	i64,ptr,i64
@@ -4686,6 +4687,7 @@ perry_resolve_static_plugin	f64	ptr
 perry_runtime_widget_init	void	
 perry_safe_area_insets_make	f64	f64,f64,f64,f64
 perry_set_wake_callback	void	ptr,ptr
+perry_shape_dir_cell	ptr	
 perry_store_census_arm	void	
 perry_string_header_abi_revision	i32u	
 perry_stub_warn_ffi	void	ptr,ptr,ptr

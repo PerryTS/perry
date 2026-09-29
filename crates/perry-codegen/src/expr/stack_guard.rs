@@ -21,7 +21,7 @@
 //! `llvm.frameaddress`, which would force a frame pointer and stop a
 //! frameless (shrink-wrapped) entry from staying frameless.
 
-use super::agent_ptr::{agent_ptr_access, AgentPtrAccess, AGENT_PTRS_SYMBOL};
+use super::agent_ptr::{agent_ptr_access, AgentPtrAccess};
 use super::FnCtx;
 use crate::types::{I64, I8, PTR};
 
@@ -65,11 +65,14 @@ fn emit_check(ctx: &mut FnCtx<'_>) {
     let ok_idx;
     let limit = match agent_ptr_access(ctx) {
         AgentPtrAccess::Call => return,
-        AgentPtrAccess::InitialExec => {
+        // The runtime publishes no stack limit on Windows (`stack_bounds` is
+        // `None` there), so the slot stays 0 and a check could never fire:
+        // emit none, as before the block was reachable inline on Windows.
+        AgentPtrAccess::WindowsTeb => return,
+        access @ AgentPtrAccess::InitialExec => {
             ok_idx = ctx.new_block("stack_guard.ok");
-            let blk = ctx.block();
-            let at = blk.gep(I8, &format!("@{AGENT_PTRS_SYMBOL}"), &[(I64, &slot_off)]);
-            blk.load(PTR, &at)
+            let at = super::agent_ptr::emit_slot_addr(ctx, access, &slot_off);
+            ctx.block().load(PTR, &at)
         }
         AgentPtrAccess::AppleTsd => {
             let lookup = super::hot_tls::emit_hot_tls_lookup(ctx, "stack_guard");
