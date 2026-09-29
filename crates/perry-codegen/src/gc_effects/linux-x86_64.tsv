@@ -2716,6 +2716,8 @@ js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters
 js_region_guard_prime	Reenters
+js_region_loop_pack	Leaf
+js_region_loop_prime	Leaf
 js_register_anon_shape_class_id	Leaf
 js_register_aux_has_active	Leaf
 js_register_aux_pump	Leaf
@@ -3029,6 +3031,7 @@ js_sqlite_stmt_get	Reenters
 js_sqlite_stmt_raw	Reenters
 js_sqlite_stmt_run	Reenters
 js_sqlite_transaction	Reenters
+js_stack_overflow	Reenters
 js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
@@ -3128,6 +3131,7 @@ js_string_normalize	Reenters
 js_string_pad_end	Reenters
 js_string_pad_fill	Reenters
 js_string_pad_start	Reenters
+js_string_pool_atom	Reenters
 js_string_position_to_index	Leaf
 js_string_print	Leaf
 js_string_raw	Reenters

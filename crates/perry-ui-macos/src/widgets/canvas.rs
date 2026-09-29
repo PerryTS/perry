@@ -11,10 +11,9 @@ use crate::ffi::CGContextFillPath;
 use crate::ffi::CGContextFillRect;
 use crate::ffi::CGContextMoveToPoint;
 use crate::ffi::CGContextSetLineWidth;
-use crate::ffi::CGContextSetRGBFillColor;
-use crate::ffi::CGContextSetRGBStrokeColor;
 use crate::ffi::CGContextStrokePath;
 use crate::ffi::CGContextStrokeRect;
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
@@ -52,8 +51,6 @@ extern "C" {
         end_point: CGPoint,
         options: u32,
     );
-    fn CGColorSpaceCreateWithName(name: *const c_void) -> CGColorSpaceRef;
-    fn CGColorSpaceRelease(space: CGColorSpaceRef);
     fn CGGradientCreateWithColorComponents(
         space: CGColorSpaceRef,
         components: *const CGFloat,
@@ -72,10 +69,6 @@ extern "C" {
     fn CGImageCreateWithImageInRect(image: CGImageRef, rect: CGRect) -> CGImageRef;
     fn CGImageGetWidth(image: CGImageRef) -> usize;
     fn CGImageGetHeight(image: CGImageRef) -> usize;
-}
-
-extern "C" {
-    static kCGColorSpaceSRGB: *const c_void;
 }
 
 // Drawing commands stored in command buffer
@@ -318,7 +311,7 @@ define_class!(
                                 if path_points.len() >= 2 {
                                     unsafe {
                                         CGContextSaveGState(ctx);
-                                        CGContextSetRGBStrokeColor(ctx, *r, *g, *b, *a);
+                                        srgb::set_stroke_color(ctx, *r, *g, *b, *a);
                                         CGContextSetLineWidth(ctx, *line_width);
                                         CGContextSetLineCap(ctx, 1); // kCGLineCapRound
                                         CGContextSetLineJoin(ctx, 1); // kCGLineJoinRound
@@ -353,7 +346,7 @@ define_class!(
                                         CGContextClip(ctx);
 
                                         // Draw gradient
-                                        let color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+                                        let color_space = srgb::color_space();
                                         let components: [CGFloat; 8] = [
                                             *r1, *g1, *b1, *a1,
                                             *r2, *g2, *b2, *a2,
@@ -376,7 +369,6 @@ define_class!(
 
                                         CGContextDrawLinearGradient(ctx, gradient, start, end, 0);
                                         CGGradientRelease(gradient);
-                                        CGColorSpaceRelease(color_space);
                                         CGContextRestoreGState(ctx);
                                     }
                                 }
@@ -397,7 +389,7 @@ define_class!(
                                 if path_points.len() >= 2 {
                                     unsafe {
                                         CGContextSaveGState(ctx);
-                                        CGContextSetRGBStrokeColor(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                                        srgb::set_stroke_color(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
                                         CGContextSetLineWidth(ctx, cur_width);
                                         CGContextSetLineCap(ctx, 1);
                                         CGContextSetLineJoin(ctx, 1);
@@ -418,7 +410,7 @@ define_class!(
                                 if path_points.len() >= 2 {
                                     unsafe {
                                         CGContextSaveGState(ctx);
-                                        CGContextSetRGBFillColor(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                                        srgb::set_fill_color(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
                                         CGContextBeginPath(ctx);
                                         CGContextMoveToPoint(ctx, path_points[0].0, path_points[0].1);
                                         for pt in &path_points[1..] {
@@ -434,7 +426,7 @@ define_class!(
                                 let flipped_y = canvas_h - y - h;
                                 unsafe {
                                     CGContextSaveGState(ctx);
-                                    CGContextSetRGBFillColor(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                                    srgb::set_fill_color(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
                                     CGContextFillRect(ctx, CGRect::new(CGPoint::new(*x, flipped_y), CGSize::new(*w, *h)));
                                     CGContextRestoreGState(ctx);
                                 }
@@ -443,7 +435,7 @@ define_class!(
                                 let flipped_y = canvas_h - y - h;
                                 unsafe {
                                     CGContextSaveGState(ctx);
-                                    CGContextSetRGBStrokeColor(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                                    srgb::set_stroke_color(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
                                     CGContextSetLineWidth(ctx, cur_width);
                                     CGContextStrokeRect(ctx, CGRect::new(CGPoint::new(*x, flipped_y), CGSize::new(*w, *h)));
                                     CGContextRestoreGState(ctx);
