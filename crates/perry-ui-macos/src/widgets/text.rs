@@ -132,8 +132,7 @@ pub fn create(text_ptr: *const u8) -> i64 {
     let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     let ns_string = NSString::from_str(&text);
 
-    let label = NSTextField::labelWithString(&ns_string, mtm);
-    super::padding::install_label_cell(&label, mtm);
+    let label = super::padding::label(&ns_string, mtm);
     unsafe {
         let _: () = objc2::msg_send![&*label, setAccessibilityLabel: &*ns_string];
         // Disable autoresizing mask so Auto Layout can size this view in NSStackView.

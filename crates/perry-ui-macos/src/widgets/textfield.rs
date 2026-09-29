@@ -3,7 +3,7 @@ use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSLineBreakMode, NSTextField, NSView};
+use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSRunLoop, NSString,
 };
@@ -214,24 +214,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let ns_placeholder = NSString::from_str(&placeholder);
 
     unsafe {
-        let text_field = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
-        super::padding::install_text_field_cell(&text_field, mtm);
+        let text_field = super::padding::text_field(&NSString::from_str(""), mtm);
         text_field.setPlaceholderString(Some(&ns_placeholder));
-
-        // Make it editable
-        text_field.setEditable(true);
-        text_field.setBezeled(true);
-
-        // Single-line, to match TextField on every other backend; TextArea is
-        // the multiline widget. textFieldWithString: hands back a cell that
-        // wraps and grows tall, so a fixed-width field must be told to keep one
-        // line and scroll horizontally instead.
-        if let Some(cell) = text_field.cell() {
-            cell.setUsesSingleLineMode(true);
-            cell.setScrollable(true);
-            cell.setWraps(false);
-            cell.setLineBreakMode(NSLineBreakMode::ByClipping);
-        }
 
         let view: Retained<NSView> = Retained::cast_unchecked(text_field);
         let handle = super::register_widget(view);
