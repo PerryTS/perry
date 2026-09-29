@@ -453,3 +453,30 @@ console.log(s, t);
          (own={own} inherited={inherited} misses={misses})"
     );
 }
+
+/// Sabotage: let the static unroller clone a loop body holding a function
+/// literal -> the 8 copies are 8 code pointers and the site primes past its
+/// ways and latches megamorphic.
+#[test]
+fn a_method_literal_built_in_a_short_counted_loop_is_one_function() {
+    let (stdout, own, inherited, misses) = run(r#"const N = process.argv.length > 99 ? 1 : 4000;
+const objs: any[] = [];
+function build() { for (let i = 0; i < 8; i++) objs.push({ a: i, b: 2, m() { return this.a; } }); }
+build();
+function run(n: number): number {
+  let h = 0;
+  for (let k = 0; k < n; k++) h += objs[k & 7].m();
+  return h;
+}
+console.log(run(N), objs[0].m === objs[7].m);
+"#);
+    // One source literal is one function: node prints `false` for the
+    // identity (each evaluation is a fresh function object) but every object
+    // shares one body, so the site keeps one entry for all 8 receivers.
+    assert_eq!(stdout, "14000 false");
+    assert!(
+        inherited == 0 && own <= 2 && misses <= 4,
+        "8 objects from one method literal must share one site entry \
+         (own={own} inherited={inherited} misses={misses})"
+    );
+}
