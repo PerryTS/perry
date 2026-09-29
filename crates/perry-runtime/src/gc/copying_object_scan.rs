@@ -8,17 +8,18 @@
 //! cost (callgrind, `gc_collect_minor_with_trigger_inner` only).
 //!
 //! This is the same walk for the one kind that dominates real heaps,
-//! `GC_TYPE_OBJECT`, written out: the same shape record, the same field range,
-//! the same payload selection (`heap_payload_slot_selection_from` itself, so the
-//! mask logic has ONE copy), the same shape-keys-edge bookkeeping, and the same
-//! slots in the same order — keys edge, meta record, payload, overflow fields.
+//! `GC_TYPE_OBJECT`, written out: the same residual-prototype edge first, the
+//! same shape record, field range and payload selection
+//! (`heap_payload_slot_selection_from` itself, so the mask logic has ONE copy),
+//! the same shape-keys-edge bookkeeping, and the same slots in the same order —
+//! residual prototype, keys edge, meta record, payload, overflow fields.
 //!
-//! It declines (returns `false` having changed nothing) whenever the generic walk
-//! would do something it does not reproduce: a residual `setPrototypeOf` entry,
-//! a full trace or layout-scan trace in progress, a payload mask wider than one
-//! word, or a type-table entry that stopped describing `GC_TYPE_OBJECT` the way
-//! this assumes. Every decline happens before the first side effect this path
-//! would duplicate.
+//! It declines (returns `false` having done nothing) only up front, from the
+//! header and thread state: a full trace or layout-scan trace in progress (the
+//! generic walk records carrier notes and slot counters this path does not), or
+//! a type-table entry that stopped describing `GC_TYPE_OBJECT` the way this
+//! assumes. Once admitted it never hands the object back, so no edge is visited
+//! twice.
 //!
 //! Drift is the risk of a second enumeration, so it is not trusted: in test and
 //! debug-assertion builds every object this path handles is ALSO enumerated by
@@ -29,17 +30,30 @@
 use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::*;
 
-/// The slots, in visit order, the generic walk would hand the drain for this
-/// object — excluding the overflow fields, which the scan visits straight from
-/// their side table exactly as the generic walk does. Iterated, not stored: the
-/// keys edge and the meta record (null when absent), then the payload slots
-/// named by one mask word.
-#[derive(Clone, Copy)]
+/// The slots, in visit order, the generic walk's layout arm hands the drain for
+/// this object: the keys edge and the meta record (null when absent), then the
+/// payload slots its selection names. Iterated, not stored.
+#[derive(Clone)]
 struct PlainObjectPlan {
     prefix: [*mut u64; 2],
     next_prefix: usize,
     payload: HeapSlotRange,
-    payload_word: u64,
+    walk: PayloadWalk,
+}
+
+/// The payload selection, as the generic walk would iterate it.
+#[derive(Clone)]
+enum PayloadWalk {
+    /// A one-word mask (`take_inline_mask_word`'s walk), already limited.
+    Word(u64),
+    /// Every slot `next..count` (`AllPointers` / `All`: a `Range`).
+    Range { next: usize, count: usize },
+    /// A mask wider than one word (the iterator's `Masked` arm).
+    Mask {
+        mask: LayoutSlotMask,
+        cursor: usize,
+        count: usize,
+    },
 }
 
 impl PlainObjectPlan {
@@ -52,91 +66,113 @@ impl PlainObjectPlan {
                 return Some(slot);
             }
         }
-        if self.payload_word == 0 {
-            return None;
-        }
-        let index = self.payload_word.trailing_zeros() as usize;
-        self.payload_word &= self.payload_word - 1;
+        let index = match &mut self.walk {
+            PayloadWalk::Word(word) => {
+                if *word == 0 {
+                    return None;
+                }
+                let index = word.trailing_zeros() as usize;
+                *word &= *word - 1;
+                index
+            }
+            PayloadWalk::Range { next, count } => {
+                if *next >= *count {
+                    return None;
+                }
+                *next += 1;
+                *next - 1
+            }
+            PayloadWalk::Mask {
+                mask,
+                cursor,
+                count,
+            } => {
+                let index = mask.next_slot_at_or_after(*cursor, *count)?;
+                *cursor = index + 1;
+                index
+            }
+        };
         Some(self.payload.slot(index))
     }
 }
 
-/// Build the plan, or `None` — having performed no side effect the generic walk
-/// would then repeat — when the object is not one this path reproduces.
+/// May this path scan the object at all? Decided before ANY side effect, from
+/// the header and per-thread/process state alone. Past this point the path never
+/// hands the object back to the generic walk.
 #[inline(always)]
-unsafe fn plain_object_plan(header: *mut GcHeader) -> Option<PlainObjectPlan> {
-    if (*header).obj_type != GC_TYPE_OBJECT || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-        return None;
-    }
-    // The generic walk's first edge, ahead of its kind arms.
-    if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
-        && crate::object::prototype_chain::residual_prototype_owner_type(GC_TYPE_OBJECT)
-        && crate::object::prototype_chain::residual_entry_possible_for(header)
-    {
-        return None;
-    }
-    // A full trace notes every carrier; a layout-scan trace counts every slot.
-    // Neither is reproduced here.
-    if full_trace_active() || layout_scan_trace_active() {
-        return None;
-    }
-    if !matches!(
-        gc_type_rewrite_descriptor_kind(GC_TYPE_OBJECT),
-        GcRewriteDescriptorKind::Object
-    ) || !matches!(
-        gc_type_layout_slot_kind(GC_TYPE_OBJECT),
-        GcLayoutSlotKind::ObjectFields
-    ) {
-        return None;
-    }
+unsafe fn plain_object_admissible(header: *mut GcHeader) -> bool {
+    (*header).obj_type == GC_TYPE_OBJECT
+        && (*header).gc_flags & GC_FLAG_FORWARDED == 0
+        // A full trace notes every carrier; a layout-scan trace counts every
+        // slot. Neither is reproduced here.
+        && !full_trace_active()
+        && !layout_scan_trace_active()
+        && matches!(
+            gc_type_rewrite_descriptor_kind(GC_TYPE_OBJECT),
+            GcRewriteDescriptorKind::Object
+        )
+        && matches!(
+            gc_type_layout_slot_kind(GC_TYPE_OBJECT),
+            GcLayoutSlotKind::ObjectFields
+        )
+}
+
+/// `gc_child_slots`' ObjectFields arm and `visit_gc_layout_slot_descriptors`'
+/// shape-keys bookkeeping, step for step and with the same side effects, as a
+/// plan instead of an iterator.
+#[inline(always)]
+unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
     #[cfg(test)]
     sabotage::note_plan_attempt();
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     let obj = user_ptr as *mut crate::object::ObjectHeader;
-    // `gc_child_slots`' ObjectFields arm, step for step.
     let shape = crate::object::shapes::object_shape_record(obj);
-    let range = crate::object::gc_field_slot_range(obj, shape)?;
+    let Some(range) = crate::object::gc_field_slot_range(obj, shape) else {
+        // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
+        // edge and no carrier note, no meta edge, no payload.
+        return PlainObjectPlan {
+            prefix: [std::ptr::null_mut(); 2],
+            next_prefix: 2,
+            payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
+            walk: PayloadWalk::Word(0),
+        };
+    };
     let meta = crate::object::gc_object_meta_slot(user_ptr as usize);
-    // The selection's only side effect (demoting a SIDE_MASK header whose mask
-    // is gone to UNKNOWN) is one the generic walk would make identically and
-    // then read back as `All`, so declining after it is still exact.
-    let selection = heap_payload_slot_selection_from(header, range, shape);
-    let payload_word = match selection {
-        HeapPayloadSlotSelection::Empty | HeapPayloadSlotSelection::PointerFree { .. } => 0,
+    let count = range.slot_count();
+    let walk = match heap_payload_slot_selection_from(header, range, shape) {
+        HeapPayloadSlotSelection::Empty | HeapPayloadSlotSelection::PointerFree { .. } => {
+            PayloadWalk::Word(0)
+        }
         HeapPayloadSlotSelection::Masked {
             mask: LayoutSlotMask::Inline(bits),
             ..
         } => {
             // `take_inline_mask_word`'s limit, exactly.
-            let limit = range.slot_count().min(64);
-            bits & if limit == 64 {
-                u64::MAX
-            } else {
-                (1u64 << limit) - 1
-            }
+            let limit = count.min(64);
+            PayloadWalk::Word(
+                bits & if limit == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << limit) - 1
+                },
+            )
         }
         HeapPayloadSlotSelection::Masked {
             mask: LayoutSlotMask::AllPointers,
             ..
         }
-        | HeapPayloadSlotSelection::All { .. } => {
-            if range.slot_count() > 64 {
-                return None;
-            }
-            if range.slot_count() == 64 {
-                u64::MAX
-            } else {
-                (1u64 << range.slot_count()) - 1
-            }
-        }
-        HeapPayloadSlotSelection::Masked {
-            mask: LayoutSlotMask::Heap(_),
-            ..
-        } => return None,
+        | HeapPayloadSlotSelection::All { .. } => PayloadWalk::Range { next: 0, count },
+        HeapPayloadSlotSelection::Masked { mask, .. } => PayloadWalk::Mask {
+            mask,
+            cursor: 0,
+            count,
+        },
     };
-    // `visit_gc_layout_slot_descriptors`' shape-keys edge. `full_trace_active`
-    // is false here, so only the old-carrier note applies — and when the note
-    // would change nothing, the generation probe that gates it is skipped.
+    #[cfg(test)]
+    let walk = sabotage::perturb(walk);
+    // The shape-keys edge. `full_trace_active` is false here, so only the
+    // old-carrier note applies — and when the note would change nothing, the
+    // generation probe that gates it is skipped.
     #[cfg(test)]
     let already_noted = sabotage::claiming_noted_carriers()
         || crate::object::shapes::old_generation_carrier_already_noted(shape);
@@ -146,20 +182,17 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> Option<PlainObjectPlan> {
         crate::object::shapes::note_old_generation_carrier(shape);
     }
     let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);
-    #[cfg(test)]
-    let payload_word = sabotage::perturb(payload_word);
     // Visit order of the generic walk: prefix (none for objects), keys edge,
-    // meta, meta2 (none), payload ascending.
-    let plan = PlainObjectPlan {
+    // meta, meta2 (none), payload.
+    PlainObjectPlan {
         prefix: [
             keys_edge.unwrap_or(std::ptr::null_mut()),
             meta.unwrap_or(std::ptr::null_mut()),
         ],
         next_prefix: 0,
         payload: range,
-        payload_word,
-    };
-    Some(plan)
+        walk,
+    }
 }
 
 impl CopyingNurseryCollector {
@@ -167,16 +200,8 @@ impl CopyingNurseryCollector {
     /// nothing was done and the caller must take the generic walk.
     #[inline(always)]
     pub(super) unsafe fn scan_plain_object(&mut self, header: *mut GcHeader) -> bool {
-        let Some(mut plan) = plain_object_plan(header) else {
+        if !plain_object_admissible(header) {
             return false;
-        };
-        #[cfg(test)]
-        let cross_check = !sabotage::cross_check_disabled();
-        #[cfg(all(not(test), debug_assertions))]
-        let cross_check = true;
-        #[cfg(any(test, debug_assertions))]
-        if cross_check {
-            assert_matches_generic_walk(header, &plan);
         }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
         let mut changed = false;
@@ -185,6 +210,35 @@ impl CopyingNurseryCollector {
         // answer.
         let weak = weak_holder_fact(header);
         let remembering = ParentRemembering::of(header, self.skip_remembering);
+        // The generic walk's first edge, ahead of its kind arms: an explicit
+        // prototype in the residual registry. For `GC_TYPE_OBJECT` the
+        // per-owner half of the gate is conservatively `true`, so once the
+        // process latch is armed every object asks.
+        let mut residual_slots = 0usize;
+        if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
+            && crate::object::prototype_chain::residual_prototype_owner_type(GC_TYPE_OBJECT)
+            && crate::object::prototype_chain::residual_entry_possible_for(header)
+        {
+            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
+                user_ptr,
+                |slot| {
+                    residual_slots += 1;
+                    let before = *slot;
+                    self.visit_side_slot(slot, header, weak, remembering);
+                    changed |= *slot != before;
+                },
+            );
+        }
+        let mut plan = plain_object_plan(header);
+        #[cfg(test)]
+        let cross_check = !sabotage::cross_check_disabled();
+        #[cfg(all(not(test), debug_assertions))]
+        let cross_check = true;
+        #[cfg(any(test, debug_assertions))]
+        if cross_check {
+            assert_matches_generic_walk(header, &plan, residual_slots);
+        }
+        let _ = residual_slots;
         while let Some(slot) = plan.next_slot() {
             let before = *slot;
             self.visit_slot_with_parent_facts(
@@ -198,7 +252,7 @@ impl CopyingNurseryCollector {
         // The generic walk's last Object-arm edge, from the same side table.
         crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| {
             let before = *slot;
-            self.visit_overflow_slot(slot, header, weak, remembering);
+            self.visit_side_slot(slot, header, weak, remembering);
             changed |= *slot != before;
         });
         if changed {
@@ -207,36 +261,51 @@ impl CopyingNurseryCollector {
         true
     }
 
-    /// Overflow fields are rare; keep their visit out of the hot loop's code.
+    /// Side-table edges (residual prototype, overflow fields) are rare; keep
+    /// their visit out of the hot loop's code.
     #[inline(never)]
-    unsafe fn visit_overflow_slot(
+    unsafe fn visit_side_slot(
         &mut self,
         slot: *mut u64,
         header: *mut GcHeader,
         weak: bool,
         remembering: ParentRemembering,
     ) {
-        self.visit_slot_with_parent_facts(GcMutableSlot::new(slot, None), header, weak, remembering);
+        self.visit_slot_with_parent_facts(
+            GcMutableSlot::new(slot, None),
+            header,
+            weak,
+            remembering,
+        );
     }
 }
 
 /// The drift check: the generic walk, run for its slot list only, must name
-/// exactly the plan's slots followed by the overflow fields, in that order.
+/// exactly the plan's slots followed by the overflow fields, after the
+/// residual-prototype slots the scan already visited. Those are a stack
+/// temporary of the registry's visitor, different on every call, so they are
+/// matched by count, not address.
 #[cfg(any(test, debug_assertions))]
-unsafe fn assert_matches_generic_walk(header: *mut GcHeader, plan: &PlainObjectPlan) {
+unsafe fn assert_matches_generic_walk(
+    header: *mut GcHeader,
+    plan: &PlainObjectPlan,
+    residual_slots: usize,
+) {
     let mut generic = Vec::new();
     visit_gc_rewrite_slots(header, |slot| generic.push(slot.slot as usize));
-    let mut replay = *plan;
+    let mut replay = plan.clone();
     let mut expected = Vec::new();
     while let Some(slot) = replay.next_slot() {
         expected.push(slot as usize);
     }
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
     crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| expected.push(slot as usize));
-    assert_eq!(
-        generic, expected,
+    assert!(
+        generic.len() == residual_slots + expected.len()
+            && generic[residual_slots..] == expected[..],
         "copying_object_scan: the plain-object plan enumerated different slots than the \
-         generic walk for header {header:p} — a traced edge would be lost or invented"
+         generic walk for header {header:p} — a traced edge would be lost or invented \
+         (generic {generic:x?}, residual {residual_slots}, plan {expected:x?})"
     );
 }
 
@@ -302,11 +371,22 @@ pub(crate) mod sabotage {
     }
 
     /// Forget the highest payload slot — the one a limit mistake loses.
-    pub(super) fn perturb(word: u64) -> u64 {
-        if DROP_TOP_PAYLOAD_SLOT.with(Cell::get) && word != 0 {
-            return word & !(1u64 << (63 - word.leading_zeros()));
+    pub(super) fn perturb(walk: super::PayloadWalk) -> super::PayloadWalk {
+        if !DROP_TOP_PAYLOAD_SLOT.with(Cell::get) {
+            return walk;
         }
-        word
+        match walk {
+            super::PayloadWalk::Word(word) if word != 0 => {
+                super::PayloadWalk::Word(word & !(1u64 << (63 - word.leading_zeros())))
+            }
+            super::PayloadWalk::Range { next, count } if count > next => {
+                super::PayloadWalk::Range {
+                    next,
+                    count: count - 1,
+                }
+            }
+            other => other,
+        }
     }
 
     pub(crate) struct DropTopPayloadSlot(bool);

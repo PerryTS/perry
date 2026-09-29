@@ -1734,9 +1734,7 @@ pub(crate) unsafe fn note_old_generation_carrier(record: Option<ShapeRecordRef>)
 /// shape whose carrier was already noted this epoch skips that page-map probe
 /// entirely (#11549). Exact: it reads the same two flags the note would.
 #[inline]
-pub(crate) unsafe fn old_generation_carrier_already_noted(
-    record: Option<ShapeRecordRef>,
-) -> bool {
+pub(crate) unsafe fn old_generation_carrier_already_noted(record: Option<ShapeRecordRef>) -> bool {
     let Some(record) = record else {
         return true;
     };

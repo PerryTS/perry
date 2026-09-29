@@ -125,8 +125,8 @@ mod test_accessors;
 mod transfer;
 mod typed_shape;
 
-pub(in crate::gc) use slot_mask::LayoutSlotMask;
 pub(in crate::gc) use shape_layout_table::ShapeLayoutTable;
+pub(in crate::gc) use slot_mask::LayoutSlotMask;
 #[cfg(test)]
 pub(crate) use test_accessors::{
     test_gc_rewrite_slot_addresses, test_gc_rewrite_slot_count, test_layout_pointer_slot_count,

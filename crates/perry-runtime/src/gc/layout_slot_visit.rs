@@ -89,8 +89,10 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
 /// paying two indirect calls per visited slot. Same enumeration either way:
 /// there is no second copy of the slot logic to drift.
 #[inline(always)]
-pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(header: *mut GcHeader, visit: &mut F)
-where
+pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
+    header: *mut GcHeader,
+    visit: &mut F,
+) where
     F: FnMut(GcMutableSlotDescriptor) + ?Sized,
 {
     let mut child_slots = gc_child_slots(header);

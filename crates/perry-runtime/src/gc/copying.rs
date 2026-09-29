@@ -735,8 +735,8 @@ impl CopyingNurseryCollector {
             slot.record_layout_read();
             let before = *slot.slot;
             let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
-            let remembering = *remembering
-                .get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
+            let remembering =
+                *remembering.get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
             changed |= *slot.slot != before;
         });

@@ -22,11 +22,34 @@ const FIELDS: usize = 3;
 /// `Ok((plan attempts, every child moved and intact))`; `Err` is the
 /// collection thread's panic message.
 fn minor_over_a_plain_object(sabotaged: bool) -> Result<(u64, bool), String> {
+    minor_over_a_plain_object_with(sabotaged, false)
+}
+
+/// `residual_armed`: first give an (old) array an explicit prototype, which
+/// arms the residual-prototype registry's process latch — after which the
+/// generic walk asks the registry for EVERY ordinary object, and so must this
+/// path, without declining.
+fn minor_over_a_plain_object_with(
+    sabotaged: bool,
+    residual_armed: bool,
+) -> Result<(u64, bool), String> {
     std::thread::spawn(move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _scan = ConservativeScanDisabledGuard::new();
         let _roots = ShadowAndGlobalRootResetGuard;
+        if residual_armed {
+            let array = unsafe { alloc_old_test_array(1).0 };
+            let proto = unsafe { alloc_old_test_object(0).0 } as usize;
+            crate::object::prototype_chain::object_set_static_prototype(
+                array as usize,
+                ptr_bits(proto),
+            );
+            assert!(
+                crate::object::prototype_chain::object_static_prototypes_maybe_nonempty(),
+                "premise: the residual registry latch is armed"
+            );
+        }
         let (parent, fields) = unsafe { alloc_nursery_test_object(FIELDS as u32) };
         let mut children = Vec::new();
         for i in 0..FIELDS {
@@ -71,7 +94,33 @@ fn a_minor_scans_a_plain_object_through_its_plan_and_moves_every_child() {
         attempts > 0,
         "premise: the minor must have taken the plain-object path at least once"
     );
-    assert!(intact, "every field's young child must be evacuated and its word rewritten");
+    assert!(
+        intact,
+        "every field's young child must be evacuated and its word rewritten"
+    );
+}
+
+#[test]
+fn an_armed_residual_prototype_registry_does_not_turn_the_plain_object_path_away() {
+    // Recording an ARRAY's prototype also latches the process-wide array
+    // prototype flags; restore them, as `dyn_eval/tests.rs`'
+    // `ArrayPrototypeLatchGuard` does, or later tests inherit them.
+    let _lock = crate::typed_feedback::typed_feedback_test_lock();
+    let latch = crate::object::prototype_chain::array_static_proto_recorded();
+    let invalidated = crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let outcome = minor_over_a_plain_object_with(false, true);
+    crate::object::prototype_chain::test_swap_array_static_proto_recorded(latch);
+    crate::array::test_swap_array_index_fast_path_invalidated(invalidated);
+    let (attempts, intact) = outcome.expect("minor must not panic");
+    assert!(
+        attempts > 0,
+        "the plain-object path must still scan with the latch armed"
+    );
+    assert!(
+        intact,
+        "every field's young child must be evacuated and its word rewritten"
+    );
 }
 
 #[test]
