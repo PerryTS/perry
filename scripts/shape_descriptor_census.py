@@ -319,6 +319,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
         "crates/perry-runtime/src/gc/layout_slot_visit.rs",
+        "crates/perry-runtime/src/gc/copying_object_scan.rs",
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs",
         "crates/perry-runtime/src/typed_feedback/guards.rs",
         "crates/perry-runtime/src/object/native_call_method.rs",
@@ -360,6 +361,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
     codegen_alloc = clean["crates/perry-codegen/src/lower_call/new_alloc.rs"]
     layout_visit = clean["crates/perry-runtime/src/gc/layout_slot_visit.rs"]
+    copying_object_scan = clean["crates/perry-runtime/src/gc/copying_object_scan.rs"]
     transition_tail = clean[
         "crates/perry-runtime/src/object/field_set_by_name/tail.rs"
     ]
@@ -485,19 +487,32 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             + ", ".join(sorted(scanner_slot_apis))
         )
 
-    layout_body = function_body(layout_visit, "visit_gc_layout_slot_descriptors")
-    require_code(
-        layout_body,
-        r"gc_shape_keys_edge_slot\s*\(",
-        "descriptor keys edge enumerated as a child slot",
-    )
-    # Nothing in the visit reads the deleted mirror. The descriptor record is
-    # both the strong edge and the stable rewritable location.
-    if re.search(r"keys_array", layout_body):
-        raise CensusError(
-            "the GC slot visitor reads ObjectHeader::keys_array again; the "
-            "descriptor is the authoritative edge since #8112"
+    # #11549: the walk's ONE body is the generic `_inline` form (the `dyn`
+    # wrapper only forwards to it), and the copying drain's plain-object scan
+    # is a second enumeration of the same object slots. Both must emit the
+    # descriptor's keys edge and neither may read the deleted mirror.
+    for body_name, body in (
+        (
+            "visit_gc_layout_slot_descriptors_inline",
+            function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline"),
+        ),
+        (
+            "plain_object_plan",
+            function_body(copying_object_scan, "plain_object_plan"),
+        ),
+    ):
+        require_code(
+            body,
+            r"gc_shape_keys_edge_slot\s*\(",
+            f"descriptor keys edge enumerated as a child slot ({body_name})",
         )
+        # Nothing in the visit reads the deleted mirror. The descriptor record
+        # is both the strong edge and the stable rewritable location.
+        if re.search(r"keys_array", body):
+            raise CensusError(
+                f"the GC slot visitor ({body_name}) reads ObjectHeader::keys_array "
+                "again; the descriptor is the authoritative edge since #8112"
+            )
 
     # The insert/reverse-index body lives in the `_with_holes` variant since
     # the tombstone-delete work; `_with_generation` is a thin forwarding
@@ -1174,6 +1189,18 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "GC slot visitor reads the header mirror for a fact",
         lambda: assert_authority_surfaces(header_fact_read),
+    )
+
+    plan_fact_read = dict(sources)
+    path = "crates/perry-runtime/src/gc/copying_object_scan.rs"
+    plan_fact_read[path] = plan_fact_read[path].replace(
+        "let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);",
+        "let _mirror = (*obj).keys_array;\n    let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);",
+        1,
+    )
+    expect_rejected(
+        "copying plain-object scan reads the header mirror for a fact",
+        lambda: assert_authority_surfaces(plan_fact_read),
     )
 
     inverted_publication = dict(sources)

@@ -125,7 +125,7 @@ mod test_accessors;
 mod transfer;
 mod typed_shape;
 
-pub(in crate::gc) use shape_layout_table::ShapeLayoutTable;
+pub(in crate::gc) use shape_layout_table::{ShapeLayoutTable, ShapeMaskMemo};
 pub(in crate::gc) use slot_mask::LayoutSlotMask;
 #[cfg(test)]
 pub(crate) use test_accessors::{
@@ -187,8 +187,9 @@ thread_local! {
 // array cannot stale this index. Nothing to prune on object death (entries are
 // per-shape, shared).
 thread_local! {
-    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<ShapeLayoutTable> =
-        RefCell::new(ShapeLayoutTable::new());
+    pub(in crate::gc) static SHAPE_LAYOUTS: RefCell<
+        ShapeMaskMemo<crate::fast_hash::PtrHashMap<u32, Option<TypedLayoutDescriptor>>>,
+    > = RefCell::new(ShapeMaskMemo::new());
 }
 
 fn shape_layout_keyed_enabled() -> bool {

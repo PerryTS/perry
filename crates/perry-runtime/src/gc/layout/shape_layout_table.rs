@@ -23,15 +23,21 @@ type ShapeLayoutMap = crate::fast_hash::PtrHashMap<u32, Option<TypedLayoutDescri
 /// The empty memo. ShapeId 0 is "unstamped" and never looked up here.
 const NO_MEMO: (u32, usize, u64) = (0, 0, 0);
 
-pub(in crate::gc) struct ShapeLayoutTable {
-    map: ShapeLayoutMap,
+/// Generic over the map only so that `SHAPE_LAYOUTS`' declaration still names
+/// its map type: `scripts/registry_lifetime_check.py` finds registries by the
+/// container named in the declaration, and must keep seeing this one.
+pub(in crate::gc) struct ShapeMaskMemo<M> {
+    map: M,
     /// `(shape_id, descriptor slot_count, inline pointer mask)` of the last
     /// `Some` descriptor with a one-word pointer mask that
     /// [`Self::shared_pointer_mask`] read.
     memo: Cell<(u32, usize, u64)>,
 }
 
-impl ShapeLayoutTable {
+/// The table `SHAPE_LAYOUTS` holds.
+pub(in crate::gc) type ShapeLayoutTable = ShapeMaskMemo<ShapeLayoutMap>;
+
+impl ShapeMaskMemo<ShapeLayoutMap> {
     pub(in crate::gc) fn new() -> Self {
         Self {
             map: crate::fast_hash::new_ptr_hash_map(),
@@ -66,19 +72,19 @@ impl ShapeLayoutTable {
     }
 }
 
-impl std::ops::Deref for ShapeLayoutTable {
-    type Target = ShapeLayoutMap;
+impl<M> std::ops::Deref for ShapeMaskMemo<M> {
+    type Target = M;
 
     #[inline]
-    fn deref(&self) -> &ShapeLayoutMap {
+    fn deref(&self) -> &M {
         &self.map
     }
 }
 
-impl std::ops::DerefMut for ShapeLayoutTable {
+impl<M> std::ops::DerefMut for ShapeMaskMemo<M> {
     /// The ONLY way to the map mutably, and it forgets the memo first.
     #[inline]
-    fn deref_mut(&mut self) -> &mut ShapeLayoutMap {
+    fn deref_mut(&mut self) -> &mut M {
         #[cfg(test)]
         if sabotage::keeping_memo() {
             return &mut self.map;
