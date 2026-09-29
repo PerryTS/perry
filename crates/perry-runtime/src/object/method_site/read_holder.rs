@@ -381,9 +381,18 @@ pub(crate) unsafe fn prime_read_holder(
     let recv = ordinary_receiver(obj as usize)?;
     // Cheap pre-walk: a receiver the entry could never describe keeps the
     // caller's path and pays nothing for the getter below. A site with no
-    // cache yet stays without one, so the emitted never-primed edge keeps its
-    // inherited-read hook.
-    if !holder_name_admitted(name) || key_may_be_accessor(recv, name) || walk(recv, name).is_none()
+    // cache yet stays without one, so the slow entry keeps asking the
+    // inherited-read cache for it.
+    //
+    // A walk that ends at the default link needs `%Object.prototype%`, which
+    // is materialized lazily: while it is unresolved the walk cannot pin it,
+    // and refusing here would leave the site to the inherited-read cache for
+    // good (the getter below is what resolves it). So an unresolved realm
+    // does not decide the pre-walk; the walk after the getter does.
+    let realm_pending = crate::array::object_prototype_addr_if_resolved() == 0;
+    if !holder_name_admitted(name)
+        || key_may_be_accessor(recv, name)
+        || (walk(recv, name).is_none() && !realm_pending)
     {
         refuse_and_latch(existing);
         return None;
