@@ -522,6 +522,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             0,
             proto_id,
             extra_summary,
+            None,
         ))
     });
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);

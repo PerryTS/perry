@@ -2180,6 +2180,7 @@ js_object_set_symbol_method	Reenters
 js_object_set_symbol_property	Reenters
 js_object_shape_id_for_class_keys	Reenters
 js_object_shape_id_for_class_keys_live	Reenters
+js_object_shape_id_for_class_keys_static	Reenters
 js_object_shape_id_for_keys	Reenters
 js_object_super_call	Reenters
 js_object_super_get	Reenters
@@ -2716,6 +2717,8 @@ js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters
 js_region_guard_prime	Reenters
+js_region_loop_pack	Leaf
+js_region_loop_prime	Leaf
 js_register_anon_shape_class_id	Leaf
 js_register_aux_has_active	Leaf
 js_register_aux_pump	Leaf
@@ -2796,7 +2799,6 @@ js_register_handle_property_set_dispatch	Leaf
 js_register_handle_property_set_dispatch_extension	Leaf
 js_register_handle_prototype_dispatch	Leaf
 js_register_http_agent_handle_probe	Leaf
-js_register_imported_class_shape_slot	Reenters
 js_register_jsx_render_stream	Leaf
 js_register_net_socket_handle_probe	Leaf
 js_register_node_stream_web_adapter_callbacks	Leaf
@@ -2986,6 +2988,9 @@ js_shadow_slot_get	Leaf
 js_shadow_slot_set	Leaf
 js_shadow_state_addr	Leaf
 js_shape_ordinary_inline_slot_for_key	Reenters
+js_shape_register_static_seed	Leaf
+js_shape_run_static_seed	Reenters
+js_shape_seed_plain	Reenters
 js_shared_array_buffer_new	Reenters
 js_shared_array_buffer_new_value	Reenters
 js_sharp_blur	Reenters
@@ -3029,6 +3034,7 @@ js_sqlite_stmt_get	Reenters
 js_sqlite_stmt_raw	Reenters
 js_sqlite_stmt_run	Reenters
 js_sqlite_transaction	Reenters
+js_stack_overflow	Reenters
 js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
@@ -3128,6 +3134,7 @@ js_string_normalize	Reenters
 js_string_pad_end	Reenters
 js_string_pad_fill	Reenters
 js_string_pad_start	Reenters
+js_string_pool_atom	Reenters
 js_string_position_to_index	Leaf
 js_string_print	Leaf
 js_string_raw	Reenters

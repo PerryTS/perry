@@ -96,6 +96,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+pub(crate) mod field_rep;
 pub(crate) mod key_attrs;
 pub(crate) use census::object_tables_census;
 #[cfg(test)]
@@ -218,6 +219,7 @@ pub(crate) mod shape_carriers;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
+pub(crate) mod static_shapes;
 pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
 mod reflect_support;
@@ -334,8 +336,6 @@ pub use class_meta_registry::{
 };
 #[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
-#[cfg(test)]
-pub(crate) use descriptor_state::test_reset_class_field_inline_guard;
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
