@@ -1688,7 +1688,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let field_idx_str = field_index.to_string();
                         let expected_class_id_str = expected_class_id.to_string();
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                        let expected_shape_id = crate::typed_shape::class_shape_id_operand(
                             ctx,
                             &class_name,
                             &keys_global_name,
@@ -1803,12 +1803,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // forward the precheck's value into this cold block,
                         // which keeps a copy of it alive across the hit path's
                         // `shl` (+1 `mov` per read, measured on `cls`).
-                        let ic_shape_id = {
-                            let global = crate::typed_shape::shape_id_global_name_from_keys_global(
-                                &keys_global_name,
-                            );
-                            ctx.block().load_volatile(I32, &format!("@{global}"))
-                        };
+                        let ic_shape_id = crate::typed_shape::class_shape_id_operand_on_block(
+                            ctx.block(),
+                            &keys_global_name,
+                            true,
+                        );
                         // The site's own read cache. A receiver the
                         // pre-check cannot prove (an `Object.create` child
                         // reading through `this`, an instance past the birth

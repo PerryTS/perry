@@ -29,6 +29,8 @@ const INIT_CALL: &str = "call void @js_gc_init_typed_shape_layout";
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),

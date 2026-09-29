@@ -778,6 +778,10 @@ pub(super) fn get_field_ic_miss_impl(
     // the lookup returns `Unknown` in about ten instructions without
     // dereferencing anything further. See the rule-3 note in
     // `object::inherited_read_cache`.
+    // Charter step 5: a receiver still carrying a shape whose lane the
+    // lineage generalized moves to the normalized shape before anything is
+    // learned from it, so the site converges instead of going polymorphic.
+    unsafe { crate::object::field_rep_store::migrate_on_miss(obj as usize) };
     let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // Lane 3 hook A: an INHERITED read that this site has already resolved
