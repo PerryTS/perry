@@ -920,6 +920,23 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     classify_heap_generation_uncached(addr, key)
 }
 
+/// The generation EVERY address of `[base, end)` classifies as, when a single
+/// registered range covers all of it; `None` when none does (or it is split
+/// across registrations). A whole arena block is registered as one range, so
+/// this answers "what generation is this block" without classifying each
+/// object on it.
+pub(crate) fn uniform_heap_generation(base: usize, end: usize) -> Option<HeapGeneration> {
+    if base == 0 || end <= base {
+        return None;
+    }
+    let key = generation_class_key_for_addr(base);
+    let range = hot_page_generations()
+        .borrow()
+        .get(&key)
+        .and_then(|slot| slot.find(base))?;
+    (range.base <= base && range.end >= end).then_some(range.generation)
+}
+
 /// Cache-miss arm of [`classify_heap_generation`]: consult the page map and
 /// re-prime the one-entry cache.
 #[inline(never)]

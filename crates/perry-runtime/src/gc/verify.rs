@@ -757,9 +757,69 @@ pub(super) fn rebuild_live_old_to_young_remembered_set() -> StickyRememberedSet 
     rebuild_retained_old_to_young_remembered_set(true)
 }
 
-#[allow(dead_code)]
+/// The arming reconstruct's walk (#7187): every retained old parent's
+/// old→young edges.
+///
+/// It skips every arena block that is wholly NURSERY. The walk keeps a parent
+/// only if `barrier_parent_needs_remembering` says so — an Old-generation
+/// object, or a malloc object — and an object on a nursery block is neither,
+/// so each object there was a classification and a rejection. Skipping the
+/// block is therefore exact, not a heuristic. It matters because the walk runs
+/// at the first minor of every thread, when the young generation is at its
+/// fullest: on binary-trees at n = 3 it visited 131 k young objects to find no
+/// parent, about 20 M instructions.
 pub(super) fn rebuild_minor_old_to_young_remembered_set() -> StickyRememberedSet {
-    rebuild_retained_old_to_young_remembered_set(false)
+    let mut state = OldToYoungRememberedRebuildState::new(false);
+    if let Some(cursor) = state.arena_cursor.as_mut() {
+        cursor.skip_blocks_where(arming_walk_skips_block);
+    }
+    while !state.step(usize::MAX) {}
+    super::barrier_arming::note_reconstruct_objects_walked(state.objects_scanned());
+    state.finish()
+}
+
+/// Can the arming walk skip the block `[data, end)` without looking? Only when
+/// one registered range covers it and that range is the nursery.
+fn arming_walk_skips_block(data: usize, end: usize) -> bool {
+    #[cfg(test)]
+    if arming_walk_sabotage::skipping_every_block() {
+        return true;
+    }
+    matches!(
+        crate::arena::uniform_heap_generation(data, end),
+        Some(crate::arena::HeapGeneration::Nursery)
+    )
+}
+
+/// Test-only sabotage for [`arming_walk_skips_block`]: skip EVERY block, old
+/// ones included, so the witness can prove that the old→young edge it recovers
+/// comes from the walk it is testing.
+#[cfg(test)]
+pub(crate) mod arming_walk_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SKIP_ALL: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn skipping_every_block() -> bool {
+        SKIP_ALL.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(SKIP_ALL.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prior = self.0;
+            SKIP_ALL.with(|s| s.set(prior));
+        }
+    }
 }
 
 #[inline]

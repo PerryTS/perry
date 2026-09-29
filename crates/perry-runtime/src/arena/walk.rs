@@ -296,6 +296,24 @@ impl ArenaObjectCursor {
         self.skip_blocks = skip;
     }
 
+    /// Never enter a snapshotted block for which `skip(data, end)` holds,
+    /// where `[data, end)` is the block's allocated extent. Replaces any
+    /// earlier skip set. Block-index order only; an address-ordered cursor is
+    /// left as it is.
+    pub(crate) fn skip_blocks_where(&mut self, mut skip: impl FnMut(usize, usize) -> bool) {
+        let ArenaObjectCursorBlocks::BlockIndex(blocks) = &self.blocks else {
+            return;
+        };
+        let Some(max_idx) = blocks.iter().map(|block| block.block_idx).max() else {
+            return;
+        };
+        let mut set = vec![false; max_idx + 1];
+        for block in blocks {
+            set[block.block_idx] = skip(block.data, block.data + block.offset);
+        }
+        self.skip_blocks = set;
+    }
+
     /// `(global block index, data, offset)` of the block the last yielded
     /// object came from, as snapshotted when the cursor was built.
     pub(crate) fn current_block_extent(&self) -> Option<(usize, usize, usize)> {
