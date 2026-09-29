@@ -203,10 +203,10 @@ fn padded_size(
 
 define_class!(
     #[unsafe(super(NSTextField))]
-    #[name = "PerryInsetTextField"]
-    pub struct PerryInsetTextField;
+    #[name = "PerryTextField"]
+    pub struct PerryTextField;
 
-    impl PerryInsetTextField {
+    impl PerryTextField {
         #[unsafe(method(cellClass))]
         fn cell_class() -> &'static AnyClass {
             PerryInsetTextFieldCell::class()
@@ -216,10 +216,10 @@ define_class!(
 
 define_class!(
     #[unsafe(super(NSSecureTextField))]
-    #[name = "PerryInsetSecureTextField"]
-    pub struct PerryInsetSecureTextField;
+    #[name = "PerrySecureTextField"]
+    pub struct PerrySecureTextField;
 
-    impl PerryInsetSecureTextField {
+    impl PerrySecureTextField {
         #[unsafe(method(cellClass))]
         fn cell_class() -> &'static AnyClass {
             PerryInsetSecureTextFieldCell::class()
@@ -230,8 +230,8 @@ define_class!(
 /// An editable one-line text field, as `textFieldWithString:` builds it, with
 /// an inset cell so `set_edge_insets` can pad it.
 pub(crate) fn text_field(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
-    let field: Retained<PerryInsetTextField> =
-        unsafe { msg_send![PerryInsetTextField::class(), textFieldWithString: string] };
+    let field: Retained<PerryTextField> =
+        unsafe { msg_send![PerryTextField::class(), textFieldWithString: string] };
     field.into_super()
 }
 
@@ -241,16 +241,16 @@ pub(crate) fn secure_text_field(
     string: &NSString,
     _mtm: MainThreadMarker,
 ) -> Retained<NSSecureTextField> {
-    let field: Retained<PerryInsetSecureTextField> =
-        unsafe { msg_send![PerryInsetSecureTextField::class(), textFieldWithString: string] };
+    let field: Retained<PerrySecureTextField> =
+        unsafe { msg_send![PerrySecureTextField::class(), textFieldWithString: string] };
     field.into_super()
 }
 
 /// A label, as `labelWithString:` builds it, with an inset cell so
 /// `set_edge_insets` can pad it.
 pub(crate) fn label(string: &NSString, _mtm: MainThreadMarker) -> Retained<NSTextField> {
-    let label: Retained<PerryInsetTextField> =
-        unsafe { msg_send![PerryInsetTextField::class(), labelWithString: string] };
+    let label: Retained<PerryTextField> =
+        unsafe { msg_send![PerryTextField::class(), labelWithString: string] };
     label.into_super()
 }
 
