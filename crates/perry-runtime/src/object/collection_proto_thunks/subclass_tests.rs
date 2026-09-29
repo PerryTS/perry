@@ -16,27 +16,67 @@ fn reflective_map_mutators_keep_subclass_identity() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = subclass(&scope, 0);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        receiver.get_nanbox_f64(),
-    ));
     assert_eq!(
-        map_proto_set_thunk(std::ptr::null(), 1.0, 10.0).to_bits(),
+        map_proto_set_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0,
+            10.0
+        )
+        .to_bits(),
         receiver.get_nanbox_f64().to_bits()
     );
-    assert_eq!(map_proto_get_thunk(std::ptr::null(), 1.0), 10.0);
-    assert_eq!(map_proto_size_getter_thunk(std::ptr::null()), 1.0);
     assert_eq!(
-        map_proto_delete_thunk(std::ptr::null(), 1.0).to_bits(),
+        map_proto_get_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        ),
+        10.0
+    );
+    assert_eq!(
+        map_proto_size_getter_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64())
+        ),
+        1.0
+    );
+    assert_eq!(
+        map_proto_delete_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
     assert_eq!(
-        map_proto_has_thunk(std::ptr::null(), 1.0).to_bits(),
+        map_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_FALSE
     );
-    map_proto_set_thunk(std::ptr::null(), 2.0, 20.0);
-    map_proto_clear_thunk(std::ptr::null(), 0.0);
-    assert_eq!(map_proto_size_getter_thunk(std::ptr::null()), 0.0);
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
+    map_proto_set_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        2.0,
+        20.0,
+    );
+    map_proto_clear_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        0.0,
+    );
+    assert_eq!(
+        map_proto_size_getter_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64())
+        ),
+        0.0
+    );
 }
 
 #[test]
@@ -44,30 +84,66 @@ fn reflective_set_mutators_keep_subclass_identity() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = subclass(&scope, 1);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        receiver.get_nanbox_f64(),
-    ));
     assert_eq!(
-        set_proto_add_thunk(std::ptr::null(), 1.0).to_bits(),
+        set_proto_add_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         receiver.get_nanbox_f64().to_bits()
     );
     assert_eq!(
-        set_proto_has_thunk(std::ptr::null(), 1.0).to_bits(),
+        set_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
-    assert_eq!(set_proto_size_getter_thunk(std::ptr::null()), 1.0);
     assert_eq!(
-        set_proto_delete_thunk(std::ptr::null(), 1.0).to_bits(),
+        set_proto_size_getter_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64())
+        ),
+        1.0
+    );
+    assert_eq!(
+        set_proto_delete_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_TRUE
     );
     assert_eq!(
-        set_proto_has_thunk(std::ptr::null(), 1.0).to_bits(),
+        set_proto_has_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            1.0
+        )
+        .to_bits(),
         crate::value::TAG_FALSE
     );
-    set_proto_add_thunk(std::ptr::null(), 2.0);
-    set_proto_clear_thunk(std::ptr::null(), 0.0);
-    assert_eq!(set_proto_size_getter_thunk(std::ptr::null()), 0.0);
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
+    set_proto_add_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        2.0,
+    );
+    set_proto_clear_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+        0.0,
+    );
+    assert_eq!(
+        set_proto_size_getter_thunk(
+            std::ptr::null(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64())
+        ),
+        0.0
+    );
 }
 
 #[test]

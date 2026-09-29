@@ -5,7 +5,7 @@ use objc2::runtime::{AnyClass, AnyObject};
 use objc2_foundation::NSString;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_array_get_length(arr: i64) -> i64;
     fn js_array_get_element(arr: i64, index: i64) -> f64;
@@ -26,7 +26,7 @@ unsafe extern "C" fn alert_callback_trampoline(ctx: *mut std::ffi::c_void) {
         let (closure, idx) = *pkg;
         let ptr = js_nanbox_get_pointer(closure) as *const u8;
         if !ptr.is_null() {
-            js_closure_call1(ptr, idx as f64);
+            js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, idx as f64);
         }
     });
 }

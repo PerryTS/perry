@@ -9,7 +9,6 @@ mod fs_options_object;
 mod generator_attach_prototype;
 mod handle_stack;
 mod hook_dispatch_handles;
-mod implicit_this_scope;
 mod interned_string_caches;
 mod iter_result_keys;
 mod json_construction;
@@ -167,7 +166,10 @@ fn assert_callable_closure(bits: u64) -> usize {
     assert_eq!(bits & TAG_MASK, POINTER_TAG);
     let ptr = (bits & POINTER_MASK) as usize;
     assert_eq!(
-        crate::closure::js_closure_call0(ptr as *const crate::closure::ClosureHeader),
+        crate::closure::js_closure_call0(
+            ptr as *const crate::closure::ClosureHeader,
+            crate::closure::plain_call_receiver()
+        ),
         0.0
     );
     ptr
@@ -454,6 +456,7 @@ fn test_prototype_resolution_stack_scanner_is_registered() {
 
 extern "C" fn test_reviver_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _key: f64,
     value: f64,
 ) -> f64 {
@@ -467,6 +470,7 @@ thread_local! {
 
 extern "C" fn test_reviver_count_closure_leaf(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _key: f64,
     value: f64,
 ) -> f64 {
@@ -486,6 +490,7 @@ extern "C" fn test_reviver_count_closure_leaf(
 
 extern "C" fn test_promise_identity_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     let _ = crate::gc::gc_collect_minor();
@@ -494,6 +499,7 @@ extern "C" fn test_promise_identity_force_minor_gc(
 
 extern "C" fn test_promise_finally_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
     let _ = crate::gc::gc_collect_minor();
@@ -502,6 +508,7 @@ extern "C" fn test_promise_finally_force_minor_gc(
 
 extern "C" fn test_array_identity_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _index: f64,
 ) -> f64 {
@@ -517,6 +524,7 @@ thread_local! {
 
 extern "C" fn test_foreach_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     key: f64,
 ) -> f64 {
@@ -532,6 +540,7 @@ extern "C" fn test_foreach_force_minor_gc(
 
 extern "C" fn test_async_hook_init_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _async_id: f64,
     _type_name: f64,
     _trigger_async_id: f64,
@@ -543,6 +552,7 @@ extern "C" fn test_async_hook_init_force_minor_gc(
 
 extern "C" fn test_async_hook_event_force_minor_gc(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _async_id: f64,
 ) -> f64 {
     let _ = crate::gc::gc_collect_minor();
@@ -557,6 +567,7 @@ thread_local! {
 
 extern "C" fn test_timer_capture_arg(
     closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     arg: f64,
 ) -> f64 {
     TEST_TIMER_CALLBACK_PTR.with(|slot| slot.set(closure as usize));
@@ -565,13 +576,17 @@ extern "C" fn test_timer_capture_arg(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn test_timer_force_minor_gc(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn test_timer_force_minor_gc(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let _ = crate::gc::gc_collect_minor();
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 extern "C" fn test_rest_first_value(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     let rest_ptr = (rest.to_bits() & POINTER_MASK) as *const crate::array::ArrayHeader;

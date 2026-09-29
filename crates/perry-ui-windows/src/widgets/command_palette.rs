@@ -30,7 +30,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -301,7 +301,7 @@ fn run_selected() {
     unsafe {
         let closure_ptr = js_nanbox_get_pointer(on_run) as *const u8;
         if !closure_ptr.is_null() {
-            js_closure_call0(closure_ptr);
+            js_closure_call0(closure_ptr, perry_ffi::JsThis::UNDEFINED);
         }
     }
 }

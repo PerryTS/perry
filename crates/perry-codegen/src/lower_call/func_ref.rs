@@ -1015,30 +1015,20 @@ pub fn try_lower_func_ref_call(
         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
     // OrdinaryCallBindThis for a receiverless call: `f()` binds `this` to
-    // undefined (sloppy bodies then substitute globalThis at the read).
-    // Without the reset, a bare call inside a method body leaks the
-    // enclosing dispatch's IMPLICIT_THIS into the callee — a nested
-    // `function inner(){ return this; }` called as `inner()` inside
-    // `o.m()` must NOT see `o` (#3576). Gated on the callee actually
-    // reading dynamic `this` so ordinary helper calls pay nothing. Args
-    // are lowered BEFORE the reset: `this` inside an argument expression
-    // still sees the enclosing binding.
-    let resets_this = ctx.funcs_reading_dynamic_this.contains(fid);
-    // #7211: rooted save/restore. The value displaced here is the ENCLOSING
-    // method's receiver, held across the callee body — arbitrary user code.
-    let prev_this = if resets_this {
-        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        Some(crate::rooting::implicit_this_save(ctx, &undef))
-    } else {
-        None
-    };
+    // undefined — a this-reading function's public symbol is a forwarder that
+    // passes `undefined` to its receiver-taking body (`codegen/function.rs`),
+    // so a nested `function inner(){ return this; }` called as `inner()`
+    // inside `o.m()` does not see `o` (#3576). Such a callee keeps to that
+    // public entry: the specialized and typed-clone arms below are not taken
+    // for it (unchanged from when this site reset a receiver cell).
+    let callee_reads_this = ctx.funcs_reading_dynamic_this.contains(fid);
     // Representation-selection Phase 2: specialized-ABI dispatch. Tier A
     // (static, guard-free) fires only when every slot's proof holds AT THIS
     // SITE; Tier B keeps the guarded-diamond shape. Any mismatch falls
     // through to the existing typed/generic chain — the public boxed entry is
     // the permanent fallback ABI.
     let spec_result: Option<String> = if crate::codegen::spec_abi_enabled()
-        && !resets_this
+        && !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && declared_count == args.len()
@@ -1068,7 +1058,7 @@ pub fn try_lower_func_ref_call(
     // No `spec_result.is_none()` gate on the typed-clone candidate arms: plan
     // selection makes the spec and typed-clone sets mutually exclusive, and
     // the `if let` chain below consumes `spec_result` first anyway.
-    let typed_f64_call_param_reps = if !resets_this
+    let typed_f64_call_param_reps = if !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_f64_functions.contains(fid)
@@ -1081,7 +1071,7 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let typed_i32_call_param_reps = if !resets_this
+    let typed_i32_call_param_reps = if !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_i32_functions.contains(fid)
@@ -1094,7 +1084,7 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let typed_string_call_param_reps = if !resets_this
+    let typed_string_call_param_reps = if !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_string_functions.contains(fid)
@@ -1107,7 +1097,7 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let typed_i1_call_param_reps = if !resets_this
+    let typed_i1_call_param_reps = if !callee_reads_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_i1_functions.contains(fid)
@@ -1465,24 +1455,12 @@ pub fn try_lower_func_ref_call(
     // because releasing on one side of it would leave the other side's call
     // reading dropped slots.
     //
-    // AFTER `implicit_this_restore`, and that order is load-bearing rather than
-    // stylistic. `implicit_this_save` runs BELOW the argument lowering, so its
-    // slot sits ABOVE this group, and `js_gc_temp_root_truncate` drops `base`
-    // and everything above it. Releasing first therefore drops the saved
-    // receiver, and `js_gc_temp_root_get` answers an out-of-range read with
-    // `0` — so the restore would rebind the enclosing method's `this` to the
-    // NUMBER 0. `implicit_this_restore` truncates at its own (higher) slot, and
-    // its doc calls out that a caller holding a lower group may release
-    // afterwards and drop the slot a second time harmlessly.
-    if let Some(prev) = prev_this {
-        crate::rooting::implicit_this_restore(ctx, prev);
-    }
     arg_group.release(ctx);
     if ctx.local_generator_funcs.contains(fid) {
-        let wrap_ptr = format!("@__perry_wrap_{}", fname);
+        let wrap_info = ctx.block().fn_info_ref(&format!("__perry_wrap_{}", fname));
         let closure_handle =
             ctx.block()
-                .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+                .call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
         return Ok(Some(ctx.block().call(
             DOUBLE,
             "js_generator_attach_closure_prototype",

@@ -13,7 +13,7 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::dns_resolver::{self, DnsError, QueryType};
 
-use crate::closure::{js_closure_alloc, js_register_closure_arity, ClosureHeader};
+use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
@@ -1206,16 +1206,24 @@ fn dns_promise_reverse(args: i64) -> f64 {
     }
 }
 
-extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn dns_noop_thunk(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     undefined_value()
 }
 
-extern "C" fn dns_noop2_thunk(_closure: *const ClosureHeader, _a: f64, _b: f64) -> f64 {
+extern "C" fn dns_noop2_thunk(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _a: f64,
+    _b: f64,
+) -> f64 {
     undefined_value()
 }
 
-extern "C" fn dns_resolver_get_servers_thunk(_closure: *const ClosureHeader) -> f64 {
-    let this_value = crate::object::js_implicit_this_get();
+extern "C" fn dns_resolver_get_servers_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let this_value = this.as_f64();
     let Some(obj) = resolver_object_from_value(this_value) else {
         return empty_array_value();
     };
@@ -1224,9 +1232,10 @@ extern "C" fn dns_resolver_get_servers_thunk(_closure: *const ClosureHeader) -> 
 
 extern "C" fn dns_resolver_set_servers_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     servers_value: f64,
 ) -> f64 {
-    let this_value = crate::object::js_implicit_this_get();
+    let this_value = this.as_f64();
     let Some(obj) = resolver_object_from_value(this_value) else {
         return dns_promises_set_servers_value(servers_value);
     };
@@ -1234,14 +1243,13 @@ extern "C" fn dns_resolver_set_servers_thunk(
 }
 
 fn method_value(name: &str) -> f64 {
-    let (func_ptr, arity) = match name {
-        "getServers" => (dns_resolver_get_servers_thunk as *const u8, 0),
-        "setServers" => (dns_resolver_set_servers_thunk as *const u8, 1),
-        "setLocalAddress" => (dns_noop2_thunk as *const u8, 2),
-        _ => (dns_noop_thunk as *const u8, 0),
+    let info = match name {
+        "getServers" => crate::fn_info!(dns_resolver_get_servers_thunk, 0; with_declared(0)),
+        "setServers" => crate::fn_info!(dns_resolver_set_servers_thunk, 1; with_declared(1)),
+        "setLocalAddress" => crate::fn_info!(dns_noop2_thunk, 2; with_declared(2)),
+        _ => crate::fn_info!(dns_noop_thunk, 0; with_declared(0)),
     };
-    let closure = js_closure_alloc(func_ptr, 0);
-    js_register_closure_arity(func_ptr, arity);
+    let closure = js_closure_alloc(info, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     js_nanbox_pointer(closure as i64)
 }

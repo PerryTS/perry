@@ -567,8 +567,6 @@ NONCOLLECTING = {
     # (closure/dynamic_props.rs:1040) when the callee captures `this`. That one
     # IS a collection point, and #7154's fix re-reads the arguments below it.
     "js_closure_unbox_callee_checked",
-    # object/this_binding.rs:160 -- a thread-local cell swap
-    "js_implicit_this_set", "js_implicit_this_get",
     # `js_gc_note_slot_layout` (gc/layout.rs:814) and its `_aware` sibling
     # (:833). `_aware` is the same body behind an early return taken when
     # neither the new nor the old bits are pointer-bearing, so it does strictly
@@ -946,6 +944,9 @@ _NON_DEFINING_MACROS = frozenset((
     "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
     "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
     "write", "writeln", "format", "panic", "vec", "dbg", "todo", "unimplemented",
+    # `fn_info!(body, n)` names a body to build its private `static INFO`
+    # (a JsFunctionInfo); it defines no export.
+    "fn_info",
 ))
 _INDENTED_MACRO_RE = re.compile(
     r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
@@ -1515,14 +1516,8 @@ POLL_CAPABLE_RUNTIME = {
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,
     # `js_apply_function`) were not symbols; these are.
-    "js_closure_call0", "js_closure_call1", "js_closure_call2",
-    "js_closure_call3", "js_closure_call4", "js_closure_call5",
-    "js_closure_call6", "js_closure_call7", "js_closure_call8",
-    "js_closure_call9", "js_closure_call10", "js_closure_call11",
-    "js_closure_call12", "js_closure_call13", "js_closure_call14",
-    "js_closure_call15", "js_closure_call16",
-    "js_closure_call_array", "js_closure_call_apply_with_spread",
-    "js_native_call_value",
+    # ... every JS-call entry point, read from `perry_abi::JS_CALL_ENTRIES`
+    # (added below) so a new entry cannot be missing here.
     "js_object_get_property_key", "js_object_set_property_key",
     "js_object_set_property_key_method",
     "js_object_get_field_by_name", "js_object_set_field_by_name",
@@ -1717,6 +1712,24 @@ POLL_CAPABLE_RUNTIME = {
     # `lower_call/new.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
+
+
+def _js_call_entries():
+    """`perry_abi::JS_CALL_ENTRIES` — the runtime entry points emitted code
+    calls to run a JS function. Read from the ABI crate, the one list both
+    sides compile against; an empty read is an error, never an empty set."""
+    abi = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "crates", "perry-abi", "src", "lib.rs")
+    with open(abi, encoding="utf-8") as fh:
+        text = fh.read()
+    m = re.search(r"pub const JS_CALL_ENTRIES:[^=]*=\s*\[(.*?)\];", text, re.S)
+    names = re.findall(r'"([A-Za-z0-9_]+)"', m.group(1)) if m else []
+    if not names:
+        raise SystemExit("gc_root_dominance_check: perry_abi::JS_CALL_ENTRIES not found")
+    return set(names)
+
+
+POLL_CAPABLE_RUNTIME |= _js_call_entries()
 
 
 def compute_poll_reaching(all_funcs):
@@ -2789,17 +2802,14 @@ ROOT_READ_CALLS = {
     "js_closure_get_capture_ptr",
     "js_gc_temp_root_get",           # a MUTABLE root: rewritten on evacuation
     "js_box_get_bits",               # box.rs mutable-capture cell read
-    "js_implicit_this_get",          # object/this_binding.rs:160 thread-local
     "js_new_target_get",
-    # object/this_binding.rs:159 -- `js_implicit_this_SET` is a swap, so its
-    # RETURN value is a read of the same scanned mutable cell
-    # (`scan_implicit_this_roots_mut`, this_binding.rs:176) and the swap has
-    # already overwritten the only other copy. Listing the setter as a reader
-    # looks odd, which is exactly why #7214 left `prev_this` unrooted for a
-    # whole PR: the checker saw a call it knew could not collect, never
-    # classified the result as a heap value, and reported nothing at either
-    # end. Being non-collecting is what makes a call a root READ.
-    "js_implicit_this_set",
+    # A non-collecting SETTER of a scanned mutable cell that returns the
+    # previous value is a root READ too (#7214 left `prev_this` unrooted for a
+    # whole PR because the implicit-`this` swap was not listed here): being
+    # non-collecting is what makes a call a root read. `js_new_target_set`
+    # returns its previous value too; it must be listed here if generated
+    # code ever uses that result (`new_target_save` reads the cell with
+    # `js_new_target_get` first instead).
     # `js_get_string_pointer_unified` is a candidate and is deliberately left
     # out for now: its result IS a raw heap address in a bare register, but it
     # is not in NONCOLLECTING (its SSO branch allocates), so classifying it as
@@ -3145,7 +3155,7 @@ def run_stale(parsed, poll_reaching, verbose, moving_only, fatal_only,
 # hands back an object the collector can move).
 HEAP_SOURCE_CALLS = frozenset({
     "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
-    "js_box_get_bits", "js_implicit_this_get", "js_new_target_get",
+    "js_box_get_bits", "js_new_target_get",
     "js_static_this_resolve", "js_get_exception",
 })
 

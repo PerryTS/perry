@@ -96,6 +96,12 @@ pub struct RegCounter {
     /// callee is UB, so the registry, not the emitting code, is the single
     /// source of truth. `None` for functions built outside a module (tests).
     preserve_none_fns: RefCell<Option<Rc<RefCell<HashSet<String>>>>>,
+    /// The module's `JsFunctionInfo` requests and facts (`crate::fn_info`),
+    /// injected by `LlModule::define_function` so every allocation site can
+    /// name its body's info without per-site threading. `None` for
+    /// functions built outside a module (tests): the info is then named but
+    /// never emitted.
+    fn_infos: RefCell<Option<Rc<RefCell<crate::fn_info::FnInfoState>>>>,
     /// `@`-prefixed symbol of the module's null-guard global (the zeroed
     /// `i32` that [`LlBlock::safe_load_i32_from_ptr`] dereferences in place
     /// of a bad handle). Injected by `LlModule::define_function` so the name
@@ -126,6 +132,7 @@ impl RegCounter {
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
             preserve_none_fns: RefCell::new(None),
+            fn_infos: RefCell::new(None),
             null_guard_symbol: RefCell::new(None),
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
         }
@@ -169,6 +176,30 @@ impl RegCounter {
     /// render time, both after the specialization plan is final.
     pub(crate) fn set_preserve_none_fns(&self, fns: Rc<RefCell<HashSet<String>>>) {
         *self.preserve_none_fns.borrow_mut() = Some(fns);
+    }
+
+    /// Install the module's `JsFunctionInfo` state (`crate::fn_info`).
+    pub(crate) fn set_fn_infos(&self, infos: Rc<RefCell<crate::fn_info::FnInfoState>>) {
+        *self.fn_infos.borrow_mut() = Some(infos);
+    }
+
+    /// The `@`-prefixed info symbol of `body`, recorded as requested.
+    pub(crate) fn fn_info_ref(&self, body: &str) -> String {
+        match &*self.fn_infos.borrow() {
+            Some(infos) => infos.borrow_mut().request(body),
+            None => format!("@{}", crate::fn_info::info_symbol(body)),
+        }
+    }
+
+    /// Record a fact about `body`, a body this module defines.
+    pub(crate) fn note_fn_info(
+        &self,
+        body: &str,
+        note: impl FnOnce(&mut crate::fn_info::FnInfoFacts),
+    ) {
+        if let Some(infos) = &*self.fn_infos.borrow() {
+            note(infos.borrow_mut().facts_mut(body));
+        }
     }
 
     /// Whether `callee` must be called with the `preserve_nonecc` convention.
@@ -1393,6 +1424,23 @@ impl LlBlock {
         }
         let cont = format!("eh.cont{}", self.counter.next());
         Some((cont, lpad))
+    }
+
+    /// The `@`-prefixed `JsFunctionInfo` of the JS body `body`, the operand
+    /// every function-object allocation passes (`crate::fn_info`). Recorded,
+    /// so the module emits (or declares) it.
+    pub fn fn_info_ref(&self, body: &str) -> String {
+        self.counter.fn_info_ref(body)
+    }
+
+    /// Record a fact about `body`, a JS body this module defines, in its
+    /// `JsFunctionInfo`.
+    pub(crate) fn note_fn_info(
+        &self,
+        body: &str,
+        note: impl FnOnce(&mut crate::fn_info::FnInfoFacts),
+    ) {
+        self.counter.note_fn_info(body, note);
     }
 
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {

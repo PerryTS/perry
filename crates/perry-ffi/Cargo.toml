@@ -1,6 +1,9 @@
 [package]
 name = "perry-ffi"
-version.workspace = true
+# Its own version, not the workspace train: 0.6 is the JS body ABI with the
+# receiver as a parameter (typed `JsBody` registration, receiver-taking calls),
+# incompatible with every 0.5 addon.
+version = "0.6.0"
 edition.workspace = true
 license.workspace = true
 description = "Stable FFI surface for native bindings packages that wrap Rust crates for Perry. Wrapper authors depend on this; perry-runtime internals stay free to evolve."
@@ -17,6 +20,8 @@ workspace = true
 
 [dependencies]
 perry-native-registration.workspace = true
+# The JS body ABI (`JsThis`, `js_body_fn_ty!`, `JsBody*`), shared with the runtime.
+perry-abi.workspace = true
 
 # #1112: `perry-runtime` is restored as an OPTIONAL regular dep (not
 # a dev-dep) so the `runtime-link` feature actually propagates the

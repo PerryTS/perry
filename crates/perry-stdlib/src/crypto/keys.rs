@@ -97,6 +97,7 @@ pub(super) unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, val
     }
     perry_runtime::closure::js_closure_call2(
         raw as *const perry_runtime::ClosureHeader,
+        perry_runtime::closure::plain_call_receiver(),
         err,
         value,
     );

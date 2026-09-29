@@ -307,12 +307,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                     ctx.block().load(DOUBLE, &this_slot)
                 } else {
-                    let helper = if ctx.is_strict_fn {
-                        "js_implicit_this_get"
-                    } else {
-                        "js_implicit_this_get_sloppy"
-                    };
-                    ctx.block().call(DOUBLE, helper, &[])
+                    crate::expr::body_call::unbound_this_value(ctx)
                 };
                 let key_idx = ctx.strings.intern(property);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -339,16 +334,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the symbol. Push into `pending_declares` — `declare_function`
             // dedupes against any later same-TU `define` (`module.rs:67-69`
             // comment) so this is safe for the same-module case too. The
-            // signature is informational only (runtime dispatches via
-            // ClosureHeader's func_ptr); use the same `(i64)` + 0 doubles
-            // shape the imported-function-ref site at `expr/mod.rs:12331`
-            // uses for unknown-arity imports.
+            // signature is informational only (the runtime dispatches by the
+            // body's `JsFunctionInfo`); use the JS body ABI with 0 doubles,
+            // the shape the imported-function-ref sites use for
+            // unknown-arity imports.
             let wrap_name = format!("__perry_wrap_{}", fn_name);
-            ctx.pending_declares
-                .push((wrap_name.clone(), DOUBLE, vec![I64]));
+            ctx.pending_declares.push((
+                wrap_name.clone(),
+                DOUBLE,
+                crate::expr::body_call::js_body_param_types(0),
+            ));
             let blk = ctx.block();
-            let wrap_ptr = format!("@{}", wrap_name);
-            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+            let wrap_info = blk.fn_info_ref(&wrap_name);
+            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 
@@ -377,12 +375,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                 ctx.block().load(DOUBLE, &this_slot)
             } else {
-                let helper = if ctx.is_strict_fn {
-                    "js_implicit_this_get"
-                } else {
-                    "js_implicit_this_get_sloppy"
-                };
-                ctx.block().call(DOUBLE, helper, &[])
+                crate::expr::body_call::unbound_this_value(ctx)
             };
             let key_v = lower_expr(ctx, key)?;
             let value_v = lower_expr(ctx, value)?;

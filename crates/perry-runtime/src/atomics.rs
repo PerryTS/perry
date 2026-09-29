@@ -465,7 +465,12 @@ fn atomics_bitwise(view: f64, index: f64, value: f64, op: impl FnOnce(u64, u64) 
 }
 
 #[no_mangle]
-pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, index: f64) -> f64 {
+pub extern "C" fn js_atomics_load(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    view: f64,
+    index: f64,
+) -> f64 {
     let (view, idx) = slot(view, index);
     if view.is_bigint() {
         return bigint_result_for_kind(view.kind(), view.get_bigint_bits(idx));
@@ -474,7 +479,11 @@ pub extern "C" fn js_atomics_load(_closure: *const ClosureHeader, view: f64, ind
 }
 
 #[no_mangle]
-pub extern "C" fn js_atomics_is_lock_free(_closure: *const ClosureHeader, size: f64) -> f64 {
+pub extern "C" fn js_atomics_is_lock_free(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    size: f64,
+) -> f64 {
     // ToNumber(size) (runs `valueOf`/`toString`, so `'4'`→4 behaves like Node),
     // then an EXACT membership test over the lock-free element widths. Node/V8
     // compares the raw number, so `4.9` is NOT floored to 4 — it is simply not a
@@ -486,6 +495,7 @@ pub extern "C" fn js_atomics_is_lock_free(_closure: *const ClosureHeader, size: 
 #[no_mangle]
 pub extern "C" fn js_atomics_store(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -509,6 +519,7 @@ pub extern "C" fn js_atomics_store(
 #[no_mangle]
 pub extern "C" fn js_atomics_add(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -531,6 +542,7 @@ pub extern "C" fn js_atomics_add(
 #[no_mangle]
 pub extern "C" fn js_atomics_sub(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -553,6 +565,7 @@ pub extern "C" fn js_atomics_sub(
 #[no_mangle]
 pub extern "C" fn js_atomics_and(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -563,6 +576,7 @@ pub extern "C" fn js_atomics_and(
 #[no_mangle]
 pub extern "C" fn js_atomics_or(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -573,6 +587,7 @@ pub extern "C" fn js_atomics_or(
 #[no_mangle]
 pub extern "C" fn js_atomics_xor(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -583,6 +598,7 @@ pub extern "C" fn js_atomics_xor(
 #[no_mangle]
 pub extern "C" fn js_atomics_exchange(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     value: f64,
@@ -602,6 +618,7 @@ pub extern "C" fn js_atomics_exchange(
 #[no_mangle]
 pub extern "C" fn js_atomics_compare_exchange(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     expected: f64,
@@ -630,6 +647,7 @@ pub extern "C" fn js_atomics_compare_exchange(
 #[no_mangle]
 pub extern "C" fn js_atomics_notify(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     count: f64,
@@ -652,6 +670,7 @@ pub extern "C" fn js_atomics_notify(
 #[no_mangle]
 pub extern "C" fn js_atomics_wait(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     expected: f64,
@@ -706,6 +725,7 @@ pub extern "C" fn js_atomics_wait(
 #[no_mangle]
 pub extern "C" fn js_atomics_wait_async(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     view: f64,
     index: f64,
     expected: f64,

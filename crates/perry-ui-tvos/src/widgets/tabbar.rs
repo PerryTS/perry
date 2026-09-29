@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
@@ -115,7 +115,11 @@ unsafe extern "C" fn tab_callback_trampoline(context: *mut std::ffi::c_void) {
     let packed = Box::from_raw(context as *mut (f64, i64));
     let (closure_f64, tab_index) = *packed;
     let closure_ptr = js_nanbox_get_pointer(closure_f64);
-    js_closure_call1(closure_ptr as *const u8, tab_index as f64);
+    js_closure_call1(
+        closure_ptr as *const u8,
+        perry_ffi::JsThis::UNDEFINED,
+        tab_index as f64,
+    );
 }
 
 // ── Public API ────────────────────────────────────────────────

@@ -205,8 +205,8 @@ fn dispatch_one(callback: i64, socket: i64) {
     }
     let frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
     unsafe {
-        let _ =
-            JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call1(handle_value(socket));
+        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader)
+            .call1(perry_ffi::JsThis::UNDEFINED, handle_value(socket));
     }
 }
 
@@ -217,8 +217,11 @@ fn dispatch_two(callback: i64, socket: i64, payload: f64) {
     let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
     frame.set_payload(payload.to_bits());
     unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader)
-            .call2(handle_value(socket), f64::from_bits(frame.payload_bits()));
+        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
+            perry_ffi::JsThis::UNDEFINED,
+            handle_value(socket),
+            f64::from_bits(frame.payload_bits()),
+        );
     }
 }
 
@@ -229,8 +232,11 @@ fn dispatch_error(callback: i64, socket: i64, message: &str) {
     let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
     frame.set_payload(unsafe { build_error_object(message) }.to_bits());
     unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader)
-            .call2(handle_value(socket), f64::from_bits(frame.payload_bits()));
+        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
+            perry_ffi::JsThis::UNDEFINED,
+            handle_value(socket),
+            f64::from_bits(frame.payload_bits()),
+        );
     }
 }
 
@@ -483,8 +489,11 @@ fn dispatch_data(handle: i64, bytes: &Bytes) {
     let mut frame = frame;
     frame.set_payload(POINTER_TAG | (buffer as u64 & POINTER_MASK));
     unsafe {
-        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader)
-            .call2(handle_value(handle), f64::from_bits(frame.payload_bits()));
+        let _ = JsClosure::from_raw(frame.cb(0) as *const RawClosureHeader).call2(
+            perry_ffi::JsThis::UNDEFINED,
+            handle_value(handle),
+            f64::from_bits(frame.payload_bits()),
+        );
     }
 }
 

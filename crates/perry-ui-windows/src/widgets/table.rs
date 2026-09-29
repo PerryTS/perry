@@ -46,8 +46,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -133,7 +133,14 @@ fn render_cell(handle: i64, row: i64, col: i64) -> CellContent {
     // handle (POINTER_TAG'd small integer) or a string-typed widget for the
     // simplest Text-only path. The string-typed return shape (top16 ==
     // 0x7FFF) is the common case — extract the bytes directly.
-    let result = unsafe { js_closure_call2(closure_ptr, row as f64, col as f64) };
+    let result = unsafe {
+        js_closure_call2(
+            closure_ptr,
+            perry_ffi::JsThis::UNDEFINED,
+            row as f64,
+            col as f64,
+        )
+    };
     let bits = result.to_bits();
     let top16 = (bits >> 48) as u16;
     if top16 == 0x7FFF {
@@ -838,7 +845,11 @@ pub fn handle_itemchanged(handle: i64, lparam: LPARAM) {
         return;
     }
     unsafe {
-        js_closure_call1(closure_ptr, info.i_item as f64);
+        js_closure_call1(
+            closure_ptr,
+            perry_ffi::JsThis::UNDEFINED,
+            info.i_item as f64,
+        );
     }
 }
 
@@ -883,7 +894,12 @@ pub fn handle_columnclick(handle: i64, lparam: LPARAM) {
         return;
     }
     unsafe {
-        js_closure_call2(closure_ptr, col as f64, if ascending { 1.0 } else { 0.0 });
+        js_closure_call2(
+            closure_ptr,
+            perry_ffi::JsThis::UNDEFINED,
+            col as f64,
+            if ascending { 1.0 } else { 0.0 },
+        );
     }
     // Clear the cache so next paint re-renders post-sort.
     let old_contents = drain_cell_contents(handle);

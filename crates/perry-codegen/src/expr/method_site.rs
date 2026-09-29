@@ -13,13 +13,13 @@
 //!         w == site.word                                     else MISS
 //!   s   = site.slot
 //!   s < 0 (inherited):  PERRY_PROTO_VALIDITY == site.gen     else MISS
-//!                       h = site.closure ; f = site.func
+//!                       h = site.closure ; f = site.code
 //!   own:  v = load [recv + HDR + 8*s] ; v is a heap pointer  else MISS
 //!   fn:   v = load [[recv + PROPS] + HDR + 8*s]  (bit 61: a function's
 //!         own-property object; same checks as own)
-//!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.func      else NEXT WAY
-//!         h = handle(v) ; f = site.func
-//!   CALL: this = recv ; r = f(h, args...) ; restore this
+//!         [v-8] & 0x80FF == CLOSURE ; [v+8] == site.info      else NEXT WAY
+//!         h = handle(v) ; f = site.code
+//!   CALL: r = f(h, recv, args...)    (the receiver is the `this` parameter)
 //!   MISS: js_method_site_miss(slot, feedback_site, recv, method_id, args)
 //!   PRIMITIVE: js_typed_feedback_native_call_method_by_id(feedback_site, recv, method_id, args)
 //! ```
@@ -75,7 +75,11 @@ pub(crate) fn emit_method_site(
     };
     let abi_word = crate::runtime_abi::METHOD_SITE_WORD_OFFSET.to_string();
     let abi_slot = crate::runtime_abi::METHOD_SITE_SLOT_OFFSET.to_string();
-    let abi_func = crate::runtime_abi::METHOD_SITE_FUNC_OFFSET.to_string();
+    // An entry memoizes a body as its `JsFunctionInfo` (the identity a
+    // closure's info word is compared with) and its code address (the call
+    // target), so a hit costs no load through the info.
+    let abi_info = crate::runtime_abi::METHOD_SITE_INFO_OFFSET.to_string();
+    let abi_code = crate::runtime_abi::METHOD_SITE_CODE_OFFSET.to_string();
     let abi_closure = crate::runtime_abi::METHOD_SITE_CLOSURE_OFFSET.to_string();
     let abi_gen = crate::runtime_abi::METHOD_SITE_GEN_OFFSET.to_string();
     let ways = crate::runtime_abi::METHOD_SITE_WAYS;
@@ -85,11 +89,11 @@ pub(crate) fn emit_method_site(
     let index_mask = crate::runtime_abi::METHOD_SITE_INDEX_MASK.to_string();
     let entry_size = crate::runtime_abi::METHOD_SITE_ENTRY_SIZE;
     let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
-    // `ClosureHeader` (64-bit only here): the code pointer, and the GcHeader
+    // `ClosureHeader` (64-bit only here): the info pointer, and the GcHeader
     // (type, flags) half-word in front of the payload that makes a cell a
     // live function object: type `GC_TYPE_CLOSURE` and not a forwarded stub
     // (`closure::is_closure_ptr`'s kind term; there is no payload magic).
-    let func_offset = crate::runtime_abi::CLOSURE_FUNC_PTR_OFFSET as i64;
+    let info_offset = crate::runtime_abi::CLOSURE_INFO_OFFSET as i64;
     let props_offset = crate::runtime_abi::CLOSURE_PROPS_OFFSET as i64;
     let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
     let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
@@ -338,11 +342,13 @@ pub(crate) fn emit_method_site(
         let kind = blk.load(crate::types::I16, &kp);
         let kind = blk.and(crate::types::I16, &kind, &kind_mask);
         let is_closure = blk.icmp_eq(crate::types::I16, &kind, &closure_kind);
-        let fpp = emit_field_ptr(blk, &own_ub, func_offset);
-        let fp = blk.load(I64, &fpp);
-        let mf_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_func)]);
+        let ip = emit_field_ptr(blk, &own_ub, info_offset);
+        let info = blk.load(I64, &ip);
+        let mi_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_info)]);
+        let mi = blk.load(I64, &mi_p);
+        let same = blk.icmp_eq(I64, &info, &mi);
+        let mf_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
         let mf = blk.load(I64, &mf_p);
-        let same = blk.icmp_eq(I64, &fp, &mf);
         let hit = blk.and(I1, &is_closure, &same);
         let h = emit_handle(blk, &own_ub);
         let end = blk.label.clone();
@@ -391,13 +397,13 @@ pub(crate) fn emit_method_site(
         let valid = blk.icmp_eq(I64, &g, &mg);
         let hp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_closure)]);
         let h = blk.load(I64, &hp);
-        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_func)]);
+        let fp_p = blk.gep(crate::types::I8, &entry, &[(I64, &abi_code)]);
         let f = blk.load(I64, &fp_p);
         let end = blk.label.clone();
         blk.cond_br(&valid, &call_l, &miss_l);
         (h, f, end)
     };
-    // call: bind `this`, call the body directly, restore.
+    // call: the body directly, with the receiver as its `this` parameter.
     ctx.current_block = call_idx;
     let handle = ctx
         .block()
@@ -406,29 +412,23 @@ pub(crate) fn emit_method_site(
         .block()
         .phi(I64, &[(&own_func, &own_end), (&inh_func, &inh_end)]);
     let fptr = ctx.block().inttoptr(I64, &func);
-    let cell = crate::rooting::implicit_this_cell_ptr(ctx);
-    let saved = match &cell {
-        Some(cell) => crate::rooting::implicit_this_save_at(ctx, cell, recv_box),
-        None => crate::rooting::implicit_this_save(ctx, recv_box),
-    };
-    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-        Vec::with_capacity(lowered_args.len() + 1);
-    call_args.push((I64, &handle));
-    call_args.extend(lowered_args.iter().map(|a| (DOUBLE, a.as_str())));
+    let mut call_args: Vec<String> = lowered_args.to_vec();
     // Pad with `undefined` up to the arity the prime admits, so a body that
     // declares a few more parameters than this call passes is entered
     // directly (`dispatch_with_arity` pads the same way). A body declaring
     // fewer ignores the extra registers.
     let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let pad = crate::runtime_abi::method_site_padded_argc(lowered_args.len()) - lowered_args.len();
-    for _ in 0..pad {
-        call_args.push((DOUBLE, undefined.as_str()));
-    }
-    let hit_value = ctx.block().call_indirect(DOUBLE, &fptr, &call_args);
-    match &cell {
-        Some(cell) => crate::rooting::implicit_this_restore_at(ctx, cell, saved),
-        None => crate::rooting::implicit_this_restore(ctx, saved),
-    }
+    call_args.extend(std::iter::repeat_n(undefined, pad));
+    // The body gets the receiver as its `this` parameter.
+    let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let hit_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Pointer(&fptr),
+        &handle,
+        &recv_bits,
+        &call_args,
+    );
     let hit_end = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_l);

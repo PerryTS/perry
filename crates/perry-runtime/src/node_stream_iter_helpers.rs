@@ -9,7 +9,10 @@ use crate::closure::{
 use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
 use crate::value::JSValue;
 
-pub(super) extern "C" fn ns_undefined0(_closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_undefined0(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -142,7 +145,10 @@ pub(super) fn promise_from_capture(
     crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut crate::promise::Promise
 }
 
-pub(super) extern "C" fn ns_stream_abort_listener(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_stream_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -239,7 +245,11 @@ pub(super) fn settle_result(value: f64) -> Result<f64, f64> {
 /// Invoke a single-argument stream callback and settle an async result.
 #[inline]
 pub(super) fn call_settled_result(cb: *const ClosureHeader, arg: f64) -> Result<f64, f64> {
-    settle_result(crate::closure::js_closure_call1(cb, arg))
+    settle_result(crate::closure::js_closure_call1(
+        cb,
+        crate::closure::plain_call_receiver(),
+        arg,
+    ))
 }
 
 /// Coerce a `take(n)` / `drop(n)` count argument to a clamped element
@@ -270,8 +280,12 @@ pub(super) fn extend_with_array(
     out
 }
 
-pub(super) extern "C" fn ns_iter_to_array(closure: *const ClosureHeader, opts: f64) -> f64 {
-    let this = this_value(closure);
+pub(super) extern "C" fn ns_iter_to_array(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    opts: f64,
+) -> f64 {
+    let this = this_value(closure, this);
     // An already-errored stream rejects immediately (matches the error-first
     // check `settle_consuming` used).
     if let Some(err) = readable_hidden_error(this) {
@@ -308,7 +322,7 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     let Some(sig_obj) = object_ptr_from_value(sig) else {
         return;
     };
-    let abort_cl = js_closure_alloc(ns_to_array_abort as *const u8, 2);
+    let abort_cl = js_closure_alloc(crate::fn_info!(ns_to_array_abort, 0; with_declared(0)), 2);
     js_closure_set_capture_ptr(abort_cl, 0, result.to_bits() as i64);
     js_closure_set_capture_f64(abort_cl, 1, stream);
     crate::url::js_abort_signal_add_listener(
@@ -321,7 +335,10 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
 /// Abort-listener body for `toArray`: cancel the live stream (terminating the
 /// internal `from_async` iterator that drives it) and reject the result with an
 /// AbortError. A no-op if the result already settled.
-pub(super) extern "C" fn ns_to_array_abort(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_to_array_abort(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -334,8 +351,13 @@ pub(super) extern "C" fn ns_to_array_abort(closure: *const ClosureHeader) -> f64
     f64::from_bits(TAG_UNDEFINED)
 }
 
-pub(super) extern "C" fn ns_iter_map(closure: *const ClosureHeader, mapper: f64, opts: f64) -> f64 {
-    let this = this_value(closure);
+pub(super) extern "C" fn ns_iter_map(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    mapper: f64,
+    opts: f64,
+) -> f64 {
+    let this = this_value(closure, this);
     prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(mapper);
@@ -364,10 +386,11 @@ pub(super) extern "C" fn ns_iter_map(closure: *const ClosureHeader, mapper: f64,
 
 pub(super) extern "C" fn ns_iter_filter(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     predicate: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
+    let this = this_value(closure, this);
     prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(predicate);
@@ -530,7 +553,11 @@ fn consume_finalize(state: *const ClosureHeader) {
 
 /// `.then` fulfilment for `iterator.next()`: read the iter-result, then
 /// either finalize (done) or invoke the user callback and await its result.
-extern "C" fn consume_on_next(state: *const ClosureHeader, iter_result: f64) -> f64 {
+extern "C" fn consume_on_next(
+    state: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    iter_result: f64,
+) -> f64 {
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -561,9 +588,13 @@ extern "C" fn consume_on_next(state: *const ClosureHeader, iter_result: f64) -> 
             return f64::from_bits(TAG_UNDEFINED);
         }
         let acc = js_closure_get_capture_f64(state, SC_ACC);
-        catch_pipeline_throw(|| crate::closure::js_closure_call2(cb, acc, value))
+        catch_pipeline_throw(|| {
+            crate::closure::js_closure_call2(cb, crate::closure::plain_call_receiver(), acc, value)
+        })
     } else {
-        catch_pipeline_throw(|| crate::closure::js_closure_call1(cb, value))
+        catch_pipeline_throw(|| {
+            crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), value)
+        })
     };
 
     match cb_result {
@@ -584,7 +615,11 @@ extern "C" fn consume_on_next(state: *const ClosureHeader, iter_result: f64) -> 
 
 /// `.then` fulfilment for the awaited callback result: update the
 /// accumulator / short-circuit, then pull the next element.
-extern "C" fn consume_on_cb(closure: *const ClosureHeader, cb_result: f64) -> f64 {
+extern "C" fn consume_on_cb(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    cb_result: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -618,7 +653,11 @@ extern "C" fn consume_on_cb(closure: *const ClosureHeader, cb_result: f64) -> f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn consume_reject(closure: *const ClosureHeader, reason: f64) -> f64 {
+extern "C" fn consume_reject(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    reason: f64,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -630,15 +669,6 @@ extern "C" fn consume_reject(closure: *const ClosureHeader, reason: f64) -> f64 
     }
     consume_reject_state(state, reason);
     f64::from_bits(TAG_UNDEFINED)
-}
-
-pub(super) fn register_consume_arities() {
-    crate::closure::js_register_closure_arity(consume_on_next as *const u8, 1);
-    crate::closure::js_register_closure_arity(consume_on_cb as *const u8, 1);
-    crate::closure::js_register_closure_arity(consume_reject as *const u8, 1);
-    // Abort listeners are dispatched via `js_closure_call0` (0 args).
-    crate::closure::js_register_closure_arity(ns_consume_abort as *const u8, 0);
-    crate::closure::js_register_closure_arity(ns_to_array_abort as *const u8, 0);
 }
 
 /// Drive a consuming helper truly-asynchronously over the stream's async
@@ -670,9 +700,9 @@ fn consume_stream(stream: f64, callback: f64, op: f64, initial: f64, opts: f64) 
     };
 
     let result = crate::promise::js_promise_new();
-    let state = js_closure_alloc(consume_on_next as *const u8, 9);
-    let on_cb = js_closure_alloc(consume_on_cb as *const u8, 1);
-    let reject = js_closure_alloc(consume_reject as *const u8, 1);
+    let state = js_closure_alloc(crate::fn_info!(consume_on_next, 1; with_declared(1)), 9);
+    let on_cb = js_closure_alloc(crate::fn_info!(consume_on_cb, 1; with_declared(1)), 1);
+    let reject = js_closure_alloc(crate::fn_info!(consume_reject, 1; with_declared(1)), 1);
 
     js_closure_set_capture_ptr(reject, 0, state as i64);
     js_closure_set_capture_ptr(on_cb, 0, state as i64);
@@ -707,7 +737,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let Some(sig_obj) = object_ptr_from_value(sig) else {
         return;
     };
-    let abort_cl = js_closure_alloc(ns_consume_abort as *const u8, 1);
+    let abort_cl = js_closure_alloc(crate::fn_info!(ns_consume_abort, 0; with_declared(0)), 1);
     js_closure_set_capture_ptr(abort_cl, 0, state as i64);
     crate::url::js_abort_signal_add_listener(
         sig_obj,
@@ -719,7 +749,10 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
 /// Abort-listener body for a consuming helper (`forEach`/`reduce`/`find`/
 /// `some`/`every`): close the iterator and reject the result with an
 /// AbortError. A no-op if the result already settled.
-pub(super) extern "C" fn ns_consume_abort(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_consume_abort(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -733,12 +766,13 @@ pub(super) extern "C" fn ns_consume_abort(closure: *const ClosureHeader) -> f64 
 
 pub(super) extern "C" fn ns_iter_reduce(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     reducer: f64,
     initial: f64,
     opts: f64,
 ) -> f64 {
     consume_stream(
-        this_value(closure),
+        this_value(closure, this),
         reducer,
         CONSUME_OP_REDUCE,
         initial,
@@ -748,11 +782,12 @@ pub(super) extern "C" fn ns_iter_reduce(
 
 pub(super) extern "C" fn ns_iter_for_each(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     action: f64,
     opts: f64,
 ) -> f64 {
     consume_stream(
-        this_value(closure),
+        this_value(closure, this),
         action,
         CONSUME_OP_FOR_EACH,
         f64::from_bits(TAG_UNDEFINED),
@@ -762,11 +797,12 @@ pub(super) extern "C" fn ns_iter_for_each(
 
 pub(super) extern "C" fn ns_iter_find(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     predicate: f64,
     opts: f64,
 ) -> f64 {
     consume_stream(
-        this_value(closure),
+        this_value(closure, this),
         predicate,
         CONSUME_OP_FIND,
         f64::from_bits(TAG_UNDEFINED),
@@ -776,11 +812,12 @@ pub(super) extern "C" fn ns_iter_find(
 
 pub(super) extern "C" fn ns_iter_some(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     predicate: f64,
     opts: f64,
 ) -> f64 {
     consume_stream(
-        this_value(closure),
+        this_value(closure, this),
         predicate,
         CONSUME_OP_SOME,
         f64::from_bits(TAG_UNDEFINED),
@@ -790,11 +827,12 @@ pub(super) extern "C" fn ns_iter_some(
 
 pub(super) extern "C" fn ns_iter_every(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     predicate: f64,
     opts: f64,
 ) -> f64 {
     consume_stream(
-        this_value(closure),
+        this_value(closure, this),
         predicate,
         CONSUME_OP_EVERY,
         f64::from_bits(TAG_UNDEFINED),
@@ -804,10 +842,11 @@ pub(super) extern "C" fn ns_iter_every(
 
 pub(super) extern "C" fn ns_iter_flat_map(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     mapper: f64,
     opts: f64,
 ) -> f64 {
-    let this = this_value(closure);
+    let this = this_value(closure, this);
     prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let cb = callback_closure(mapper);
@@ -981,6 +1020,7 @@ fn take_source_fulfilled(iterator: f64, result: f64) -> f64 {
 
 pub(super) extern "C" fn ns_take_source_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     result: f64,
 ) -> f64 {
     take_source_fulfilled(js_closure_get_capture_f64(closure, 0), result)
@@ -988,6 +1028,7 @@ pub(super) extern "C" fn ns_take_source_fulfilled(
 
 pub(super) extern "C" fn ns_take_source_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1002,6 +1043,7 @@ pub(super) extern "C" fn ns_take_source_rejected(
 
 pub(super) extern "C" fn ns_take_limit_fulfilled(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     result: f64,
 ) -> f64 {
     let iterator = js_closure_get_capture_f64(closure, 0);
@@ -1012,15 +1054,19 @@ pub(super) extern "C" fn ns_take_limit_fulfilled(
 
 pub(super) extern "C" fn ns_take_limit_rejected(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     _reason: f64,
 ) -> f64 {
     finish_take_source(js_closure_get_capture_f64(closure, 0), None, true);
     take_source_done_result()
 }
 
-pub(super) extern "C" fn ns_take_source_next(closure: *const ClosureHeader) -> f64 {
+pub(super) extern "C" fn ns_take_source_next(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let iterator = scope.root_nanbox_f64(this_value(closure));
+    let iterator = scope.root_nanbox_f64(this_value(closure, this));
     if has_truthy_hidden(iterator.get_nanbox_f64(), hidden_key(TAKE_SOURCE_DONE_KEY)) {
         return take_source_done_result();
     }
@@ -1079,9 +1125,9 @@ pub(super) extern "C" fn ns_take_source_next(closure: *const ClosureHeader) -> f
             finish_take_source(iterator.get_nanbox_f64(), None, close_source);
             return take_source_done_result();
         }
-        let fulfilled = js_closure_alloc(ns_take_limit_fulfilled as *const u8, 1);
+        let fulfilled = js_closure_alloc(crate::fn_info!(ns_take_limit_fulfilled, 1), 1);
         let fulfilled = scope.root_raw_mut_ptr(fulfilled);
-        let rejected = js_closure_alloc(ns_take_limit_rejected as *const u8, 1);
+        let rejected = js_closure_alloc(crate::fn_info!(ns_take_limit_rejected, 1), 1);
         let rejected = scope.root_raw_mut_ptr(rejected);
         js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
         js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
@@ -1096,9 +1142,9 @@ pub(super) extern "C" fn ns_take_source_next(closure: *const ClosureHeader) -> f
     if crate::promise::js_value_is_promise(next.get_nanbox_f64()) == 0 {
         return take_source_fulfilled(iterator.get_nanbox_f64(), next.get_nanbox_f64());
     }
-    let fulfilled = js_closure_alloc(ns_take_source_fulfilled as *const u8, 1);
+    let fulfilled = js_closure_alloc(crate::fn_info!(ns_take_source_fulfilled, 1), 1);
     let fulfilled = scope.root_raw_mut_ptr(fulfilled);
-    let rejected = js_closure_alloc(ns_take_source_rejected as *const u8, 1);
+    let rejected = js_closure_alloc(crate::fn_info!(ns_take_source_rejected, 1), 1);
     let rejected = scope.root_raw_mut_ptr(rejected);
     js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
     js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
@@ -1111,8 +1157,11 @@ pub(super) extern "C" fn ns_take_source_next(closure: *const ClosureHeader) -> f
     ) as *const u8)
 }
 
-pub(super) extern "C" fn ns_take_source_return(closure: *const ClosureHeader) -> f64 {
-    finish_take_source(this_value(closure), None, true);
+pub(super) extern "C" fn ns_take_source_return(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    finish_take_source(this_value(closure, this), None, true);
     take_source_done_result()
 }
 
@@ -1121,8 +1170,14 @@ fn take_source_iterator(source: f64, result: f64, count: u32) -> f64 {
     let source = scope.root_nanbox_f64(source);
     let result = scope.root_nanbox_f64(result);
     let methods = [
-        ("next", cast0(ns_take_source_next)),
-        ("return", cast0(ns_take_source_return)),
+        (
+            "next",
+            crate::fn_info!(ns_take_source_next, 0; with_declared(0)),
+        ),
+        (
+            "return",
+            crate::fn_info!(ns_take_source_return, 0; with_declared(0)),
+        ),
     ];
     let iterator = box_pointer(build_object(&methods, 0x7FFF_FF70) as *const u8);
     set_hidden_value(
@@ -1143,9 +1198,13 @@ fn take_source_iterator(source: f64, result: f64, count: u32) -> f64 {
     iterator
 }
 
-pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64) -> f64 {
+pub(super) extern "C" fn ns_iter_take(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    count: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let this = scope.root_nanbox_f64(this_value(closure));
+    let this = scope.root_nanbox_f64(this_value(closure, this));
     if !readable_chunks_nonempty(this.get_nanbox_f64()) {
         if get_hidden_value(
             this.get_nanbox_f64(),
@@ -1188,8 +1247,12 @@ pub(super) extern "C" fn ns_iter_take(closure: *const ClosureHeader, count: f64)
     result
 }
 
-pub(super) extern "C" fn ns_iter_drop(closure: *const ClosureHeader, count: f64) -> f64 {
-    let this = this_value(closure);
+pub(super) extern "C" fn ns_iter_drop(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    count: f64,
+) -> f64 {
+    let this = this_value(closure, this);
     prepare_readable_for_iteration(this);
     let arr = readable_chunks_array(this);
     let mut out = crate::array::js_array_alloc(0);
@@ -1208,8 +1271,15 @@ pub(super) extern "C" fn ns_iter_drop(closure: *const ClosureHeader, count: f64)
 mod take_tests {
     use super::*;
 
-    extern "C" fn source_next(closure: *const ClosureHeader) -> f64 {
-        let source = this_value(closure);
+    static SOURCE_NEXT_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        source_next as crate::codegen_abi::JsBody0<ClosureHeader>,
+    );
+    static SOURCE_RETURN_INFO: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+        source_return as crate::codegen_abi::JsBody0<ClosureHeader>,
+    );
+
+    extern "C" fn source_next(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+        let source = this_value(closure, this);
         let value = get_hidden_value(source, hidden_key(b"count")).unwrap_or(0.0) + 1.0;
         set_hidden_value(source, hidden_key(b"count"), value);
         if value > 2.0 && has_truthy_hidden(source, hidden_key(b"failAfterLimit")) {
@@ -1230,8 +1300,11 @@ mod take_tests {
         box_pointer(result as *const u8)
     }
 
-    extern "C" fn source_return(closure: *const ClosureHeader) -> f64 {
-        let source = this_value(closure);
+    extern "C" fn source_return(
+        closure: *const ClosureHeader,
+        this: crate::closure::JsThis,
+    ) -> f64 {
+        let source = this_value(closure, this);
         set_hidden_value(source, hidden_key(b"returned"), f64::from_bits(TAG_TRUE));
         f64::from_bits(TAG_UNDEFINED)
     }
@@ -1252,17 +1325,17 @@ mod take_tests {
     #[test]
     fn take_closes_retained_source_after_limit() {
         let methods = [
-            ("next", cast0(source_next)),
-            ("return", cast0(source_return)),
+            ("next", &SOURCE_NEXT_INFO as StubFn),
+            ("return", &SOURCE_RETURN_INFO as StubFn),
         ];
         let source = box_pointer(build_object(&methods, 0x7FFF_FF72) as *const u8);
         let chunks = crate::array::js_array_alloc(0);
         let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
         set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
-        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, 2.0);
+        let result = ns_iter_take(take, crate::closure::JsThis::UNDEFINED, 2.0);
         let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
 
         assert!(!has_truthy_hidden(source, hidden_key(b"returned")));
@@ -1279,18 +1352,18 @@ mod take_tests {
     #[test]
     fn take_does_not_return_source_that_finished_naturally() {
         let methods = [
-            ("next", cast0(source_next)),
-            ("return", cast0(source_return)),
+            ("next", &SOURCE_NEXT_INFO as StubFn),
+            ("return", &SOURCE_RETURN_INFO as StubFn),
         ];
         let source = box_pointer(build_object(&methods, 0x7FFF_FF73) as *const u8);
         set_hidden_value(source, hidden_key(b"doneAfter"), 1.0);
         let chunks = crate::array::js_array_alloc(0);
         let stream = js_node_stream_readable_from(box_pointer(chunks as *const u8));
         set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
-        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, 2.0);
+        let result = ns_iter_take(take, crate::closure::JsThis::UNDEFINED, 2.0);
         let iterator = get_hidden_value(result, hidden_key(READABLE_SOURCE_ITERATOR_KEY)).unwrap();
 
         assert!(!stream_destroyed(stream));
@@ -1305,8 +1378,8 @@ mod take_tests {
     fn take_propagates_retained_source_state() {
         let source = box_pointer(build_object(
             &[
-                ("next", cast0(source_next)),
-                ("return", cast0(source_return)),
+                ("next", &SOURCE_NEXT_INFO as StubFn),
+                ("return", &SOURCE_RETURN_INFO as StubFn),
             ],
             0x7FFF_FF75,
         ) as *const u8);
@@ -1315,10 +1388,10 @@ mod take_tests {
         set_hidden_value(stream, hidden_key(READABLE_SOURCE_ITERATOR_KEY), source);
         set_hidden_value(stream, hidden_error_key(), 7.0);
         set_hidden_value(stream, hidden_signal_key(), 8.0);
-        let take = js_closure_alloc(ns_iter_take as *const u8, 1);
+        let take = js_closure_alloc(crate::fn_info!(ns_iter_take, 1), 1);
         js_closure_set_capture_ptr(take, 0, stream.to_bits() as i64);
 
-        let result = ns_iter_take(take, 2.0);
+        let result = ns_iter_take(take, crate::closure::JsThis::UNDEFINED, 2.0);
 
         assert_eq!(readable_hidden_error(result), Some(7.0));
         assert_eq!(get_hidden_value(result, hidden_signal_key()), Some(8.0));
@@ -1328,8 +1401,8 @@ mod take_tests {
     fn take_suppresses_sync_and_async_lookahead_errors() {
         for reject in [false, true] {
             let methods = [
-                ("next", cast0(source_next)),
-                ("return", cast0(source_return)),
+                ("next", &SOURCE_NEXT_INFO as StubFn),
+                ("return", &SOURCE_RETURN_INFO as StubFn),
             ];
             let source = box_pointer(build_object(&methods, 0x7FFF_FF74) as *const u8);
             set_hidden_value(

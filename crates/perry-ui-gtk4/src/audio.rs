@@ -207,7 +207,7 @@ extern "C" {
     fn js_string_from_bytes(ptr: *const u8, len: i32) -> i64;
     fn js_array_create() -> i64;
     fn js_array_push_f64(array_ptr: i64, value: f64);
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64);
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64);
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_pointer(ptr: i64) -> f64;
 }
@@ -432,6 +432,11 @@ pub fn invoke_audio_callback(samples_ptr: *const f32, num_samples: usize) {
     let num_samples_val = num_samples as f64;
 
     unsafe {
-        js_closure_call2(callback_ptr, samples_val, num_samples_val);
+        js_closure_call2(
+            callback_ptr,
+            perry_ffi::JsThis::UNDEFINED,
+            samples_val,
+            num_samples_val,
+        );
     }
 }

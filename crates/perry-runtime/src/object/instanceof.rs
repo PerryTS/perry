@@ -458,12 +458,13 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
 /// returns `false` when `this` is not callable, so `Function.prototype[Symbol
 /// .hasInstance].call(undefined, {})` is `false` (not a throw). Installed on
 /// `Function.prototype` under the `@@hasInstance` key; the receiver flows in
-/// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
+/// as the `this` argument supplied by the `.call`/member dispatch.
 pub(crate) extern "C" fn function_prototype_has_instance_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let constructor = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let constructor = f64::from_bits(this.bits());
     let result = ordinary_has_instance(constructor, value);
     f64::from_bits(if result {
         crate::value::TAG_TRUE
@@ -574,7 +575,14 @@ fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
         throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
     }
     let args = [value];
-    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+    let r = unsafe {
+        crate::closure::js_native_call_value(
+            cb,
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            1,
+        )
+    };
     HasInstanceOutcome::Result(if crate::value::js_is_truthy(r) != 0 {
         f64::from_bits(crate::value::TAG_TRUE)
     } else {

@@ -2,7 +2,13 @@
 use super::*;
 use perry_ffi::{alloc_closure, closure_capture_f64, set_closure_capture_f64, RawClosureHeader};
 
-extern "C" fn observe(closure: *const RawClosureHeader, req: f64, socket: f64, head: f64) -> f64 {
+extern "C" fn observe(
+    closure: *const RawClosureHeader,
+    _this: perry_ffi::JsThis,
+    req: f64,
+    socket: f64,
+    head: f64,
+) -> f64 {
     unsafe {
         let count = closure_capture_f64(closure, 0);
         set_closure_capture_f64(closure as *mut _, 0, count + 1.0);
@@ -45,8 +51,7 @@ fn queue(server_handle: i64, request_handle: i64, raw_socket_id: i64) {
 
 fn delivery(https: bool) {
     let scope = perry_ffi::TransientRootScope::enter();
-    perry_ffi::register_closure_arity(observe as *const u8, 3);
-    let callback = scope.root_addr(alloc_closure(observe as *const u8, 3) as i64);
+    let callback = scope.root_addr(alloc_closure(&OBSERVE_INFO, 3) as i64);
     unsafe {
         set_closure_capture_f64(callback.get() as *mut _, 0, 0.0);
     }
@@ -119,3 +124,6 @@ fn deleted_server_releases_unclaimed_raw_upgrade() {
         );
     }
 }
+
+static OBSERVE_INFO: perry_ffi::JsFunctionInfo =
+    perry_ffi::JsFunctionInfo::of(observe as perry_ffi::JsBody3).with_declared(3);

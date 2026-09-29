@@ -93,10 +93,6 @@ pub(super) fn call_method(_: u32) {
 /// unchanged (no tag rewriting to worry about), so a distinct marker per call
 /// is enough to make `capture()` observe a change — mirrors how
 /// `static_private_owner`'s witness below reuses `marker as f64`.
-pub(super) fn implicit_this(marker: u32) {
-    crate::object::js_implicit_this_set(marker as f64);
-}
-
 pub(super) fn new_target(marker: u32) {
     crate::object::js_new_target_set(marker as f64);
 }

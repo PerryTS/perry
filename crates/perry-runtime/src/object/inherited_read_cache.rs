@@ -692,7 +692,7 @@ unsafe fn accessor_hit(obj: *const ObjectHeader, pair_bits: u64) -> Lookup {
         if crate::object::prototype_chain::resolution_stack_savepoint() != 0 {
             return Lookup::Unknown;
         }
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_get);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
         return Lookup::Hit(JSValue::from_bits(f(this).to_bits()));
     }
     if acc.get != 0 {
@@ -890,7 +890,7 @@ unsafe fn accessor_set(obj: *const ObjectHeader, pair_bits: u64, value: f64) -> 
         // A compiled class setter is called directly with the receiver as its
         // `this` parameter, exactly as the class-setter arm of the generic
         // `[[Set]]` calls it (that arm opens no resolution boundary either).
-        let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f = crate::closure::body_call::js_method_body_fn!(acc.raw_set as *const u8; value);
         let _ = f(this, value);
         return true;
     }
