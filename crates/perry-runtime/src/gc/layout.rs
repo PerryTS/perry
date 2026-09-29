@@ -1599,6 +1599,7 @@ impl HeapChildSlotIterator {
     /// caller already resolved (#8122). The payload-mask selection reuses it
     /// instead of probing the shape table, and it is retained on the iterator
     /// for the slot visitor.
+    #[inline(always)]
     pub(super) fn new_object(
         header: *mut GcHeader,
         prefix_slot: Option<*mut u64>,
@@ -1755,6 +1756,7 @@ pub(super) unsafe fn heap_payload_slot_selection(
 /// [`heap_payload_slot_selection`] for an ObjectFields receiver whose shape
 /// record the caller already resolved (#8122): the shared-shape
 /// pointer-mask lookup reuses it instead of probing the shape table twice.
+#[inline(always)]
 pub(super) unsafe fn heap_payload_slot_selection_from(
     header: *mut GcHeader,
     payload: HeapSlotRange,
@@ -1765,7 +1767,7 @@ pub(super) unsafe fn heap_payload_slot_selection_from(
     })
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn heap_payload_slot_selection_impl(
     header: *mut GcHeader,
     payload: HeapSlotRange,
@@ -1827,6 +1829,9 @@ unsafe fn heap_payload_slot_selection_impl(
 
 /// #10362: every arm returns the iterator it builds, never through an `Option`
 /// combinator whose temporary is copied out — a per-object memmove per GC walk.
+/// Inlined (#11549): the descriptor walk has two instantiations now, and out of
+/// line the iterator came back by memory on every traced object.
+#[inline(always)]
 pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotIterator {
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return HeapChildSlotIterator::empty();
