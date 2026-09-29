@@ -289,9 +289,9 @@ fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
         }
         let obj = addr as *const crate::object::ObjectHeader;
         let shape_id = (*obj).parent_class_id;
-        if !crate::object::shapes::shape_descriptor_by_id(shape_id).is_some_and(|shape| {
-            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-        }) {
+        if !crate::object::shapes::shape_descriptor_by_id(shape_id)
+            .is_some_and(|shape| shape.object_kind.is_ordinary_layout())
+        {
             return None;
         }
         // #10123: a class-0 ordinary object is admitted, keyed on the exact
@@ -380,8 +380,8 @@ unsafe fn element_identity_of_validated_object(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<(u32, u32)> {
     let shape_id = (*obj).parent_class_id;
-    if crate::object::shapes::shape_object_kind_by_id(shape_id)
-        != Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+    if !crate::object::shapes::shape_object_kind_by_id(shape_id)
+        .is_some_and(|kind| kind.is_ordinary_layout())
     {
         return None;
     }

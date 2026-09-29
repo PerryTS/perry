@@ -151,8 +151,7 @@ REGISTRY: list[Restatement] = [
      "GC_FLAG_TENURED",
      "key-add hit: an old receiver needs the stamp funnel's carrier note"),
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_REFUSE_RESERVED",
-     "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES"
-     " | OBJ_FLAG_PACKED_NUMERIC_PROOF",
+     "OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES",
      "key-add hit: per-object flags refused before the stamp"),
     ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "ADD_LAYOUT_RESERVED",
      "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",

@@ -303,7 +303,7 @@ impl GuardState<'_> {
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(object) else {
             return None;
         };
-        if descriptor.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        if !descriptor.object_kind.is_ordinary_layout() {
             return None;
         }
         let live_slots = descriptor.live_inline_slot_count as usize;

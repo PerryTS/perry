@@ -822,16 +822,17 @@ impl<'a> DirectParser<'a> {
         // shape cache lookup — the shape is already in the cache from
         // the one-time build at parse entry.
         let mut saw_pointer = false;
-        let mut js_obj = crate::object::js_object_alloc_class_inline_keys(
-            0, // class_id 0 = plain object (not a class instance)
-            0, // parent_class_id
-            shape.field_count,
-            shape.keys_array,
-        );
         // #8098: parsed records are ordinary plain objects — no class, but an
-        // authoritative ShapeId and no per-object [[Set]] semantics — so mark
-        // them eligible for the object-write fast paths.
-        crate::object::mark_object_plain_ordinary(js_obj);
+        // authoritative ShapeId and no per-object [[Set]] semantics — so they
+        // are born marked eligible for the object-write fast paths, BEFORE
+        // their stamp (charter step 3: the mark is a shape fact).
+        let mut js_obj = crate::object::alloc_plain::alloc_plain_record_with_keys(
+            shape.field_count,
+            #[allow(unused_unsafe)]
+            unsafe {
+                crate::object::ObjectKeys::owned(shape.keys_array)
+            },
+        );
         // Initialize all fields to undefined so JSON with missing
         // fields returns `undefined` for absent properties (matches
         // spec: access to absent own property returns undefined).

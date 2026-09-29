@@ -131,32 +131,6 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
     ptr
 }
 
-/// #8098: mark `obj` as an ORDINARY plain object — class-less, but with no
-/// per-object `[[Set]]` semantics of its own, so the object-write fast paths
-/// may treat it exactly like a class instance.
-///
-/// The mark is deliberately OPT-IN and set at BIRTH. `class_id == 0` is not a
-/// sufficient condition: a `URL` instance, `Object.prototype`, a module
-/// namespace, and a native-module receiver are all class-less, and the write
-/// guards used to exclude the whole class-less population wholesale rather than
-/// reason about them (`proxy/put_value.rs`, and the same three exclusions in
-/// `field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`). Only a
-/// birth site that has established its receiver is ordinary calls this; every
-/// other class-less receiver keeps taking the full `[[Set]]` walk.
-///
-/// The bit lives in `GcHeader::_reserved`, which survives evacuation
-/// (`gc/copying.rs` and `gc/oldgen.rs` carry the word across), is preserved by
-/// the survival-age (`0x0038`) and layout-state (`0xC000`) updates, and is
-/// already loaded by the generated write PIC for its blocking-flag test.
-#[inline]
-pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
-    if obj.is_null() {
-        return;
-    }
-    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    (*gc)._reserved |= crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
-}
-
 /// Allocate a class instance's storage while the caller holds `keys` — a keys
 /// array it received as a raw copy of a root it does not own (a codegen
 /// per-class global, the class memo, the shape cache) — and hand back both the
@@ -276,12 +250,13 @@ pub(crate) unsafe fn build_longlived_keys_array(
 /// widened bound this computes has to travel back to the caller that stamps it.
 /// The last element is `keys_array`'s address after the allocation, which is
 /// the only one a caller may use.
-fn object_alloc_class_inline_keys_impl(
+pub(super) fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
     keys: crate::object::ObjectKeys,
     preinstalled_shape_id: u32,
+    premark_plain: bool,
 ) -> (*mut ObjectHeader, u32, bool, crate::object::ObjectKeys) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
@@ -311,6 +286,11 @@ fn object_alloc_class_inline_keys_impl(
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
+        if premark_plain {
+            // Charter step 3: marked before the first stamp, so the birth
+            // shape is minted `Ordinary` and no twin is ever needed.
+            crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
+        }
         // The compiled entry point passes the ShapeId installed beside this
         // canonical keys global at module initialization. Reuse that immutable
         // descriptor directly when its keys facts and live-slot bound still
@@ -389,17 +369,13 @@ pub(crate) fn alloc_class_instance_with_keys(
     field_count: u32,
     keys: crate::object::ObjectKeys,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots, _, keys) =
-        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys, 0);
-    unsafe {
-        let id = crate::object::shapes::shape_id_for_class_keys_ensure(
-            keys.arr() as *const ArrayHeader,
-            keys.count(),
-            class_id,
-        );
-        crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots);
-    }
-    ptr
+    super::alloc_plain::alloc_class_instance_with_keys_impl(
+        class_id,
+        parent_class_id,
+        field_count,
+        keys,
+        false,
+    )
 }
 
 /// The compiled-class allocation entry point after #6759 C3 rung 2.
@@ -421,15 +397,14 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     // The key count comes from the shape the module-init code minted beside
     // this keys global: the global holds only the array, and the array can
     // be a canonical backing longer than this class's list.
-    let keys = preinstalled_class_keys(keys_array, shape_id);
-    let (ptr, birth_slots, used_preinstalled_shape, _) =
-        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys, shape_id);
-    if !used_preinstalled_shape {
-        unsafe {
-            crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
-        }
-    }
-    ptr
+    super::alloc_plain::alloc_class_inline_keys_stamped_impl(
+        class_id,
+        parent_class_id,
+        field_count,
+        keys_array,
+        shape_id,
+        false,
+    )
 }
 
 /// A class keys global's keys, with the count its module-init ShapeId names.
@@ -441,7 +416,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
 /// there. The fallback's count then differs from the id's, so the stamp
 /// declines it and publishes an exact descriptor.
 #[inline]
-fn preinstalled_class_keys(
+pub(super) fn preinstalled_class_keys(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> crate::object::ObjectKeys {
