@@ -5,7 +5,7 @@ inset their text. The new cell lost the factory setup. `TextField` then set
 its one-line properties again and turned on `usesSingleLineMode`. In that mode
 AppKit draws idle text on the baseline of the system font for the control
 size, so a custom font sat 2pt high at 16pt Helvetica and clipped from about
-20pt. `PerryInsetTextField` and `PerryInsetSecureTextField` now override
+20pt. `PerryTextField` and `PerrySecureTextField` now override
 `cellClass`, so `textFieldWithString:` and `labelWithString:` build the inset
 cell with the factory setup. The cell swap, the property restore for labels,
 and the one-line properties are gone. `SecureField` is now one line and
