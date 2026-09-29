@@ -84,7 +84,7 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
         return false;
     };
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+    if !shape.object_kind.is_ordinary_layout() {
         return false;
     }
     // #10868 step 2.5 stage 1: this path takes its bound from the descriptor
@@ -415,9 +415,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
     let shape = crate::object::shapes::object_shape_descriptor(obj)?;
-    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary
-        || shape.logical_key_count >= 16
-    {
+    if !shape.object_kind.is_ordinary_layout() || shape.logical_key_count >= 16 {
         return None;
     }
     let keys = shape.keys as usize as *mut ArrayHeader;

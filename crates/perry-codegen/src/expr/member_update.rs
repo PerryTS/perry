@@ -423,6 +423,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let result_may_be_heap =
                 !crate::type_analysis::is_provably_not_bigint(ctx, &element_read);
+            // A typed-array element: the explicit form's guarded inline read
+            // and store around one IEEE step (`typed_array_update.rs`).
+            if let Some(result) = super::typed_array_update::try_lower(
+                ctx,
+                object,
+                index,
+                *op,
+                *prefix,
+                *strict,
+                result_may_be_heap,
+            )? {
+                return Ok(result);
+            }
             let strict_i32 = if *strict { "1" } else { "0" };
             rooting::with_rooted_group(ctx, 2, |ctx, group| {
                 let obj = group.lower(ctx, object, true)?;

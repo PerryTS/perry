@@ -1085,9 +1085,7 @@ pub(super) fn get_field_ic_miss_impl(
         } else {
             None
         };
-        let is_regular = shape.is_some_and(|shape| {
-            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
-        });
+        let is_regular = shape.is_some_and(|shape| shape.object_kind.is_ordinary_layout());
         if diag {
             miss_reason = if !is_object {
                 R::NonObjectGcType
