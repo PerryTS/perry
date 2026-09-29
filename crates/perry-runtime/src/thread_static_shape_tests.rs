@@ -22,6 +22,7 @@ fn seed_here() -> u32 {
         packed.as_ptr(),
         packed.len() as u32,
         2,
+        2,
     )
 }
 

@@ -14,6 +14,7 @@ fn seed(requested: u32, names: &[&str]) -> u32 {
         packed.as_ptr(),
         packed.len() as u32,
         names.len() as u32,
+        names.len() as u32,
     )
 }
 

@@ -5748,6 +5748,11 @@ pub fn run_with_parse_cache(
             static_shape_started.elapsed().as_secs_f64() * 1000.0
         );
     }
+    // Design step 4: the program's static shape seed set — every seedable
+    // static id some module's guards embed — collected from each module's
+    // codegen (or its cache sidecar on a hit) and linked as one seed unit.
+    let program_static_seeds: std::sync::Mutex<BTreeMap<u32, perry_codegen::BirthShape>> =
+        std::sync::Mutex::new(BTreeMap::new());
     let compile_results: Vec<Result<NativeObjectArtifact, String>> = module_pool.install(|| {
         ctx.native_modules.par_iter().map(|(path, hir_module)| {
             let _permit =
@@ -5833,9 +5838,26 @@ pub fn run_with_parse_cache(
                 object_output_dir.join(format!("{}.{}", obj_name, ext))
             };
 
-            if let Some((key, cached_path, ffi_symbols)) = cache_key
-                .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
-            {
+            if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+                object_cache
+                    .lookup_path_with_ffi(k)
+                    .map(|(p, s, seeds)| (k, p, s, seeds))
+            }) {
+                // Design step 4: a hit replays the module's static shape
+                // seeds exactly as the skipped codegen reported them, so the
+                // seed unit is the same cold and warm. A malformed line makes
+                // the entry unusable rather than silently dropping a seed.
+                let seeds = seed_lines
+                    .iter()
+                    .map(|line| perry_codegen::decode_static_seed(line))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        format!("corrupt static shape seed sidecar for cache key {key:016x}")
+                    })?;
+                program_static_seeds
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(seeds);
                 // #6439: a hit skips `compile_module`, and `compile_module`
                 // is what populates the ext_registry (`record_ffi_call`
                 // fires from `LlBlock::call`). The registry drives
@@ -5941,6 +5963,7 @@ pub fn run_with_parse_cache(
                     perry_codegen::compile_module(hir_module, opts)
                 })
             };
+            let module_static_seeds = perry_codegen::take_module_static_seeds();
             let object_code = compiled.map_err(|e| {
                 perry_codegen::ext_registry::take_module_capture();
                 format!(
@@ -5951,6 +5974,10 @@ pub fn run_with_parse_cache(
                 )
             })?;
             let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+            program_static_seeds
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(module_static_seeds.iter().cloned());
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
@@ -5959,6 +5986,14 @@ pub fn run_with_parse_cache(
                 // as a miss to a concurrent build (correct, just a wasted
                 // recompile), whereas the reverse ordering can never mislead.
                 object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+                let seed_lines: Vec<String> = module_static_seeds
+                    .iter()
+                    .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
+                    .collect();
+                object_cache.store_static_seeds(
+                    k,
+                    &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
                 object_cache.store_and_get_path(k, &object_code)
             }) {
                 // #7167: handing back the cache path saves a copy for a
@@ -6496,6 +6531,29 @@ pub fn run_with_parse_cache(
         fs::write(&installer_path, &installer_bytes)?;
         obj_cleanup_paths.push(installer_path.clone());
         obj_paths.push(installer_path);
+        obj_fingerprints.push(None);
+    }
+
+    // Design step 4: the static shape seed unit (see
+    // `perry_codegen::stubs::static_shape_seed_ll`). No seedable id = no unit;
+    // the runtime's seed hook then does nothing.
+    let program_static_seeds: Vec<(u32, perry_codegen::BirthShape)> = program_static_seeds
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .collect();
+    if !program_static_seeds.is_empty() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!("  static shape seeds: {}", program_static_seeds.len());
+        }
+        let seed_bytes = perry_codegen::stubs::generate_static_shape_seed_object(
+            &program_static_seeds,
+            target.as_deref(),
+        )?;
+        let seed_path = object_output_dir.join("_perry_static_shape_seeds.o");
+        fs::write(&seed_path, &seed_bytes)?;
+        obj_cleanup_paths.push(seed_path.clone());
+        obj_paths.push(seed_path);
         obj_fingerprints.push(None);
     }
 

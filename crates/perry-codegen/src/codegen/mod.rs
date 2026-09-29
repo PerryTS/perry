@@ -247,8 +247,8 @@ mod spec_self_recursion_tests;
 pub(crate) mod static_fields;
 mod static_shape_ids;
 pub use static_shape_ids::{
-    assign_static_shape_ids, BirthProto, BirthShape, DefinedClassShape, ModuleBirth,
-    ProgramClassShapeIds, TypedMasks,
+    assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
+    BirthProto, BirthShape, DefinedClassShape, ModuleBirth, ProgramClassShapeIds, TypedMasks,
 };
 pub(crate) use static_shape_ids::{
     static_shape_id_for_foreign_global, static_shape_id_for_keys_global,

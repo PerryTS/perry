@@ -89,6 +89,13 @@ impl BirthShape {
         h
     }
 
+    /// A literal content without a typed layout: the runtime seed mints it
+    /// from its key names alone (`js_shape_seed_plain`). Class contents are
+    /// seeded by their class registration, typed ones by their typed install.
+    pub fn is_seedable(&self) -> bool {
+        self.proto == BirthProto::Literal && self.typed.is_none()
+    }
+
     /// The facts the runtime mints for this content, without the masks: a
     /// typed layout and a structural mint of the same class share them.
     pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto) {
@@ -301,9 +308,16 @@ thread_local! {
     /// This module's static id per class keys global: the id its mint
     /// requests and its guards compare as an immediate (the definer's id for
     /// a structural stub of the definer's facts, see
-    /// [`ProgramClassShapeIds::resolved_id`]). Set by `compile_module` for
+    /// [`ProgramClassShapeIds::resolved_id`]), with the content when it is
+    /// seedable ([`BirthShape::is_seedable`]). Set by `compile_module` for
     /// every module (empty when the driver assigned none).
-    static MODULE_STATIC_IDS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+    static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, Option<BirthShape>)>> =
+        RefCell::new(HashMap::new());
+    /// The seedable static ids this module's GUARDS embedded, with their
+    /// content: the module's part of the program's seed set. Cleared by
+    /// [`set_module_static_ids`], drained by [`take_module_static_seeds`]
+    /// right after `compile_module` on the same thread.
+    static MODULE_SEEDS: RefCell<BTreeMap<u32, BirthShape>> = RefCell::new(BTreeMap::new());
     /// This module's slice of the program-wide map (foreign shape globals).
     static MODULE_PROGRAM_IDS: RefCell<ProgramClassShapeIds> = RefCell::new(ProgramClassShapeIds::default());
 }
@@ -319,7 +333,7 @@ pub(crate) fn set_module_static_ids(
     program: &ProgramClassShapeIds,
 ) {
     let by_content: HashMap<&BirthShape, u32> = assigned.iter().map(|(c, id)| (c, *id)).collect();
-    let map: HashMap<String, u32> = if by_content.is_empty() {
+    let map: HashMap<String, (u32, Option<BirthShape>)> = if by_content.is_empty() {
         HashMap::new()
     } else {
         class_keys_init_data
@@ -329,19 +343,83 @@ pub(crate) fn set_module_static_ids(
                 let shape = birth.shape.as_ref()?;
                 let own = *by_content.get(shape)?;
                 let id = program.resolved_id(&entry.0, birth.class_id, shape, own);
-                Some((entry.0.clone(), id))
+                let seed = shape.is_seedable().then(|| shape.clone());
+                Some((entry.0.clone(), (id, seed)))
             })
             .collect()
     };
     MODULE_STATIC_IDS.with(|m| *m.borrow_mut() = map);
     MODULE_PROGRAM_IDS.with(|m| *m.borrow_mut() = program.clone());
+    MODULE_SEEDS.with(|s| s.borrow_mut().clear());
 }
 
-/// The static id of the class whose keys global is `keys_global`, when the
-/// driver assigned one and the global belongs to this module: the id its mint
-/// requests and every guard compares against as an immediate.
+/// Note that a guard embeds `id` as an immediate: a seedable content joins
+/// this module's seed set.
+fn note_guard_id(id: u32, seed: Option<&BirthShape>) {
+    if let Some(shape) = seed.filter(|s| s.is_seedable()) {
+        MODULE_SEEDS.with(|s| {
+            s.borrow_mut().entry(id).or_insert_with(|| shape.clone());
+        });
+    }
+}
+
+/// Drain the seed set of the module just compiled on this thread: every
+/// seedable static id its guards embedded, with its content. The driver
+/// persists it beside the module's cached object, so a cache hit replays the
+/// same set a cold build produced.
+pub fn take_module_static_seeds() -> Vec<(u32, BirthShape)> {
+    MODULE_SEEDS.with(|s| std::mem::take(&mut *s.borrow_mut()).into_iter().collect())
+}
+
+/// One seed as a line of the object cache's seed sidecar:
+/// `<id> <key_count> <live> <hex of the NUL-terminated key names>`.
+pub fn encode_static_seed(id: u32, shape: &BirthShape) -> String {
+    let hex: String = shape.keys.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{id} {} {} {hex}", shape.key_count, shape.live)
+}
+
+/// The inverse of [`encode_static_seed`]; `None` for a malformed line.
+pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
+    let mut it = line.split_ascii_whitespace();
+    let id = it.next()?.parse().ok()?;
+    let key_count = it.next()?.parse().ok()?;
+    let live = it.next()?.parse().ok()?;
+    let hex = it.next().unwrap_or("");
+    if it.next().is_some() || hex.len() % 2 != 0 {
+        return None;
+    }
+    let keys = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    Some((
+        id,
+        BirthShape {
+            keys,
+            key_count,
+            live,
+            proto: BirthProto::Literal,
+            typed: None,
+        },
+    ))
+}
+
+/// The static id a GUARD compares against for the class whose keys global is
+/// `keys_global`, when the driver assigned one and the global belongs to this
+/// module. A literal content joins the module's seed set.
 pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).copied())
+    MODULE_STATIC_IDS.with(|m| {
+        let m = m.borrow();
+        let (id, seed) = m.get(keys_global)?;
+        note_guard_id(*id, seed.as_ref());
+        Some(*id)
+    })
+}
+
+/// The static id this module's mint of `keys_global` requests (the same id
+/// its guards embed; a mint alone does not need a seed).
+pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(id, _)| id))
 }
 
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`
@@ -354,9 +432,13 @@ pub(crate) fn static_shape_id_for_foreign_global(
     MODULE_PROGRAM_IDS.with(|m| {
         let program = m.borrow();
         let d = program.0.get(&class_id)?;
-        (crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
-            == shape_id_global)
-            .then_some(d.id)
+        if crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
+            != shape_id_global
+        {
+            return None;
+        }
+        note_guard_id(d.id, Some(&d.shape));
+        Some(d.id)
     })
 }
 
