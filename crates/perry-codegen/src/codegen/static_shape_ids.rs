@@ -3,8 +3,9 @@
 //! The driver names every compiler-visible class birth shape BY CONTENT —
 //! the packed key names, the key count, the birth live bound, class or
 //! literal prototype, and the typed masks when the class has a typed layout —
-//! and assigns each distinct content one id in the static band
-//! (`perry_abi::STATIC_SHAPE_ID_COUNT` ids from `SHAPE_ID_BASE`). Equal content
+//! and assigns each distinct content one id in the static band (a
+//! power-of-two band sized to the program, within the reserved
+//! `perry_abi::STATIC_SHAPE_ID_COUNT` ids from `SHAPE_ID_BASE`). Equal content
 //! means an equal slot layout (and the same class id), which is exactly what
 //! the runtime already shares, so one id can never name two layouts. Class
 //! NAMES never identify a shape: an importer's stub keys can differ from the
@@ -68,21 +69,88 @@ impl BirthShape {
     pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto) {
         (&self.keys, self.key_count, self.live, &self.proto)
     }
+
+    /// A stable 64-bit FNV-1a over the content (never `RandomState`: the id
+    /// must be identical across builds so cached objects stay valid).
+    fn content_hash(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        eat(&(self.keys.len() as u64).to_le_bytes());
+        eat(&self.keys);
+        eat(&self.key_count.to_le_bytes());
+        eat(&self.live.to_le_bytes());
+        match self.proto {
+            BirthProto::Literal => eat(&[0]),
+            BirthProto::Class(cid) => {
+                eat(&[1]);
+                eat(&cid.to_le_bytes());
+            }
+        }
+        if let Some(masks) = &self.typed {
+            eat(&[2]);
+            for words in [&masks.raw_f64_words, &masks.pointer_words] {
+                eat(&(words.len() as u64).to_le_bytes());
+                for w in words {
+                    eat(&w.to_le_bytes());
+                }
+            }
+        }
+        h
+    }
+
+    /// The content's home slot in a band of `band` slots (a power of two):
+    /// the hash folded to 32 bits, masked.
+    fn home_slot(&self, band: u32) -> u32 {
+        let h = self.content_hash();
+        ((h ^ (h >> 32)) as u32) & (band - 1)
+    }
 }
 
-/// Assign every distinct content a static id: `SHAPE_ID_BASE + rank`, the
-/// content's rank in sorted order, so the result depends on the SET only and
-/// the ids are DENSE from the band's start. Dense is what the runtime's by-id
-/// store needs: `ShapeSlab` indexes a two-level directory of 32-record chunks
-/// by id, so every id placed in its own 32-id run allocates and touches a
-/// chunk of its own, and every 32 K-id run a directory page. Ids scattered by
-/// content hash over the 2^20 band cost tsc ~1.5 MB of chunk and page memory
-/// at startup (more with transparent huge pages) for a few hundred records
-/// that dense ids pack into a few KB.
+/// The smallest static band: programs with up to 256 contents all share it,
+/// so small programs never renumber as they grow.
+pub const MIN_STATIC_BAND: u32 = 1024;
+
+/// The size of the static band for `count` distinct contents: the next power
+/// of two at or above `4 * count`, at least [`MIN_STATIC_BAND`], at most the
+/// reserved `STATIC_SHAPE_ID_COUNT`. The band therefore holds its contents at
+/// a load between 1/8 and 1/4 (lower at the minimum), and only changes size
+/// when the count crosses a power-of-two threshold.
+pub fn static_band_size(count: usize) -> u32 {
+    let want = count
+        .saturating_mul(4)
+        .max(MIN_STATIC_BAND as usize)
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX);
+    want.min(STATIC_SHAPE_ID_COUNT as usize) as u32
+}
+
+/// Assign every distinct content a static id in a band sized to the program:
+/// `SHAPE_ID_BASE + slot`, where `slot` is the content's hash reduced to
+/// [`static_band_size`]`(count)` slots, with linear probing on collision over
+/// the contents in sorted order (so the result depends on the SET only).
 ///
-/// Rank is not stable when the set changes: adding a content renumbers every
-/// content after it, and the object cache (whose key includes each module's
-/// `(content, id)` pairs) then rebuilds the modules whose ids moved.
+/// Two properties, both needed:
+///
+/// * **Compact.** The runtime's by-id store (`ShapeSlab`) indexes a
+///   two-level directory of 32-record chunks by id, so every 32-id run that
+///   holds an id allocates and touches a chunk, and every 32 K-id run a
+///   directory page. Hashing over the whole 2^20 reserve gave each id its own
+///   chunk (tsc: ~1.5 MB at startup, more with transparent huge pages). A
+///   band of 4-8 slots per content keeps the ids within `band / 32` chunks
+///   and, for any band up to 32 K ids, one directory page.
+/// * **Stable.** A content keeps its id when other contents are added or
+///   removed, as long as the band size is unchanged and the change does not
+///   land in its probe run: an added content can only displace the contents
+///   after it (in sorted order) in the run of occupied slots it joins, and at
+///   a load of at most 1/4 those runs are short. The object cache (whose key
+///   includes each module's `(content, id)` pairs) rebuilds exactly the
+///   modules whose ids moved. When the count crosses a power-of-two
+///   threshold the band doubles and every id moves once.
 ///
 /// Every distinct content gets its OWN id (decision 16): a structural view of
 /// a class and its typed layout are different content, so they never share an
@@ -91,18 +159,27 @@ impl BirthShape {
 /// at runtime and uses the definer's id through [`ProgramClassShapeIds`]
 /// (its own entry here is then never requested).
 ///
-/// Contents beyond the band's capacity get no id (their guards load the
+/// Contents beyond the reserve's capacity get no id (their guards load the
 /// mint's id, as before step 4).
 pub fn assign_static_shape_ids<'a>(
     contents: impl IntoIterator<Item = &'a BirthShape>,
 ) -> HashMap<BirthShape, u32> {
     let contents: BTreeSet<&BirthShape> = contents.into_iter().collect();
-    contents
-        .into_iter()
-        .take(STATIC_SHAPE_ID_COUNT as usize)
-        .zip(SHAPE_ID_BASE..)
-        .map(|(c, id)| (c.clone(), id))
-        .collect()
+    let band = static_band_size(contents.len());
+    let mut used = vec![false; band as usize];
+    let mut ids: HashMap<BirthShape, u32> = HashMap::with_capacity(contents.len());
+    for c in contents {
+        if ids.len() as u32 >= band {
+            break;
+        }
+        let mut slot = c.home_slot(band);
+        while used[slot as usize] {
+            slot = (slot + 1) & (band - 1);
+        }
+        used[slot as usize] = true;
+        ids.insert(c.clone(), SHAPE_ID_BASE + slot);
+    }
+    ids
 }
 
 /// One class keys global's birth as the driver's pre-pass collects it.

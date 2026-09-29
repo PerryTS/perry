@@ -20,20 +20,46 @@ fn typed(keys: &str, count: u32, cid: u32, raw: u64, ptr: u64) -> BirthShape {
     }
 }
 
-fn in_band(id: u32) -> bool {
-    (SHAPE_ID_BASE..SHAPE_ID_BASE + STATIC_SHAPE_ID_COUNT).contains(&id)
+/// `ids_are_identical_across_builds`: the slots of two fixed contents.
+const GOLDEN: (u32, u32) = (308, 723);
+
+fn in_band(id: u32, band: u32) -> bool {
+    (SHAPE_ID_BASE..SHAPE_ID_BASE + band).contains(&id)
+}
+
+fn many(prefix: &str, n: u32) -> Vec<BirthShape> {
+    (0..n)
+        .map(|i| class(&format!("{prefix}{i}\0"), 1, 100 + (i % 7)))
+        .collect()
 }
 
 #[test]
-fn every_distinct_content_gets_a_distinct_id_in_the_band() {
-    let contents: Vec<BirthShape> = (0..5000)
-        .map(|i| class(&format!("k{i}\0"), 1, 100 + (i % 7)))
-        .collect();
-    let ids = assign_static_shape_ids(&contents);
-    assert_eq!(ids.len(), contents.len());
-    let distinct: BTreeSet<u32> = ids.values().copied().collect();
-    assert_eq!(distinct.len(), contents.len(), "two contents shared an id");
-    assert!(ids.values().all(|&id| in_band(id)));
+fn the_band_is_the_next_power_of_two_of_four_per_content() {
+    assert_eq!(static_band_size(0), MIN_STATIC_BAND);
+    assert_eq!(static_band_size(1), 1024);
+    assert_eq!(static_band_size(256), 1024);
+    assert_eq!(static_band_size(257), 2048);
+    assert_eq!(static_band_size(512), 2048);
+    assert_eq!(static_band_size(513), 4096);
+    assert_eq!(static_band_size(5000), 32768);
+    assert_eq!(static_band_size(1 << 18), STATIC_SHAPE_ID_COUNT);
+    assert_eq!(static_band_size(usize::MAX), STATIC_SHAPE_ID_COUNT);
+}
+
+#[test]
+fn every_distinct_content_gets_a_distinct_id_within_the_sized_band() {
+    for n in [1u32, 100, 256, 257, 5000] {
+        let contents = many("k", n);
+        let band = static_band_size(n as usize);
+        let ids = assign_static_shape_ids(&contents);
+        assert_eq!(ids.len(), contents.len());
+        let distinct: BTreeSet<u32> = ids.values().copied().collect();
+        assert_eq!(distinct.len(), contents.len(), "two contents shared an id");
+        assert!(
+            ids.values().all(|&id| in_band(id, band)),
+            "an id left the {band}-slot band for {n} contents"
+        );
+    }
 }
 
 #[test]
@@ -47,22 +73,97 @@ fn ids_depend_on_the_content_set_not_its_order_or_duplicates() {
 }
 
 #[test]
-fn ids_are_dense_from_the_band_start_in_content_order() {
-    // The by-id store allocates a 32-record chunk per 32-id run it touches:
-    // ids must fill the band from its start, one per content, no gaps.
-    let contents: Vec<BirthShape> = (0..70_000)
-        .map(|i| class(&format!("p{i}\0"), 1, 1))
-        .collect();
-    let ids = assign_static_shape_ids(&contents);
-    let distinct: BTreeSet<u32> = ids.values().copied().collect();
-    assert_eq!(distinct.len(), 70_000);
-    assert_eq!(distinct.first(), Some(&SHAPE_ID_BASE));
-    assert_eq!(distinct.last(), Some(&(SHAPE_ID_BASE + 70_000 - 1)));
-    let mut sorted: Vec<&BirthShape> = contents.iter().collect();
-    sorted.sort();
-    for (rank, c) in sorted.into_iter().enumerate() {
-        assert_eq!(ids[c], SHAPE_ID_BASE + rank as u32);
+fn ids_are_identical_across_builds() {
+    // The hash is a fixed FNV-1a, never a per-process seed: a cached object
+    // embeds these ids, so a rebuild must reproduce them bit for bit.
+    let a = class("x\0y\0", 2, 7);
+    let lit = BirthShape {
+        proto: BirthProto::Literal,
+        ..class("x\0y\0", 2, 0)
+    };
+    let ids = assign_static_shape_ids([&a, &lit]);
+    assert_eq!((ids[&a] - SHAPE_ID_BASE, ids[&lit] - SHAPE_ID_BASE), GOLDEN);
+}
+
+/// The occupied run (maximal contiguous occupied slots, wrapping) holding
+/// `slot` in a band of `band` slots.
+fn run_of(slot: u32, used: &BTreeSet<u32>, band: u32) -> BTreeSet<u32> {
+    let mut run = BTreeSet::new();
+    let mut s = slot;
+    while used.contains(&s) && run.insert(s) {
+        s = (s + 1) & (band - 1);
     }
+    let mut s = slot.wrapping_sub(1) & (band - 1);
+    while used.contains(&s) && run.insert(s) {
+        s = s.wrapping_sub(1) & (band - 1);
+    }
+    run
+}
+
+#[test]
+fn adding_an_unrelated_content_keeps_the_other_ids() {
+    // 300 contents: a 2048-slot band, which one more content does not grow.
+    let base = many("s", 300);
+    let band = static_band_size(base.len());
+    assert_eq!(band, static_band_size(base.len() + 1));
+    let before = assign_static_shape_ids(&base);
+    let mut untouched = 0;
+    for i in 0..64 {
+        let extra = class(&format!("unrelated{i}\0"), 1, 900);
+        let after = assign_static_shape_ids(base.iter().chain([&extra]));
+        let used: BTreeSet<u32> = after.values().map(|id| id - SHAPE_ID_BASE).collect();
+        let run = run_of(after[&extra] - SHAPE_ID_BASE, &used, band);
+        let moved: Vec<&BirthShape> = base.iter().filter(|c| before[*c] != after[*c]).collect();
+        // Only a content in the probe run the new content joined can move.
+        for c in &moved {
+            assert!(
+                run.contains(&(before[*c] - SHAPE_ID_BASE)),
+                "{c:?} moved from outside the run the new content joined"
+            );
+        }
+        if moved.is_empty() {
+            untouched += 1;
+        }
+    }
+    // At a load of at most 1/4 almost every addition moves nothing.
+    assert!(
+        untouched >= 56,
+        "only {untouched}/64 additions left every id alone"
+    );
+}
+
+#[test]
+fn a_colliding_addition_moves_only_contents_in_its_probe_run() {
+    // The counterpart of the test above: a new content whose home slot is an
+    // existing id and which sorts before its occupant takes that slot, and
+    // the displacement stays inside the run it joined.
+    let base = many("s", 300);
+    let band = static_band_size(base.len());
+    let before = assign_static_shape_ids(&base);
+    let taken: BTreeSet<u32> = before.values().map(|id| id - SHAPE_ID_BASE).collect();
+    let extra = (0..100_000)
+        .map(|i| class(&format!("a{i}\0"), 1, 100))
+        .find(|c| taken.contains(&c.home_slot(band)))
+        .expect("some content collides in a 2048-slot band");
+    let after = assign_static_shape_ids(base.iter().chain([&extra]));
+    let used: BTreeSet<u32> = after.values().map(|id| id - SHAPE_ID_BASE).collect();
+    let run = run_of(after[&extra] - SHAPE_ID_BASE, &used, band);
+    let moved: Vec<&BirthShape> = base.iter().filter(|c| before[*c] != after[*c]).collect();
+    assert!(!moved.is_empty(), "the collision displaced nothing");
+    for c in moved {
+        assert!(run.contains(&(before[c] - SHAPE_ID_BASE)));
+        assert!(run.contains(&(after[c] - SHAPE_ID_BASE)));
+    }
+}
+
+#[test]
+fn the_band_doubles_only_at_a_power_of_two_threshold() {
+    let contents = many("d", 257);
+    let small = assign_static_shape_ids(&contents[..256]);
+    let big = assign_static_shape_ids(&contents);
+    assert!(small.values().all(|&id| in_band(id, 1024)));
+    assert!(big.values().all(|&id| in_band(id, 2048)));
+    assert!(big.values().any(|&id| !in_band(id, 1024)));
 }
 
 #[test]
