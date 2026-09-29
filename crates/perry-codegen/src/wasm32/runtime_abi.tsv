@@ -581,6 +581,7 @@ js_class_capture_value	f64	i32u,i32u
 js_class_capture_value_for_receiver	f64	f64,i32u,i32u
 js_class_capture_value_or	f64	i32u,i32u,f64
 js_class_computed_field_key	f64	f64,i32u,ptr,usize
+js_class_constructor_called	f64	ptr
 js_class_env_current	f64	f64,i32u
 js_class_env_evaluate	void	i32u,f64,f64
 js_class_env_get	f64	f64,i32u,i32u
@@ -590,9 +591,9 @@ js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
 js_class_field_add	f64	f64,f64,f64
-js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
-js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
-js_class_field_get_ic_fast_miss	f64	i64,f64,i32u,i32u,ptr,i32u,i32s
+js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
+js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
+js_class_field_get_ic_fast_miss	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_set_fallback	void	i64,i64,i64,f64
 js_class_field_set_ic	void	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
 js_class_field_set_ic_fast	i32s	i64,f64,i32u,i32u,ptr,i32u,f64,i32s
@@ -608,7 +609,10 @@ js_class_prototype_method_value	f64	f64,f64
 js_class_register_capture_values	void	i32u,ptr,usize
 js_class_register_static_field	void	i32u,ptr,usize,f64,ptr
 js_class_register_static_symbol	void	i32u,f64,f64
+js_class_static_field_get	f64	i32s,ptr,i64
+js_class_static_field_put	void	i32s,ptr,i64,f64
 js_class_static_method_call	f64	f64,ptr,usize,ptr,usize
+js_class_value	f64	i32s
 js_clear_exception	void	
 js_clear_immediate_value	void	f64
 js_clear_interval_value	void	f64
@@ -1489,7 +1493,7 @@ js_gc_temp_root_get	i64	i32u
 js_gc_temp_root_push	i32u	i64
 js_gc_temp_root_set	void	i32u,i64
 js_gc_temp_root_truncate	void	i32u
-js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u
+js_gc_typed_shape_id_for_keys	i32u	i32u,i64,i32u,ptr,i32u,ptr,i32u,i32u
 js_gc_write_barriers_emitted	void	i32u
 js_ge	i64	i64,i64
 js_generator_attach_closure_prototype	f64	f64,ptr
@@ -2646,6 +2650,7 @@ js_object_set_symbol_method	f64	f64,f64,f64
 js_object_set_symbol_property	f64	f64,f64,f64
 js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u
 js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u
+js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u
 js_object_shape_id_for_keys	i32u	i64,i32u
 js_object_super_call	f64	f64,f64,f64,ptr,usize
 js_object_super_get	f64	f64,f64,f64
@@ -3194,6 +3199,8 @@ js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
 js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
+js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u
+js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
 js_register_anon_shape_class_id	void	i32u
 js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr
@@ -3274,7 +3281,6 @@ js_register_handle_property_set_dispatch	void	ptr
 js_register_handle_property_set_dispatch_extension	void	ptr
 js_register_handle_prototype_dispatch	void	ptr
 js_register_http_agent_handle_probe	void	ptr
-js_register_imported_class_shape_slot	void	i32u,i32u,ptr,ptr,ptr
 js_register_jsx_render_stream	void	ptr
 js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
@@ -3464,6 +3470,9 @@ js_shadow_slot_get	i64	i32u
 js_shadow_slot_set	void	i32u,i64
 js_shadow_state_addr	ptr	
 js_shape_ordinary_inline_slot_for_key	i32s	i32u,i64
+js_shape_register_static_seed	void	ptr
+js_shape_run_static_seed	void	
+js_shape_seed_plain	i32u	i32u,ptr,i32u,i32u,i32u
 js_shared_array_buffer_new	ptr	i32s
 js_shared_array_buffer_new_value	ptr	f64
 js_sharp_auto_orient	i64	i64
@@ -3514,12 +3523,14 @@ js_sqlite_stmt_get	f64	i64,ptr
 js_sqlite_stmt_raw	i64	i64
 js_sqlite_stmt_run	ptr	i64,ptr
 js_sqlite_transaction	ptr	i64,i64
+js_stack_overflow	void	
 js_state_get	f64	f64
 js_state_init	void	f64,f64
 js_state_set	void	f64,f64
 js_static_this_arm_classref	void	i32u
 js_static_this_arm_value	void	f64
 js_static_this_resolve	f64	f64
+js_static_this_resolve_class	f64	i32s,ptr
 js_stdlib_has_active_handles	i32s	
 js_stdlib_init_dispatch	void	
 js_stdlib_install_bundled_nodemailer	void	

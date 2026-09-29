@@ -290,7 +290,9 @@ fn overridden_cache_name(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Opti
         .map(|shared| shared.cache_name.clone())
 }
 
-fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
+/// A fresh per-site read cache (`PicCacheSlot`), as every generic read site
+/// has; also the class-field read's miss arm (`js_class_field_get_ic`).
+pub(crate) fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
     let cache_site = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let cache_name = super::super::inline_cache_global_name(ctx, cache_site);

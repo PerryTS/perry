@@ -41,12 +41,24 @@ pub(in crate::codegen) fn compile_static_method(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
+    // The prologue's cache of this class's function object (see
+    // `js_static_this_resolve_class`); thread-local when workers exist, so
+    // each agent caches its own.
+    let class_value_slot = format!("@{llvm_name}__classval");
+    llmod.add_raw_global(format!(
+        "{class_value_slot} = private {}global double 0.0, align 8",
+        if crate::codegen::program_has_worker() {
+            "thread_local "
+        } else {
+            ""
+        }
+    ));
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
 
     // gh #6206 / #6081: same shadow-frame emission as compile_method — static
     // method bodies were equally invisible to the exact-roots copying minor.
     // One extra slot roots the resolved receiver: static `this` is usually
-    // the non-pointer INT32 class-ref, but `js_static_this_resolve` returns a
+    // the class's pinned function object, but `js_static_this_resolve_class` returns a
     // REAL heap receiver for `C.m.call(x)` / `.apply(x)` / inherited `D.m()`
     // dynamic dispatch, and that object may be reachable only from this slot.
     // #10663: decided before any statement is lowered.
@@ -88,10 +100,6 @@ pub(in crate::codegen) fn compile_static_method(
     // path. (Previously `this` fell through to `js_implicit_this_get` and
     // read back `undefined`.)
     let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
-    let class_ref_lit = {
-        let bits = crate::nanbox::INT32_TAG | (class_ref_cid as u64 & 0xFFFF_FFFF);
-        crate::nanbox::double_literal(f64::from_bits(bits))
-    };
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
@@ -103,8 +111,11 @@ pub(in crate::codegen) fn compile_static_method(
         // real receiver (test262 class/elements static-private-*).
         let resolved_this = blk.call(
             DOUBLE,
-            "js_static_this_resolve",
-            &[(DOUBLE, &class_ref_lit)],
+            "js_static_this_resolve_class",
+            &[
+                (I32, &(class_ref_cid as i32).to_string()),
+                (PTR, &class_value_slot),
+            ],
         );
         blk.store(DOUBLE, &resolved_this, &this_slot);
         if crate::codegen::helpers::precise_root_analysis_enabled() {
@@ -329,9 +340,10 @@ pub(in crate::codegen) fn compile_static_method(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
@@ -460,6 +472,8 @@ pub(in crate::codegen) fn compile_static_method(
         Some(&f.body),
         crate::codegen::arguments::ArgumentsCallee::Undefined,
     );
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class.name, f.name)

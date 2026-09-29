@@ -796,7 +796,7 @@ pub extern "C" fn js_object_define_property(
             // `Object.defineProperty(C, Symbol.hasInstance, { value: fn })` (and
             // any symbol-keyed static define on a class): `metadata_key_to_string`
             // can't stringify a Symbol, so the value would be silently dropped.
-            // Route it into the class static-symbol table (CLASS_STATIC_SYMBOLS) —
+            // Route it into the class static symbols (the class function object's own symbol properties) —
             // the same table `static [Symbol.hasInstance]` registers into and that
             // `js_instanceof` consults — so `x instanceof C` honors the user hook
             // (zod 4 installs its brand-check `@@hasInstance` exactly this way).
@@ -805,12 +805,41 @@ pub extern "C" fn js_object_define_property(
                 // non-`undefined`: `Object.defineProperty(C, sym, { value: undefined })`
                 // must still register an own entry. A generic redefine like
                 // `{ enumerable: true }` (no `value`) leaves any existing entry intact.
+                let existed =
+                    crate::symbol::class_static_symbol_lookup(target_cid, key_value).is_some();
                 if desc_has_field(descriptor_value, b"value") {
                     let value_field = desc_read_field(descriptor_value, b"value");
                     crate::symbol::js_class_register_static_symbol(
                         target_cid,
                         key_value,
                         f64::from_bits(value_field.bits()),
+                    );
+                }
+                // ValidateAndApplyPropertyDescriptor: omitted attributes are
+                // false on a new property and retained on an existing one.
+                let owner = crate::object::class_value::class_value_ptr(target_cid) as usize;
+                let sym_key = crate::symbol::sym_key_from_f64(key_value);
+                if crate::symbol::class_static_symbol_lookup(target_cid, key_value).is_some() {
+                    let prior = crate::symbol::get_symbol_property_attrs(owner, sym_key)
+                        .unwrap_or(crate::object::PropertyAttrs::new(existed, existed, existed));
+                    let descriptor_value = desc_handle.get_nanbox_f64();
+                    let pick = |field: &[u8], cur: bool| {
+                        if desc_has_field(descriptor_value, field) {
+                            crate::value::js_is_truthy(f64::from_bits(
+                                desc_read_field(descriptor_value, field).bits(),
+                            )) != 0
+                        } else {
+                            cur
+                        }
+                    };
+                    crate::symbol::set_symbol_property_attrs(
+                        owner,
+                        sym_key,
+                        crate::object::PropertyAttrs::new(
+                            pick(b"writable", prior.writable()),
+                            pick(b"enumerable", prior.enumerable()),
+                            pick(b"configurable", prior.configurable()),
+                        ),
                     );
                 }
                 return obj_value;
@@ -876,7 +905,27 @@ pub extern "C" fn js_object_define_property(
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
-                    if !value_field.is_undefined() {
+                    let descriptor_value = desc_handle.get_nanbox_f64();
+                    let has_value = desc_has_field(descriptor_value, b"value");
+                    // ECMA-262 ValidateAndApplyPropertyDescriptor: an existing own
+                    // static keeps every attribute the descriptor omits (a
+                    // declared `static x` is writable+enumerable+configurable);
+                    // a new key defaults them to false.
+                    let existing_static = super::super::class_prototype_ref_id(obj_value)
+                        .is_none()
+                        .then(|| {
+                            super::super::class_registry::class_own_static_field_value(
+                                target_cid, &name,
+                            )
+                        })
+                        .flatten()
+                        .map(|_| {
+                            super::super::class_registry::class_static_defined_attrs(
+                                target_cid, &name,
+                            )
+                            .unwrap_or((true, true, true))
+                        });
+                    if !value_field.is_undefined() || has_value || existing_static.is_some() {
                         // #7190: `C` and `C.prototype` both answer
                         // `class_ref_id` with the SAME class id — the arm this
                         // sits in exists because `C.prototype` maps back to the
@@ -899,11 +948,13 @@ pub extern "C" fn js_object_define_property(
                             // `js_class_register_static_field` write to, so the
                             // existing static read path finds it with no new
                             // lookup.
-                            super::super::class_registry::class_dynamic_prop_root_store(
-                                target_cid,
-                                &name,
-                                f64::from_bits(value_field.bits()),
-                            );
+                            if has_value || existing_static.is_none() {
+                                super::super::class_registry::class_dynamic_prop_root_store(
+                                    target_cid,
+                                    &name,
+                                    f64::from_bits(value_field.bits()),
+                                );
+                            }
                             // A data descriptor is non-enumerable unless it
                             // says otherwise; a `static x = …` field IS
                             // enumerable, and both share CLASS_DYNAMIC_PROPS.
@@ -922,17 +973,25 @@ pub extern "C" fn js_object_define_property(
                                     desc_read_field(descriptor_value, b"configurable").bits(),
                                 )) != 0
                             } else {
-                                super::super::class_registry::class_static_defined_attrs(
-                                    target_cid, &name,
-                                )
-                                .map(|(_, _, cfg)| cfg)
-                                .unwrap_or(matches!(name.as_str(), "name" | "length"))
+                                existing_static
+                                    .map(|(_, _, cfg)| cfg)
+                                    .unwrap_or(matches!(name.as_str(), "name" | "length"))
+                            };
+                            let writable = if desc_has_field(descriptor_value, b"writable") {
+                                descriptor_writable(descriptor_value)
+                            } else {
+                                existing_static.is_some_and(|(w, _, _)| w)
+                            };
+                            let enumerable = if desc_has_field(descriptor_value, b"enumerable") {
+                                descriptor_enumerable(descriptor_value)
+                            } else {
+                                existing_static.is_some_and(|(_, e, _)| e)
                             };
                             super::super::class_registry::class_static_set_defined_attrs(
                                 target_cid,
                                 &name,
-                                descriptor_writable(descriptor_value),
-                                descriptor_enumerable(descriptor_value),
+                                writable,
+                                enumerable,
                                 configurable,
                             );
                             return obj_value;

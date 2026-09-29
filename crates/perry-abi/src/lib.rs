@@ -6,6 +6,14 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+/// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
+pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
+/// The compiler-assigned ("static") ShapeId band is
+/// `[SHAPE_ID_BASE, SHAPE_ID_BASE + STATIC_SHAPE_ID_COUNT)`: the driver
+/// assigns ids there by content and generated code embeds them as immediates;
+/// the runtime's counter never draws from it (design step 4).
+pub const STATIC_SHAPE_ID_COUNT: u32 = 1 << 20;
+
 /// `array::ArrayHeader` size: element 0 follows it.
 pub const ARRAY_HEADER_SIZE: usize = 8;
 
@@ -26,6 +34,10 @@ pub const RECEIVER_HANDLE_FLOOR: usize = 0x10_0000;
 /// Slot 1: the address of this agent's implicit-`this` cell
 /// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
 pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;
+/// Slot 2: this agent's stack limit (#10812) — not a pointer to anything, the
+/// lowest frame address a compiled prologue accepts before it throws
+/// `RangeError: Maximum call stack size exceeded`. Null means unchecked.
+pub const AGENT_PTR_STACK_LIMIT: usize = 2;
 /// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): directly
 /// after `implicit_this` (128), behind fixed-size fields only.
 pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 136;

@@ -10,6 +10,7 @@
 //! an NSMutableAttributedString keyed off the widget handle so the
 //! lazy-bind doesn't lose state between calls.
 
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
@@ -127,14 +128,7 @@ pub fn append(
         }
 
         if a > 0.0 {
-            let color_cls = AnyClass::get(c"NSColor").unwrap();
-            let color: Retained<AnyObject> = msg_send![
-                color_cls,
-                colorWithRed: r as objc2_core_foundation::CGFloat,
-                green: g as objc2_core_foundation::CGFloat,
-                blue: b as objc2_core_foundation::CGFloat,
-                alpha: a as objc2_core_foundation::CGFloat
-            ];
+            let color = srgb::ns_color(r, g, b, a);
             let color_key = NSString::from_str("NSColor");
             let _: () = msg_send![&*attrs, setObject: &*color, forKey: &*color_key];
         }

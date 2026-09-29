@@ -84,6 +84,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;
 pub(crate) use class_registry::async_resource_prototype_value;
@@ -96,6 +97,8 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+pub(crate) mod field_rep;
+pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;
 pub(crate) use census::object_tables_census;
 #[cfg(test)]
@@ -164,6 +167,8 @@ pub use side_table_roots::{
 pub(crate) use side_table_roots::{
     test_seed_transition_cache_entry, test_transition_cache_occupancy,
 };
+#[cfg(test)]
+mod field_rep_store_tests;
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_site;
@@ -218,6 +223,7 @@ pub(crate) mod shape_carriers;
 #[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
 pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
+pub(crate) mod static_shapes;
 pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
 mod reflect_support;
@@ -334,8 +340,6 @@ pub use class_meta_registry::{
 };
 #[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
-#[cfg(test)]
-pub(crate) use descriptor_state::test_reset_class_field_inline_guard;
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
@@ -372,7 +376,7 @@ pub(crate) use this_binding::{
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
     js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve, ImplicitThisScope,
+    js_static_this_resolve, js_static_this_resolve_class, ImplicitThisScope,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -738,19 +742,6 @@ pub(crate) struct ShapeCacheEntry {
 }
 
 crate::perry_thread_local! {
-    /// Issue #618-followup / drizzle SQL.Aliased: dynamic properties added
-    /// via the IIFE pattern `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)`
-    /// to imported classes (which Perry stores as INT32-tagged class ids).
-    /// Pre-fix `js_object_set_field_by_name` saw the receiver as an INT32
-    /// "small handle" and silently dropped the assignment. Now route through
-    /// this side-table keyed by class_id.
-    pub(crate) static CLASS_DYNAMIC_PROPS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, f64>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Property-creation order for `CLASS_DYNAMIC_PROPS`. The value table is a
-    /// HashMap for hot lookup, while [[OwnPropertyKeys]] needs first-insertion
-    /// order (with delete + re-add moving a key to the end).
-    pub(crate) static CLASS_DYNAMIC_PROP_ORDER: std::cell::RefCell<std::collections::HashMap<u32, Vec<String>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
     /// #7190: `(writable, enumerable)` for static own keys installed by
     /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
     /// next to `static x = …` fields, which are writable AND enumerable by

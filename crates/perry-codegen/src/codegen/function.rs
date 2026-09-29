@@ -1256,9 +1256,10 @@ pub(super) fn compile_function(
         class_header_images: HashMap::new(),
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
-        masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).
@@ -1536,6 +1537,8 @@ pub(super) fn compile_function(
         super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
     }
 
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;

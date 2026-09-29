@@ -755,22 +755,6 @@ mod tests {
 
 // ── #10777: shape inputs for the function-scope walk ──────────────────────
 
-/// `PERRY_L14_NBC_ORDER` gate. **Default OFF.** When off this returns empty
-/// sets, the fixpoint sees exactly what it saw before, and every emitted byte
-/// is identical to the pre-fix build — the reorder in `hir_facts.rs` is pure,
-/// so the knob gates the INPUTS, not the position. Keyed into the object cache
-/// so a warm cache cannot serve the other arm's object.
-pub(crate) fn nbc_order_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        matches!(
-            std::env::var("PERRY_L14_NBC_ORDER").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
-        )
-    })
-}
-
 /// Turn the receiver proofs into the `(members, numeric_fields)` pair the
 /// function-scope fixpoint needs.
 ///
@@ -790,13 +774,10 @@ pub(crate) fn nbc_order_enabled() -> bool {
 ///
 /// A union would be a WRONG ANSWER, not a weaker one: `a` numeric on `C` and
 /// not on `D` would license a bare `fadd` on `D.a`.
-/// The gate is passed in so both modes can be tested without changing the
-/// process environment shared by parallel unit tests.
 pub(crate) fn shape_numeric_inputs(
     shape_proven: &HashMap<u32, crate::collectors::ptr_shape::PtrShapeLocal>,
-    enabled: bool,
 ) -> (HashSet<u32>, HashSet<String>) {
-    if !enabled || shape_proven.is_empty() {
+    if shape_proven.is_empty() {
         return (HashSet::new(), HashSet::new());
     }
     let mut members: HashSet<u32> = HashSet::new();
@@ -855,7 +836,7 @@ mod shape_input_tests {
     }
 
     #[test]
-    fn nbc_order_intersects_numeric_fields_before_proving_property_locals() {
+    fn shape_inputs_intersect_numeric_fields_before_proving_property_locals() {
         let shape_proven = HashMap::from([
             (
                 10,
@@ -882,7 +863,7 @@ mod shape_input_tests {
             property_local(24, 12, "shared"),
         ];
 
-        let (members, fields) = shape_numeric_inputs(&shape_proven, true);
+        let (members, fields) = shape_numeric_inputs(&shape_proven);
         let numeric = numeric_locals(&stmts, &members, &fields);
         assert!(numeric.contains(&20), "shared field on First is numeric");
         assert!(numeric.contains(&21), "shared field on Second is numeric");
@@ -898,8 +879,5 @@ mod shape_input_tests {
             !numeric.contains(&24),
             "an unproven receiver is not a numeric input"
         );
-
-        let (off_members, off_fields) = shape_numeric_inputs(&shape_proven, false);
-        assert!(numeric_locals(&stmts, &off_members, &off_fields).is_empty());
     }
 }

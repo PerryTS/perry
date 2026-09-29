@@ -217,6 +217,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // skipping per-evaluation closure allocation on the hot loop. See
     // `crates/perry-runtime/src/closure.rs::js_closure_alloc_singleton`.
     module.declare_function("js_closure_alloc_singleton", I64, &[PTR]);
+    // A class constructor as a value: the class's per-agent function object
+    // (`object/class_value.rs`; #11414).
+    module.declare_function("js_class_value", DOUBLE, &[I32]);
+    // A declared static whose compiled alias is detached (`TAG_HOLE`): the
+    // generic [[Get]] / [[Set]] on the class function object.
+    module.declare_function("js_class_static_field_get", DOUBLE, &[I32, PTR, I64]);
+    module.declare_function("js_class_static_field_put", VOID, &[I32, PTR, I64, DOUBLE]);
     // Singleton-cached variant for closures with captures, keyed by
     // `(func_ptr, capture_bits…)`. Args: (func_ptr, capture_count,
     // captures_ptr — pointer to `capture_count` u64 values).
@@ -1234,16 +1241,27 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[PTR, I32, I32, I64, I64, I64, I64, I64],
     );
+    // Step 4b loop regions: the store-licensing twin (attribute summary 0).
+    module.declare_function(
+        "js_region_loop_prime",
+        I64,
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32],
+    );
     module.declare_function(
         "js_gc_typed_shape_id_for_keys",
         I32,
-        &[I32, I64, I32, PTR, I32, PTR, I32],
+        &[I32, I64, I32, PTR, I32, PTR, I32, I32],
     );
+    // Design step 4: the per-class mint with the driver's static id, and the
+    // literal-shape seed.
     module.declare_function(
-        "js_register_imported_class_shape_slot",
-        VOID,
-        &[I32, I32, PTR, PTR, PTR],
+        "js_object_shape_id_for_class_keys_static",
+        I32,
+        &[I64, I32, I32, I32, I32],
     );
+    module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32]);
+    module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
+    module.declare_function("js_shape_run_static_seed", VOID, &[]);
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive
     // allocators resolve it in a public wrapper and forward it as a hidden body

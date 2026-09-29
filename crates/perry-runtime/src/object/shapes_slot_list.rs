@@ -722,6 +722,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         hole_count,
         current.proto_id,
         super::receiver_extra_summary(obj),
+        None,
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
     // the one that minted a fresh (old_carrier=false) descriptor for an
@@ -1159,6 +1160,7 @@ pub(super) fn install_external_shape_id(
             0,
             proto_id,
             summary,
+            crate::object::field_rep::REP_ANY,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.

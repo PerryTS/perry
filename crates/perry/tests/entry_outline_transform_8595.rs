@@ -64,7 +64,10 @@ fn compile(dir: &std::path::Path, name: &str, source: &str, outline: bool) -> (P
         .arg(&entry)
         .arg("-o")
         .arg(&output)
-        .arg("--no-cache");
+        .arg("--no-cache")
+        // #11591: the reflection fixture needs Script semantics, which apply
+        // only under the global-script opt-in.
+        .env("PERRY_GLOBAL_SCRIPT_THIS", "1");
     for key in GC_ENV_OVERRIDES {
         cmd.env_remove(key);
     }
