@@ -34,8 +34,6 @@
 //! indirect path resolve to the public boxed symbol (asserted by
 //! `spec_abi_symbol_reachability` in the tests module).
 
-use std::collections::HashMap;
-
 pub(crate) use super::param_guard::SpecParamGuard;
 pub(crate) use crate::collectors::SpecParamRep;
 use crate::types::{LlvmType, DOUBLE, I32, I64};
@@ -199,17 +197,62 @@ pub(crate) fn spec_tuple_is_viable(reps: &[SpecParamRep]) -> bool {
         .any(|r| matches!(r, SpecParamRep::I32 | SpecParamRep::TaPtr { .. }))
 }
 
-/// Select the dominant viable tuple for `fid` from the pre-pass judgments,
-/// after demoting slots the CALLEE cannot accept in raw form (reassigned or
-/// closure-referenced params must keep the boxed protocol). Returns the tuple
-/// and how many sites match it exactly.
+/// Whether a site judged `site` can call an entry built for `tuple`: every
+/// slot is either `Boxed` in the entry (which takes any value in the boxed
+/// ABI) or exactly the site's own judgment. Mirrors the call-site check in
+/// `lower_call/func_ref.rs::try_emit_spec_static_call`, which re-proves every
+/// raw slot at lowering time; this is only the selector's prediction of it.
+fn tuple_accepts_site(tuple: &[SpecParamRep], site: &[SpecParamRep]) -> bool {
+    tuple
+        .iter()
+        .zip(site.iter())
+        .all(|(t, s)| matches!(t, SpecParamRep::Boxed) || t == s)
+}
+
+/// The slots of `tuple` that remove work (`spec_tuple_is_viable`'s set).
+fn specialized_slot_count(tuple: &[SpecParamRep]) -> usize {
+    tuple
+        .iter()
+        .filter(|r| matches!(r, SpecParamRep::I32 | SpecParamRep::TaPtr { .. }))
+        .count()
+}
+
+/// Slot-wise meet of two tuples: a slot the two agree on keeps its
+/// representation, a slot they disagree on falls back to `Boxed`.
+fn meet_tuples(a: &[SpecParamRep], b: &[SpecParamRep]) -> Vec<SpecParamRep> {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| if x == y { *x } else { SpecParamRep::Boxed })
+        .collect()
+}
+
+/// Select the tuple for `fid`'s one specialized entry from the pre-pass
+/// judgments, after demoting slots the CALLEE cannot accept in raw form
+/// (reassigned or closure-referenced params must keep the boxed protocol).
+/// Returns the tuple and how many sites can call it.
+///
+/// A site whose judgment the entry cannot accept calls the public boxed entry
+/// and runs the whole generic body, so the choice is not "the most frequent
+/// exact tuple". Spectral-norm's `Atu(n, w, v)` / `Atu(n, w, u)` judged
+/// `(i32, ta, ta)` and `(i32, ta, b)` once each; picking the first sent the
+/// second site — half of all calls — to the boxed body (24% of the program
+/// plus 12% in `js_number_coerce`), although `(i32, ta, b)` serves both and
+/// keeps the hot `u[j]` read on the proven view.
+///
+/// Candidates are every distinct site tuple, the slot-wise meet of every pair
+/// of them, and the meet of all of them. Each is scored by the raw slots it
+/// delivers: (sites it accepts) x (its `I32`/`TaPtr` slots). The highest score
+/// wins; ties keep the earliest candidate, and the distinct site tuples come
+/// first in the deterministic walk order, so a function whose sites all agree
+/// selects exactly what the frequency rule selected, and the object-cache
+/// input stays stable.
 pub(crate) fn select_dominant_tuple(
     sites: &[Vec<SpecParamRep>],
     param_count: usize,
     demoted_params: &[bool],
 ) -> Option<(Vec<SpecParamRep>, usize)> {
-    let mut counts: HashMap<Vec<SpecParamRep>, usize> = HashMap::new();
-    let mut order: Vec<Vec<SpecParamRep>> = Vec::new();
+    let mut judged: Vec<Vec<SpecParamRep>> = Vec::new();
+    let mut distinct: Vec<Vec<SpecParamRep>> = Vec::new();
     for site in sites {
         if site.len() != param_count {
             continue;
@@ -219,27 +262,48 @@ pub(crate) fn select_dominant_tuple(
             .zip(demoted_params.iter())
             .map(|(rep, demoted)| if *demoted { SpecParamRep::Boxed } else { *rep })
             .collect();
+        // A site with no raw slot can only call an entry with none, which is
+        // never emitted, so it cannot change the choice.
         if !spec_tuple_is_viable(&tuple) {
             continue;
         }
-        let entry = counts.entry(tuple.clone()).or_insert(0);
-        if *entry == 0 {
-            order.push(tuple);
+        if !distinct.contains(&tuple) {
+            distinct.push(tuple.clone());
         }
-        *entry += 1;
+        judged.push(tuple);
     }
-    // Dominant = most frequent; ties break by FIRST appearance in the
-    // deterministic walk order, keeping the object-cache input stable
-    // (`max_by_key` would return the LAST maximal element, so the strictly-
-    // greater comparison below is what pins the first appearance).
-    let mut best: Option<(Vec<SpecParamRep>, usize)> = None;
-    for tuple in order {
-        let n = counts.get(&tuple).copied().unwrap_or(0);
-        if best.as_ref().is_none_or(|(_, best_n)| n > *best_n) {
-            best = Some((tuple, n));
+    let mut candidates = distinct.clone();
+    let mut push_candidate = |tuple: Vec<SpecParamRep>| {
+        if spec_tuple_is_viable(&tuple) && !candidates.contains(&tuple) {
+            candidates.push(tuple);
+        }
+    };
+    for (i, a) in distinct.iter().enumerate() {
+        for b in &distinct[i + 1..] {
+            push_candidate(meet_tuples(a, b));
         }
     }
-    best
+    if let Some((first, rest)) = distinct.split_first() {
+        push_candidate(
+            rest.iter()
+                .fold(first.clone(), |acc, t| meet_tuples(&acc, t)),
+        );
+    }
+    let mut best: Option<(Vec<SpecParamRep>, usize, usize)> = None;
+    for tuple in candidates {
+        let covered = judged
+            .iter()
+            .filter(|site| tuple_accepts_site(&tuple, site))
+            .count();
+        let score = covered * specialized_slot_count(&tuple);
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, best_score)| score > *best_score)
+        {
+            best = Some((tuple, covered, score));
+        }
+    }
+    best.map(|(tuple, covered, _)| (tuple, covered))
 }
 
 /// Declaration-derived tuple for the guarded (Tier B) dispatch: `Int32`-typed
@@ -336,6 +400,45 @@ mod tests {
 
         // Arity-mismatched sites never count.
         assert!(select_dominant_tuple(&sites, 3, &[false, false, false]).is_none());
+    }
+
+    /// Spectral-norm's `Atu`: two sites agree on the hot typed-array slot and
+    /// differ on a cold one. The meet serves both sites; the first-seen exact
+    /// tuple served one and sent the other through the boxed body.
+    #[test]
+    fn dominant_tuple_selection_prefers_the_meet_that_serves_every_site() {
+        let ta = SpecParamRep::TaPtr {
+            kind: 7,
+            const_len: Some(3000),
+        };
+        let sites = vec![
+            vec![SpecParamRep::I32, ta, ta],
+            vec![SpecParamRep::I32, ta, SpecParamRep::Boxed],
+        ];
+        let (tuple, n) = select_dominant_tuple(&sites, 3, &[false; 3]).unwrap();
+        assert_eq!(tuple, vec![SpecParamRep::I32, ta, SpecParamRep::Boxed]);
+        assert_eq!(n, 2);
+
+        // The same shape when neither site is already the meet.
+        let other = SpecParamRep::TaPtr {
+            kind: 7,
+            const_len: Some(10),
+        };
+        let sites = vec![
+            vec![SpecParamRep::I32, ta, ta],
+            vec![SpecParamRep::I32, ta, other],
+        ];
+        let (tuple, n) = select_dominant_tuple(&sites, 3, &[false; 3]).unwrap();
+        assert_eq!(tuple, vec![SpecParamRep::I32, ta, SpecParamRep::Boxed]);
+        assert_eq!(n, 2);
+
+        // A meet that gives up more raw slots than it gains sites loses:
+        // ten sites keep both typed-array slots, one site is left boxed.
+        let mut sites = vec![vec![ta, ta]; 10];
+        sites.push(vec![ta, SpecParamRep::Boxed]);
+        let (tuple, n) = select_dominant_tuple(&sites, 2, &[false; 2]).unwrap();
+        assert_eq!(tuple, vec![ta, ta]);
+        assert_eq!(n, 10);
     }
 
     /// The reachability ratchet: specialized symbols must NEVER be constructed

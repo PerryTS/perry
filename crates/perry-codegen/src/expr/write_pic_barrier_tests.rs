@@ -451,14 +451,7 @@ fn static_write_pic_keeps_a_bare_store_for_a_provably_non_pointer_value() {
 #[test]
 fn store_ic_hit_path_reads_no_gc_kind_or_forwarded_byte() {
     let ir = write_pic_ir("store_ic_header_reads", Expr::LocalGet(VALUE));
-    for stem in [
-        HIT,
-        "put.pic.kind",
-        "put.pic.class",
-        "put.pic.classless",
-        HIT_STORE,
-        CLASSIFY,
-    ] {
+    for stem in [HIT, "put.pic.kind", HIT_STORE, CLASSIFY] {
         let body = block(&ir, stem)
             .unwrap_or_else(|| panic!("the store IC block `{stem}` must exist:\n{ir}"));
         assert!(
@@ -479,54 +472,32 @@ fn store_ic_hit_path_reads_no_gc_kind_or_forwarded_byte() {
     );
 }
 
-/// The per-object facts the ShapeId does NOT carry stand between the shape
-/// compare and the store, as live header tests, on EVERY path into the store
-/// block: the Array-subclass numeric proof (`_reserved & 0x80`), then the
-/// receiver kind — a class id other than 0 / native-module / `u32::MAX`
-/// (`class_id + 2 >u 2`), or a class-less receiver marked ordinary and not a
-/// typed-array prototype (`_reserved & 0x300 == 0x200`, `class_id == 0`).
-/// Sabotage: branching the kind block straight to the store turns this red.
+/// Charter step 3: the receiver kind and the Array-subclass numeric proof are
+/// SHAPE facts (`perry_runtime::object::shapes::store_kind` — the runtime
+/// publishes a word only for an `Ordinary` shape), so nothing per object
+/// stands between the shape compare and the store: the hit block loads
+/// `_reserved` for the barrier only and branches straight to the store, with
+/// no `class_id` read and no proof or ordinary-mark mask. Sabotage:
+/// re-inserting any of the old per-object tests turns this red.
 #[test]
-fn store_ic_hit_requires_the_per_object_receiver_tests() {
+fn store_ic_hit_reads_no_per_object_receiver_fact() {
     let ir = write_pic_ir("store_ic_receiver_kind", Expr::LocalGet(VALUE));
-    let kind = block(&ir, "put.pic.kind").unwrap_or_else(|| panic!("kind block:\n{ir}"));
-    let class = block(&ir, "put.pic.class").unwrap_or_else(|| panic!("class block:\n{ir}"));
-    let classless =
-        block(&ir, "put.pic.classless").unwrap_or_else(|| panic!("classless block:\n{ir}"));
-    let term = |b: &str| b.lines().last().unwrap_or("").trim().to_string();
-
     assert!(
-        kind.contains("load i16") && kind.contains(", 128"),
-        "the kind block must test the numeric-proof bit of `_reserved`:\n{kind}"
+        block(&ir, "put.pic.class").is_none() && block(&ir, "put.pic.classless").is_none(),
+        "no class / class-less admission block may exist:\n{ir}"
     );
-    let (k_cond, k_true, k_false) = branch_targets(&term(&kind));
+    let kind = block(&ir, "put.pic.kind").unwrap_or_else(|| panic!("hit block:\n{ir}"));
+    let term = kind.lines().last().unwrap_or("").trim().to_string();
     assert!(
-        label_is(&k_true, "put.pic.class") && label_is(&k_false, "put.pic.miss"),
-        "no proof -> class test, proof -> miss: {k_cond}\n{kind}"
+        term.starts_with("br label %")
+            && label_is(term.trim_start_matches("br label %"), HIT_STORE),
+        "a matched shape stores unconditionally: {term}\n{kind}"
     );
-
     assert!(
-        class.contains("load i32") && class.contains(", 2"),
-        "the class block must test `class_id + 2 >u 2`:\n{class}"
+        !kind.contains("load i32") && !kind.contains(", 128") && !kind.contains(", 768"),
+        "the hit reads no class id and tests no proof / ordinary-mark bit:\n{kind}"
     );
-    let (_, c_true, c_false) = branch_targets(&term(&class));
-    assert!(
-        label_is(&c_true, HIT_STORE) && label_is(&c_false, "put.pic.classless"),
-        "a class instance stores, anything else asks the ordinary mark:\n{class}"
-    );
-
-    assert!(
-        classless.contains(", 768") && classless.contains(", 512"),
-        "the class-less block must require the ordinary mark without the \
-         typed-array-prototype bit:\n{classless}"
-    );
-    let (_, l_true, l_false) = branch_targets(&term(&classless));
-    assert!(
-        label_is(&l_true, HIT_STORE) && label_is(&l_false, "put.pic.miss"),
-        "a marked ordinary receiver stores, anything else misses:\n{classless}"
-    );
-
-    // No other edge reaches the store.
+    // Exactly the hit block enters the store.
     let into_store = ir
         .lines()
         .filter(|l| {
@@ -538,8 +509,8 @@ fn store_ic_hit_requires_the_per_object_receiver_tests() {
         })
         .count();
     assert_eq!(
-        into_store, 2,
-        "only the class and class-less tests may enter the store:\n{ir}"
+        into_store, 1,
+        "only the matched-shape hit may enter the store:\n{ir}"
     );
 }
 

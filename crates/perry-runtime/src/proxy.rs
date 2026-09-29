@@ -3236,7 +3236,10 @@ mod tests {
             let first_header =
                 (first as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             let original_flags = (*first_header)._reserved;
+            // Charter step 3: every per-object store fact below is changed
+            // through its writer's transition, as the runtime changes it.
             (*first).class_id = 0;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 0,
@@ -3249,6 +3252,7 @@ mod tests {
             // the pair discriminates "the guard reads the mark" from "the guard
             // stopped caring about class-id zero".
             (*first_header)._reserved = original_flags | crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 (4u64 << 16) | 3,
@@ -3257,6 +3261,7 @@ mod tests {
             );
             // A native-module receiver stays out no matter what it is marked.
             (*first).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[c, d], 2),
                 0,
@@ -3264,6 +3269,7 @@ mod tests {
             );
             (*first_header)._reserved = original_flags;
             (*first).class_id = original;
+            crate::object::shapes::store_kind::restamp_object_store_kind(first);
         }
 
         assert_eq!(
@@ -3393,8 +3399,9 @@ mod tests {
         );
 
         // The discriminating quantity: clear the ordinary mark on ONE receiver
-        // and nothing else. Same objects, same ShapeId, same keys, same slots —
-        // if the guard still accepted, it would not be reading the mark.
+        // and nothing else. Same objects, same keys, same slots — charter step
+        // 3: the cleared mark moves that receiver to its `OrdinaryUnmarked`
+        // twin, which is what the guard must refuse.
         unsafe {
             let header =
                 (objects[2] as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -3405,6 +3412,7 @@ mod tests {
                 "the parser must mark what it allocates"
             );
             (*header)._reserved = saved & !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(objects[2]);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[key_y], 4),
                 0,
@@ -3412,6 +3420,7 @@ mod tests {
                  ordinary [[Set]]"
             );
             (*header)._reserved = saved;
+            crate::object::shapes::store_kind::restamp_object_store_kind(objects[2]);
             assert_eq!(
                 object_array_numeric_write_guard(array_box, &[key_y], 4),
                 2,
@@ -3460,6 +3469,7 @@ mod tests {
             let header =
                 (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*header)._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+            crate::object::shapes::store_kind::restamp_object_store_kind(unmarked);
         }
         let mut cache2: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
         let mut cache2_slot: put_value::WritePicCacheSlot = &mut cache2;

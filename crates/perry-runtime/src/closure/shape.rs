@@ -302,7 +302,7 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
         } else {
             match shapes::object_shape_descriptor(bag) {
                 Some(d)
-                    if d.object_kind == ShapeObjectKind::Ordinary
+                    if d.object_kind.is_ordinary_layout()
                         && d.hole_count == 0
                         && d.semantic_generation == 0 =>
                 {

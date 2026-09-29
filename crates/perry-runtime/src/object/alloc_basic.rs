@@ -62,6 +62,22 @@ pub extern "C" fn js_object_alloc_with_parent(
     parent_class_id: u32,
     field_count: u32,
 ) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl(class_id, parent_class_id, field_count, false)
+}
+
+/// A class-less ORDINARY object (`JSON.parse` records, `Object.create`),
+/// born marked plain-ordinary before its birth stamp so the birth shape is
+/// minted `Ordinary` directly (charter step 3; `mark_object_plain_ordinary`).
+pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl(0, 0, field_count, true)
+}
+
+fn object_alloc_with_parent_impl(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    premark_plain: bool,
+) -> *mut ObjectHeader {
     // Register this class's parent for inheritance lookups
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
@@ -96,6 +112,9 @@ pub extern "C" fn js_object_alloc_with_parent(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        if premark_plain {
+            crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
+        }
         // #8113: the birth live-slot bound is published here and nowhere else.
         crate::object::shapes::birth_publish_object_shape(ptr, field_count);
 
