@@ -116,9 +116,11 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
         ),
     ));
     unsafe {
-        (*(crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
-            as *mut crate::object::ObjectHeader))
-            .class_id = super::MODULE_CJS_CLASS_ID;
+        let module = crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader;
+        (*module).class_id = super::MODULE_CJS_CLASS_ID;
+        // Charter step 3: `class_id` is a store-kind input.
+        crate::object::shapes::store_kind::restamp_object_store_kind(module);
     }
     let exports = scope.root_nanbox_f64(module_object_value(crate::object::js_object_alloc(0, 0)));
     let children = scope.root_nanbox_f64(f64::from_bits(

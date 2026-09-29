@@ -83,9 +83,11 @@ fn an_ordinary_receiver_publishes_its_shape_and_inline_slot() {
     assert_eq!(word >> 32, 1, "high half: `n` is the second own slot");
     // The discriminating half: the SAME receiver with the ordinary mark
     // cleared is a class-less receiver the hit path does not admit, so the
-    // entry must not publish it either.
+    // entry must not publish it either. Charter step 3: the mark is a shape
+    // fact, so clearing it moves the receiver to its `OrdinaryUnmarked` twin.
     unsafe {
         (*header(target))._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
+        crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target));
     }
     let (_, word) = store_fresh(target, key, 8.0);
     assert_eq!(
@@ -97,20 +99,25 @@ fn an_ordinary_receiver_publishes_its_shape_and_inline_slot() {
 #[test]
 fn per_object_facts_the_hit_retests_are_refused_at_publication() {
     let key = interned(b"n");
-    for (what, flag) in [
-        (
-            "the typed-array prototype flag",
-            crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO,
-        ),
-        (
-            "the Array-subclass numeric proof",
-            crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
-        ),
-    ] {
+    // Charter step 3: each fact moves the receiver's shape through its own
+    // writer; the entry refuses the resulting (non-`Ordinary`) shape.
+    let typed_array_proto = |target: f64| unsafe {
+        (*header(target))._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+        crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target));
+    };
+    let numeric_proof = |target: f64| unsafe {
+        assert!(
+            crate::object::shapes::store_kind::stamp_numeric_proof_twin(object_of(target))
+                .is_some()
+        );
+    };
+    let writers: [(&str, &dyn Fn(f64)); 2] = [
+        ("the typed-array prototype flag", &typed_array_proto),
+        ("the Array-subclass numeric proof", &numeric_proof),
+    ];
+    for (what, write) in writers {
         let target = parsed(SRC);
-        unsafe {
-            (*header(target))._reserved |= flag;
-        }
+        write(target);
         let packed = AtomicU64::new(PACKED_SET_EMPTY);
         unsafe { prime_packed_set(target, key, std::ptr::null_mut(), &packed) };
         assert_eq!(
@@ -122,6 +129,7 @@ fn per_object_facts_the_hit_retests_are_refused_at_publication() {
     let target = parsed(SRC);
     unsafe {
         (*object_of(target)).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
+        crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target));
     }
     let packed = AtomicU64::new(PACKED_SET_EMPTY);
     unsafe { prime_packed_set(target, key, std::ptr::null_mut(), &packed) };
@@ -347,14 +355,13 @@ fn packed_set_inline_ways_matches_codegen() {
     assert!(PACKED_SET_INLINE_WAYS <= PACKED_SET_WAYS);
 }
 
-/// The per-object receiver test the emitted hit (and this entry's ways 4..8)
-/// re-reads on every store, because the ShapeId does not carry it: a
-/// class-less receiver shares ShapeIds with the exotic class-less objects
-/// (`URL`, `Object.prototype`, the typed-array prototypes), and only a birth
-/// site's ordinary mark admits it. Same ShapeId, same slot, same way — only
-/// the per-object facts differ, so each refusal below is the test itself.
+/// Charter step 3: a matching shape IS enough. Every per-object store fact
+/// (the ordinary mark, the typed-array-prototype flag, the numeric proof, the
+/// native-module class id) moves its receiver to another ShapeId, so a way
+/// published for the marked ordinary shape can never serve a receiver that
+/// lacks the fact — the stamp compare refuses it before any store.
 #[test]
-fn a_matching_shape_is_not_enough_without_the_receiver_kind() {
+fn a_store_fact_change_leaves_the_published_shape() {
     let key = interned(b"n");
     let marked = parsed(SRC);
     let (_, word) = store_fresh(marked, key, 1.0);
@@ -372,25 +379,42 @@ fn a_matching_shape_is_not_enough_without_the_receiver_kind() {
         "a marked ordinary twin is served"
     );
 
+    let restamp = |target: f64| unsafe {
+        crate::object::shapes::store_kind::restamp_object_store_kind(object_of(target))
+    };
     let unmarked = parsed(SRC);
     unsafe { (*header(unmarked))._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY };
-    assert_eq!(stamp(unmarked), word as u32);
+    restamp(unmarked);
+    assert_ne!(
+        stamp(unmarked),
+        word as u32,
+        "clearing the mark moves the shape"
+    );
     assert_eq!(
         served(unmarked, 6.0),
         None,
-        "an UNMARKED class-less twin must not be served"
+        "an UNMARKED class-less receiver must not be served"
     );
 
     let proto = parsed(SRC);
     unsafe { (*header(proto))._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO };
+    restamp(proto);
+    assert_ne!(stamp(proto), word as u32);
     assert_eq!(
         served(proto, 7.0),
         None,
-        "a typed-array prototype twin must not be served"
+        "a typed-array prototype must not be served"
     );
 
     let proof = parsed(SRC);
-    unsafe { (*header(proof))._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF };
+    assert!(unsafe {
+        crate::object::shapes::store_kind::stamp_numeric_proof_twin(object_of(proof)).is_some()
+    });
+    assert_ne!(
+        stamp(proof),
+        word as u32,
+        "publishing the proof moves the shape"
+    );
     assert_eq!(
         served(proof, 8.0),
         None,
@@ -399,10 +423,12 @@ fn a_matching_shape_is_not_enough_without_the_receiver_kind() {
 
     let native = parsed(SRC);
     unsafe { (*object_of(native)).class_id = crate::object::NATIVE_MODULE_CLASS_ID };
+    restamp(native);
+    assert_ne!(stamp(native), word as u32);
     assert_eq!(
         served(native, 9.0),
         None,
-        "a native-module twin must not be served"
+        "a native-module receiver must not be served"
     );
 }
 
@@ -547,11 +573,11 @@ fn an_object_create_receiver_publishes_its_shape_and_inline_slot() {
         "an Object.create receiver must publish its ShapeId to the site word"
     );
     assert_eq!(word >> 32, 1, "high half: `b` is the second own slot");
-    // The emitted hit's per-object half admits it too, so the published
-    // word is actually served inline rather than missing on every store.
+    // Its shape is store-admitted (charter step 3: `Ordinary`), so the
+    // published word is actually served inline.
     assert!(
-        unsafe { packed_hit_receiver_ok(obj) },
-        "the emitted hit's receiver-kind test must admit an Object.create receiver"
+        crate::object::shapes::store_kind::shape_admits_plain_store(stamp(target)),
+        "an Object.create receiver's shape must be store-admitted"
     );
     // Its prototype is still the one it was created with.
     let got = crate::object::js_object_get_prototype_of(target);

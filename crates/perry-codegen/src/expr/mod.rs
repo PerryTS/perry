@@ -3089,6 +3089,7 @@ mod member_update;
 #[cfg(test)]
 mod packed_loop_shadow_barrier_tests;
 mod typed_array_rmw;
+mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;
 pub(crate) mod element_shape_guard;

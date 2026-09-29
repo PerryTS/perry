@@ -57,7 +57,7 @@ use guarded_array::{
     lower_guarded_array_index_get, lower_packed_f64_loop_index_get,
     lower_region_validated_array_index_get, packed_f64_loop_fact,
 };
-use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
+pub(super) use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 
 /// Emit a weak monomorphic IC for an exact own Symbol-keyed data property.
 ///

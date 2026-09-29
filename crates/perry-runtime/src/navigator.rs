@@ -111,6 +111,8 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     );
     unsafe {
         (*obj).class_id = NAVIGATOR_CLASS_ID;
+        // Charter step 3: `class_id` is a store-kind input.
+        crate::object::shapes::store_kind::restamp_object_store_kind(obj);
     }
 
     // userAgent: "Node.js/<major>"

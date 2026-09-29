@@ -140,12 +140,26 @@ unsafe fn plant_descriptor_backed_instance(
     shape_id: u32,
     packed_keys: &[u8],
 ) -> *mut crate::ObjectHeader {
+    plant_descriptor_backed_instance_marked(shape_id, packed_keys, false)
+}
+
+/// As above, with the plain-ordinary birth mark set BEFORE the descriptor is
+/// declared: the mark re-stamps the object onto its `Ordinary` twin shape, and
+/// a shape-shared descriptor belongs to the ShapeId it was declared against.
+unsafe fn plant_descriptor_backed_instance_marked(
+    shape_id: u32,
+    packed_keys: &[u8],
+    plain_ordinary: bool,
+) -> *mut crate::ObjectHeader {
     let obj = crate::object::js_object_alloc_with_shape(
         shape_id,
         3,
         packed_keys.as_ptr(),
         packed_keys.len() as u32,
     );
+    if plain_ordinary {
+        crate::object::mark_object_plain_ordinary(obj);
+    }
     // slot 0 pointer, slots 1..2 raw f64 — the shape of `class C { s: string;
     // x: number; y: number }`.
     let raw_f64_words: [u64; 1] = [0b110];
@@ -479,8 +493,7 @@ fn the_bake_healed_itself_only_because_the_descriptor_probe_reads_the_same_bit()
 #[test]
 fn a_by_name_number_overwrite_keeps_the_typed_layout_a_contradiction_drops_it() {
     unsafe {
-        let obj = plant_descriptor_backed_instance(0x1160_0001, b"s\0x\0y\0");
-        crate::object::mark_object_plain_ordinary(obj);
+        let obj = plant_descriptor_backed_instance_marked(0x1160_0001, b"s\0x\0y\0", true);
         assert!(
             inline_guard_raw_f64_arm_taken(reserved_of(obj)),
             "premise: the declared descriptor licenses the raw-f64 arm"
