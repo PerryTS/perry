@@ -81,18 +81,22 @@ fn run_census(source: &str) -> (String, impl Fn(&str) -> u64) {
 #[test]
 fn a_by_name_overwrite_keeps_the_layout_a_method_body_reads() {
     let (stdout, count) = run_census(
-        r#"// The receiver reaches the loop as a PARAMETER, so `o.d = k` is the generic
+        r#"// The receiver reaches `put` as a PARAMETER, so `o.d = k` is the generic
 // store, whose first execution is the runtime's by-name overwrite; `o.m()`
-// runs the literal's method, whose `this.a` is a class-field read.
+// runs the literal's method, whose `this.a` is a class-field read. The store
+// sits in a callee, not in the loop: a store written in the loop body is
+// served by the loop's receiver region (step 4b) and never reaches the
+// by-name overwrite this test is about.
 const N = process.argv.length > 99 ? 1 : 3000;
 // Arms the census: runtime-counted routes count only after the first emitted
 // route note, so a read nothing can fold runs first.
 const probes: any[] = [{ x: 5 }, { y: 0, x: 5 }];
 const px = probes[process.argv.length & 1].x;
+function put(o: any, k: number): void { o.d = k; }
 function run(n: number, o: any): number {
     let h = 0;
     for (let k = 0; k < n; k++) {
-        o.d = k;
+        put(o, k);
         h += o.m();
     }
     return h + o.d;
@@ -121,7 +125,10 @@ fn a_this_read_the_guard_cannot_prove_is_answered_from_the_receivers_shape() {
     let (stdout, count) = run_census(
         r#"// `this.pa` and `this.own` are class-field reads of PROTO's literal class; the
 // receiver is an Object.create child of PROTO, which that pre-check never
-// admits. `pa` is inherited, `own` is the child's own key.
+// admits. `pa` is inherited, `own` is the child's own key. Each read sits in
+// its own method, called from the loop: a read written in the loop body is
+// served by the loop's receiver region (step 4b) and never reaches the miss
+// handler this test is about.
 const N = process.argv.length > 99 ? 1 : 3000;
 // Arms the census: runtime-counted routes count only after the first emitted
 // route note, so a read nothing can fold runs first.
@@ -130,8 +137,10 @@ const px = probes[process.argv.length & 1].x;
 const PROTO: any = {
     pa: 32,
     own: 0,
-    sum(n: number): number { let h = 0; for (let k = 0; k < n; k++) { h += this.pa; } return h; },
-    mine(n: number): number { let h = 0; for (let k = 0; k < n; k++) { h += this.own; } return h; },
+    getPa(): number { return this.pa; },
+    getOwn(): number { return this.own; },
+    sum(n: number): number { let h = 0; for (let k = 0; k < n; k++) { h += this.getPa(); } return h; },
+    mine(n: number): number { let h = 0; for (let k = 0; k < n; k++) { h += this.getOwn(); } return h; },
 };
 const child: any = Object.create(PROTO);
 child.own = 3;
