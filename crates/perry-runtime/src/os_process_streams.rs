@@ -50,6 +50,7 @@ fn callable_closure_ptr(value: f64) -> usize {
 /// fires the optional completion callback (see [`schedule_write_callback`]).
 extern "C" fn process_stdout_write_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -62,6 +63,7 @@ extern "C" fn process_stdout_write_stub(
 /// `write` impl for process.stderr. Same as stdout, targeting fd 2.
 extern "C" fn process_stderr_write_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -76,6 +78,7 @@ extern "C" fn process_stderr_write_stub(
 /// optional completion callback so an awaited `stdin.write(x, cb)` resolves.
 extern "C" fn process_stdin_write_noop_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _chunk: f64,
     arg2: f64,
     arg3: f64,
@@ -86,6 +89,7 @@ extern "C" fn process_stdin_write_noop_stub(
 
 extern "C" fn process_stream_emit_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_TRUE)
@@ -93,6 +97,7 @@ extern "C" fn process_stream_emit_stub(
 
 extern "C" fn process_stream_on_once_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -143,6 +148,7 @@ fn stdin_reader_should_stop() -> bool {
 /// hold on the event loop and stops the reader. No-op return (`undefined`).
 extern "C" fn process_stdin_detach_stub(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(true, std::sync::atomic::Ordering::Release);
@@ -159,10 +165,11 @@ extern "C" fn process_stdin_detach_stub(
 /// delivery (#9676). Node's contract: an unref'd stdin still emits `'data'`.
 extern "C" fn process_stdin_unref_stub(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(true, std::sync::atomic::Ordering::Release);
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.ref()` — restore the event-loop hold (#9676). Was a no-op
@@ -173,10 +180,11 @@ extern "C" fn process_stdin_unref_stub(
 /// stream. `resume()` remains the one call that restarts a stopped reader.
 extern "C" fn process_stdin_ref_stub(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 thread_local! {
@@ -674,6 +682,7 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
 /// the reader can decide.
 extern "C" fn process_stdin_set_encoding(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     encoding: f64,
 ) -> f64 {
     let name = stdin_event_name(encoding).unwrap_or_default();
@@ -827,6 +836,7 @@ pub fn enable_process_stdin_keypress_events(callback: i64) {
 /// `process.stdin.addListener(event, cb)` / `.on(...)` reached as an object method.
 extern "C" fn process_stdin_add_listener(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -838,12 +848,13 @@ extern "C" fn process_stdin_add_listener(
         }
         return stdin_this_value();
     }
-    process_stdin_on(closure, event, callback)
+    process_stdin_on(closure, this, event, callback)
 }
 
 /// `process.stdin.once(event, cb)` reached as an object method.
 extern "C" fn process_stdin_add_listener_once(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -855,12 +866,21 @@ extern "C" fn process_stdin_add_listener_once(
         }
         return stdin_this_value();
     }
-    process_stdin_once(closure, event, callback)
+    process_stdin_once(closure, this, event, callback)
 }
 
 /// `process.stdin.removeListener(event, cb)` / `.off(...)`.
+/// One info for `removeListener` and `off`: both install the same singleton
+/// function object (`off === removeListener`).
+static PROCESS_STDIN_REMOVE_LISTENER_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        process_stdin_remove_listener as crate::codegen_abi::JsBody2<crate::closure::ClosureHeader>,
+    )
+    .with_declared(2);
+
 extern "C" fn process_stdin_remove_listener(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -926,6 +946,7 @@ fn clear_stdin_listener_list(list: &std::sync::Mutex<Vec<i64>>) {
 /// call that Node treats as authoritative.
 extern "C" fn process_stdin_remove_all_listeners(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let name = stdin_event_name(event);
@@ -987,6 +1008,7 @@ extern "C" fn process_stdin_remove_all_listeners(
 /// as a real array (empty when there are none), like Node's EventEmitter.
 extern "C" fn process_stdin_listeners(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let name = stdin_event_name(event).unwrap_or_default();
@@ -1181,6 +1203,7 @@ fn register_generic_stdin_keypress_listener(event: f64, callback: f64, once: boo
 /// listener and starts the reader. Returns `this` so callers can chain.
 extern "C" fn process_stdin_on(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1214,12 +1237,13 @@ extern "C" fn process_stdin_on(
             _ => {}
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.once(event, cb)` — fires the listener exactly once.
 extern "C" fn process_stdin_once(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     event: f64,
     callback: f64,
 ) -> f64 {
@@ -1251,13 +1275,17 @@ extern "C" fn process_stdin_once(
             _ => {}
         }
     }
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// `process.stdin.read([size])` — returns buffered input as a string (stdin is
 /// `setEncoding("utf8")` in practice) or `null` when nothing is buffered, per
 /// Node's `Readable.read()` contract.
-extern "C" fn process_stdin_read(_closure: *const crate::closure::ClosureHeader, _arg: f64) -> f64 {
+extern "C" fn process_stdin_read(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _arg: f64,
+) -> f64 {
     let bytes = match STDIN_BUFFER.lock() {
         Ok(mut b) => std::mem::take(&mut *b),
         Err(_) => return f64::from_bits(crate::value::TAG_NULL),
@@ -1304,6 +1332,7 @@ pub fn reset_process_stdin_liveness_for_tests() {
 /// paused stdin can resume.
 extern "C" fn process_stdin_resume(
     _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
@@ -1317,7 +1346,7 @@ extern "C" fn process_stdin_resume(
         resume();
     }
     ensure_stdin_reader();
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
 /// Drain buffered stdin and fire `data`/`readable` listeners. Called once per
@@ -1366,86 +1395,8 @@ mod empty_checkpoint_tests {
 }
 
 #[cfg(test)]
-mod reader_lifecycle_tests {
-    use super::{reader_slot_claim_start, reader_slot_claim_stop};
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// #10895: replays the interleaving that stranded fd 0 without a reader —
-    /// the reader decides to stop, and `resume()` asks for a restart BEFORE
-    /// the dying reader has finished leaving. The stop decision must already
-    /// have released the reader slot, or the restart's claim fails and nobody
-    /// ever reads stdin again.
-    ///
-    /// Runs on local flags: no fd-0 reader is spawned and no process-global
-    /// stdin state is touched, so it cannot disturb the liveness tests.
-    #[test]
-    fn a_restart_requested_while_the_reader_is_leaving_is_not_lost() {
-        // A reader is running and `pause()` has latched the detach.
-        let started = AtomicBool::new(true);
-        let detached = AtomicBool::new(true);
-        assert!(
-            reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)),
-            "a detached reader must decide to stop"
-        );
-        // `resume()`: clear the latch, then ask for a reader. The old reader
-        // has not run another instruction since its stop decision.
-        detached.store(false, Ordering::Release);
-        assert!(
-            reader_slot_claim_start(&started),
-            "restart lost: the stopping reader still held the reader slot"
-        );
-        // The respawned reader owns the slot; a second request is a no-op.
-        assert!(!reader_slot_claim_start(&started));
-    }
-
-    /// The other order: `resume()` clears the latch before the reader looks.
-    /// The reader keeps running and no second reader may be started on fd 0.
-    #[test]
-    fn a_resume_that_beats_the_stop_check_keeps_the_one_reader() {
-        let started = AtomicBool::new(true);
-        let detached = AtomicBool::new(true);
-        detached.store(false, Ordering::Release);
-        assert!(!reader_slot_claim_start(&started));
-        assert!(!reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)));
-        assert!(started.load(Ordering::Acquire));
-    }
-
-    /// Hammer the handshake from two threads: a "reader" that stops whenever
-    /// it sees the latch and a "main" that pauses/resumes. After every
-    /// resume the slot must be owned — by the surviving reader or by the
-    /// restart — never stranded.
-    #[test]
-    fn pause_resume_storm_never_strands_the_slot() {
-        use std::sync::Arc;
-        let started = Arc::new(AtomicBool::new(true));
-        let detached = Arc::new(AtomicBool::new(false));
-        let done = Arc::new(AtomicBool::new(false));
-        let reader = {
-            let (started, detached, done) = (started.clone(), detached.clone(), done.clone());
-            std::thread::spawn(move || {
-                while !done.load(Ordering::Acquire) {
-                    // A live reader polls the latch between reads; one that
-                    // stopped waits to be "respawned" by main's claim.
-                    if started.load(Ordering::Acquire) {
-                        reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire));
-                    }
-                    std::hint::spin_loop();
-                }
-            })
-        };
-        for _ in 0..200_000 {
-            detached.store(true, Ordering::Release); // pause()
-            detached.store(false, Ordering::Release); // resume(): clear …
-            reader_slot_claim_start(&started); // … then ensure a reader
-            assert!(
-                started.load(Ordering::Acquire),
-                "resume() returned with no reader owning fd 0"
-            );
-        }
-        done.store(true, Ordering::Release);
-        reader.join().unwrap();
-    }
-}
+#[path = "os_process_streams/reader_lifecycle_tests.rs"]
+mod reader_lifecycle_tests;
 
 fn pump_stdin_data_chunks() {
     let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);
@@ -1491,14 +1442,16 @@ fn pump_stdin_data_chunks() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
             // Node calls stream listeners with `this === stream`. Re-read the
-            // singleton per listener and root the displaced receiver: the previous
-            // listener was user code, so either may have moved (#9445).
+            // singleton per listener: the previous listener was user code, so it
+            // may have moved (#9445).
             let this = stdin_this_value();
-            let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
             cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-                crate::closure::js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                crate::closure::js_closure_call1(
+                    closure,
+                    crate::closure::JsThis::from_f64(this),
+                    arg_handle.get_nanbox_f64(),
+                );
             });
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
         return;
     }
@@ -1514,13 +1467,11 @@ fn pump_stdin_data_chunks() {
     for cb in readable_listeners {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-        // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+        // Per-listener re-read of the receiver (#9445), as for `data`.
         let this = stdin_this_value();
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure);
+            crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this));
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -1562,13 +1513,15 @@ fn maybe_fire_stdin_end() {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let cb_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-                // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+                // Per-listener re-read of the receiver (#9445), as for `data`.
                 let this = stdin_this_value();
-                let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
                 cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-                    crate::closure::js_closure_call1(closure, flush_handle.get_nanbox_f64());
+                    crate::closure::js_closure_call1(
+                        closure,
+                        crate::closure::JsThis::from_f64(this),
+                        flush_handle.get_nanbox_f64(),
+                    );
                 });
-                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             }
         }
     }
@@ -1599,21 +1552,18 @@ fn maybe_fire_stdin_end() {
     for cb in end_listeners {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-        // Per-listener re-read + rooted save/restore (#9445), as for `data`.
+        // Per-listener re-read of the receiver (#9445), as for `data`.
         let this = stdin_this_value();
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
         cb_handle.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
-            crate::closure::js_closure_call0(closure);
+            crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this));
         });
-        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
-/// Make a native-method closure value with the given arity registered, so the
-/// dispatch path forwards the right number of arguments.
-fn stdin_native_method(func_ptr: *const u8, name: &str, arity: u32) -> f64 {
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
+/// Make a native-method closure value (`.length` `arity`) for the body
+/// `info` describes.
+fn stdin_native_method(info: *const crate::closure::JsFunctionInfo, name: &str, arity: u32) -> f64 {
+    let closure = crate::closure::js_closure_alloc_singleton(info);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -1661,7 +1611,7 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 
 /// Build a stream object with a `write` field bound to the given stub.
 fn build_stream_object_with_write(
-    write_stub: extern "C" fn(*const crate::closure::ClosureHeader, f64, f64, f64) -> f64,
+    write_info: *const crate::closure::JsFunctionInfo,
     fd: f64,
     writable: f64,
 ) -> *mut crate::object::ObjectHeader {
@@ -1748,15 +1698,14 @@ fn build_stream_object_with_write(
         )
     };
     // `write` takes up to three positional args — `write(chunk[, encoding][,
-    // callback])`. Register its arity so dispatch pads/truncates to exactly the
-    // three the stub declares (Direct dispatch would otherwise size the call to
-    // the call site, dropping the trailing callback — #6672).
-    crate::closure::js_register_closure_arity(write_stub as *const u8, 3);
-    let closure = js_closure_alloc(write_stub as *const u8, 0);
+    // callback])`. The caller's info declares all three, so dispatch
+    // pads/truncates to exactly the three the stub takes; sizing the call to
+    // the call site would drop the trailing callback (#6672).
+    let closure = js_closure_alloc(write_info, 0);
     let cval = JSValue::pointer(closure as *const u8);
     js_object_set_field(obj, 0, cval);
     js_object_set_field(obj, 1, JSValue::number(fd));
-    let emit = js_closure_alloc(process_stream_emit_stub as *const u8, 0);
+    let emit = js_closure_alloc(crate::fn_info!(process_stream_emit_stub, 1), 0);
     js_object_set_field(obj, 2, JSValue::pointer(emit as *const u8));
     if is_tty && fd_i != 0 {
         js_object_set_field(
@@ -1772,16 +1721,24 @@ fn build_stream_object_with_write(
     } else if is_stdin {
         // Real `on(event, cb)` so `process.stdin.on("data"/"readable", …)`
         // registers a keyboard listener instead of dropping it (#input).
-        let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
+        let on = stdin_native_method(
+            crate::fn_info!(process_stdin_on, 2; with_declared(2)),
+            "on",
+            2,
+        );
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
         // `once` routes through the same registry as `on`/`addListener` so a
         // one-shot listener registered on an aliased binding is not dropped either.
-        let once = stdin_native_method(process_stdin_add_listener_once as *const u8, "once", 2);
+        let once = stdin_native_method(
+            crate::fn_info!(process_stdin_add_listener_once, 2; with_declared(2)),
+            "once",
+            2,
+        );
         js_object_set_field(obj, 4, JSValue::from_bits(once.to_bits()));
     } else {
-        let on = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
+        let on = js_closure_alloc(crate::fn_info!(process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 3, JSValue::pointer(on as *const u8));
-        let once = js_closure_alloc(process_stream_on_once_stub as *const u8, 0);
+        let once = js_closure_alloc(crate::fn_info!(process_stream_on_once_stub, 1), 0);
         js_object_set_field(obj, 4, JSValue::pointer(once as *const u8));
     }
     js_object_set_field(obj, 5, JSValue::from_bits(writable.to_bits()));
@@ -1835,56 +1792,54 @@ fn build_stream_object_with_write(
     // replaces the stream stubs below with its real listener/flow operations;
     // stdout and stderr retain the stubs.
     if let Some(start) = teardown_start {
-        let set_field_with_stub =
-            |idx: u32, stub: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64| {
-                let c = js_closure_alloc(stub as *const u8, 0);
-                js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
-            };
-        let lifecycle: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64 = if is_stdin
-        {
-            process_stdin_detach_stub
+        let on_once = crate::fn_info!(process_stream_on_once_stub, 1);
+        let set_field_with_stub = |idx: u32, stub: *const crate::closure::JsFunctionInfo| {
+            let c = js_closure_alloc(stub, 0);
+            js_object_set_field(obj, idx, JSValue::pointer(c as *const u8));
+        };
+        let lifecycle = if is_stdin {
+            crate::fn_info!(process_stdin_detach_stub, 1)
         } else {
-            process_stream_on_once_stub
+            on_once
         };
         // On stdin these must be REAL: a TUI registers its keyboard through an
         // aliased binding (`stdin.addListener("readable", handler)`), which lands
         // here rather than on codegen's direct `process.stdin.on(...)` extern. As
         // no-op stubs they silently discarded the handler.
         if is_stdin {
-            let add =
-                stdin_native_method(process_stdin_add_listener as *const u8, "addListener", 2);
-            js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
-            let rm = stdin_native_method(
-                process_stdin_remove_listener as *const u8,
-                "removeListener",
+            let add = stdin_native_method(
+                crate::fn_info!(process_stdin_add_listener, 2; with_declared(2)),
+                "addListener",
                 2,
             );
+            js_object_set_field(obj, start, JSValue::from_bits(add.to_bits()));
+            let rm = stdin_native_method(&PROCESS_STDIN_REMOVE_LISTENER_INFO, "removeListener", 2);
             js_object_set_field(obj, start + 1, JSValue::from_bits(rm.to_bits()));
-            let off = stdin_native_method(process_stdin_remove_listener as *const u8, "off", 2);
+            let off = stdin_native_method(&PROCESS_STDIN_REMOVE_LISTENER_INFO, "off", 2);
             js_object_set_field(obj, start + 2, JSValue::from_bits(off.to_bits()));
         } else {
-            set_field_with_stub(start, process_stream_on_once_stub); // addListener
-            set_field_with_stub(start + 1, process_stream_on_once_stub); // removeListener
-            set_field_with_stub(start + 2, process_stream_on_once_stub); // off
+            set_field_with_stub(start, on_once); // addListener
+            set_field_with_stub(start + 1, on_once); // removeListener
+            set_field_with_stub(start + 2, on_once); // off
         }
         if is_stdin {
             let remove_all = stdin_native_method(
-                process_stdin_remove_all_listeners as *const u8,
+                crate::fn_info!(process_stdin_remove_all_listeners, 1; with_declared(1)),
                 "removeAllListeners",
                 1,
             );
             js_object_set_field(obj, start + 3, JSValue::from_bits(remove_all.to_bits()));
         } else {
-            set_field_with_stub(start + 3, process_stream_on_once_stub);
+            set_field_with_stub(start + 3, on_once);
         }
         set_field_with_stub(start + 4, lifecycle); // pause
                                                    // resume: real flowing-mode start on stdin, no-op on stdout/stderr.
         set_field_with_stub(
             start + 5,
             if is_stdin {
-                process_stdin_resume
+                crate::fn_info!(process_stdin_resume, 1)
             } else {
-                process_stream_on_once_stub
+                on_once
             },
         ); // resume
            // #9676: on stdin, `unref`/`ref` are a SYMMETRIC pair that only moves
@@ -1892,21 +1847,32 @@ fn build_stream_object_with_write(
         set_field_with_stub(
             start + 6,
             if is_stdin {
-                process_stdin_unref_stub
+                crate::fn_info!(process_stdin_unref_stub, 1)
             } else {
-                process_stream_on_once_stub
+                on_once
             },
         ); // unref
         if is_stdin {
-            set_field_with_stub(start + 7, process_stdin_ref_stub); // ref
+            set_field_with_stub(start + 7, crate::fn_info!(process_stdin_ref_stub, 1)); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
-            let se = stdin_native_method(process_stdin_set_encoding as *const u8, "setEncoding", 1);
+            let se = stdin_native_method(
+                crate::fn_info!(process_stdin_set_encoding, 1; with_declared(1)),
+                "setEncoding",
+                1,
+            );
             js_object_set_field(obj, start + 9, JSValue::from_bits(se.to_bits()));
             // field 22: Readable.read() returns buffered keyboard input.
-            let read = stdin_native_method(process_stdin_read as *const u8, "read", 1);
+            let read = stdin_native_method(
+                crate::fn_info!(process_stdin_read, 1; with_declared(1)),
+                "read",
+                1,
+            );
             js_object_set_field(obj, 22, JSValue::from_bits(read.to_bits()));
-            let listeners =
-                stdin_native_method(process_stdin_listeners as *const u8, "listeners", 1);
+            let listeners = stdin_native_method(
+                crate::fn_info!(process_stdin_listeners, 1; with_declared(1)),
+                "listeners",
+                1,
+            );
             js_object_set_field(obj, 23, JSValue::from_bits(listeners.to_bits()));
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
@@ -1924,7 +1890,7 @@ pub extern "C" fn js_process_stdin() -> f64 {
         let fresh = *slot == 0;
         if fresh {
             *slot = build_stream_object_with_write(
-                process_stdin_write_noop_stub,
+                crate::fn_info!(process_stdin_write_noop_stub, 3),
                 0.0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             ) as usize;
@@ -1962,7 +1928,7 @@ pub extern "C" fn js_process_stdout() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                process_stdout_write_stub,
+                crate::fn_info!(process_stdout_write_stub, 3; with_declared(3)),
                 1.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;
@@ -1980,7 +1946,7 @@ pub extern "C" fn js_process_stderr() -> f64 {
         let mut slot = slot.borrow_mut();
         if *slot == 0 {
             *slot = build_stream_object_with_write(
-                process_stderr_write_stub,
+                crate::fn_info!(process_stderr_write_stub, 3; with_declared(3)),
                 2.0,
                 f64::from_bits(crate::value::TAG_TRUE),
             ) as usize;

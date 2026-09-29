@@ -703,11 +703,12 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     if let Some(acc) = cur_accessor {
         // Both accessor: `get`/`set` may not change. The stored closures are
         // clones rebound to the receiver (`clone_closure_rebind_this`) but keep
-        // the original `func_ptr`, so compare by underlying function pointer.
+        // the original body, so compare by underlying code address.
         let closure_func_ptr = |bits: u64| -> usize {
             let p = (bits & crate::value::POINTER_MASK) as usize;
             if p >= 0x1000 && crate::closure::is_closure_ptr(p) {
-                (*(p as *const crate::closure::ClosureHeader)).func_ptr as usize
+                crate::closure::get_valid_func_ptr(p as *const crate::closure::ClosureHeader)
+                    as usize
             } else {
                 0
             }

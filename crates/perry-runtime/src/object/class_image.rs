@@ -90,9 +90,11 @@ pub(crate) const PARENT_DENSE_CAP: usize = 1 << 16;
 /// `HashMap<String, _>` stays on SipHash because its keys are JS-supplied
 /// member names.
 pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool)>>;
-/// class_id -> { name -> (getter func_ptr, setter func_ptr) } for static accessors.
+/// class_id -> { name -> accessor halves (and the setter's `.length`) } for
+/// static accessors.
 /// Outer map fast-hashed, inner `String`-keyed map deliberately not — see above.
-pub type StaticAccessorTable = PtrHashMap<u32, HashMap<String, (usize, usize)>>;
+pub type StaticAccessorTable =
+    PtrHashMap<u32, HashMap<String, super::class_registry::AccessorDecl>>;
 /// `(class_id, is_static, property_name) -> source-order token` for declared
 /// string-keyed methods and accessors. The token is the member function's HIR
 /// id, which is allocated while walking the class body and therefore orders
@@ -100,8 +102,9 @@ pub type StaticAccessorTable = PtrHashMap<u32, HashMap<String, (usize, usize)>>;
 pub type StringMemberOrderTable = HashMap<(u32, bool, String), u32>;
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
-/// class_id -> (has_synthetic_arguments, has_rest) for a registered constructor.
-pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool)>;
+/// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
+/// trailing array) for a registered constructor.
+pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 
 /// One compiled image's class metadata: every class-id-keyed table module init
 /// writes. Field docs live on the `static` handles that select them.

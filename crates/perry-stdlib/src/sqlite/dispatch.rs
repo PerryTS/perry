@@ -200,14 +200,19 @@ pub unsafe fn dispatch_node_sqlite_database_property(
     }
 }
 
-pub(crate) extern "C" fn sql_tag_store_constructor_thunk(_closure: *const ClosureHeader) -> f64 {
+pub(crate) extern "C" fn sql_tag_store_constructor_thunk(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     throw_illegal_constructor()
 }
 
 pub(crate) unsafe fn sql_tag_store_constructor_value() -> f64 {
-    let func_ptr = sql_tag_store_constructor_thunk as *const u8;
-    perry_runtime::closure::js_register_closure_arity(func_ptr, 0);
-    let closure = perry_runtime::closure::js_closure_alloc_singleton(func_ptr);
+    let closure = perry_runtime::closure::js_closure_alloc_singleton(perry_runtime::fn_info!(
+        sql_tag_store_constructor_thunk,
+        0;
+        with_declared(0)
+    ));
     if closure.is_null() {
         return undefined_f64();
     }

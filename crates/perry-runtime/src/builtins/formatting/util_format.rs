@@ -196,7 +196,7 @@ unsafe fn object_has_a_user_to_string(val: f64) -> bool {
         return false;
     }
     let closure = addr as *const crate::closure::ClosureHeader;
-    (*closure).func_ptr != crate::object::object_prototype_to_string_thunk as *const u8
+    (*closure).code() != crate::object::object_prototype_to_string_thunk as *const u8
 }
 
 fn inspect_format_arg(val: f64) -> String {
@@ -603,7 +603,7 @@ mod s_placeholder_policy_tests {
             let custom = crate::object::js_object_alloc(0, 1);
             let to_string_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
             let user_fn = crate::closure::js_closure_alloc(
-                crate::object::object_prototype_value_of_thunk as *const u8,
+                crate::fn_info!(crate::object::object_prototype_value_of_thunk, 0),
                 0,
             );
             crate::object::js_object_set_field_by_name(

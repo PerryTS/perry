@@ -45,7 +45,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
     // chain) onto `target_cid`.
     if crate::closure::is_closure_ptr(ptr) {
         let closure = ptr as *const ClosureHeader;
-        if (*closure).func_ptr == BOUND_METHOD_FUNC_PTR {
+        if (*closure).code() == BOUND_METHOD_FUNC_PTR {
             let recv = crate::closure::js_closure_get_capture_f64(closure, 0);
             let recv_value = crate::JSValue::from_bits(recv.to_bits());
             let source_cid = super::super::class_ref_id(recv).or_else(|| {

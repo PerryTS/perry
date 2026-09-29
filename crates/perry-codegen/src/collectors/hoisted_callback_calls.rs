@@ -1,8 +1,8 @@
 //! Immutable method callbacks whose dispatch can be resolved once at entry.
 //!
 //! A TypeScript function annotation only nominates a possible callback. The
-//! runtime still validates the actual value and admits only plain arrow
-//! closures whose arity needs no padding or rest bundling. This collector's
+//! runtime still validates the actual value and admits only closures whose
+//! arity needs no padding or rest bundling (and no bound-function routing). This collector's
 //! job is narrower: find direct call arities of immutable callback parameters
 //! and their immutable local aliases, without entering nested closure bodies.
 
@@ -194,8 +194,8 @@ fn immutable_aliases(root: u32, edges: &[(u32, u32)]) -> HashSet<u32> {
 }
 
 /// Find callback parameter/alias call sites that may reuse one entry-resolved
-/// arrow target. Runtime validation remains mandatory; annotations never prove
-/// the incoming value's class, arity, rest shape, or arrow semantics.
+/// target. Runtime validation remains mandatory; annotations never prove the
+/// incoming value's class, arity or rest shape.
 pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCallbackCall> {
     if method.is_async
         || method.is_generator
@@ -260,7 +260,7 @@ pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCa
 /// A call `f(args)` through a `LocalGet` callee reaches the guarded
 /// direct-dispatch arm in `lower_call/early_branches.rs` whenever the binding
 /// carries a `Function` type hint, and that arm consults
-/// `resolved_arrow_callback_targets` — but only method bodies ever populated
+/// `resolved_plain_callback_targets` — but only method bodies ever populated
 /// the map, so a captured arrow, a module-global arrow, or a plain function's
 /// callback parameter paid `js_closure_callN` (two runtime boundaries plus
 /// strategy dispatch) on every call of every loop iteration.

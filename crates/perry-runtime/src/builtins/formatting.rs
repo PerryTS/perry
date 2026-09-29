@@ -286,7 +286,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
     // `[Function: ChildProcess]` instead of `[Function (anonymous)]`,
     // matching Node. #1856.
     let registry_name: Option<String> = unsafe {
-        let func_ptr = (*closure_ptr).func_ptr;
+        let func_ptr = (*closure_ptr).code();
         if func_ptr.is_null() {
             None
         } else {
@@ -310,7 +310,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             // Synthesize (and cache) it the same way any other reader of
             // `.name` would.
             unsafe {
-                ((*closure_ptr).func_ptr == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
+                ((*closure_ptr).code() == crate::closure::BOUND_FUNCTION_FUNC_PTR).then(|| {
                     jsvalue_string_content(crate::closure::bound_function_lazy_name(
                         closure_ptr as usize,
                     ))
@@ -1043,6 +1043,7 @@ unsafe fn format_object_as_json(
                 let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
                 let ret = crate::closure::js_closure_call3(
                     closure_ptr,
+                    crate::closure::plain_call_receiver(),
                     remaining,
                     options_arg,
                     undef_arg,
@@ -1364,7 +1365,8 @@ fn format_accessor_property(acc: crate::object::AccessorDescriptor, depth: usize
         let closure =
             (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if !closure.is_null() {
-            let value = crate::closure::js_closure_call0(closure);
+            let value =
+                crate::closure::js_closure_call0(closure, crate::closure::plain_call_receiver());
             return format!("[{}: {}]", label, format_jsvalue_for_json(value, depth + 1));
         }
     }

@@ -1532,20 +1532,14 @@ pub(super) fn emit_namespace_populator(
                 NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. } => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalFunction { wrap_symbol } => {
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrap_symbol))],
-                    );
+                    let info = blk.fn_info_ref(wrap_symbol);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalClass { class_id } => {
@@ -1572,26 +1566,19 @@ pub(super) fn emit_namespace_populator(
                         sanitize_member(source_local)
                     );
                     let arity = *param_count;
-                    let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
-                    wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
+                    let wrapper_params = crate::expr::body_call::js_body_param_types(arity);
                     ctx.pending_declares
                         .push((wrapper_name.clone(), DOUBLE, wrapper_params));
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper_name))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper_name);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { .. } if is_self_namespace => {
                     let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
                     let blk = ctx.block();
-                    let handle = blk.call(
-                        I64,
-                        "js_closure_alloc_singleton",
-                        &[(PTR, &format!("@{}", wrapper))],
-                    );
+                    let info = blk.fn_info_ref(&wrapper);
+                    let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
@@ -1828,7 +1815,7 @@ pub(super) fn callee_binding_resolution_enabled() -> bool {
     })
 }
 
-/// Populate `resolved_arrow_callback_targets` for loop-called immutable callee
+/// Populate `resolved_plain_callback_targets` for loop-called immutable callee
 /// bindings — the generalization of `codegen/method.rs`'s callback-parameter
 /// resolution to plain function and closure bodies, and to captured bindings
 /// and module globals.
@@ -1877,7 +1864,7 @@ pub(super) fn emit_callee_binding_resolutions(
     );
     for (id, arity) in candidates {
         if ctx
-            .resolved_arrow_callback_targets
+            .resolved_plain_callback_targets
             .contains_key(&(id, arity))
         {
             continue;
@@ -1937,10 +1924,10 @@ pub(super) fn emit_callee_binding_resolutions(
         let handle = crate::expr::unbox_to_i64(ctx.block(), &value_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &handle), (I32, &arity.to_string())],
         );
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((id, arity), fn_ptr);
     }
 }

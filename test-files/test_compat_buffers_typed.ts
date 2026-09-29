@@ -340,7 +340,6 @@ crates/perry-runtime/src/closure.rs:
   - js_closure_get_func
   - js_closure_set_capture_f64
   - js_closure_set_capture_ptr
-  - js_closure_unbind_this
   - js_create_callback
   - js_native_call_value
   - js_new_instance

@@ -66,8 +66,8 @@ pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'stati
 }
 
 #[cfg(test)]
-pub(crate) fn function_prototype_bind_thunk_for_test() -> *const u8 {
-    array_error::function_prototype_bind_thunk as *const u8
+pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(array_error::function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
 }
 
 pub(crate) use array_error::{
@@ -161,8 +161,7 @@ pub use install_static::js_promise_static_function_value;
 pub(crate) use install_static::{
     builtin_species_getter_thunk, install_atomics_namespace_members,
     install_builtin_constructor_statics, install_builtin_species_accessor,
-    install_constructor_static, install_constructor_static_with_call_arity,
-    install_json_namespace_members, install_noop_proto_methods,
+    install_constructor_static, install_json_namespace_members, install_noop_proto_methods,
     install_number_static_data_properties, install_proto_method, install_proto_method_alias,
     install_proto_method_rest, install_proto_method_rest_with_length,
     install_reflect_namespace_members, subtle_crypto_decapsulate_bits_thunk,

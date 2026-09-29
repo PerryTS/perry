@@ -1,10 +1,11 @@
 //! Give every closure body the runtime's view of its first parameter.
 //!
-//! Codegen defines a closure body as `(i64 %this_closure, double …)`: the
-//! closure pointer travels as an `i64` like every other address it carries.
-//! The runtime invokes those bodies through `extern "C" fn(*const
-//! ClosureHeader, f64 …)` (and defines its own native-closure bodies that
-//! way), so on wasm32 the first slot is an `i32` pointer. A native C ABI
+//! Codegen defines a closure body as `(i64 %this_closure, i64 %js_this,
+//! double …)` (`perry_abi::JS_BODY_*`): the closure pointer travels as an
+//! `i64` like every other address it carries. The runtime invokes those
+//! bodies through `extern "C" fn(*const ClosureHeader, JsThis, f64 …)` (and
+//! defines its own native-closure bodies that way), so on wasm32 the first
+//! slot is an `i32` pointer; the receiver is a `u64` on both sides. A native C ABI
 //! does not care; a wasm `call_indirect` must match exactly, and traps.
 //!
 //! This pass retypes each such definition to take `ptr %this_closure.ptr`

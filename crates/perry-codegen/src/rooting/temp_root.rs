@@ -224,10 +224,9 @@ pub(in crate::rooting) fn temp_root_truncate(ctx: &mut FnCtx<'_>, idx: &str) {
         // above it. Each released slot is zeroed (dropping its retention) and
         // its frame mirror cleared; the pool entry becomes reusable.
         //
-        // A repeated release of an already-released handle (the documented
-        // `implicit_this_restore` → outer-group interleaving) finds no
-        // watermark position and is the same harmless no-op the FFI's
-        // `base < len` guard made it.
+        // A repeated release of an already-released handle (an inner release
+        // interleaved with an outer group's) finds no watermark position and
+        // is the same harmless no-op the FFI's `base < len` guard made it.
         let Some(pos) = ctx.temp_roots.position(idx) else {
             return;
         };

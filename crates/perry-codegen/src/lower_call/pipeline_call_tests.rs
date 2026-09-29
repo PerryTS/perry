@@ -80,20 +80,16 @@ fn immutable_function_alias_calls_the_known_symbol_directly() {
         "an immutable FuncRef alias must use direct function lowering:\n{ir}"
     );
     assert!(
-        !ir.contains("call double @js_closure_call1_receiverless"),
+        !ir.contains("call double @js_closure_call1("),
         "the immutable alias must not retain dynamic closure dispatch:\n{ir}"
     );
 }
 
 #[test]
-fn mutable_function_alias_keeps_guarded_receiverless_dispatch() {
+fn mutable_function_alias_keeps_guarded_plain_dispatch() {
     let ir = alias_call_ir(true);
     assert!(
-        ir.contains("call double @js_closure_call1_receiverless"),
+        ir.contains("call double @js_closure_call1("),
         "a mutable alias has no stable target and must retain dynamic dispatch:\n{ir}"
-    );
-    assert!(
-        !ir.contains("call double @js_implicit_this_set"),
-        "the arrow-aware runtime dispatcher owns receiverless this binding:\n{ir}"
     );
 }

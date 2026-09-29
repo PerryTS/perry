@@ -296,10 +296,13 @@ pub struct VTableMethodEntry {
 
 /// The compiled halves of one declared accessor, each 0 when that half is
 /// absent: `get` is `fn(this) -> f64`, `set` is `fn(this, value) -> f64`.
+/// `set_length` is the setter's spec `.length` (0 for `set m(x = 1)`), when
+/// codegen recorded one.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct AccessorDecl {
     pub get: usize,
     pub set: usize,
+    pub set_length: Option<u32>,
 }
 
 /// Per-class vtable: the method dispatch table plus the class's accessor
@@ -328,6 +331,17 @@ impl ClassVTable {
     /// Record one compiled half of the accessor `name` (`#x` goes to the
     /// private record). A zero pointer records nothing.
     pub(crate) fn declare_accessor_half(&mut self, name: &str, func_ptr: usize, is_setter: bool) {
+        self.declare_accessor_half_with_length(name, func_ptr, is_setter, None);
+    }
+
+    /// [`Self::declare_accessor_half`] recording a setter's spec `.length`.
+    pub(crate) fn declare_accessor_half_with_length(
+        &mut self,
+        name: &str,
+        func_ptr: usize,
+        is_setter: bool,
+        set_length: Option<u32>,
+    ) {
         if func_ptr == 0 {
             return;
         }
@@ -339,6 +353,7 @@ impl ClassVTable {
         let decl = table.entry(name.to_string()).or_default();
         if is_setter {
             decl.set = func_ptr;
+            decl.set_length = set_length;
         } else {
             decl.get = func_ptr;
         }
@@ -369,7 +384,7 @@ pub static CLASS_VTABLE_REGISTRY: ImageTable<
 
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
 /// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
-/// (no `this` param — they read `this` from the implicit-this slot) and are
+/// (no `this` param — they resolve `this` via `js_static_this_resolve`) and are
 /// NOT in the instance vtable above, so a subclass whose parent is a
 /// class-expression value (`class Sub extends make(...) {}`) can't resolve an
 /// inherited static method (`Sub.greet()`) at compile time. This table is
@@ -380,8 +395,8 @@ pub static CLASS_VTABLE_REGISTRY: ImageTable<
 pub static CLASS_STATIC_METHODS: ImageTable<RwLock<Option<StaticMethodTable>>> =
     ImageTable::new(|image| &image.static_methods);
 
-/// Static accessors on the class constructor: class_id -> { name -> (getter
-/// func_ptr, setter func_ptr) }, each 0 when that half is absent.
+/// Static accessors on the class constructor: class_id -> { name ->
+/// [`AccessorDecl`] }, each half 0 when absent.
 pub static CLASS_STATIC_ACCESSORS: ImageTable<RwLock<Option<StaticAccessorTable>>> =
     ImageTable::new(|image| &image.static_accessors);
 

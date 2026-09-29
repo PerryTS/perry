@@ -229,13 +229,20 @@ unsafe fn digest_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
 
 unsafe fn emit_callback0(cb: i64) {
     if cb != 0 {
-        js_closure_call0(cb as *const ClosureHeader);
+        js_closure_call0(
+            cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+        );
     }
 }
 
 unsafe fn emit_callback1(cb: i64, arg: f64) {
     if cb != 0 {
-        js_closure_call1(cb as *const ClosureHeader, arg);
+        js_closure_call1(
+            cb as *const ClosureHeader,
+            perry_runtime::closure::plain_call_receiver(),
+            arg,
+        );
     }
 }
 

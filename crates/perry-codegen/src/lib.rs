@@ -16,6 +16,7 @@ pub(crate) mod dialect;
 pub(crate) mod eh_mode;
 pub mod expr;
 pub mod ext_registry;
+pub(crate) mod fn_info;
 pub mod function;
 pub(crate) mod gc_call_effects;
 pub mod gc_map;

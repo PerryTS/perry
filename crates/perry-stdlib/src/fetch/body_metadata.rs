@@ -816,6 +816,7 @@ pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
             as *const perry_runtime::ClosureHeader;
         perry_runtime::js_closure_call3(
             closure,
+            perry_runtime::closure::plain_call_receiver(),
             value_handle.get_nanbox_f64(),
             name_handle.get_nanbox_f64(),
             handle,

@@ -5,7 +5,7 @@
 //! runtime helpers and never touch these thunks. The thunks exist for the
 //! *reflective* path — `DisposableStack.prototype.use`, method extraction
 //! (`const use = stack.use`), `.call`/`.apply`, and Test262's `verifyProperty`
-//! descriptor checks. Each reads the `IMPLICIT_THIS` receiver, brand-checks it
+//! descriptor checks. Each takes the receiver as `this`, brand-checks it
 //! against the stack class id, throws a `TypeError` on an incompatible
 //! receiver, and otherwise dispatches to the shared runtime helper.
 //!
@@ -29,10 +29,14 @@ fn throw_incompatible(proto: &str, method: &str) -> ! {
     ))
 }
 
-/// Resolve `IMPLICIT_THIS` to a stack `ObjectHeader` of the expected class id,
+/// Resolve the `this` receiver to a stack `ObjectHeader` of the expected class id,
 /// or throw a `TypeError`.
-fn stack_receiver_or_throw(want_async: bool, method: &str) -> *mut ObjectHeader {
-    let bits = IMPLICIT_THIS.with(|c| c.get());
+fn stack_receiver_or_throw(
+    this: crate::closure::JsThis,
+    want_async: bool,
+    method: &str,
+) -> *mut ObjectHeader {
+    let bits = this.bits();
     let value = f64::from_bits(bits);
     let proto = if want_async {
         "AsyncDisposableStack.prototype"
@@ -55,43 +59,53 @@ fn stack_receiver_or_throw(want_async: bool, method: &str) -> *mut ObjectHeader 
 
 pub(super) extern "C" fn ds_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "use");
+    let stack = stack_receiver_or_throw(this, false, "use");
     js_disposable_stack_use(stack, resource)
 }
 
 pub(super) extern "C" fn ds_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "adopt");
+    let stack = stack_receiver_or_throw(this, false, "adopt");
     js_disposable_stack_adopt(stack, value, on_dispose)
 }
 
 pub(super) extern "C" fn ds_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "defer");
+    let stack = stack_receiver_or_throw(this, false, "defer");
     js_disposable_stack_defer(stack, on_dispose)
 }
 
-pub(super) extern "C" fn ds_proto_dispose_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
-    let stack = stack_receiver_or_throw(false, "dispose");
+pub(super) extern "C" fn ds_proto_dispose_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let stack = stack_receiver_or_throw(this, false, "dispose");
     js_disposable_stack_dispose(stack)
 }
 
-pub(super) extern "C" fn ds_proto_move_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
-    let stack = stack_receiver_or_throw(false, "move");
+pub(super) extern "C" fn ds_proto_move_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let stack = stack_receiver_or_throw(this, false, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(false, "disposed");
+    let stack = stack_receiver_or_throw(this, false, "disposed");
     js_disposable_stack_disposed(stack)
 }
 
@@ -99,56 +113,66 @@ pub(super) extern "C" fn ds_proto_disposed_getter_thunk(
 
 pub(super) extern "C" fn ads_proto_use_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     resource: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "use");
+    let stack = stack_receiver_or_throw(this, true, "use");
     js_async_disposable_stack_use(stack, resource)
 }
 
 pub(super) extern "C" fn ads_proto_adopt_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "adopt");
+    let stack = stack_receiver_or_throw(this, true, "adopt");
     js_disposable_stack_adopt(stack, value, on_dispose)
 }
 
 pub(super) extern "C" fn ads_proto_defer_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     on_dispose: f64,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "defer");
+    let stack = stack_receiver_or_throw(this, true, "defer");
     js_disposable_stack_defer(stack, on_dispose)
 }
 
 pub(super) extern "C" fn ads_proto_dispose_async_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "disposeAsync");
+    let stack = stack_receiver_or_throw(this, true, "disposeAsync");
     js_async_disposable_stack_dispose_async(stack)
 }
 
-pub(super) extern "C" fn ads_proto_move_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
-    let stack = stack_receiver_or_throw(true, "move");
+pub(super) extern "C" fn ads_proto_move_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let stack = stack_receiver_or_throw(this, true, "move");
     js_disposable_stack_move(stack)
 }
 
 pub(super) extern "C" fn ads_proto_disposed_getter_thunk(
     _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let stack = stack_receiver_or_throw(true, "disposed");
+    let stack = stack_receiver_or_throw(this, true, "disposed");
     js_disposable_stack_disposed(stack)
 }
 
 /// Install a `disposed` accessor (getter only) onto a stack prototype.
-fn install_disposed_getter(proto_obj: *mut ObjectHeader, func_ptr: *const u8) {
+fn install_disposed_getter(
+    proto_obj: *mut ObjectHeader,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     if proto_obj.is_null() {
         return;
     }
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -200,27 +224,78 @@ pub(super) fn install_disposable_proto_methods(
             // adding an accessor descriptor onto a prototype that already holds
             // data properties desyncs the accessor/data-field bookkeeping and
             // corrupts a data slot (see the Map arm in `collection_proto_thunks`).
-            install_disposed_getter(proto_obj, ds_proto_disposed_getter_thunk as *const u8);
-            ipm(proto_obj, "use", ds_proto_use_thunk as *const u8, 1);
-            ipm(proto_obj, "adopt", ds_proto_adopt_thunk as *const u8, 2);
-            ipm(proto_obj, "defer", ds_proto_defer_thunk as *const u8, 1);
-            let dispose_value = ipm(proto_obj, "dispose", ds_proto_dispose_thunk as *const u8, 0);
-            ipm(proto_obj, "move", ds_proto_move_thunk as *const u8, 0);
+            install_disposed_getter(
+                proto_obj,
+                crate::fn_info!(ds_proto_disposed_getter_thunk, 0; with_declared(0)),
+            );
+            ipm(
+                proto_obj,
+                "use",
+                crate::fn_info!(ds_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "adopt",
+                crate::fn_info!(ds_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "defer",
+                crate::fn_info!(ds_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            let dispose_value = ipm(
+                proto_obj,
+                "dispose",
+                crate::fn_info!(ds_proto_dispose_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
+            ipm(
+                proto_obj,
+                "move",
+                crate::fn_info!(ds_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_symbol_dispose_alias(proto_obj, "dispose", dispose_value);
             install_toplevel_string_tag(proto_obj, "DisposableStack");
         }
         "AsyncDisposableStack" => {
-            install_disposed_getter(proto_obj, ads_proto_disposed_getter_thunk as *const u8);
-            ipm(proto_obj, "use", ads_proto_use_thunk as *const u8, 1);
-            ipm(proto_obj, "adopt", ads_proto_adopt_thunk as *const u8, 2);
-            ipm(proto_obj, "defer", ads_proto_defer_thunk as *const u8, 1);
+            install_disposed_getter(
+                proto_obj,
+                crate::fn_info!(ads_proto_disposed_getter_thunk, 0; with_declared(0)),
+            );
+            ipm(
+                proto_obj,
+                "use",
+                crate::fn_info!(ads_proto_use_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
+            ipm(
+                proto_obj,
+                "adopt",
+                crate::fn_info!(ads_proto_adopt_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                2,
+            );
+            ipm(
+                proto_obj,
+                "defer",
+                crate::fn_info!(ads_proto_defer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                1,
+            );
             let dispose_value = ipm(
                 proto_obj,
                 "disposeAsync",
-                ads_proto_dispose_async_thunk as *const u8,
+                crate::fn_info!(ads_proto_dispose_async_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
-            ipm(proto_obj, "move", ads_proto_move_thunk as *const u8, 0);
+            ipm(
+                proto_obj,
+                "move",
+                crate::fn_info!(ads_proto_move_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                0,
+            );
             install_symbol_dispose_alias(proto_obj, "asyncDispose", dispose_value);
             install_toplevel_string_tag(proto_obj, "AsyncDisposableStack");
         }

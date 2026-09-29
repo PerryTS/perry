@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -44,7 +44,8 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
     let closure_ptr = unsafe { js_nanbox_get_pointer(render_closure) } as *const u8;
     let n = count as i64;
     for i in 0..n {
-        let child_f64 = unsafe { js_closure_call1(closure_ptr, i as f64) };
+        let child_f64 =
+            unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64) };
         let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
         if let Some(child) = super::get_widget(child_handle) {
             if child.parent().is_some() {
@@ -79,7 +80,9 @@ pub fn update(handle: i64, count: i64) {
             // Re-render
             let closure_ptr = unsafe { js_nanbox_get_pointer(state.render_closure) } as *const u8;
             for i in 0..count {
-                let child_f64 = unsafe { js_closure_call1(closure_ptr, i as f64) };
+                let child_f64 = unsafe {
+                    js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, i as f64)
+                };
                 let child_handle = unsafe { js_nanbox_get_pointer(child_f64) };
                 if let Some(child) = super::get_widget(child_handle) {
                     if child.parent().is_some() {

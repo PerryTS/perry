@@ -7,7 +7,7 @@
 //! true reachability detection should target iOS / macOS / Android.
 
 extern "C" {
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -28,7 +28,12 @@ pub extern "C" fn perry_system_network_get_status(callback: f64) {
         if cb.is_null() {
             return;
         }
-        js_closure_call2(cb, f64::from_bits(TAG_TRUE), nb_str("unknown"));
+        js_closure_call2(
+            cb,
+            perry_ffi::JsThis::UNDEFINED,
+            f64::from_bits(TAG_TRUE),
+            nb_str("unknown"),
+        );
     }
 }
 

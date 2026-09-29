@@ -111,9 +111,6 @@ pub(crate) fn proxy_get_with_receiver(proxy_boxed: f64, key: f64, receiver: f64)
     // Ordinary target getters and further prototype hops must keep Receiver.
     // Clear/restore the override around the operation; getters and Proxy hops
     // consume it before entering user code so nested reads bind independently.
-    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        receiver.get_nanbox_f64(),
-    ));
     let previous_override =
         crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64())
             .map(|value| scope.root_nanbox_f64(value));
@@ -121,6 +118,5 @@ pub(crate) fn proxy_get_with_receiver(proxy_boxed: f64, key: f64, receiver: f64)
     crate::object::accessor_receiver_override_end(
         previous_override.map(|value| value.get_nanbox_f64()),
     );
-    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     result
 }

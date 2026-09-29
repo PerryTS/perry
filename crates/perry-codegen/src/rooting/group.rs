@@ -9,7 +9,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::FnCtx;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE};
 
 use super::temp_root;
 use super::{call_void_with_roots, call_with_roots, read_slot, Arg, Repr, RootedSlot};
@@ -401,182 +401,7 @@ pub(crate) fn open_rooted_group<'a>(capacity: usize) -> RootedGroup<'a> {
     RootedGroup::new(capacity)
 }
 
-/// A saved implicit `this`, held in a rooted slot for the duration of a
-/// dispatch (#7211).
-///
-/// **Moved here in slice 6 rather than re-exported.** It was already a paired
-/// combinator with this file's contract — root before the window, re-read
-/// after it, never hand out the register — but it lived in the raw API, so six
-/// `lower_call/` modules had to name `expr::temp_root` while making no ordering
-/// decision at all. Leaving a copy behind would have given the pair two
-/// spellings, which is the drift that produced #7114; there is one.
-///
-/// `js_implicit_this_set` swaps the `IMPLICIT_THIS` cell and returns what was
-/// there, read straight out of a cell `scan_implicit_this_roots_mut`
-/// (`object/this_binding.rs:176`) registers as a scanned MUTABLE root. The swap
-/// has already overwritten the cell, so the returned value is now held ONLY in
-/// an SSA register, across the whole call the bind exists to scope.
-///
-/// Two ways that hurts, and the second is what makes it worse than an ordinary
-/// stale read:
-///
-///  * the enclosing frame still roots the same object, so an evacuating minor
-///    inside the callee MOVES it and rewrites that root — leaving this register
-///    naming from-space. The restore then publishes a pre-move address back
-///    INTO a root the collector scans, so the corruption outlives the call that
-///    caused it and surfaces in whatever reads `this` next;
-///  * where no other root holds it, the object is simply collected.
-///
-/// Seven lowerings emit this pair. They had seven copies of the same three
-/// lines and therefore seven copies of the same bug, which is why it is a
-/// combinator rather than seven edits.
-pub(crate) struct ImplicitThisSave {
-    slot: RootedSlot,
-}
-
-/// Bind `new_this` as the implicit `this` and root the value it displaced.
-///
-/// Unconditional, unlike an operand group: the window is a user or native call,
-/// so `operand_protection`'s "can this window collect?" test has exactly one
-/// answer here and there is nothing to gate on.
-pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> ImplicitThisSave {
-    let prev = implicit_this_swap(ctx, new_this, "implicit_this.save");
-    let idx = temp_root::temp_root_push_double(ctx, &prev);
-    ImplicitThisSave {
-        slot: RootedSlot {
-            idx,
-            repr: Repr::Boxed,
-        },
-    }
-}
-
-/// The implicit-`this` cell's address when this target reads it without a
-/// call (ELF executables, `expr::agent_ptr`), for a save/restore pair that
-/// wants to find the cell once: the address is per-thread and stable, so a
-/// restore after the call may reuse it.
-pub(crate) fn implicit_this_cell_ptr(ctx: &mut FnCtx<'_>) -> Option<String> {
-    if crate::expr::agent_ptr::agent_ptr_access(ctx)
-        != crate::expr::agent_ptr::AgentPtrAccess::InitialExec
-    {
-        return None;
-    }
-    Some(crate::expr::agent_ptr::emit_agent_ptr(
-        ctx,
-        crate::runtime_abi::AGENT_PTR_IMPLICIT_THIS,
-        "perry_implicit_this_cell",
-    ))
-}
-
-/// [`implicit_this_save`] through a cell address from
-/// [`implicit_this_cell_ptr`].
-pub(crate) fn implicit_this_save_at(
-    ctx: &mut FnCtx<'_>,
-    cell: &str,
-    new_this: &str,
-) -> ImplicitThisSave {
-    let prev = {
-        let blk = ctx.block();
-        let prev_bits = blk.load(I64, cell);
-        let value_bits = blk.bitcast_double_to_i64(new_this);
-        // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
-        blk.store(I64, &value_bits, cell);
-        blk.bitcast_i64_to_double(&prev_bits)
-    };
-    let idx = temp_root::temp_root_push_double(ctx, &prev);
-    ImplicitThisSave {
-        slot: RootedSlot {
-            idx,
-            repr: Repr::Boxed,
-        },
-    }
-}
-
-/// [`implicit_this_restore`] through the same cell address.
-pub(crate) fn implicit_this_restore_at(ctx: &mut FnCtx<'_>, cell: &str, save: ImplicitThisSave) {
-    let prev = read_slot(ctx, &save.slot);
-    save.slot.release(ctx);
-    let blk = ctx.block();
-    let bits = blk.bitcast_double_to_i64(&prev);
-    // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
-    blk.store(I64, &bits, cell);
-}
-
-/// Restore the saved implicit `this`, re-read from its root.
-///
-/// Reading the slot rather than the register is the fix, not a precaution: the
-/// slot is a mutable root, so an evacuating cycle inside the dispatch rewrote
-/// it and the register pushed beforehand names from-space.
-///
-/// The release is emitted BEFORE the restore call so that nested saves — an
-/// override arm inside an outer bind — release inner to outer. A release is a
-/// stack cut, so a caller holding a LOWER group may release it afterwards and
-/// drop this slot a second time harmlessly.
-pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave) {
-    let prev = read_slot(ctx, &save.slot);
-    save.slot.release(ctx);
-    implicit_this_swap(ctx, &prev, "implicit_this.restore");
-}
-
-/// `js_implicit_this_set(value)`: bind `value` as the implicit `this` and
-/// return the previous binding. On Apple aarch64 the cell is read and
-/// written inline through the hot-cache lookup (`expr::hot_tls`), with the
-/// runtime call as the fallback for every miss — the pair around a
-/// dynamically-dispatched call was two runtime calls whose whole body was
-/// that lookup plus a `replace`.
-fn implicit_this_swap(ctx: &mut FnCtx<'_>, value: &str, stem: &str) -> String {
-    // ELF executables: the cell's address is a per-agent pointer read
-    // thread-pointer-relative (`expr::agent_ptr`), so the swap is a load and a
-    // store with no call.
-    if let Some(cell) = implicit_this_cell_ptr(ctx) {
-        let blk = ctx.block();
-        let prev_bits = blk.load(I64, &cell);
-        let value_bits = blk.bitcast_double_to_i64(value);
-        // GC_STORE_AUDIT(ROOT_CELL): the implicit-`this` cell is a registered root.
-        blk.store(I64, &value_bits, &cell);
-        return blk.bitcast_i64_to_double(&prev_bits);
-    }
-    if !crate::expr::hot_tls::inline_hot_tls_enabled(ctx) {
-        return ctx
-            .block()
-            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, value)]);
-    }
-    let lookup = crate::expr::hot_tls::emit_hot_tls_lookup(ctx, stem);
-    let merge_idx = ctx.new_block(&format!("{stem}.hot_tls.merge"));
-    let merge_label = ctx.block_label(merge_idx);
-    let cell = crate::expr::hot_tls::hot_tls_field(
-        ctx,
-        &lookup.hot,
-        crate::expr::hot_tls::HOT_TLS_IMPLICIT_THIS_OFFSET,
-    );
-    let (fast_prev, fast_pred) = {
-        let blk = ctx.block();
-        let prev_bits = blk.load(I64, &cell);
-        let value_bits = blk.bitcast_double_to_i64(value);
-        blk.store(I64, &value_bits, &cell);
-        let prev = blk.bitcast_i64_to_double(&prev_bits);
-        let pred = blk.label.clone();
-        blk.br(&merge_label);
-        (prev, pred)
-    };
-    ctx.current_block = lookup.slow_idx;
-    let (slow_prev, slow_pred) = {
-        let blk = ctx.block();
-        let prev = blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, value)]);
-        let pred = blk.label.clone();
-        blk.br(&merge_label);
-        (prev, pred)
-    };
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[(&fast_prev, &fast_pred), (&slow_prev, &slow_pred)],
-    )
-}
-
 /// The `new.target` cell's saved previous value (#7664).
-///
-/// Structurally [`ImplicitThisSave`] for a different cell, and it is a separate
-/// type rather than a parameter so the two cannot be crossed at a restore.
 ///
 /// The cell is a registered mutable root — `scan_current_new_target_root_mut`,
 /// `gc/mod.rs` — so an evacuating cycle inside the constructor rewrites it and
@@ -620,8 +445,8 @@ pub(crate) fn new_target_save_for_super(ctx: &mut FnCtx<'_>) -> Option<NewTarget
 
 /// Restore the saved `new.target`, re-read from its root.
 ///
-/// Takes the save by REFERENCE, and does not release — which is the difference
-/// from [`implicit_this_restore`] and is forced by the caller. `new.rs` emits
+/// Takes the save by REFERENCE, and does not release, which is forced by the
+/// caller. `new.rs` emits
 /// this restore on several exits from one save, and its slot is cut by the
 /// enclosing expression scope (`temp_root_scope_begin`/`temp_root_scope_end`,
 /// which that module already opens precisely because its ~20 return paths make

@@ -7,9 +7,7 @@
 #
 #   wasi-sdk   clang + wasm-ld + the wasm32-wasip2 sysroot: compiles the
 #              runtime's C for WASI and links `perry compile --target wasi`.
-#   wasmtime   the WASI host the smoke test runs programs under. Perry's
-#              closure dispatch uses `ref.test` (the GC proposal) on WASI;
-#              wasmtime enables it by default.
+#   wasmtime   the WASI host the smoke test runs programs under.
 #
 # Versions are adopted only once they are older than the repo's soak window
 # (scripts/soak/constants.mts): wasi-sdk 34 was published 2026-08-25 and

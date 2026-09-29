@@ -20,8 +20,8 @@ pub(crate) fn scan_gtk4_textfield_gc_roots(visitor: &mut perry_ffi::GcRootVisito
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -60,7 +60,11 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
             unsafe {
-                js_closure_call1(closure_ptr as *const u8, nanboxed);
+                js_closure_call1(
+                    closure_ptr as *const u8,
+                    perry_ffi::JsThis::UNDEFINED,
+                    nanboxed,
+                );
             }
         }
     });
@@ -137,7 +141,11 @@ pub fn set_on_submit(handle: i64, on_submit: f64) {
                 let closure_ptr = unsafe { js_nanbox_get_pointer(on_submit) };
                 if closure_ptr != 0 {
                     unsafe {
-                        js_closure_call1(closure_ptr as *const u8, nanboxed);
+                        js_closure_call1(
+                            closure_ptr as *const u8,
+                            perry_ffi::JsThis::UNDEFINED,
+                            nanboxed,
+                        );
                     }
                 }
             });
@@ -155,7 +163,7 @@ pub fn set_on_focus(handle: i64, on_focus: f64) {
                 let closure_ptr = unsafe { js_nanbox_get_pointer(on_focus) };
                 if closure_ptr != 0 {
                     unsafe {
-                        js_closure_call0(closure_ptr as *const u8);
+                        js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
                     }
                 }
             });

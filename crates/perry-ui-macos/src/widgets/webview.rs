@@ -32,9 +32,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
     fn js_is_truthy(value: f64) -> i32;
@@ -347,7 +347,7 @@ define_class!(
                         if closure_ptr.is_null() {
                             return; // default ALLOW
                         }
-                        let result = unsafe { js_closure_call1(closure_ptr, url_nb) };
+                        let result = unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb) };
 
                         // Per the API: undefined / no return = allow (matches JS
                         // "implicit allow"); explicit `false` / 0 / null = cancel.
@@ -425,7 +425,7 @@ define_class!(
                     let url_nb = nanbox_str(&url_str);
                     let closure_ptr = js_nanbox_get_pointer(on_loaded) as *const u8;
                     if !closure_ptr.is_null() {
-                        js_closure_call1(closure_ptr, url_nb);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb);
                     }
                 }),
             );
@@ -490,7 +490,12 @@ impl PerryWebViewDelegate {
                 let msg_nb = nanbox_str(&msg);
                 let closure_ptr = js_nanbox_get_pointer(on_error) as *const u8;
                 if !closure_ptr.is_null() {
-                    js_closure_call2(closure_ptr, code as f64, msg_nb);
+                    js_closure_call2(
+                        closure_ptr,
+                        perry_ffi::JsThis::UNDEFINED,
+                        code as f64,
+                        msg_nb,
+                    );
                 }
             }),
         );
@@ -683,7 +688,7 @@ pub fn evaluate_js(handle: i64, js_ptr: *const u8, callback: f64) {
                     let nb = nanbox_str(&s);
                     let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
                     if !closure_ptr.is_null() {
-                        js_closure_call1(closure_ptr, nb);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb);
                     }
                 }),
             );
@@ -834,5 +839,5 @@ fn webview_for_handle(handle: i64) -> Option<*mut AnyObject> {
 /// future event hooks the design names but doesn't ship in Phase 1.
 #[allow(dead_code)]
 fn _used_js_closure_call0() {
-    let _ = js_closure_call0 as unsafe extern "C" fn(_) -> _;
+    let _ = js_closure_call0 as unsafe extern "C" fn(_, _) -> _;
 }

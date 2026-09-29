@@ -629,7 +629,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
         "initialexec",
     );
-    module.declare_function("perry_implicit_this_cell", PTR, &[]);
     // #10812: the prologue stack check (`expr/stack_guard.rs`).
     module.declare_function("js_stack_overflow", VOID, &[]);
     module.declare_function(

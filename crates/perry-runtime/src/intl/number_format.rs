@@ -1309,8 +1309,12 @@ pub(crate) fn parts_to_js_array(parts: &[(&'static str, String)]) -> f64 {
     js_nanbox_pointer(arr as i64)
 }
 
-pub(crate) fn this_intl_object(method: &str, expected_kind: &str) -> *mut ObjectHeader {
-    let this_value = crate::object::js_implicit_this_get();
+pub(crate) fn this_intl_object(
+    this: crate::closure::JsThis,
+    method: &str,
+    expected_kind: &str,
+) -> *mut ObjectHeader {
+    let this_value = this.as_f64();
     intl_object_from_value(this_value, method, expected_kind)
 }
 
@@ -1385,13 +1389,17 @@ fn unwrap_legacy_constructed(value: f64) -> Option<f64> {
 /// KEY_NF_BOUND_FORMAT slot (set at construction, name `""`, length 1) rather
 /// than the public own `format` property, so user mutation/deletion of that
 /// property can't change what the accessor returns.
-pub(crate) extern "C" fn number_format_format_getter_thunk(_closure: *const ClosureHeader) -> f64 {
-    let obj = this_intl_object("format", KIND_NUMBER);
+pub(crate) extern "C" fn number_format_format_getter_thunk(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let obj = this_intl_object(this, "format", KIND_NUMBER);
     get_field(obj, KEY_NF_BOUND_FORMAT)
 }
 
 pub(crate) extern "C" fn number_format_bound_format_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "format", KIND_NUMBER);
@@ -1416,13 +1424,15 @@ pub(crate) fn number_format_format_object(obj: *const ObjectHeader, value: f64) 
 
 pub(crate) extern "C" fn number_format_resolved_options_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let obj = this_intl_object("resolvedOptions", KIND_NUMBER);
+    let obj = this_intl_object(this, "resolvedOptions", KIND_NUMBER);
     number_format_resolved_options_object(obj)
 }
 
 pub(crate) extern "C" fn number_format_bound_resolved_options_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     let obj = captured_intl_object(closure, "resolvedOptions", KIND_NUMBER);
     number_format_resolved_options_object(obj)
@@ -1430,15 +1440,17 @@ pub(crate) extern "C" fn number_format_bound_resolved_options_thunk(
 
 pub(crate) extern "C" fn number_format_to_parts_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatToParts", KIND_NUMBER);
+    let obj = this_intl_object(this, "formatToParts", KIND_NUMBER);
     let number = nf_coerce_number(value);
     parts_to_js_array(&number_instance_parts(obj, number))
 }
 
 pub(crate) extern "C" fn number_format_bound_to_parts_thunk(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "formatToParts", KIND_NUMBER);
@@ -1534,19 +1546,21 @@ pub(crate) fn number_format_range_parts_value(
 
 pub(crate) extern "C" fn number_format_range_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatRange", KIND_NUMBER);
+    let obj = this_intl_object(this, "formatRange", KIND_NUMBER);
     number_format_range_value(obj, "formatRange", start, end)
 }
 
 pub(crate) extern "C" fn number_format_range_to_parts_thunk(
     _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     start: f64,
     end: f64,
 ) -> f64 {
-    let obj = this_intl_object("formatRangeToParts", KIND_NUMBER);
+    let obj = this_intl_object(this, "formatRangeToParts", KIND_NUMBER);
     number_format_range_parts_value(obj, "formatRangeToParts", start, end)
 }
 

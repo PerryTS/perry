@@ -8,52 +8,195 @@ pub(crate) fn install_math_namespace(ns_obj: *mut ObjectHeader) {
     if ns_obj.is_null() {
         return;
     }
-    for (name, func_ptr, arity) in [
-        ("abs", math_abs_thunk as *const u8, 1),
-        ("acos", math_acos_thunk as *const u8, 1),
-        ("acosh", math_acosh_thunk as *const u8, 1),
-        ("asin", math_asin_thunk as *const u8, 1),
-        ("asinh", math_asinh_thunk as *const u8, 1),
-        ("atan", math_atan_thunk as *const u8, 1),
-        ("atanh", math_atanh_thunk as *const u8, 1),
-        ("atan2", math_atan2_thunk as *const u8, 2),
-        ("ceil", math_ceil_thunk as *const u8, 1),
-        ("cbrt", math_cbrt_thunk as *const u8, 1),
-        ("expm1", math_expm1_thunk as *const u8, 1),
-        ("clz32", math_clz32_thunk as *const u8, 1),
-        ("cos", math_cos_thunk as *const u8, 1),
-        ("cosh", math_cosh_thunk as *const u8, 1),
-        ("exp", math_exp_thunk as *const u8, 1),
-        ("floor", math_floor_thunk as *const u8, 1),
-        ("fround", math_fround_thunk as *const u8, 1),
+    for (name, info, arity) in [
+        (
+            "abs",
+            crate::fn_info!(math_abs_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "acos",
+            crate::fn_info!(math_acos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "acosh",
+            crate::fn_info!(math_acosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "asin",
+            crate::fn_info!(math_asin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "asinh",
+            crate::fn_info!(math_asinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "atan",
+            crate::fn_info!(math_atan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "atanh",
+            crate::fn_info!(math_atanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "atan2",
+            crate::fn_info!(math_atan2_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "ceil",
+            crate::fn_info!(math_ceil_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "cbrt",
+            crate::fn_info!(math_cbrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "expm1",
+            crate::fn_info!(math_expm1_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "clz32",
+            crate::fn_info!(math_clz32_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "cos",
+            crate::fn_info!(math_cos_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "cosh",
+            crate::fn_info!(math_cosh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "exp",
+            crate::fn_info!(math_exp_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "floor",
+            crate::fn_info!(math_floor_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "fround",
+            crate::fn_info!(math_fround_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
     ] {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+        install_proto_method(ns_obj, name, info, arity);
     }
-    install_proto_method_rest_with_length(ns_obj, "hypot", math_hypot_thunk as *const u8, 2, 0);
-    for (name, func_ptr, arity) in [
-        ("imul", math_imul_thunk as *const u8, 2),
-        ("log", math_log_thunk as *const u8, 1),
-        ("log1p", math_log1p_thunk as *const u8, 1),
-        ("log2", math_log2_thunk as *const u8, 1),
-        ("log10", math_log10_thunk as *const u8, 1),
+    install_proto_method_rest_with_length(
+        ns_obj,
+        "hypot",
+        crate::fn_info!(math_hypot_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        2,
+    );
+    for (name, info, arity) in [
+        (
+            "imul",
+            crate::fn_info!(math_imul_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "log",
+            crate::fn_info!(math_log_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "log1p",
+            crate::fn_info!(math_log1p_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "log2",
+            crate::fn_info!(math_log2_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "log10",
+            crate::fn_info!(math_log10_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
     ] {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+        install_proto_method(ns_obj, name, info, arity);
     }
-    install_proto_method_rest_with_length(ns_obj, "max", math_max_thunk as *const u8, 2, 0);
-    install_proto_method_rest_with_length(ns_obj, "min", math_min_thunk as *const u8, 2, 0);
-    for (name, func_ptr, arity) in [
-        ("pow", math_pow_thunk as *const u8, 2),
-        ("random", math_random_thunk as *const u8, 0),
-        ("round", math_round_thunk as *const u8, 1),
-        ("sign", math_sign_thunk as *const u8, 1),
-        ("sin", math_sin_thunk as *const u8, 1),
-        ("sinh", math_sinh_thunk as *const u8, 1),
-        ("sqrt", math_sqrt_thunk as *const u8, 1),
-        ("tan", math_tan_thunk as *const u8, 1),
-        ("tanh", math_tanh_thunk as *const u8, 1),
-        ("trunc", math_trunc_thunk as *const u8, 1),
+    install_proto_method_rest_with_length(
+        ns_obj,
+        "max",
+        crate::fn_info!(math_max_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        2,
+    );
+    install_proto_method_rest_with_length(
+        ns_obj,
+        "min",
+        crate::fn_info!(math_min_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        2,
+    );
+    for (name, info, arity) in [
+        (
+            "pow",
+            crate::fn_info!(math_pow_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "random",
+            crate::fn_info!(math_random_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
+        (
+            "round",
+            crate::fn_info!(math_round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "sign",
+            crate::fn_info!(math_sign_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "sin",
+            crate::fn_info!(math_sin_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "sinh",
+            crate::fn_info!(math_sinh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "sqrt",
+            crate::fn_info!(math_sqrt_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "tan",
+            crate::fn_info!(math_tan_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "tanh",
+            crate::fn_info!(math_tanh_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "trunc",
+            crate::fn_info!(math_trunc_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
     ] {
-        install_proto_method(ns_obj, name, func_ptr, arity);
+        install_proto_method(ns_obj, name, info, arity);
     }
 
     let constant_attrs = super::super::PropertyAttrs::new(false, false, false);
@@ -70,7 +213,12 @@ pub(crate) fn install_math_namespace(ns_obj: *mut ObjectHeader) {
         set_intrinsic_data_prop(ns_obj, name, value, constant_attrs);
     }
 
-    install_proto_method(ns_obj, "f16round", math_f16round_thunk as *const u8, 1);
+    install_proto_method(
+        ns_obj,
+        "f16round",
+        crate::fn_info!(math_f16round_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+        1,
+    );
 }
 
 // ---- TC39 Temporal namespace (#4686) -------------------------------------
@@ -86,6 +234,7 @@ pub(crate) fn install_math_namespace(ns_obj: *mut ObjectHeader) {
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::duration::construct(&global_this_rest_array_values(rest))
@@ -94,6 +243,7 @@ extern "C" fn temporal_duration_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::duration::from_static(&global_this_rest_array_values(rest))
@@ -102,6 +252,7 @@ extern "C" fn temporal_duration_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_duration_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::duration::compare_static(&global_this_rest_array_values(rest))
@@ -110,6 +261,7 @@ extern "C" fn temporal_duration_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::instant::construct(&global_this_rest_array_values(rest))
@@ -118,6 +270,7 @@ extern "C" fn temporal_instant_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::instant::from_static(&global_this_rest_array_values(rest))
@@ -126,6 +279,7 @@ extern "C" fn temporal_instant_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_epoch_ms_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::instant::from_epoch_milliseconds_static(&global_this_rest_array_values(rest))
@@ -134,6 +288,7 @@ extern "C" fn temporal_instant_from_epoch_ms_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_from_epoch_ns_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::instant::from_epoch_nanoseconds_static(&global_this_rest_array_values(rest))
@@ -142,6 +297,7 @@ extern "C" fn temporal_instant_from_epoch_ns_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_instant_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::instant::compare_static(&global_this_rest_array_values(rest))
@@ -150,6 +306,7 @@ extern "C" fn temporal_instant_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date::construct(&global_this_rest_array_values(rest))
@@ -158,6 +315,7 @@ extern "C" fn temporal_plain_date_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date::from_static(&global_this_rest_array_values(rest))
@@ -166,6 +324,7 @@ extern "C" fn temporal_plain_date_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date::compare_static(&global_this_rest_array_values(rest))
@@ -174,6 +333,7 @@ extern "C" fn temporal_plain_date_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_time::construct(&global_this_rest_array_values(rest))
@@ -182,6 +342,7 @@ extern "C" fn temporal_plain_time_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_time::from_static(&global_this_rest_array_values(rest))
@@ -190,6 +351,7 @@ extern "C" fn temporal_plain_time_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_time::compare_static(&global_this_rest_array_values(rest))
@@ -198,6 +360,7 @@ extern "C" fn temporal_plain_time_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date_time::construct(&global_this_rest_array_values(rest))
@@ -206,6 +369,7 @@ extern "C" fn temporal_plain_date_time_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date_time::from_static(&global_this_rest_array_values(rest))
@@ -214,6 +378,7 @@ extern "C" fn temporal_plain_date_time_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_date_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_date_time::compare_static(&global_this_rest_array_values(rest))
@@ -222,6 +387,7 @@ extern "C" fn temporal_plain_date_time_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_year_month::construct(&global_this_rest_array_values(rest))
@@ -230,6 +396,7 @@ extern "C" fn temporal_plain_year_month_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_year_month::from_static(&global_this_rest_array_values(rest))
@@ -238,6 +405,7 @@ extern "C" fn temporal_plain_year_month_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_year_month_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_year_month::compare_static(&global_this_rest_array_values(rest))
@@ -246,6 +414,7 @@ extern "C" fn temporal_plain_year_month_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_month_day_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_month_day::construct(&global_this_rest_array_values(rest))
@@ -254,6 +423,7 @@ extern "C" fn temporal_plain_month_day_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_plain_month_day_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::plain_month_day::from_static(&global_this_rest_array_values(rest))
@@ -262,6 +432,7 @@ extern "C" fn temporal_plain_month_day_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_ctor_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::zoned_date_time::construct(&global_this_rest_array_values(rest))
@@ -270,6 +441,7 @@ extern "C" fn temporal_zoned_date_time_ctor_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::zoned_date_time::from_static(&global_this_rest_array_values(rest))
@@ -278,6 +450,7 @@ extern "C" fn temporal_zoned_date_time_from_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zoned_date_time_compare_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::zoned_date_time::compare_static(&global_this_rest_array_values(rest))
@@ -288,6 +461,7 @@ extern "C" fn temporal_zoned_date_time_compare_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_instant_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::instant(&global_this_rest_array_values(rest))
@@ -296,6 +470,7 @@ extern "C" fn temporal_now_instant_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_timezone_id_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::time_zone_id(&global_this_rest_array_values(rest))
@@ -304,6 +479,7 @@ extern "C" fn temporal_now_timezone_id_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_date_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::plain_date_time_iso(&global_this_rest_array_values(rest))
@@ -312,6 +488,7 @@ extern "C" fn temporal_now_plain_date_time_iso_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_date_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::plain_date_iso(&global_this_rest_array_values(rest))
@@ -320,6 +497,7 @@ extern "C" fn temporal_now_plain_date_iso_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_plain_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::plain_time_iso(&global_this_rest_array_values(rest))
@@ -328,6 +506,7 @@ extern "C" fn temporal_now_plain_time_iso_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_now_zoned_date_time_iso_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
     crate::temporal::now::zoned_date_time_iso(&global_this_rest_array_values(rest))
@@ -340,31 +519,39 @@ fn build_temporal_now_namespace() -> f64 {
     if now_obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    for (name, thunk, len) in [
-        ("instant", temporal_now_instant_thunk as *const u8, 0u32),
-        ("timeZoneId", temporal_now_timezone_id_thunk as *const u8, 0),
+    for (name, info, len) in [
+        (
+            "instant",
+            crate::fn_info!(temporal_now_instant_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            0u32,
+        ),
+        (
+            "timeZoneId",
+            crate::fn_info!(temporal_now_timezone_id_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+            0,
+        ),
         (
             "plainDateTimeISO",
-            temporal_now_plain_date_time_iso_thunk as *const u8,
+            crate::fn_info!(temporal_now_plain_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainDateISO",
-            temporal_now_plain_date_iso_thunk as *const u8,
+            crate::fn_info!(temporal_now_plain_date_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "plainTimeISO",
-            temporal_now_plain_time_iso_thunk as *const u8,
+            crate::fn_info!(temporal_now_plain_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
         (
             "zonedDateTimeISO",
-            temporal_now_zoned_date_time_iso_thunk as *const u8,
+            crate::fn_info!(temporal_now_zoned_date_time_iso_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             0,
         ),
     ] {
-        install_proto_method_rest_with_length(now_obj, name, thunk, len, 0);
+        install_proto_method_rest_with_length(now_obj, name, info, len);
     }
     set_intrinsic_to_string_tag(now_obj, "Temporal.Now");
     crate::value::js_nanbox_pointer(now_obj as i64)
@@ -378,12 +565,15 @@ fn build_temporal_now_namespace() -> f64 {
 /// path and use the returned cell.
 /// Generic accessor-getter thunk shared by every `Temporal.<Type>.prototype`
 /// getter. The property name and expected brand kind are stored on the closure
-/// instance (`__tname` / `__tkind`); the receiver comes from `IMPLICIT_THIS`.
+/// instance (`__tname` / `__tkind`); the receiver is the `this` argument.
 /// Throws `TypeError` on a non-Temporal or wrong-brand receiver (the getter
 /// `branding.js` tests: `blank.call(undefined)`, `years.call({})`, …).
 #[cfg(feature = "temporal")]
-extern "C" fn temporal_proto_getter_thunk(closure: *const crate::closure::ClosureHeader) -> f64 {
-    let recv = super::super::js_implicit_this_get();
+extern "C" fn temporal_proto_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let recv = this.as_f64();
     let cl = closure as usize;
     let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
     let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
@@ -401,16 +591,17 @@ extern "C" fn temporal_proto_getter_thunk(closure: *const crate::closure::Closur
 
 /// Generic method thunk shared by every `Temporal.<Type>.prototype` method.
 /// Rest-ABI (fixed arity 0): all args arrive in `rest`. Brand-checks the
-/// `IMPLICIT_THIS` receiver, then forwards to the per-type dispatch router —
+/// `this` receiver, then forwards to the per-type dispatch router —
 /// used when a prototype method is invoked through indirection
 /// (`Temporal.Duration.prototype.add.call(d, x)`); the normal `d.add(x)` path
 /// is the brand arm in `js_native_call_method`.
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let recv = super::super::js_implicit_this_get();
+    let recv = this.as_f64();
     let cl = closure as usize;
     let kind = crate::closure::closure_get_dynamic_prop(cl, "__tkind");
     let expected = crate::value::JSValue::from_bits(kind.to_bits()).to_number() as u8;
@@ -432,11 +623,13 @@ extern "C" fn temporal_proto_method_thunk(
 /// enumerable: false, configurable: true }`) on a Temporal prototype.
 #[cfg(feature = "temporal")]
 fn install_temporal_proto_getter(proto: *mut ObjectHeader, kind: u8, name: &str) {
-    let c = crate::closure::js_closure_alloc(temporal_proto_getter_thunk as *const u8, 0);
+    let c = crate::closure::js_closure_alloc(
+        crate::fn_info!(temporal_proto_getter_thunk, 0; with_declared(0)),
+        0,
+    );
     if c.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(temporal_proto_getter_thunk as *const u8, 0);
     let cl = c as usize;
     crate::closure::closure_set_dynamic_prop(cl, "__tkind", kind as f64);
     crate::closure::closure_set_dynamic_prop(
@@ -461,13 +654,15 @@ fn install_temporal_proto_getter(proto: *mut ObjectHeader, kind: u8, name: &str)
 /// Temporal prototype.
 #[cfg(feature = "temporal")]
 fn install_temporal_proto_method(proto: *mut ObjectHeader, kind: u8, name: &str, spec_length: u32) {
-    let c = crate::closure::js_closure_alloc(temporal_proto_method_thunk as *const u8, 0);
+    let c = crate::closure::js_closure_alloc(
+        crate::fn_info!(temporal_proto_method_thunk, 1; with_rest(0)),
+        0,
+    );
     if c.is_null() {
         return;
     }
     // Rest ABI so every argument is bundled regardless of the shared thunk's
     // fixed signature.
-    crate::closure::js_register_closure_rest(temporal_proto_method_thunk as *const u8, 0);
     let cl = c as usize;
     crate::closure::closure_set_dynamic_prop(cl, "__tkind", kind as f64);
     crate::closure::closure_set_dynamic_prop(
@@ -547,14 +742,13 @@ fn install_temporal_prototype(
 fn install_temporal_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
-    func_ptr: *const u8,
+    info: *const crate::closure::JsFunctionInfo,
     spec_length: u32,
 ) -> *mut crate::closure::ClosureHeader {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return std::ptr::null_mut();
     }
-    crate::closure::js_register_closure_rest(func_ptr, 0);
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -601,13 +795,14 @@ fn temporal_brand_type_error(type_name: &str, member: &str) -> ! {
 }
 
 /// Shared body for a `Temporal.ZonedDateTime.prototype` accessor getter invoked
-/// reflectively. Resolves `this` from `IMPLICIT_THIS`, brand-checks it is a
+/// reflectively. Takes `this` as an argument, brand-checks it is a
 /// `ZonedDateTime`, and returns the getter's value.
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_getter_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     // The accessor's name is `"get <prop>"`; recover the bare property.
     let name = temporal_closure_name(closure);
     let prop = name.strip_prefix("get ").unwrap_or(&name);
@@ -624,9 +819,10 @@ extern "C" fn temporal_zdt_proto_getter_thunk(
 #[cfg(feature = "temporal")]
 extern "C" fn temporal_zdt_proto_method_thunk(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let this = f64::from_bits(this.bits());
     let name = temporal_closure_name(closure);
     if crate::temporal::temporal_kind(this) != Some(crate::temporal::TemporalKind::ZonedDateTime) {
         temporal_brand_type_error("Temporal.ZonedDateTime", &name);
@@ -639,10 +835,13 @@ extern "C" fn temporal_zdt_proto_method_thunk(
 /// proper getter `name` (`"get <prop>"`) / `length` (0). Mirrors the RegExp
 /// prototype getter install.
 #[cfg(feature = "temporal")]
-fn install_temporal_getter(proto: *mut ObjectHeader, prop: &str, func_ptr: *const u8) {
+fn install_temporal_getter(
+    proto: *mut ObjectHeader,
+    prop: &str,
+    info: *const crate::closure::JsFunctionInfo,
+) {
     unsafe {
-        crate::closure::js_register_closure_arity(func_ptr, 0);
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(info, 0);
         if closure.is_null() {
             return;
         }
@@ -708,7 +907,11 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
         "calendarId",
     ];
     for g in GETTERS {
-        install_temporal_getter(proto, g, temporal_zdt_proto_getter_thunk as *const u8);
+        install_temporal_getter(
+            proto,
+            g,
+            crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_declared(0)),
+        );
     }
     // (name, spec_length)
     const METHODS: &[(&str, u32)] = &[
@@ -737,9 +940,8 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
         install_proto_method_rest_with_length(
             proto,
             name,
-            temporal_zdt_proto_method_thunk as *const u8,
+            crate::fn_info!(temporal_zdt_proto_method_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
             *len,
-            0,
         );
     }
     set_intrinsic_to_string_tag(proto, "Temporal.ZonedDateTime");
@@ -765,7 +967,7 @@ pub(crate) fn temporal_ctor_kind(type_ref: f64) -> Option<crate::temporal::Tempo
     if !crate::closure::is_closure_ptr(closure as usize) {
         return None;
     }
-    let fp = unsafe { (*closure).func_ptr };
+    let fp = unsafe { (*closure).code() };
     let fp = fp as usize;
     let table: [(*const u8, TemporalKind); 8] = [
         (
@@ -970,25 +1172,21 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let duration = install_temporal_constructor(
         ns_obj,
         "Duration",
-        temporal_duration_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_duration_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !duration.is_null() {
-        install_constructor_static_with_call_arity(
+        install_constructor_static(
             duration,
             "from",
-            temporal_duration_from_thunk as *const u8,
+            crate::fn_info!(temporal_duration_from_thunk, 1; with_rest(0)),
             1,
-            0,
-            true,
         );
-        install_constructor_static_with_call_arity(
+        install_constructor_static(
             duration,
             "compare",
-            temporal_duration_compare_thunk as *const u8,
+            crate::fn_info!(temporal_duration_compare_thunk, 1; with_rest(0)),
             2,
-            0,
-            true,
         );
         install_temporal_prototype(
             duration,
@@ -1027,30 +1225,26 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let instant = install_temporal_constructor(
         ns_obj,
         "Instant",
-        temporal_instant_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_instant_ctor_thunk, 1; with_rest(0)),
         1,
     );
     if !instant.is_null() {
         install_temporal_from_compare(
             instant,
-            temporal_instant_from_thunk as *const u8,
-            temporal_instant_compare_thunk as *const u8,
+            crate::fn_info!(temporal_instant_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_instant_compare_thunk, 1; with_rest(0)),
         );
-        install_constructor_static_with_call_arity(
+        install_constructor_static(
             instant,
             "fromEpochMilliseconds",
-            temporal_instant_from_epoch_ms_thunk as *const u8,
+            crate::fn_info!(temporal_instant_from_epoch_ms_thunk, 1; with_rest(0)),
             1,
-            0,
-            true,
         );
-        install_constructor_static_with_call_arity(
+        install_constructor_static(
             instant,
             "fromEpochNanoseconds",
-            temporal_instant_from_epoch_ns_thunk as *const u8,
+            crate::fn_info!(temporal_instant_from_epoch_ns_thunk, 1; with_rest(0)),
             1,
-            0,
-            true,
         );
         install_temporal_prototype(
             instant,
@@ -1076,14 +1270,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_date = install_temporal_constructor(
         ns_obj,
         "PlainDate",
-        temporal_plain_date_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_plain_date_ctor_thunk, 1; with_rest(0)),
         3,
     );
     if !plain_date.is_null() {
         install_temporal_from_compare(
             plain_date,
-            temporal_plain_date_from_thunk as *const u8,
-            temporal_plain_date_compare_thunk as *const u8,
+            crate::fn_info!(temporal_plain_date_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_plain_date_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date,
@@ -1097,14 +1291,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_time = install_temporal_constructor(
         ns_obj,
         "PlainTime",
-        temporal_plain_time_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_plain_time_ctor_thunk, 1; with_rest(0)),
         0,
     );
     if !plain_time.is_null() {
         install_temporal_from_compare(
             plain_time,
-            temporal_plain_time_from_thunk as *const u8,
-            temporal_plain_time_compare_thunk as *const u8,
+            crate::fn_info!(temporal_plain_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_plain_time_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1112,14 +1306,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_date_time = install_temporal_constructor(
         ns_obj,
         "PlainDateTime",
-        temporal_plain_date_time_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_plain_date_time_ctor_thunk, 1; with_rest(0)),
         3,
     );
     if !plain_date_time.is_null() {
         install_temporal_from_compare(
             plain_date_time,
-            temporal_plain_date_time_from_thunk as *const u8,
-            temporal_plain_date_time_compare_thunk as *const u8,
+            crate::fn_info!(temporal_plain_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_plain_date_time_compare_thunk, 1; with_rest(0)),
         );
         install_temporal_prototype(
             plain_date_time,
@@ -1133,14 +1327,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_year_month = install_temporal_constructor(
         ns_obj,
         "PlainYearMonth",
-        temporal_plain_year_month_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_plain_year_month_ctor_thunk, 1; with_rest(0)),
         2,
     );
     if !plain_year_month.is_null() {
         install_temporal_from_compare(
             plain_year_month,
-            temporal_plain_year_month_from_thunk as *const u8,
-            temporal_plain_year_month_compare_thunk as *const u8,
+            crate::fn_info!(temporal_plain_year_month_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_plain_year_month_compare_thunk, 1; with_rest(0)),
         );
     }
 
@@ -1148,17 +1342,15 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let plain_month_day = install_temporal_constructor(
         ns_obj,
         "PlainMonthDay",
-        temporal_plain_month_day_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_plain_month_day_ctor_thunk, 1; with_rest(0)),
         2,
     );
     if !plain_month_day.is_null() {
-        install_constructor_static_with_call_arity(
+        install_constructor_static(
             plain_month_day,
             "from",
-            temporal_plain_month_day_from_thunk as *const u8,
+            crate::fn_info!(temporal_plain_month_day_from_thunk, 1; with_rest(0)),
             1,
-            0,
-            true,
         );
     }
 
@@ -1166,14 +1358,14 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     let zoned = install_temporal_constructor(
         ns_obj,
         "ZonedDateTime",
-        temporal_zoned_date_time_ctor_thunk as *const u8,
+        crate::fn_info!(temporal_zoned_date_time_ctor_thunk, 1; with_rest(0)),
         2,
     );
     if !zoned.is_null() {
         install_temporal_from_compare(
             zoned,
-            temporal_zoned_date_time_from_thunk as *const u8,
-            temporal_zoned_date_time_compare_thunk as *const u8,
+            crate::fn_info!(temporal_zoned_date_time_from_thunk, 1; with_rest(0)),
+            crate::fn_info!(temporal_zoned_date_time_compare_thunk, 1; with_rest(0)),
         );
         // Real `Temporal.ZonedDateTime.prototype` with getter/method descriptors
         // so reflective test262 cases resolve (branding / prop-desc / length /
@@ -1483,9 +1675,9 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
 #[cfg(feature = "temporal")]
 fn install_temporal_from_compare(
     ctor: *mut crate::closure::ClosureHeader,
-    from_thunk: *const u8,
-    compare_thunk: *const u8,
+    from_info: *const crate::closure::JsFunctionInfo,
+    compare_info: *const crate::closure::JsFunctionInfo,
 ) {
-    install_constructor_static_with_call_arity(ctor, "from", from_thunk, 1, 0, true);
-    install_constructor_static_with_call_arity(ctor, "compare", compare_thunk, 2, 0, true);
+    install_constructor_static(ctor, "from", from_info, 1);
+    install_constructor_static(ctor, "compare", compare_info, 2);
 }
