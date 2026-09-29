@@ -12,7 +12,7 @@ mod builtins;
 pub(crate) use builtins::is_builtin_global_value_name;
 pub(crate) use builtins::{
     builtin_constructor_length, builtin_global_function_length, builtin_static_function_length,
-    is_builtin_function, is_builtin_static_function_member,
+    has_intrinsic_static_surface, is_builtin_function, is_builtin_static_function_member,
 };
 
 /// Whether `name` is one of the global constructors / namespaces the runtime

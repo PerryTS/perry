@@ -267,7 +267,21 @@ pub(crate) fn builtin_global_function_length(name: &str) -> Option<u32> {
 /// surfaced by `built-ins/Function` Test262 (38× `Cannot read … (reading
 /// 'name')` on the #799 radar).
 pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -> bool {
-    match namespace {
+    intrinsic_static_function_member(namespace, member).unwrap_or(false)
+}
+
+/// Whether `namespace` has an intrinsic static surface at all: some static
+/// member of it lowers through an intrinsic keyed on the collapsed
+/// `GlobalGet(0)` receiver. A built-in without one is only ever read as the
+/// real object it is, so its member reads keep their receiver.
+pub(crate) fn has_intrinsic_static_surface(namespace: &str) -> bool {
+    intrinsic_static_function_member(namespace, "").is_some()
+}
+
+/// `None` when `namespace` has no intrinsic static surface; otherwise whether
+/// `member` is one of its intrinsic static functions.
+fn intrinsic_static_function_member(namespace: &str, member: &str) -> Option<bool> {
+    Some(match namespace {
         "Math" => matches!(
             member,
             "abs"
@@ -387,8 +401,8 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
             member,
             "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming" | "validate"
         ),
-        _ => false,
-    }
+        _ => return None,
+    })
 }
 
 /// Spec-defined `.length` for static *function* members recognized by

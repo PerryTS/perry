@@ -136,6 +136,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         if matches == Some(true) {
             return true_val;
         }
+        // A miss is final when the value's own prototype is materialized:
+        // the walk read the authoritative chain. Without one, the chain is
+        // carried by the class id, which the paths below still follow.
+        if matches == Some(false)
+            && crate::object::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+        {
+            return false_val;
+        }
     }
 
     // Subclass-of-built-in: see `subclass_of_builtin_reaches`.
