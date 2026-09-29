@@ -356,6 +356,10 @@ pub(super) fn compile_module_entry(
                 );
             }
             blk.call_void("js_gc_init", &[]);
+            // Design step 4: mint the program's static literal ids in this
+            // agent before any module init or user code (the seed unit the
+            // driver links registers the function; none = a no-op).
+            blk.call_void("js_shape_run_static_seed", &[]);
             if crate::expr::store_census::enabled() {
                 blk.call_void("perry_store_census_arm", &[]);
             }
@@ -773,6 +777,8 @@ pub(super) fn compile_module_entry(
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
+            region_loops: Vec::new(),
+            region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
@@ -1634,6 +1640,8 @@ pub(super) fn compile_module_entry(
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
             class_field_loop_facts: Vec::new(),
+            region_loops: Vec::new(),
+            region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),

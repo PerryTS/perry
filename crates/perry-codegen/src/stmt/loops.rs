@@ -5841,7 +5841,7 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+    let expected_shape_id = crate::typed_shape::class_shape_id_operand(
         ctx,
         &matched.class_name,
         &matched.keys_global_name,
@@ -7248,10 +7248,19 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
-    if i32_counter::lower(ctx, init, condition, update, body)? {
-        return Ok(());
-    }
-    lower_for_after_init(ctx, init, condition, update, body, "for")
+    // Step 4b (#10884): every specialised tier above declined; a loop (or
+    // body) region guards its receivers once here, in the preheader, and
+    // splits the body when the tier below lowers it (`stmt::region_loop`).
+    let region = super::region_loop::begin(ctx, condition, body, update)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        if i32_counter::lower(ctx, init, condition, update, body)? {
+            Ok(())
+        } else {
+            lower_for_after_init(ctx, init, condition, update, body, "for")
+        }
+    });
+    super::region_loop::end(ctx, region);
+    lowered
 }
 
 pub(super) fn lower_for_after_init(
@@ -9920,6 +9929,15 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_while_impl(ctx, condition, body)
+    });
+    super::region_loop::end(ctx, region);
+    lowered
+}
+
+fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[Stmt]) -> Result<()> {
     let cond_idx = ctx.new_block("while.cond");
     let body_idx = ctx.new_block("while.body");
     let exit_idx = ctx.new_block("while.exit");
@@ -9989,6 +10007,19 @@ pub(crate) fn lower_while(
 /// `do { body } while (cond)` — body runs at least once. Same blocks as
 /// `while`, but the initial branch goes to body, not cond.
 pub(crate) fn lower_do_while(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    condition: &perry_hir::Expr,
+) -> Result<()> {
+    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
+    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+        lower_do_while_impl(ctx, body, condition)
+    });
+    super::region_loop::end(ctx, region);
+    lowered
+}
+
+fn lower_do_while_impl(
     ctx: &mut FnCtx<'_>,
     body: &[Stmt],
     condition: &perry_hir::Expr,

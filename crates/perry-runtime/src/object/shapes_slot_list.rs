@@ -578,6 +578,8 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.hole_count = hole_count;
+    // The hole count is an input of the positional bit.
+    record.refresh_positional();
     super::debug_assert_object_shape_parity(obj);
     Some(id)
 }
@@ -720,6 +722,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         hole_count,
         current.proto_id,
         super::receiver_extra_summary(obj),
+        None,
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
     // the one that minted a fresh (old_carrier=false) descriptor for an
@@ -1157,6 +1160,7 @@ pub(super) fn install_external_shape_id(
             0,
             proto_id,
             summary,
+            crate::object::field_rep::REP_ANY,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.

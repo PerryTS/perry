@@ -325,6 +325,14 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // Design step 4 (DESIGN 7.2): the static ShapeIds this module's code
+    // embeds as immediates. A cached object is reused exactly when every id
+    // it embeds is unchanged.
+    h.field("static_shape_ids", &format!("{:?}", opts.static_shape_ids));
+    h.field(
+        "program_class_shape_ids",
+        &format!("{:?}", opts.program_class_shape_ids),
+    );
     // #11394: a module's method calls lower differently when ANY module in the
     // program writes that method name onto a builtin prototype.
     h.field(
@@ -1566,6 +1574,18 @@ impl ObjectCache {
             .map(|d| d.join(format!("{:016x}.ffi", key)))
     }
 
+    /// Path of the static shape seed sidecar that accompanies `<key>.o`
+    /// (design step 4): the seedable static ShapeIds this module's guards
+    /// embedded, one `perry_codegen::encode_static_seed` line each, possibly
+    /// empty. Like the FFI manifest it exists because a hit skips codegen,
+    /// and codegen is what reports them: without it a warm build would link
+    /// a smaller seed set than a cold one.
+    fn static_seeds_path_for(&self, key: u64) -> Option<PathBuf> {
+        self.cache_dir
+            .as_ref()
+            .map(|d| d.join(format!("{:016x}.seeds", key)))
+    }
+
     /// Look up a cached object by key. Returns `Some(bytes)` on hit,
     /// `None` on miss (cache disabled, file missing, or IO error).
     #[allow(dead_code)]
@@ -1606,7 +1626,9 @@ impl ObjectCache {
     }
 
     /// Cache-hit path for the codegen workers (#6439): returns the cached
-    /// object *and* the FFI manifest recorded when it was compiled.
+    /// object, the FFI manifest recorded when it was compiled, and its static
+    /// shape seed lines (design step 4). An entry missing either sidecar is a
+    /// miss, for the same reason.
     ///
     /// An entry is only a hit when both halves are present. A `.o` without
     /// a manifest is an entry written by a pre-#6439 perry — its FFI
@@ -1617,27 +1639,34 @@ impl ObjectCache {
     ///
     /// Counts a hit only when the entry is usable, so `--verbose` cache
     /// stats stay honest about what was actually reused.
-    pub fn lookup_path_with_ffi(&self, key: u64) -> Option<(PathBuf, Vec<String>)> {
+    pub fn lookup_path_with_ffi(&self, key: u64) -> Option<(PathBuf, Vec<String>, Vec<String>)> {
         let path = self.path_for(key)?;
         let manifest_path = self.ffi_manifest_path_for(key)?;
+        let seeds_path = self.static_seeds_path_for(key)?;
         let object_ok = matches!(
             fs::File::open(&path).and_then(|f| f.metadata()),
             Ok(meta) if meta.is_file()
         );
-        let manifest = object_ok
-            .then(|| fs::read_to_string(&manifest_path).ok())
+        let sidecars = object_ok
+            .then(|| {
+                Some((
+                    fs::read_to_string(&manifest_path).ok()?,
+                    fs::read_to_string(&seeds_path).ok()?,
+                ))
+            })
             .flatten();
-        match manifest {
-            Some(text) => {
+        let lines = |text: String| -> Vec<String> {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        match sidecars {
+            Some((manifest, seeds)) => {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 self.path_reuses.fetch_add(1, Ordering::Relaxed);
-                let symbols = text
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_string)
-                    .collect();
-                Some((path, symbols))
+                Some((path, lines(manifest), lines(seeds)))
             }
             None => {
                 self.misses.fetch_add(1, Ordering::Relaxed);
@@ -1654,10 +1683,22 @@ impl ObjectCache {
     /// [`Self::lookup_path_with_ffi`] treats as a miss — the build stays
     /// correct and merely recompiles that module next time.
     pub fn store_ffi_manifest(&self, key: u64, symbols: &[&str]) {
-        let Some(path) = self.ffi_manifest_path_for(key) else {
-            return;
-        };
-        let mut body = symbols.join("\n");
+        if let Some(path) = self.ffi_manifest_path_for(key) {
+            Self::store_sidecar(&path, symbols);
+        }
+    }
+
+    /// Persist the static shape seed lines for `key` (design step 4), like
+    /// [`Self::store_ffi_manifest`]; store it before the `.o`.
+    pub fn store_static_seeds(&self, key: u64, lines: &[&str]) {
+        if let Some(path) = self.static_seeds_path_for(key) {
+            Self::store_sidecar(&path, lines);
+        }
+    }
+
+    /// Write one line-per-entry sidecar atomically (tmp + rename).
+    fn store_sidecar(path: &std::path::Path, lines: &[&str]) {
+        let mut body = lines.join("\n");
         if !body.is_empty() {
             body.push('\n');
         }
@@ -1665,9 +1706,13 @@ impl ObjectCache {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let tmp_path = path.with_extension(format!("ffi.tmp.{:x}", tmp_suffix));
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("sidecar");
+        let tmp_path = path.with_extension(format!("{ext}.tmp.{:x}", tmp_suffix));
         if fs::write(&tmp_path, body)
-            .and_then(|_| fs::rename(&tmp_path, &path))
+            .and_then(|_| fs::rename(&tmp_path, path))
             .is_err()
         {
             let _ = fs::remove_file(&tmp_path);

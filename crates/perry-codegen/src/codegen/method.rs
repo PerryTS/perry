@@ -667,6 +667,8 @@ pub(super) fn compile_method(
         string_window_array_facts: Vec::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: index_i32_param_slots,
         numeric_accumulator_f64_slots: HashMap::new(),
@@ -1619,8 +1621,6 @@ pub(super) fn compile_method(
                     .class_keys_globals
                     .get(&class.name)
                     .expect("method class has a canonical keys global");
-                let expected_shape_global =
-                    crate::typed_shape::shape_id_global_name_from_keys_global(keys_global);
                 let falsy_default = (!is_pshape_clone)
                     .then_some(guarded_falsy_field_default.as_ref())
                     .flatten();
@@ -1631,7 +1631,7 @@ pub(super) fn compile_method(
                     &llvm_name,
                     params,
                     expected_class_id,
-                    &expected_shape_global,
+                    keys_global,
                     falsy_default,
                 );
             } else {

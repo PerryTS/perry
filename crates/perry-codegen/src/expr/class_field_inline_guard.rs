@@ -56,11 +56,12 @@ const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 /// instances put `property` at the SAME packed slot as the declared class does.
 ///
 /// `keys_global` names the module global holding that subclass's canonical keys
-/// array; `class_id` is its registered class id.
+/// array (its guard operand comes from it, `class_shape_id_operand_on_block`);
+/// `class_id` is its registered class id.
 #[derive(Clone, Debug)]
 pub(crate) struct ClassFieldSubclassArm {
     pub class_id: u32,
-    pub shape_id_global: String,
+    pub keys_global: String,
 }
 
 /// A hierarchy wider than this turns the shape check into a longer compare
@@ -151,9 +152,7 @@ pub(crate) fn class_field_subclass_arms(
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
-            shape_id_global: crate::typed_shape::shape_id_global_name_from_keys_global(
-                &keys_global,
-            ),
+            keys_global,
         });
         if arms.len() > MAX_CLASS_FIELD_SUBCLASS_ARMS {
             return Vec::new();
@@ -510,8 +509,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> String {
-    let class_shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -533,13 +530,15 @@ pub(crate) fn emit_class_field_inline_precheck(
             crate::expr::receiver_range::Route::ClassWrite,
         );
         let obj_ptr = blk.inttoptr(I64, obj_handle);
-        // The expectation is the class's OWN ShapeId global — the id every
-        // instance is stamped with at birth — and nothing else: no site or
-        // process switch can tell this compare not to trust the shape (S6).
-        // Read volatile because the runtime may rewrite the global once, when
-        // an imported class's defining module publishes its typed ShapeId
-        // (`gc/layout/typed_shape.rs`); a stale copy could only miss.
-        let live_shape = blk.load_volatile(I32, &format!("@{class_shape_global}"));
+        // The expectation is the class's OWN ShapeId — the id every instance
+        // is stamped with at birth — and nothing else: no site or process
+        // switch can tell this compare not to trust the shape (S6). It is the
+        // driver's static id as an immediate when there is one (design step
+        // 4: a declined static id is carried by no object, so it only
+        // misses); otherwise the mint's global, read volatile so LLVM cannot
+        // keep a forwarded copy alive across the hit path.
+        let live_shape =
+            crate::typed_shape::class_shape_id_operand_on_block(blk, keys_global_name, true);
         let mut ok = if require_raw_f64 {
             // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
             // one 64-bit compare against `(shape << 32) | class_id`.
@@ -547,7 +546,11 @@ pub(crate) fn emit_class_field_inline_precheck(
             let declared = expected_class_identity(blk, expected_class_id, &live_shape);
             let mut ok = blk.icmp_eq(I64, &identity, &declared);
             for arm in subclass_arms {
-                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
+                    blk,
+                    &arm.keys_global,
+                    true,
+                );
                 let arm_expected =
                     expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
                 let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
@@ -559,7 +562,11 @@ pub(crate) fn emit_class_field_inline_precheck(
             let shape_id = blk.load(I32, &sid_ptr);
             let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
             for arm in subclass_arms {
-                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
+                    blk,
+                    &arm.keys_global,
+                    true,
+                );
                 let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
                 ok = blk.or(I1, &ok, &arm_ok);
             }
@@ -698,8 +705,6 @@ pub(crate) fn emit_class_field_read_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> (String, String) {
-    let class_shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -726,9 +731,10 @@ pub(crate) fn emit_class_field_read_precheck(
             crate::expr::receiver_range::Route::ClassRead,
         );
         let obj_ptr = blk.inttoptr(I64, &obj_handle);
-        // The expectation is the class's own ShapeId global (see the write
-        // guard above for why it is read volatile).
-        let live_shape = blk.load_volatile(I32, &format!("@{class_shape_global}"));
+        // The expectation is the class's own ShapeId (see the write guard
+        // above: the static immediate, else a volatile load of the global).
+        let live_shape =
+            crate::typed_shape::class_shape_id_operand_on_block(blk, keys_global_name, true);
         let mut ok = if require_raw_f64 {
             // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
             // one 64-bit compare against `(shape << 32) | class_id`.
@@ -740,7 +746,11 @@ pub(crate) fn emit_class_field_read_precheck(
             let shape_id = blk.load(I32, &sid_ptr);
             let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
             for arm in subclass_arms {
-                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
+                    blk,
+                    &arm.keys_global,
+                    true,
+                );
                 let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
                 ok = blk.or(I1, &ok, &arm_ok);
             }
@@ -751,7 +761,11 @@ pub(crate) fn emit_class_field_read_precheck(
             // what licenses the raw-f64 representation (see above).
             let identity = blk.load(I64, &obj_ptr);
             for arm in subclass_arms {
-                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_shape = crate::typed_shape::class_shape_id_operand_on_block(
+                    blk,
+                    &arm.keys_global,
+                    true,
+                );
                 let arm_expected =
                     expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
                 let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);

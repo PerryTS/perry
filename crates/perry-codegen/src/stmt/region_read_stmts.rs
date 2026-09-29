@@ -125,7 +125,7 @@ fn binding_is_plain_slot(
 
 /// The maximal run of same-receiver static-key reads at the head of `stmts`.
 pub(crate) fn try_match<'a>(ctx: &FnCtx<'_>, stmts: &'a [Stmt]) -> Option<StmtRun<'a>> {
-    if !region_guard::emission_allowed() {
+    if !region_guard::emission_allowed() || !ctx.region_loop_facts.is_empty() {
         return None;
     }
     scan(stmts, |id, ty, init| {

@@ -414,6 +414,57 @@ pub(crate) fn load_class_shape_id(
     ctx.block().load(crate::types::I32, &shape_slot)
 }
 
+/// The ShapeId a GUARD compares a receiver against (design step 4).
+///
+/// The driver's static id for the class's birth content when it assigned one
+/// to this module's keys global: an immediate, so the compare needs no load.
+/// Otherwise the entry-cached load of the mint's global ([`load_class_shape_id`]).
+///
+/// Only guards may use this, never births: a birth stamps the id the mint
+/// RETURNED. The two agree whenever the mint adopted the static id; when it
+/// declined (the content's facts were minted first under another id), no
+/// object ever carries the static id, so the compare misses and the site
+/// takes its slow path, never a wrong hit.
+pub(crate) fn class_shape_id_operand(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class_name: &str,
+    keys_global_name: &str,
+) -> String {
+    match static_class_shape_id(keys_global_name) {
+        Some(id) => id.to_string(),
+        None => load_class_shape_id(ctx, class_name, keys_global_name),
+    }
+}
+
+/// The driver's static ShapeId for this module's class keys global, if any
+/// (guards only, see [`class_shape_id_operand`]). A keys global of another
+/// module has none here: its guard loads that module's global.
+pub(crate) fn static_class_shape_id(keys_global_name: &str) -> Option<u32> {
+    crate::codegen::static_shape_id_for_keys_global(keys_global_name)
+}
+
+/// The guard operand for a site that reads the shape global directly on
+/// `blk` rather than through the entry cache: the static immediate when there
+/// is one, else that load (volatile when `volatile`).
+pub(crate) fn class_shape_id_operand_on_block(
+    blk: &mut crate::block::LlBlock,
+    keys_global_name: &str,
+    volatile: bool,
+) -> String {
+    if let Some(id) = static_class_shape_id(keys_global_name) {
+        return id.to_string();
+    }
+    let global = format!(
+        "@{}",
+        shape_id_global_name_from_keys_global(keys_global_name)
+    );
+    if volatile {
+        blk.load_volatile(crate::types::I32, &global)
+    } else {
+        blk.load(crate::types::I32, &global)
+    }
+}
+
 /// The function-entry alloca that caches a class's ShapeId global (see
 /// [`load_class_shape_id`]), created on first use. Split out (#8122) so the
 /// inline `new` path can compose its per-function header image from the slot

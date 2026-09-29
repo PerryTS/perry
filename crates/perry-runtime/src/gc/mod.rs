@@ -282,6 +282,7 @@ pub use schedule::{
 pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
+mod census_field_repr;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 mod heap_stats;
