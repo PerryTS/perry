@@ -149,6 +149,9 @@ pub(crate) fn normalized_shape(mut id: u32) -> u32 {
             // The record's complete summary: the same facts, another rep.
             d.summary,
             rep,
+            // A re-intern under another rep names no static id (only
+            // REP_ANY facts can).
+            None,
         ));
         debug_assert_ne!(next, id, "normalizing {id:#x} found itself");
         if next == id {

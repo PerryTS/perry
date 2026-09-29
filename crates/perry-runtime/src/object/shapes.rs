@@ -1236,6 +1236,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
         proto_id,
         summary,
         rep,
+        requested,
     )
 }
 
@@ -1243,6 +1244,10 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
 /// shape's COMPLETE attribute summary: a lifted record's own `summary`
 /// (charter step 5's generalization, which re-interns a live record's facts
 /// with another rep). Nothing here reads the keys' attributes.
+///
+/// `requested` is the static id of these facts, exactly as for
+/// [`shape_descriptor_ensure_with_rep`]; a re-intern of a live record's facts
+/// names none.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_intern_with_rep(
@@ -1255,6 +1260,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     proto_id: u64,
     summary: u8,
     rep: u64,
+    requested: Option<u32>,
 ) -> Result<u32, ShapeDescriptorError> {
     if !super::field_rep::is_valid(rep) {
         return Err(ShapeDescriptorError::InvalidFacts);

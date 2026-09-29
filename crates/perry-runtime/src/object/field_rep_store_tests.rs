@@ -40,6 +40,7 @@ fn with_rep(id: u32, rep: u64) -> u32 {
         d.proto_id,
         d.summary,
         rep,
+        None,
     ))
 }
 
