@@ -742,13 +742,15 @@ static NM_STREAM_SUBCLASS_INIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mu
 /// `this`. False when `method` is no stream base or `stream` was never
 /// installed (then no stream base callee can exist either).
 pub(crate) fn nm_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
-    let mut p = NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed);
+    let p = NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed);
     // See nm_dispatch_lookup: unit tests run without the codegen install.
     #[cfg(test)]
-    if p.is_null() && nm_lazy_install_enabled() {
+    let p = if p.is_null() && nm_lazy_install_enabled() {
         js_nm_install_all();
-        p = NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed);
-    }
+        NM_STREAM_SUBCLASS_INIT.load(Ordering::Relaxed)
+    } else {
+        p
+    };
     if p.is_null() {
         return false;
     }

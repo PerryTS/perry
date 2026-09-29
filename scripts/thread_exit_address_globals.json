@@ -2679,6 +2679,14 @@
   {
    "file": "crates/perry-runtime/src/object/native_module_registry.rs",
    "names": [
+    "NM_STREAM_SUBCLASS_INIT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The node_stream_subclass_init NmStreamSubclassInitFn fn pointer, its only store at native_module_registry.rs:518 (js_nm_install_stream); a code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module_registry.rs",
+   "names": [
     "NM_CONST_REGISTRY"
    ],
    "verdict": "no_heap_address",
