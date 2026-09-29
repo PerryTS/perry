@@ -208,7 +208,7 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
 /// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
 /// view of the same memory.
-pub const PIC_CACHE_WORDS: usize = 12;
+pub const PIC_CACHE_WORDS: usize = crate::codegen_abi::PIC_CACHE_WORDS;
 
 /// The runtime view of a `@perry_ic_N` property-read cache.
 ///
@@ -221,7 +221,8 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// | 1 | `slot0` — its resolved field slot |
 /// | 2 | unused — was the Array-subclass named-prefix token, retired by S6 (site state must derive from one shape) |
 /// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
-/// | 11 | round-robin victim index for the ways |
+/// | 3 | way state ([`PIC_WAY_STATE`]) |
+/// | 12..=20 | the holder entry for a key that is not own (`method_site::read_holder`) |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
 
 /// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
@@ -1129,6 +1130,13 @@ pub(super) fn get_field_ic_miss_impl(
                 // +106 instructions per read against the same binary with
                 // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
                 // this shape.
+                // The site's holder entry: primed here, answered by the
+                // emitted tower from then on (`method_site::read_holder`).
+                if let Some(value) =
+                    crate::object::method_site::read_holder::prime_read_holder(obj, key, cache_slot)
+                {
+                    return f64::from_bits(value.bits());
+                }
                 if !inherited_declined {
                     // Already inside this function's `unsafe` block (line 874),
                     // so a nested one is `unused_unsafe` under -D warnings.
@@ -1282,6 +1290,14 @@ pub(super) fn get_field_ic_miss_impl(
     // paying for a second search. Walk the chain once and record the answer.
     // A decline leaves the generic getter below untouched, which is today's
     // behaviour for every case the cache refuses.
+    if matches!(miss_reason, R::NotOwn) {
+        // The site's holder entry (`method_site::read_holder`).
+        if let Some(value) = unsafe {
+            crate::object::method_site::read_holder::prime_read_holder(obj, key, cache_slot)
+        } {
+            return f64::from_bits(value.bits());
+        }
+    }
     if matches!(miss_reason, R::NotOwn) && !inherited_declined {
         if let Some(value) =
             unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
@@ -2425,8 +2441,8 @@ mod poly_pic_tests {
     #[test]
     fn pic_cache_words_match_codegen() {
         assert_eq!(
-            PIC_CACHE_WORDS, 12,
-            "codegen emits `[12 x i64]`; update both sides together"
+            PIC_CACHE_WORDS, 21,
+            "codegen's PIC_CACHE_WORDS is 21; update both sides together"
         );
         assert!(
             PIC_WAY_STATE < PIC_CACHE_WORDS,
@@ -2438,7 +2454,7 @@ mod poly_pic_tests {
         );
         assert_eq!(
             PIC_WAY_BASE + PIC_WAYS * 2,
-            PIC_CACHE_WORDS,
+            crate::codegen_abi::PIC_HOLDER_RECV_WORD,
             "the ways must fill the global exactly"
         );
     }

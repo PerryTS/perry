@@ -2613,6 +2613,7 @@ js_queue_microtask	Reenters
 js_queue_next_tick	Reenters
 js_queue_next_tick_args	Reenters
 js_rangeerror_new	Reenters
+js_read_site_holder_hit	Leaf
 js_readable_stream_cancel	Reenters
 js_readable_stream_controller_byob_request	Reenters
 js_readable_stream_controller_close	Reenters

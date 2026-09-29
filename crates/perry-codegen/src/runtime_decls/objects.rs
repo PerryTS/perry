@@ -621,6 +621,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // value, or `TAG_HOLE` for a decline. A pure state read (see
     // `gc_call_effects.rs`).
     module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
+    module.declare_function("js_read_site_holder_hit", DOUBLE, &[PTR, PTR]);
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables through the initial-exec TLS model; its slot-1 accessor,
     // and the method-call site's miss entry (`expr/method_site.rs`).

@@ -3090,6 +3090,7 @@ js_queue_microtask	void	i64
 js_queue_next_tick	void	i64
 js_queue_next_tick_args	void	i64,ptr,i32s
 js_rangeerror_new	ptr	ptr
+js_read_site_holder_hit	f64	ptr,ptr
 js_readable_stream_cancel	ptr	f64,f64
 js_readable_stream_controller_byob_request	f64	f64
 js_readable_stream_controller_close	f64	f64

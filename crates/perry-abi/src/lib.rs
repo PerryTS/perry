@@ -59,6 +59,19 @@ pub const METHOD_SITE_GEN_OFFSET: usize = 32;
 /// Entries per method site, and one entry's size.
 pub const METHOD_SITE_WAYS: usize = 2;
 pub const METHOD_SITE_ENTRY_SIZE: usize = 40;
+
+/// `object::method_site::read_holder` — the property-read cache words
+/// (`PicCache`) holding the read site's holder entry, which the emitted read
+/// tower checks where the MRU word and the ways miss
+/// (`perry-codegen/src/expr/property_get/generic_dispatch.rs`).
+pub const PIC_HOLDER_RECV_WORD: usize = 12;
+pub const PIC_HOLDER_OBJ_WORD: usize = 13;
+pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
+pub const PIC_HOLDER_KIND_WORD: usize = 15;
+/// The kind word of a depth-1 ABSENT entry: the answer is `undefined`.
+pub const PIC_HOLDER_ABSENT_DEPTH1: i64 = 1 << 62;
+/// Words in a property-read cache: MRU, way state, four ways, the holder entry.
+pub const PIC_CACHE_WORDS: usize = 21;
 /// A method site calls a body with its argument count padded by `undefined`
 /// up to this many extra arguments (never past 16), and admits bodies that
 /// declare up to that many parameters.
