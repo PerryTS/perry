@@ -252,7 +252,18 @@ pub(crate) unsafe fn maybe_construct_http_class_with_this(
 /// (`js_fetch_or_value_super`, #10448/#10798) and the explicit-`this`
 /// `Base.call(this, opts)` path below (#10454), so every construction shape
 /// installs the identical surface. False when `method` is no stream base.
+///
+/// The node_stream shims are reached through the stream bucket's install
+/// (`js_nm_install_stream`), never directly: this runs on the always-linked
+/// `Function.prototype.call`/`.apply` path, and a direct call would link all of
+/// node_stream into every program. A stream base callee only exists in a
+/// program that imports `stream`, which emits that install.
 pub(crate) fn run_node_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
+    super::native_module_registry::nm_stream_subclass_init(method, this, opts)
+}
+
+/// The stream bucket's subclass-init entry, installed by `js_nm_install_stream`.
+pub(crate) fn node_stream_subclass_init(method: &str, this: f64, opts: f64) -> bool {
     use crate::node_stream as ns;
     match method {
         "Readable" => ns::js_node_stream_readable_subclass_init(this, opts),
