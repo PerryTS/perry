@@ -790,7 +790,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 )
                 require_code(
                     body,
-                    r"load_volatile\s*\(\s*I32\s*,\s*&format!\(\s*\"@\{class_shape_global\}\"",
+                    # Since #11653 the operand is `class_shape_id_operand_on_block`:
+                    # the driver's static immediate when there is one, else the
+                    # global's load, VOLATILE when its last argument is `true`.
+                    r"class_shape_id_operand_on_block\s*\(\s*blk\s*,\s*keys_global_name\s*,\s*true\s*,?\s*\)",
                     f"{name} reads the class ShapeId expectation VOLATILE, per access",
                 )
                 require_code(

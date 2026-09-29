@@ -577,8 +577,6 @@ fn declared_array_element_type_hint<'a>(
 /// keeps the answer independent of `ctx.classes` iteration order, which is a
 /// `HashMap`'s.
 fn anon_shape_class_for_element_type(ctx: &FnCtx<'_>, array_id: u32) -> Option<String> {
-    use perry_hir::types::Type as HirType;
-
     // The annotation selects a candidate versioned clone.  The clone's
     // preheader validates the receiver kind, array head, shape, and key token
     // before any representation-specific access, and falls back on failure.
