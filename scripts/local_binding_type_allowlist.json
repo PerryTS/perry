@@ -696,6 +696,14 @@
       "count": 1,
       "classification": "runtime-validated",
       "reason": "The declared type is read only to DECLINE the shape-keyed loop clone for a receiver that carries any layout claim (a named class or an anon-shape the resolver found ambiguous); it never selects a layout. A receiver admitted here (no annotation, any, unknown) still goes through the preheader's runtime proof \u2014 js_array_ensure_element_shape_ordinary must return a nonzero ShapeId and js_shape_ordinary_inline_slot_for_key a slot for every tracked key \u2014 and the per-element residual check re-validates that ShapeId on every read, so a stale or wrong hint can only cost the clone, never a wrong offset."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
+      "function": "static_region_word",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared class only picks a loop region's static supplier (its static ShapeId and slots); the region guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape misses into the learned supplier and a wrong hint can only cost the static hit, never a wrong slot."
     }
   ]
 }

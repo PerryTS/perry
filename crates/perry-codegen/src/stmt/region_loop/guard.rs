@@ -181,10 +181,106 @@ pub(super) fn emit_body_guard_direct(
     Ok(())
 }
 
+/// The region word the static supplier names for this receiver (DESIGN
+/// §4.1): the driver's static id of the receiver's class birth shape and its
+/// keys' slots, packed exactly as the runtime packs an all-inline word
+/// (`id | slot_i << (32 + SLOT_BITS * i)`). `None` when the compiler names no
+/// class for the receiver, the driver assigned the class no static id, or a
+/// key is not an inline slot of that shape.
+///
+/// The class is a GUESS, not a proof: the guard compares the receiver's own
+/// ShapeId against the id, so a declared type (a parameter `p: C`, a
+/// reassigned binding) serves as well as a proven one — a receiver of any
+/// other shape misses into the learned supplier.
+fn static_region_word(ctx: &FnCtx<'_>, rv: &Receiver) -> Option<u64> {
+    let class_name =
+        crate::type_analysis::receiver_class_name(ctx, &rv.recv.expr()).or_else(|| {
+            match rv.recv {
+                Recv::Local(id) => match ctx.local_type_hint(&id)? {
+                    perry_hir::types::Type::Named(name) if ctx.classes.contains_key(name) => {
+                        Some(name.clone())
+                    }
+                    // A closed object type: the literal class its literals allocate.
+                    ty => {
+                        crate::stmt::element_shape_loop::anon_shape_class_for_object_type(ctx, ty)
+                    }
+                },
+                Recv::This => None,
+            }
+        })?;
+    let keys_global = ctx.class_keys_globals.get(&class_name)?;
+    let (id, slots) = crate::codegen::static_region_slots(keys_global, &rv.keys)?;
+    let mut word = u64::from(id);
+    for (i, slot) in slots.iter().enumerate() {
+        word |= u64::from(*slot) << (32 + SLOT_BITS * i as u32);
+    }
+    Some(word)
+}
+
+/// A guard whose receiver the compiler names (DESIGN §4.1, static-exclusive):
+/// test the receiver and compare its ShapeId against the static id as an
+/// immediate (plus the store admission when the region stores). The region
+/// word is the constant `word`, so the slots fold to displacements; there is
+/// no word load and no prime. Any miss selects the generic copy.
+fn emit_static_guard(
+    ctx: &mut FnCtx<'_>,
+    rv: &Receiver,
+    word: u64,
+) -> Result<(String, String, String)> {
+    note(ctx, Route::RloopGuard);
+    let chk = ctx.new_block("rloop.guard.static");
+    let hit = ctx.new_block("rloop.guard.static.hit");
+    let join = ctx.new_block("rloop.guard.join");
+    let chk_l = ctx.block_label(chk);
+    let hit_l = ctx.block_label(hit);
+    let join_l = ctx.block_label(join);
+    let recv_box = lower_recv(ctx, rv.recv)?;
+    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+    let test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    let entry_l = ctx.block().label.clone();
+    ctx.block()
+        .cond_br(&test.is_object_pointer, &chk_l, &join_l);
+
+    ctx.current_block = chk;
+    let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &test.biased);
+    let sid = field_i32(ctx, &handle, 4);
+    let expected = (word as u32).to_string();
+    let eq = ctx.block().icmp_eq(I32, &sid, &expected);
+    let mut miss_edges = vec![entry_l];
+    if rv.has_store {
+        let admit = store_admission(ctx, &handle, true);
+        let adm = ctx.new_block("rloop.guard.static.admit");
+        let adm_l = ctx.block_label(adm);
+        miss_edges.push(ctx.block().label.clone());
+        ctx.block().cond_br(&eq, &adm_l, &join_l);
+        ctx.current_block = adm;
+        miss_edges.push(adm_l);
+        ctx.block().cond_br(&admit, &hit_l, &join_l);
+    } else {
+        miss_edges.push(ctx.block().label.clone());
+        ctx.block().cond_br(&eq, &hit_l, &join_l);
+    }
+    ctx.current_block = hit;
+    note(ctx, Route::RloopStatic);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+
+    ctx.current_block = join;
+    let mut edges: Vec<(&str, &str)> = miss_edges.iter().map(|l| ("false", l.as_str())).collect();
+    edges.push(("true", hit_end.as_str()));
+    let pass = ctx.block().phi(I1, &edges);
+    Ok((word.to_string(), pass, "false".to_string()))
+}
+
 pub(super) fn emit_guard(
     ctx: &mut FnCtx<'_>,
     rv: &mut Receiver,
 ) -> Result<(String, String, String)> {
+    // A receiver whose class the compiler names takes its guard's ShapeId
+    // from the driver's static id (DESIGN §4.1): no loaded supplier.
+    if let Some(w) = static_region_word(ctx, rv) {
+        return emit_static_guard(ctx, rv, w);
+    }
     // A retired region (every bounded prime refused) is decided by the word
     // alone: one load and one compare, before the receiver is even tested.
     let (sites, word) = emit_guard_word(ctx, rv);

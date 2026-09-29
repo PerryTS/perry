@@ -313,10 +313,11 @@ thread_local! {
     /// This module's static id per class keys global: the id its mint
     /// requests and its guards compare as an immediate (the definer's id for
     /// a structural stub of the definer's facts, see
-    /// [`ProgramClassShapeIds::resolved_id`]), with the content when it is
-    /// seedable ([`BirthShape::is_seedable`]). Set by `compile_module` for
-    /// every module (empty when the driver assigned none).
-    static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, Option<BirthShape>)>> =
+    /// [`ProgramClassShapeIds::resolved_id`]), with the global's birth
+    /// content (the facts the id names: a resolved definer id names the same
+    /// structure). Set by `compile_module` for every module (empty when the
+    /// driver assigned none).
+    static MODULE_STATIC_IDS: RefCell<HashMap<String, (u32, BirthShape)>> =
         RefCell::new(HashMap::new());
     /// The seedable static ids this module's GUARDS embedded, with their
     /// content: the module's part of the program's seed set. Cleared by
@@ -338,7 +339,7 @@ pub(crate) fn set_module_static_ids(
     program: &ProgramClassShapeIds,
 ) {
     let by_content: HashMap<&BirthShape, u32> = assigned.iter().map(|(c, id)| (c, *id)).collect();
-    let map: HashMap<String, (u32, Option<BirthShape>)> = if by_content.is_empty() {
+    let map: HashMap<String, (u32, BirthShape)> = if by_content.is_empty() {
         HashMap::new()
     } else {
         class_keys_init_data
@@ -348,8 +349,7 @@ pub(crate) fn set_module_static_ids(
                 let shape = birth.shape.as_ref()?;
                 let own = *by_content.get(shape)?;
                 let id = program.resolved_id(&entry.0, birth.class_id, shape, own);
-                let seed = shape.is_seedable().then(|| shape.clone());
-                Some((entry.0.clone(), (id, seed)))
+                Some((entry.0.clone(), (id, shape.clone())))
             })
             .collect()
     };
@@ -415,16 +415,52 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
 pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
-        let (id, seed) = m.get(keys_global)?;
-        note_guard_id(*id, seed.as_ref());
+        let (id, shape) = m.get(keys_global)?;
+        note_guard_id(*id, Some(shape));
         Some(*id)
+    })
+}
+
+/// The static supplier of a loop region (DESIGN §4.1): the static id of
+/// `keys_global` and the inline slot of each of `keys` in the birth shape
+/// that id names, when every key is an inline data slot the region word can
+/// carry. The runtime packs a region word from the SHAPE (`region_loop_pack`:
+/// first match among the inline keys, `slot < 32`); a birth shape's facts are
+/// its keys in slot order with every key inline (`live >= key_count`), a
+/// data summary, no holes and generation 0, so the slots follow from the
+/// keys alone and this is the word the runtime would publish for the id.
+/// `None` (the region keeps its learned supplier alone) when a key is not an
+/// inline key of the birth shape. A returned id is a guard immediate: it
+/// joins the module's seed set like any other.
+pub(crate) fn static_region_slots(keys_global: &str, keys: &[String]) -> Option<(u32, Vec<u32>)> {
+    MODULE_STATIC_IDS.with(|m| {
+        let m = m.borrow();
+        let (id, shape) = m.get(keys_global)?;
+        let names: Vec<&[u8]> = shape
+            .keys
+            .strip_suffix(&[0])
+            .unwrap_or(&shape.keys)
+            .split(|&b| b == 0)
+            .collect();
+        if names.len() != shape.key_count as usize || shape.live < shape.key_count {
+            return None;
+        }
+        let slots = keys
+            .iter()
+            .map(|k| {
+                let at = names.iter().position(|n| *n == k.as_bytes())?;
+                (at < 32).then_some(at as u32)
+            })
+            .collect::<Option<Vec<u32>>>()?;
+        note_guard_id(*id, Some(shape));
+        Some((*id, slots))
     })
 }
 
 /// The static id this module's mint of `keys_global` requests (the same id
 /// its guards embed; a mint alone does not need a seed).
 pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|&(id, _)| id))
+    MODULE_STATIC_IDS.with(|m| m.borrow().get(keys_global).map(|(id, _)| *id))
 }
 
 /// The static id behind ANOTHER module's shape-id global `shape_id_global`
