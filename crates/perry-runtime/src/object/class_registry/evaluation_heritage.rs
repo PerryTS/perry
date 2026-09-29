@@ -148,8 +148,7 @@ pub(crate) fn scan_active_class_evaluations_mut(visitor: &mut crate::gc::Runtime
 /// class value with its own pinned heritage, and rejecting those would break the
 /// factory chains that lowering already models correctly.
 pub(crate) fn is_self_heritage_value(class_id: u32, parent_bits: u64) -> bool {
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-    parent_bits & 0xFFFF_0000_0000_0000 == INT32_TAG && parent_bits as u32 == class_id
+    crate::object::class_value::class_value_id_bits(parent_bits) == Some(class_id)
 }
 
 /// #10624: monotone "has any class object ever pinned its own heritage"

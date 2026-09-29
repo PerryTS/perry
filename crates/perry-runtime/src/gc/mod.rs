@@ -1213,6 +1213,8 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
+    // The per-agent class function objects (`object::class_value`).
+    reg_scanner!(crate::object::class_value::scan_class_value_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;

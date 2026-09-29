@@ -115,6 +115,11 @@ pub(crate) fn register_class_dynamic_static_accessor(
         return;
     }
     let key = dynamic_static_accessor_storage_key(owner, name);
+    // A property is data OR accessor: redefining an own static data property
+    // as an accessor removes the data slot from the class function object.
+    if !is_class_object_ptr(owner as *const u8) {
+        crate::object::class_value::class_static_remove(class_id, name);
+    }
     let existing = crate::object::get_accessor_descriptor(owner, &key).unwrap_or_default();
     crate::object::set_accessor_descriptor(
         owner,
@@ -150,6 +155,7 @@ pub(crate) fn register_class_dynamic_static_accessor(
     } else {
         class_static_set_defined_attrs(class_id, name, false, enumerable, configurable);
     }
+    crate::object::class_registry::class_static_alias_sync(class_id, name);
 }
 
 pub(crate) fn class_dynamic_static_accessor_descriptor(

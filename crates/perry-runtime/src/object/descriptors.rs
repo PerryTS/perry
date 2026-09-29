@@ -1190,7 +1190,13 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     push_unique_name(&mut names, name);
                 }
             }
-            names.retain(|n| !super::field_get_set::is_internal_runtime_key(n));
+            names.retain(|n| {
+                !super::field_get_set::is_internal_runtime_key(n)
+                    // A deleted `length` / `name` is no longer own.
+                    && !(!is_prototype_ref
+                        && matches!(n.as_str(), "length" | "name")
+                        && super::class_registry::class_is_key_deleted(class_id, n))
+            });
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {

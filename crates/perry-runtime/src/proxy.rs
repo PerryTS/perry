@@ -2433,7 +2433,7 @@ pub extern "C" fn js_super_put_value_set(
     // path looked at `Parent.prototype` and made valid static writes fail.
     if let Some(child_id) = crate::object::class_ref_id(receiver) {
         let target = if parent_class_id != 0 {
-            f64::from_bits(crate::value::INT32_TAG | parent_class_id as u64)
+            crate::object::class_value::class_value(parent_class_id)
         } else {
             crate::object::js_get_dynamic_parent_value(child_id)
         };
