@@ -773,9 +773,14 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 # the ShapeId in the high 32 bits. All three halves are
                 # required, so dropping the ShapeId from the compare fails.
                 #
-                # The expectation is the class's own `@perry_class_shape_id_*`
-                # global, read VOLATILE per access (the runtime rewrites it once
-                # when an imported class's typed id is published). S6 retired
+                # The expectation is the class's own ShapeId: the driver's
+                # static id as an immediate when there is one (#11653),
+                # otherwise the `@perry_class_shape_id_*` global, read VOLATILE
+                # per access (the runtime rewrites it once when an imported
+                # class's typed id is published). The precheck asks
+                # `class_shape_id_operand_on_block` for it with `volatile`
+                # true; that helper owns the immediate-or-volatile-load
+                # choice. S6 retired
                 # the poisonable `@perry_class_guard_shape_*` twin: nothing may
                 # tell this compare not to trust the shape.
                 require_code(
@@ -790,11 +795,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 )
                 require_code(
                     body,
-                    # Since #11653 the operand is `class_shape_id_operand_on_block`:
-                    # the driver's static immediate when there is one, else the
-                    # global's load, VOLATILE when its last argument is `true`.
-                    r"class_shape_id_operand_on_block\s*\(\s*blk\s*,\s*keys_global_name\s*,\s*true\s*,?\s*\)",
-                    f"{name} reads the class ShapeId expectation VOLATILE, per access",
+                    r"class_shape_id_operand_on_block\s*\(\s*blk\s*,\s*keys_global_name\s*,\s*true\s*\)",
+                    f"{name} reads the class ShapeId expectation VOLATILE (immediate or volatile load), per access",
                 )
                 require_code(
                     function_body(raw_class_guard, "expected_class_identity"),

@@ -222,8 +222,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
         // An INT32-tagged value may be a class ref (same 0x7FFE tag as small
         // integers) — those must keep flowing to the class resolution below.
-        let is_class_ref = (obj_value.to_bits() >> 48) == 0x7FFE
-            && super::super::class_ref_id(obj_value).is_some();
+        let is_class_ref = super::super::class_ref_id(obj_value).is_some();
         let wrapper = if is_class_ref {
             None
         } else if jv.is_number() {
@@ -408,8 +407,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             f64::from_bits(TAG_NULL)
         }
     };
-    if top16 == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
         // derived answer below — it IS the constructor's [[Prototype]].
         if super::super::class_prototype_ref_id(obj_value).is_none() {
@@ -445,8 +443,7 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             // %Object.prototype%, so the synthetic class whose proto was that
             // namespace inherits Object.prototype too.
             if parent_id != 0 && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID {
-                let parent_bits = 0x7FFE_0000_0000_0000u64 | (parent_id as u64);
-                return f64::from_bits(parent_bits);
+                return crate::object::class_value::class_value(parent_id);
             }
         }
         // Root of the class hierarchy. In JS `Object.getPrototypeOf` of a base

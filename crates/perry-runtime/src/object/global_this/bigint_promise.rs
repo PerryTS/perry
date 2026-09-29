@@ -756,7 +756,7 @@ fn require_typed_array_from_of_constructor() {
 /// non-constructable builtin.
 fn value_is_constructor(value: f64) -> bool {
     let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
+    if crate::object::class_value::legacy_class_value_word(bits).is_some() {
         return true; // class-ref constructor
     }
     if crate::proxy::js_proxy_is_proxy(value) == 1 {

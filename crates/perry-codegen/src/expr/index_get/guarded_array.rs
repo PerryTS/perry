@@ -40,6 +40,7 @@ pub(super) fn lower_trusted_plain_array_index_get(
     array_handle: &str,
     idx_i32: &str,
 ) -> String {
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -59,6 +60,7 @@ fn lower_trusted_numeric_array_index_get(
     idx_i32: &str,
     coerce_numeric_fallback: bool,
 ) -> String {
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -119,6 +121,7 @@ pub(super) fn lower_region_validated_array_index_get(
         .cond_br(&access.valid_i1, &fast_label, &fallback_label);
 
     ctx.current_block = fast_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let array_handle = ctx.block().load(I64, &access.base_handle_slot);
     let fast_value = if require_numeric_layout {
         lower_trusted_numeric_array_index_get(ctx, &array_handle, idx_i32, coerce_numeric_fallback)
@@ -183,18 +186,30 @@ pub(super) fn lower_region_validated_array_index_get(
 
 /// `POINTER_TAG << 48 | 1 MiB`: subtracted from a NaN-boxed receiver, a heap
 /// array handle lands in `[0, HEAP_POINTER_BAND_SPAN)`.
-const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
 /// `2^48 - 1 MiB`: the handles above the runtime-id band.
-const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
+pub(in crate::expr) const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
 /// The array read's guard mask over the header word `[h-8]` read as an i32:
 /// the type byte, `GC_FLAG_FORWARDED` (0x80 in byte 1) and
 /// `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400 in `_reserved`, bytes 2..3).
 const ARRAY_READ_GUARD_MASK_I32: &str = "67141887"; // 0x0400_80FF
 /// The masked word of a readable array: `GC_TYPE_ARRAY`, every masked flag clear.
 const ARRAY_READ_GUARD_EXPECT_I32: &str = "1";
+/// The array STORE's guard mask: the read's, plus the integrity bits a
+/// write must respect, `FROZEN | SEALED | NO_EXTEND` (0x1..0x4 in `_reserved`).
+pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "67600639"; // 0x0407_80FF
+/// The STORE's band: `is_valid_obj_ptr`'s 2^47 ceiling, less the 1 MiB the
+/// band is measured from. A store keeps the ceiling the runtime guard applies
+/// before it dereferences anything (#7396), at no extra instruction.
+pub(in crate::expr) const HEAP_POINTER_STORE_BAND_SPAN_I64: &str = "140737487306752"; // 2^47 - 1 MiB
+/// The masked word of a writable array (the read's expectation).
+pub(in crate::expr) const ARRAY_STORE_GUARD_EXPECT_I32: &str = ARRAY_READ_GUARD_EXPECT_I32;
 
 /// The GC header's first word, `{obj_type, gc_flags, _reserved}`, of `handle`.
-fn emit_array_guard_word(blk: &mut crate::block::LlBlock, handle: &str) -> String {
+pub(in crate::expr) fn emit_array_guard_word(
+    blk: &mut crate::block::LlBlock,
+    handle: &str,
+) -> String {
     let word_addr = blk.sub(I64, handle, "8");
     let word_ptr = blk.inttoptr(I64, &word_addr);
     blk.load(I32, &word_ptr)
@@ -485,6 +500,7 @@ pub(super) fn lower_guarded_array_index_get(
         // indices below `length` as named properties), and a prototype chain
         // without index properties. Anything else takes the boxed fallback.
         ctx.current_block = hole_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
         {
             let blk = ctx.block();
             let index_negative = blk.icmp_slt(I32, idx_i32, "0");
@@ -516,6 +532,7 @@ pub(super) fn lower_guarded_array_index_get(
             // arrays into raw-f64 layout (then this call site goes inline on
             // every later read); everything else routes to the boxed fallback.
             ctx.current_block = cold_idx;
+            crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
             // Self-heal a stale growth-forwarded binding first (see
             // `receiver_repair_slot`): follow the chain, write the live head
             // back to the local slot. This iteration still takes the guard
@@ -574,6 +591,7 @@ pub(super) fn lower_guarded_array_index_get(
 
     let inline_oob = inline_oob_idx.map(|oob_idx| {
         ctx.current_block = oob_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
         let value = if require_numeric_layout && coerce_numeric_fallback {
             // This is ToNumber(undefined), matching the boxed fallback.
             "0x7FF8000000000000".to_string()
@@ -587,6 +605,7 @@ pub(super) fn lower_guarded_array_index_get(
     });
 
     ctx.current_block = fallback_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     // Materialize the f64 index only here (cold path) so the int→fp conversion
     // stays out of the numeric loop's hot region.
     let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
@@ -645,6 +664,7 @@ pub(super) fn lower_guarded_array_index_get(
     }
 
     ctx.current_block = fast_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
     let fast_blk = ctx.block();
     let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
         (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => fast_blk.phi(

@@ -98,7 +98,7 @@ fn the_probe_catches_a_bare_process_global_sink() {
 // ---------------------------------------------------------------------------
 
 /// `symbol::test_clear_symbol_side_table_roots` — `SYMBOL_PROPERTIES`,
-/// `SYMBOL_PROPERTY_ATTRS`, `CLASS_STATIC_SYMBOLS`, `SYMBOL_ACCESSOR_PROPERTIES`
+/// `SYMBOL_PROPERTY_ATTRS`, `SYMBOL_ACCESSOR_PROPERTIES`
 /// and the `SYMBOL_POINTERS` rebuild.
 ///
 /// The largest reader cluster in the survey behind #7672: 14 tests populate one

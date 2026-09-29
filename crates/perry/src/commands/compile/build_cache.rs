@@ -76,12 +76,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
     // stored, which drops the spill-reading copies from the emitted loop.
     "PERRY_REGION_SPILL",
-    // #10777: gates computing numeric-by-construction provenance AFTER the
-    // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
-    // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the
-    // shape inputs are empty and it stays GUARDED. Different emitted code, so
-    // an object built one way must not be served to a build of the other.
-    "PERRY_L14_NBC_ORDER",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.

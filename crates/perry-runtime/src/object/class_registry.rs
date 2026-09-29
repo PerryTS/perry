@@ -68,16 +68,13 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
-mod static_accessor_attrs;
 pub(crate) mod verdict_classes;
 mod vm_brand;
 
-// ── static_accessor_attrs.rs ────────────────────────────────────────────────
-pub(crate) use static_accessor_attrs::{
-    set_static_accessor_attrs, static_accessor_attrs, static_accessor_attrs_in_use,
-    static_accessor_descriptor, static_declared_accessor_ptrs, static_enumerable_accessor_names,
-    CLASS_ACCESSOR_DEFAULT_ATTRS,
-};
+// Static accessors are accessor properties of the class function object
+// (`object::class_value`); the ClassBody defaults are shared with instance
+// accessors.
+pub(crate) use crate::object::class_value::CLASS_ACCESSOR_DEFAULT_ATTRS;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 pub(crate) use state::async_resource_prototype_value;
@@ -95,21 +92,20 @@ pub(crate) use state::{
     class_prototype_method_value_cache_root_store, class_prototype_object_addr_index_contains,
     class_prototype_object_addr_index_rekey, class_prototype_object_root_store,
     class_ref_dynamic_prop_root_store, class_register_declared_static_global_slot,
-    class_static_defined_attrs, class_static_prototype, class_static_prototype_is_nulled,
-    class_static_prototype_root_clear, class_static_prototype_root_store,
-    class_static_set_defined_attrs, class_unmark_key_deleted, decl_prototype_identity_id,
-    global_object_prototype_bits, is_bound_native_constructor_closure_value,
-    is_non_constructable_builtin_function_value, parent_closure_in_chain,
-    throw_non_constructable_builtin_function,
+    class_static_alias_sync, class_static_clear_defined_attrs, class_static_defined_attrs,
+    class_static_prototype, class_static_prototype_is_nulled, class_static_prototype_root_clear,
+    class_static_prototype_root_store, class_static_set_defined_attrs, class_unmark_key_deleted,
+    decl_prototype_identity_id, global_object_prototype_bits,
+    is_bound_native_constructor_closure_value, is_non_constructable_builtin_function_value,
+    parent_closure_in_chain, throw_non_constructable_builtin_function, CLASS_OBJECT_EVER,
 };
 pub use state::{
     AccessorDecl, ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS,
     CLASS_DYNAMIC_PARENT_VALUE, CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES,
     CLASS_PARENT_CLOSURES, CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS,
     CLASS_STATIC_ACCESSORS, CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS,
-    CLASS_STATIC_PROTOTYPES, CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS,
-    CLASS_SYMBOL_MEMBER_ORDERS, CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS,
-    REGISTERED_CLASS_IDS,
+    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
+    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -202,7 +198,7 @@ pub(crate) use gc_roots::{
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
     class_accessor_function_value, class_accessor_source_func_ptr, class_own_accessor_ptrs,
-    class_own_static_accessor_ptrs, invalidate_class_string_member_order,
+    class_registered_static_accessor_ptrs, invalidate_class_string_member_order,
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,

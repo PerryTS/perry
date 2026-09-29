@@ -968,6 +968,12 @@ pub(super) fn emit_string_pool(
         // #1788: static methods are emitted as `perry_static_*` (no `this`
         // param). Collect them for the runtime CLASS_STATIC_METHODS table.
         for sm in &class.static_methods {
+            // A `static { }` block is lowered to a synthetic static method the
+            // class's initializer calls directly. It is not a member: never
+            // registered, so no reflection (`Reflect.ownKeys(C)`) can see it.
+            if sm.name.starts_with("__perry_static_init_") {
+                continue;
+            }
             let llvm_name = scoped_static_method_name(module_prefix, cid, class_name, &sm.name);
             let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
             // Spec `.length`: leading formal params before the first default/rest
