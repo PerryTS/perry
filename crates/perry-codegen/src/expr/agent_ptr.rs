@@ -140,7 +140,7 @@ pub(crate) fn emit_agent_ptr_or(ctx: &mut FnCtx<'_>, slot: usize, absent: &str) 
 
 /// The address of the slot `slot_off` bytes into this thread's block, for the
 /// two forms that name the block through the thread pointer (module docs).
-fn emit_slot_addr(ctx: &mut FnCtx<'_>, access: AgentPtrAccess, slot_off: &str) -> String {
+pub(crate) fn emit_slot_addr(ctx: &mut FnCtx<'_>, access: AgentPtrAccess, slot_off: &str) -> String {
     let blk = ctx.block();
     let block = match access {
         AgentPtrAccess::InitialExec => format!("@{AGENT_PTRS_SYMBOL}"),
