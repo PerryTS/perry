@@ -32,9 +32,26 @@ fn perry_bin() -> PathBuf {
 }
 
 fn compile_and_run(dir: &std::path::Path, entry: &std::path::Path) -> (bool, String) {
+    compile_and_run_as(dir, entry, true)
+}
+
+fn compile_and_run_as(
+    dir: &std::path::Path,
+    entry: &std::path::Path,
+    global_script: bool,
+) -> (bool, String) {
     let output = dir.join("main_bin");
-    let compile = Command::new(perry_bin())
-        .current_dir(dir)
+    // #11591: Script semantics (GlobalDeclarationInstantiation) apply only
+    // under the global-script opt-in the Test262 runner uses; a plain `.ts`
+    // entry is a module, whose declarations never reach the global object.
+    let mut compile = Command::new(perry_bin());
+    compile.current_dir(dir);
+    if global_script {
+        compile.env("PERRY_GLOBAL_SCRIPT_THIS", "1");
+    } else {
+        compile.env_remove("PERRY_GLOBAL_SCRIPT_THIS");
+    }
+    let compile = compile
         .arg("compile")
         .arg(entry)
         .arg("-o")
@@ -202,5 +219,36 @@ console.log("DONE");
     assert!(
         out.contains("DONE"),
         "program must run to completion\n{out}"
+    );
+}
+
+/// #11591: without the global-script opt-in, a `.ts` entry with no
+/// import/export is still a module under Node (CommonJS or ESM), so its
+/// top-level declarations stay module-scoped and must not shadow a builtin
+/// global such as `URL`.
+#[test]
+fn plain_ts_entry_does_not_reflect_top_level_declarations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+function foo() { return 1; }
+function URL(x?: string) { return { x }; }
+var topVar = 42;
+const G: any = globalThis;
+console.log("foo:", typeof G.foo);
+console.log("URL shadowed:", G.URL === URL, typeof G.URL);
+console.log("own.topVar:", Object.prototype.hasOwnProperty.call(globalThis, "topVar"));
+console.log("bindings:", foo(), URL("u").x, topVar);
+"#,
+    )
+    .expect("write entry");
+
+    let (ok, out) = compile_and_run_as(dir.path(), &entry, false);
+    assert!(ok, "compiled binary did not exit cleanly\nstdout:\n{out}");
+    assert_eq!(
+        out, "foo: undefined\nURL shadowed: false function\nown.topVar: false\nbindings: 1 u 42\n",
+        "module-scoped declarations leaked onto globalThis"
     );
 }
