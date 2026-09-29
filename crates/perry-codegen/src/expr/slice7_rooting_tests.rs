@@ -608,3 +608,52 @@ fn class_expr_capture_refresh_rereads_its_capture_array_below_each_capture() {
          (line {alloc}):\n{ir}"
     );
 }
+
+fn capture_refresh(name: &str, captures: Vec<Expr>) -> String {
+    compile_body(
+        name,
+        vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            class_value: Box::new(Expr::Undefined),
+            captures,
+            env_class: None,
+        })],
+    )
+}
+
+/// The capture array is ONE accumulator: however many captures collect, the
+/// refresh holds one rooted slot, republished by each push. A slot per push
+/// grew tsc's module-scope closure (hundreds of refreshes of ~75 captures
+/// each) by ~370k blocks and made its compile 3-4x slower.
+#[test]
+fn class_expr_capture_refresh_roots_one_slot_for_any_capture_count() {
+    let one = capture_refresh("refresh_one", vec![allocating("a")]);
+    let three = capture_refresh(
+        "refresh_three",
+        vec![allocating("a"), allocating("b"), allocating("c")],
+    );
+    assert_eq!(call_count(&one, "js_array_push_f64"), 1, "{one}");
+    assert_eq!(call_count(&three, "js_array_push_f64"), 3, "{three}");
+    assert_eq!(
+        temp_root_slot_width(&one),
+        temp_root_slot_width(&three),
+        "three collecting captures must reuse the one capture-array slot:\n{three}"
+    );
+}
+
+/// Captures that cannot collect leave no collection point between two pushes,
+/// so the refresh emits no root at all: the same slot width as a refresh with
+/// no captures.
+#[test]
+fn class_expr_capture_refresh_over_inert_captures_emits_no_root() {
+    let none = capture_refresh("refresh_none", vec![]);
+    let inert = capture_refresh(
+        "refresh_inert",
+        vec![Expr::Number(1.0), Expr::Number(2.0), Expr::Undefined],
+    );
+    assert_eq!(call_count(&inert, "js_array_push_f64"), 3, "{inert}");
+    assert_eq!(
+        temp_root_slot_width(&inert),
+        temp_root_slot_width(&none),
+        "inert captures cannot collect, so the capture array needs no slot:\n{inert}"
+    );
+}

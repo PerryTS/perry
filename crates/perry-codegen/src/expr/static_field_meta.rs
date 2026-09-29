@@ -309,19 +309,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cap_len = captures.len().to_string();
             // The capture array is live across every capture's lowering, and a
             // capture can collect (a property read through an IC miss, a
-            // getter): it lives in a root slot, and each push re-reads it from
-            // there. Each push's result (the array may grow) is rooted in turn;
-            // only the last one becomes a register, after the last capture.
-            use crate::rooting::{call_rooted, call_with_roots, Arg};
-            let caps_arr = if captures.is_empty() {
-                ctx.block().call_void("js_tdz_suppress_begin", &[]);
-                ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)])
-            } else {
-                let first = call_rooted(ctx, I64, "js_array_alloc", &[Arg::Plain(I32, &cap_len)]);
-                ctx.block().call_void("js_tdz_suppress_begin", &[]);
-                let last = captures.len() - 1;
-                let pushed = (|| -> Result<String> {
-                    let mut current = first.clone();
+            // getter): then it is an accumulator in ONE root slot, re-read by
+            // each push and republished with the push's result (the array may
+            // grow). A refresh whose captures cannot collect — the common case,
+            // plain local and boxed-variable reads — has no collection point
+            // between two pushes, so it emits no slot at all: a per-push slot
+            // costs seven blocks, and a module-scope closure holding several
+            // hundred class refreshes of ~75 captures each grew by ~370k blocks,
+            // which made LLVM's mem2reg quadratic (tsc compiled 3-4x slower).
+            let protect = crate::rooting::any_operand_may_collect(ctx, captures.iter());
+            let arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap_len)]);
+            let caps_arr = crate::rooting::with_rooted_accumulator(
+                ctx,
+                crate::rooting::Repr::Ptr,
+                &arr,
+                protect,
+                |ctx, acc| {
+                    ctx.block().call_void("js_tdz_suppress_begin", &[]);
                     for (index, capture) in captures.iter().enumerate() {
                         let value = lower_expr(ctx, capture)?;
                         if let Some(env_class) = env_class {
@@ -333,19 +337,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 capture,
                             );
                         }
-                        let args = [Arg::Root(&current), Arg::Plain(DOUBLE, &value)];
-                        if index == last {
-                            return Ok(call_with_roots(ctx, I64, "js_array_push_f64", &args));
-                        }
-                        current = call_rooted(ctx, I64, "js_array_push_f64", &args);
+                        acc.advance(
+                            ctx,
+                            "js_array_push_f64",
+                            &[crate::rooting::Arg::Plain(DOUBLE, &value)],
+                        );
                     }
-                    unreachable!("the last capture returns")
-                })();
-                // A stack cut: releases every slot pushed after `first` too, on
-                // the error path as well.
-                first.release(ctx);
-                pushed?
-            };
+                    Ok(())
+                },
+                |_, current| Ok(current.to_string()),
+            )?;
             ctx.block().call_void("js_tdz_suppress_end", &[]);
             let caps_box = nanbox_pointer_inline(ctx.block(), &caps_arr);
             // Lower after the allocating array operations so a movable class
