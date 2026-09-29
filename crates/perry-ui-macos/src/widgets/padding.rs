@@ -2,7 +2,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSColor, NSEvent, NSSecureTextFieldCell, NSText, NSTextField, NSTextFieldCell, NSView,
+    NSCell, NSColor, NSEvent, NSSecureTextFieldCell, NSText, NSTextField, NSTextFieldCell, NSView,
 };
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSObjectProtocol};
@@ -55,6 +55,13 @@ define_class!(
         fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
             let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
             unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
+        }
+
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            draw_on_font_baseline(self, || unsafe {
+                msg_send![super(self), drawInteriorWithFrame: frame, inView: view]
+            });
         }
 
         #[unsafe(method(cellSizeForBounds:))]
@@ -113,6 +120,13 @@ define_class!(
             unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
         }
 
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            draw_on_font_baseline(self, || unsafe {
+                msg_send![super(self), drawInteriorWithFrame: frame, inView: view]
+            });
+        }
+
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
             let insets = self.ivars().get();
@@ -155,6 +169,20 @@ define_class!(
         }
     }
 );
+
+/// Single-line mode draws idle text on the baseline of the control size's
+/// system font, not the cell's own font; the field editor uses the cell's font,
+/// so a custom font would jump when editing starts. Drawing with single-line
+/// mode off puts the idle text where the field editor draws it, newlines
+/// included.
+fn draw_on_font_baseline(cell: &NSCell, draw: impl FnOnce()) {
+    if !cell.usesSingleLineMode() {
+        return draw();
+    }
+    cell.setUsesSingleLineMode(false);
+    draw();
+    cell.setUsesSingleLineMode(true);
+}
 
 fn inset_rect(rect: CGRect, insets: NSEdgeInsets, flipped: bool) -> CGRect {
     // Native text fields and buttons are flipped: their top moves origin.y.
