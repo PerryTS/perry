@@ -251,7 +251,7 @@ pub unsafe fn pin_object_non_young(header: *mut GcHeader) {
          latch stays disarmed and the copying minor will relocate it"
     );
     (*header).gc_flags |= GC_FLAG_PINNED;
-    note_pin_root(header);
+    note_non_young_pin_root(header);
 }
 
 /// Test accessor for the young-pin predicate, so
@@ -761,11 +761,31 @@ mod report_tests {
 // Leaf objects are not noted: a leaf has no child slot, so its pin keeps it
 // live (no sweep) and there is nothing to trace through it. That is what
 // keeps the long-lived small-int and ASCII string caches' pins free.
+//
+// `pin_object_non_young` must stay as light as #7655 made it: it is reached
+// from code the feature-stripped `perry-ext-*` links keep, so it must not
+// reference the arena (#7650). A tenured arena pin made through it only sets
+// `TENURED_PIN_UNPLACED`, a leaf thread-local; the next full root scan walks
+// every tenured block once, which sets the block summaries and clears the bit.
 // ---------------------------------------------------------------------------
 
 crate::perry_thread_local! {
     /// This thread's malloc registry may hold a pinned, non-leaf header.
     static MALLOC_PIN_SUMMARY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A non-leaf `Longlived`/`Old` arena object of this thread was pinned
+    /// through `pin_object_non_young`, and its block summary is not set yet.
+    static TENURED_PIN_UNPLACED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Does a pin of `header` need a summary? A leaf has no child to trace.
+///
+/// # Safety
+///
+/// As [`pin_object`].
+#[inline]
+unsafe fn pin_needs_root_note(header: *mut GcHeader) -> bool {
+    super::types::gc_type_rewrite_descriptor_kind((*header).obj_type)
+        != super::types::GcRewriteDescriptorKind::Leaf
 }
 
 /// Note `header` (just pinned) in the summary of the space that holds it.
@@ -775,9 +795,7 @@ crate::perry_thread_local! {
 /// As [`pin_object`].
 #[inline]
 unsafe fn note_pin_root(header: *mut GcHeader) {
-    if super::types::gc_type_rewrite_descriptor_kind((*header).obj_type)
-        == super::types::GcRewriteDescriptorKind::Leaf
-    {
+    if !pin_needs_root_note(header) {
         return;
     }
     if (*header).gc_flags & GC_FLAG_ARENA == 0
@@ -787,11 +805,33 @@ unsafe fn note_pin_root(header: *mut GcHeader) {
     }
 }
 
+/// [`note_pin_root`] for [`pin_object_non_young`], without the arena: a
+/// non-young arena object is tenured, and its block is found by the next full
+/// root scan instead of here.
+///
+/// # Safety
+///
+/// As [`pin_object_non_young`].
+#[inline]
+unsafe fn note_non_young_pin_root(header: *mut GcHeader) {
+    if !pin_needs_root_note(header) {
+        return;
+    }
+    if (*header).gc_flags & GC_FLAG_ARENA == 0 {
+        MALLOC_PIN_SUMMARY.with(|s| s.set(true));
+    } else {
+        TENURED_PIN_UNPLACED.with(|s| s.set(true));
+    }
+}
+
 /// The pinned non-leaf headers of this thread, found through the summaries.
 /// Clears a summary whose walk found nothing.
 fn collect_pinned_root_headers(include_tenured: bool) -> Vec<*mut GcHeader> {
     let mut out = Vec::new();
-    crate::arena::collect_pinned_arena_headers(include_tenured, &mut out);
+    // A minor does not act on tenured objects, so an unplaced tenured pin
+    // waits for the next pass that does.
+    let place_tenured = include_tenured && TENURED_PIN_UNPLACED.with(|s| s.replace(false));
+    crate::arena::collect_pinned_arena_headers(include_tenured, place_tenured, &mut out);
     if MALLOC_PIN_SUMMARY.with(|s| s.get()) {
         let mut found = false;
         super::malloc::MALLOC_STATE.with(|state| {

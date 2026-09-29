@@ -38,55 +38,41 @@ pub(crate) fn note_pinned_arena_header(header_addr: usize) -> bool {
 }
 
 /// Push every header carrying `GC_FLAG_PINNED` in a block whose summary is
-/// set onto `out`, clearing the summary of every walked block that has none.
+/// set onto `out`, and set each walked block's summary to whether it holds one.
 ///
 /// `include_tenured` walks `Longlived` and `Old` blocks as well. A pass that
 /// cannot act on a tenured object (a minor: old objects are black leaves and
 /// their young children are remembered by the barrier) leaves it `false`.
-pub(crate) fn collect_pinned_arena_headers(include_tenured: bool, out: &mut Vec<*mut GcHeader>) {
+/// `place_tenured` walks EVERY tenured block, summary or not: a tenured pin
+/// made through `gc::pin_object_non_young` is not placed in its block at pin
+/// time (see `gc/pin.rs`), so this walk is what places it.
+pub(crate) fn collect_pinned_arena_headers(
+    include_tenured: bool,
+    place_tenured: bool,
+    out: &mut Vec<*mut GcHeader>,
+) {
     sync_inline_arena_state();
-    let walk = |arena: &mut Arena, out: &mut Vec<*mut GcHeader>| {
+    let walk = |arena: &mut Arena, every_block: bool, out: &mut Vec<*mut GcHeader>| {
         for block in arena.blocks.iter_mut() {
-            if !block.pinned_summary {
+            if !every_block && !block.pinned_summary {
                 continue;
             }
             let mut found = false;
-            let mut offset = 0usize;
-            while offset < block.offset {
-                let aligned = (offset + 7) & !7;
-                if aligned >= block.offset {
-                    break;
-                }
-                // SAFETY: `aligned < block.offset`, so this is a parseable
-                // header inside the block's bump-allocated prefix — the same
-                // walk `arena_walk_objects_filtered` does.
-                let header = unsafe { block.data.add(aligned) } as *mut GcHeader;
-                let (total, flags, obj_type) = unsafe {
-                    (
-                        (*header).size as usize,
-                        (*header).gc_flags,
-                        (*header).obj_type,
-                    )
-                };
-                if total == 0 || total > block.size {
-                    break;
-                }
-                if flags & crate::gc::GC_FLAG_PINNED != 0
-                    && crate::gc::gc_type_is_arena_walkable(obj_type)
-                {
+            super::walk::for_each_block_header(block, |header| {
+                // SAFETY: the walker yields parseable headers of this block.
+                if unsafe { (*header).gc_flags } & crate::gc::GC_FLAG_PINNED != 0 {
                     found = true;
                     out.push(header);
                 }
-                offset = aligned + total;
-            }
+            });
             block.pinned_summary = found;
         }
     };
-    ARENA.with(|a| walk(unsafe { &mut *a.get() }, out));
-    SURVIVOR_ARENA_0.with(|a| walk(unsafe { &mut *a.get() }, out));
-    SURVIVOR_ARENA_1.with(|a| walk(unsafe { &mut *a.get() }, out));
+    ARENA.with(|a| walk(unsafe { &mut *a.get() }, false, out));
+    SURVIVOR_ARENA_0.with(|a| walk(unsafe { &mut *a.get() }, false, out));
+    SURVIVOR_ARENA_1.with(|a| walk(unsafe { &mut *a.get() }, false, out));
     if include_tenured {
-        LONGLIVED_ARENA.with(|a| walk(unsafe { &mut *a.get() }, out));
-        OLD_ARENA.with(|a| walk(unsafe { &mut *a.get() }, out));
+        LONGLIVED_ARENA.with(|a| walk(unsafe { &mut *a.get() }, place_tenured, out));
+        OLD_ARENA.with(|a| walk(unsafe { &mut *a.get() }, place_tenured, out));
     }
 }

@@ -169,6 +169,21 @@ fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
 fn full_mark_reaches_child(birth: Birth) -> bool {
     let _guard = pinned_guard();
     let parent = build_parent(birth, true);
+    full_mark_marks_parent_and_child(parent)
+}
+
+/// [`full_mark_reaches_child`] for a parent pinned through
+/// `pin_user_ptr_non_young`, the light pin that does not place a tenured
+/// arena pin in its block (the full root scan does).
+fn full_mark_reaches_child_of_non_young_pin(birth: Birth) -> bool {
+    let _guard = pinned_guard();
+    let parent = build_parent(birth, false);
+    unsafe { crate::gc::pin_user_ptr_non_young(parent as *mut u8) };
+    js_shadow_slot_set(0, 0);
+    full_mark_marks_parent_and_child(parent)
+}
+
+fn full_mark_marks_parent_and_child(parent: *mut ObjectHeader) -> bool {
     let v = crate::object::js_object_get_field_by_name(parent, string(KEY));
     let child = (v.bits() & POINTER_MASK) as usize;
     assert_ne!(child, 0, "premise: the child was stored");
@@ -183,6 +198,16 @@ fn full_mark_reaches_child(birth: Birth) -> bool {
     clear_mark_seeds();
     unsafe { crate::gc::unpin_object(header_of(parent as *mut u8)) };
     parent_marked && child_marked
+}
+
+#[test]
+fn full_mark_traces_through_every_non_young_pin() {
+    for birth in [Birth::BornTenured, Birth::Old, Birth::Malloc] {
+        assert!(
+            full_mark_reaches_child_of_non_young_pin(birth),
+            "the full trace did not mark and trace through a {birth:?} parent pinned by pin_object_non_young"
+        );
+    }
 }
 
 #[test]
