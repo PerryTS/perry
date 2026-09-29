@@ -233,7 +233,7 @@ impl BlockPersistCycleState {
             }
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+                if (*header).gc_flags & GC_FLAG_MARKED != 0 {
                     self.block_has_live[block_idx] = true;
                 }
             }
@@ -272,7 +272,8 @@ impl BlockPersistCycleState {
             }
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
+                let flags = (*header).gc_flags;
+                if flags & GC_FLAG_MARKED == 0 && !super::pin::pinned_counts_as_marked(flags) {
                     (*header).gc_flags |= GC_FLAG_MARKED;
                     self.worklist.push(header);
                     self.newly_marked = self.newly_marked.saturating_add(1);

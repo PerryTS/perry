@@ -68,6 +68,7 @@ mod object_create;
 mod old_free_intrusive;
 mod oldgen;
 mod os_tag;
+mod pinned_roots;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
