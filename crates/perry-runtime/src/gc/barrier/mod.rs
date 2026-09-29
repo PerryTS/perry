@@ -1086,7 +1086,9 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     }
     unsafe {
         let flags = (*header).gc_flags;
-        if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED) != 0 {
+        if flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED) != 0
+            || crate::gc::pin::pinned_counts_as_marked(flags)
+        {
             return false;
         }
         (*header).gc_flags = flags | GC_FLAG_MARKED;

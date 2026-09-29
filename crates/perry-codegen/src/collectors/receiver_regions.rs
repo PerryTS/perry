@@ -334,6 +334,15 @@ enum ActiveReceiverData {
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
     entries: Vec<ActiveReceiverDescriptor>,
+    /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
+    /// Each is the set a guarded clone proved for its own body: the locals
+    /// its entry test admitted and whose every in-clone write is
+    /// Number-preserving. The function scope is the static
+    /// `number_by_construction_locals`; `type_analysis::local_is_number` is
+    /// the one query over both. A scope ends with `dematerialize_scope`, like
+    /// every other scoped payload here, so the slow clone and post-loop code
+    /// never see it.
+    number_locals: Vec<(u32, Vec<u32>)>,
 }
 
 impl ReceiverDescriptorTable {
@@ -712,10 +721,63 @@ impl ReceiverDescriptorTable {
             })
     }
 
+    /// Open the Number-local scope of one guarded clone: `locals` hold a
+    /// Number at every read inside it. Empty sets are not recorded.
+    pub(crate) fn materialize_number_locals(&mut self, scope_id: u32, locals: &[u32]) {
+        if !locals.is_empty() {
+            self.number_locals.push((scope_id, locals.to_vec()));
+        }
+    }
+
+    /// Admit `local` to the Number set of the open scope `scope_id` at a flow
+    /// point inside it: a masked-window refinement lands strictly after the
+    /// statement that wrote a Number, and holds until a write the region cannot
+    /// prove Number withdraws it. Returns whether the local was newly admitted.
+    pub(crate) fn admit_number_local(&mut self, scope_id: u32, local: u32) -> bool {
+        if let Some((_, locals)) = self
+            .number_locals
+            .iter_mut()
+            .find(|(scope, _)| *scope == scope_id)
+        {
+            if locals.contains(&local) {
+                return false;
+            }
+            locals.push(local);
+            return true;
+        }
+        self.number_locals.push((scope_id, vec![local]));
+        true
+    }
+
+    /// Withdraw `local` from the Number set of scope `scope_id` (the write just
+    /// lowered is not provably a Number). Returns whether it was a member.
+    /// Another open scope that proved it by its own fixed point keeps it.
+    pub(crate) fn withdraw_number_local(&mut self, scope_id: u32, local: u32) -> bool {
+        let Some((_, locals)) = self
+            .number_locals
+            .iter_mut()
+            .find(|(scope, _)| *scope == scope_id)
+        else {
+            return false;
+        };
+        let before = locals.len();
+        locals.retain(|member| *member != local);
+        before != locals.len()
+    }
+
+    /// Whether an active clone scope proved `local` a Number.
+    pub(crate) fn local_is_number_in_scope(&self, local: u32) -> bool {
+        self.number_locals
+            .iter()
+            .any(|(_, locals)| locals.contains(&local))
+    }
+
     /// End every descriptor fact owned by a lexical proof scope. Each Phase 4
     /// migration adds its scoped payload here, replacing a separate
-    /// `retain(scope_id)` discipline at the lowering site.
+    /// `retain(scope_id)` discipline at the lowering site. Returns the number
+    /// of receiver entries removed; the scope's Number-local set ends too.
     pub(crate) fn dematerialize_scope(&mut self, scope_id: u32) -> usize {
+        self.number_locals.retain(|(scope, _)| *scope != scope_id);
         let before = self.entries.len();
         self.entries.retain(|entry| {
             let active_scope = match &entry.data {

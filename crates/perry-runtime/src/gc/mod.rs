@@ -1175,6 +1175,10 @@ pub fn gc_init() {
     reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
+    // A pinned object is a root: its holder is an external reference the
+    // collector cannot see. Found through the block / malloc-registry pin
+    // summaries the pin setters maintain (gc/pin.rs, arena/pinned.rs).
+    reg_scanner!(pin::scan_pinned_object_roots_mut);
     reg_scanner!(crate::string::trim_cache::scan_trim_cache_roots_mut);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
     reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
@@ -1213,6 +1217,8 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
+    // The per-agent class function objects (`object::class_value`).
+    reg_scanner!(crate::object::class_value::scan_class_value_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;

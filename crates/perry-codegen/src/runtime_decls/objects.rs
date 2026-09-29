@@ -233,11 +233,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
     // modules the whole get diamond collapses to one call returning the field
     // value. Args: (site_id, recv, expected_class_id, expected_shape_id, key,
-    // field_index, require_raw_f64). Same signature as the get guard (+ f64 ret).
+    // field_index, require_raw_f64, per-site read cache). The get guard's
+    // operands plus the cache its miss reads from (+ f64 ret).
     module.declare_function(
         "js_class_field_get_ic",
         DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
     );
     // S2 (deferred-collection RFC): the two full-outline class-field ICs as a
     // GC-leaf hit (`_fast`, same operands as the full helper) plus a
@@ -246,12 +247,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_class_field_get_ic_fast",
         DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
     );
     module.declare_function(
         "js_class_field_get_ic_fast_miss",
         DOUBLE,
-        &[I64, DOUBLE, I32, I32, I64, I32, I32],
+        &[I64, DOUBLE, I32, I32, I64, I32, I32, PTR],
     );
     module.declare_function(
         "js_class_field_set_ic_fast",

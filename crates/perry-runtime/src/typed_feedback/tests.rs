@@ -1231,9 +1231,9 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
 #[test]
 fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
-    let native_module = include_str!(concat!(
+    let class_method_bind = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/object/native_module.rs"
+        "/src/object/native_module/class_method_bind.rs"
     ));
     let guards = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1353,7 +1353,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "js_native_call_method_apply_by_id",
         ),
         (
-            native_module,
+            class_method_bind,
             "KEEP_CLASS_METHOD_BIND_BY_ID",
             "static KEEP_CLASS_METHOD_BIND_BY_ID: extern \"C\" fn(f64, i64) -> f64",
             "js_class_method_bind_by_id",
@@ -3076,7 +3076,16 @@ fn class_field_get_ic_reads_the_boxed_slot_on_a_guard_pass() {
     let stored = crate::JSValue::string_ptr(payload);
     crate::object::js_object_set_field(obj, 0, stored);
 
-    let got = js_class_field_get_ic(7401, receiver, class_id, expected_shape_id, key_x, 0, 0);
+    let got = js_class_field_get_ic(
+        7401,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        0,
+        std::ptr::null_mut(),
+    );
     assert_eq!(
         got.to_bits(),
         stored.bits(),
@@ -3113,7 +3122,16 @@ fn class_field_get_ic_reads_the_raw_f64_slot_on_a_guard_pass() {
         0,
     );
 
-    let got = js_class_field_get_ic(7402, receiver, class_id, expected_shape_id, key_x, 0, 1);
+    let got = js_class_field_get_ic(
+        7402,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        1,
+        std::ptr::null_mut(),
+    );
     assert_eq!(
         got, 5.25,
         "a `require_raw_f64` PASS must answer with the raw double the codegen \
@@ -3146,7 +3164,16 @@ fn class_field_get_ic_records_the_fallback_and_answers_by_name_on_a_guard_fail()
         "the fixture must actually transition the shape, or the FAIL arm never runs"
     );
 
-    let got = js_class_field_get_ic(7403, receiver, class_id, expected_shape_id, key_x, 0, 0);
+    let got = js_class_field_get_ic(
+        7403,
+        receiver,
+        class_id,
+        expected_shape_id,
+        key_x,
+        0,
+        0,
+        std::ptr::null_mut(),
+    );
     assert_eq!(
         got.to_bits(),
         5.0f64.to_bits(),
@@ -3176,7 +3203,16 @@ fn class_field_get_ic_throws_a_type_error_on_a_nullish_receiver() {
     for nullish in [crate::value::TAG_UNDEFINED, crate::value::TAG_NULL] {
         let receiver = f64::from_bits(nullish);
         let threw = catch_runtime_throw(|| {
-            js_class_field_get_ic(7404, receiver, class_id, expected_shape_id, key_x, 0, 0);
+            js_class_field_get_ic(
+                7404,
+                receiver,
+                class_id,
+                expected_shape_id,
+                key_x,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
         });
         assert!(
             threw,
