@@ -340,7 +340,9 @@ impl ShapeRecord {
     /// which is itself a valid NaN-boxed value, so key position `i` is inline
     /// slot `i` whatever the slot's representation. A shape minted with a
     /// non-`Any` rep is its own record and gets its own bound from these
-    /// facts at construction and slab insert, like every other shape.
+    /// facts at construction and slab insert, like every other shape, and
+    /// deprecating a lane in place (`deprecate_rep_slot`) leaves the bound
+    /// as it is, correctly.
     #[inline]
     pub(super) fn positional_by_facts(&self) -> bool {
         self.object_kind() == ShapeObjectKind::Ordinary
