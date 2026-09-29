@@ -39,7 +39,7 @@ pub unsafe extern "C" fn js_native_call_value(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    unsafe { native_call_value_this(func_value, this, args_ptr, args_len) }
+    unsafe { native_call_value_this_impl(func_value, this, args_ptr, args_len) }
 }
 
 // Debug/test static archives transport Perry exceptions with Rust unwinding,
@@ -53,13 +53,29 @@ pub unsafe extern "C-unwind" fn js_native_call_value(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    unsafe { native_call_value_this(func_value, this, args_ptr, args_len) }
+    unsafe { native_call_value_this_impl(func_value, this, args_ptr, args_len) }
 }
 
 /// Call function value `func_value` with receiver `this` and `args_len`
-/// arguments at `args_ptr`: the one value-call dispatcher.
+/// arguments at `args_ptr`: the one value-call dispatcher, for runtime callers.
+///
+/// This calls the exported `js_native_call_value` instead of inlining the
+/// dispatcher: the runtime has over a hundred callers, and inlining the whole
+/// dispatch into each of them grew every linked program by ~190 KB.
 #[inline(always)]
 pub(crate) unsafe fn native_call_value_this(
+    func_value: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    unsafe { js_native_call_value(func_value, this, args_ptr, args_len) }
+}
+
+/// The dispatcher body, inlined only into the two `js_native_call_value`
+/// definitions (one per panic strategy).
+#[inline(always)]
+unsafe fn native_call_value_this_impl(
     func_value: f64,
     this: crate::closure::JsThis,
     args_ptr: *const f64,
