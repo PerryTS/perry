@@ -552,7 +552,8 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     );
     // T1: the landing block is now the single slow exit itself, and the
     // dominance is structural — `pic.miss` has exactly ONE predecessor,
-    // `pic.token.miss`, which `pic.token` dominates. Assert that directly:
+    // `pic.holder` (whose only predecessor is `pic.token.ways`, reached from
+    // `pic.token.miss`), which `pic.token` dominates. Assert that directly:
     // routing any receiver-validation failure back into `pic.miss` would add a
     // predecessor and immediately re-introduce the phis #7907 removed.
     // `pic.miss` carries a numeric suffix and `pic.miss.call` starts with the
@@ -580,7 +581,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         .count();
     assert_eq!(
         preds, 1,
-        "pic.miss must have exactly one predecessor (pic.token.miss), or it is \
+        "pic.miss must have exactly one predecessor (pic.holder), or it is \
          no longer dominated by pic.token:\n{ir}"
     );
     assert!(
@@ -597,14 +598,16 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         "the small-handle sentinel select only existed because an invalid \
          receiver could reach the way compares; it must be gone:\n{ir}"
     );
-    // The receiver predicates, exactly once each. `icmp eq i32 %` is two: the
-    // ShapeId identity compare on the hit path and the spill compare in
-    // `pic.token.miss` that replaced the hit path's overflow-bit test. There
-    // is no GC-kind compare at all any more (#10828), so a single `icmp eq
-    // i8` would mean the header load has crept back somewhere.
+    // The receiver predicates, exactly once each. `icmp eq i32 %` is three:
+    // the ShapeId identity compare on the hit path, the spill compare in
+    // `pic.token.miss` that replaced the hit path's overflow-bit test, and the
+    // HOLDER's ShapeId compare in `pic.holder.inline` (an object other than
+    // the receiver, so not a re-derivation). There is no GC-kind compare at
+    // all any more (#10828), so a single `icmp eq i8` would mean the header
+    // load has crept back somewhere.
     for (needle, what, expect) in [
         ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 0),
-        ("icmp eq i32 %", "the ShapeId identity compare", 2),
+        ("icmp eq i32 %", "the ShapeId identity compare", 3),
     ] {
         let n = main.matches(needle).count();
         assert_eq!(
@@ -1617,10 +1620,14 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // `pic.way.live` is GONE with the way path's `TAG_HOLE` compare: the
         // load block has nothing left to decide and branches to the merge.
         "pic.way.load",
-        // the holder entry (`method_site::read_holder`), past the ways: the
-        // receiver word, the kind, the inline depth-1 compare and load (or
-        // `undefined` for an absent entry), and the GC-leaf stub for depth
-        // 2..4; every decline continues to the one exit
+        // a site whose ways never primed asks the inherited-read hook before
+        // the call, as a never-primed site does
+        "pic.ways.fresh",
+        "pic.miss.inherited",
+        // the holder entry (`method_site::read_holder`), first on the MRU
+        // miss edge: the receiver word, the kind, the inline depth-1 compare
+        // and load (or `undefined` for an absent entry), and the GC-leaf stub
+        // for depth 2..4
         "pic.holder",
         "pic.holder.kind",
         "pic.holder.inline",
@@ -1652,17 +1659,23 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     );
 }
 
-/// The read site's holder entry is checked where the MRU word and the ways
-/// have missed, and nowhere else:
+/// The read site's holder entry is the first answer asked where the MRU word
+/// missed, and the inherited-read hook is kept for what it does not describe:
 ///
-/// 1. the never-primed edge (`present` false) goes straight to the one exit —
-///    a site with no cache has no entry;
-/// 2. both edges out of the ways (`pic.miss` with no live way, `pic.ways` with
-///    no matching way) go to `pic.holder`;
-/// 3. the stub is called from `pic.holder.stub` only, and its `TAG_HOLE`
-///    decline and the inline load's hole compare both continue to the exit.
+/// 1. `pic.token.ways`: a present cache goes to `pic.holder`; the never-primed
+///    edge goes to the inherited-read hook (`pic.miss.inherited`);
+/// 2. `pic.holder`: a receiver word that is not the entry's goes on to the
+///    ways (`pic.miss`), never straight to the exit;
+/// 3. `pic.miss`: live ways go to `pic.ways`, otherwise `pic.ways.fresh`,
+///    which asks the hook only for a site whose ways never primed (a
+///    megamorphic site goes to the call);
+/// 4. the stub is called from `pic.holder.stub` only, declines on `TAG_HOLE`
+///    to the exit; the inline load has no hole compare (a delete is a shape
+///    transition, #10826) and goes to the merge only;
+/// 5. the hook calls `js_inherited_read_cache_hit_f64` and declines to the
+///    exit.
 #[test]
-fn the_holder_entry_is_checked_past_the_ways_only() {
+fn the_holder_entry_is_asked_first_and_the_hook_is_kept() {
     let ir = emit(false, None);
     let func = ir
         .split("\ndefine ")
@@ -1676,8 +1689,8 @@ fn the_holder_entry_is_checked_past_the_ways_only() {
             body.push(line.trim().to_string());
         }
     }
-    let term = |prefix: &str| -> String {
-        let (_, body) = blocks
+    let body = |prefix: &str| -> Vec<String> {
+        blocks
             .iter()
             .find(|(l, _)| {
                 l.strip_prefix(prefix).is_some_and(|r| {
@@ -1685,32 +1698,60 @@ fn the_holder_entry_is_checked_past_the_ways_only() {
                         .is_some_and(|n| n.parse::<u32>().is_ok())
                 })
             })
-            .unwrap_or_else(|| panic!("no block {prefix}:\n{func}"));
-        body.iter()
+            .unwrap_or_else(|| panic!("no block {prefix}:\n{func}"))
+            .1
+            .clone()
+    };
+    let term = |prefix: &str| -> String {
+        body(prefix)
+            .iter()
             .rev()
             .find(|l| l.starts_with("br "))
             .unwrap()
             .clone()
     };
+    let targets = |t: &str| -> Vec<String> {
+        t.split("label %")
+            .skip(1)
+            .map(|x| {
+                let x = x.trim_end_matches(&[',', ' '][..]);
+                let mut parts: Vec<&str> = x.split('.').collect();
+                if parts.last().is_some_and(|p| p.parse::<u32>().is_ok()) {
+                    parts.pop();
+                }
+                parts.join(".")
+            })
+            .collect()
+    };
     // 1.
-    let ways_entry = term("pic.token.ways");
-    assert!(
-        ways_entry.contains("label %pic.miss.") && ways_entry.contains("label %pic.miss.call"),
-        "the never-primed edge goes straight to the exit: {ways_entry}"
+    assert_eq!(
+        targets(&term("pic.token.ways")),
+        ["pic.holder", "pic.miss.inherited"],
+        "{func}"
     );
     // 2.
-    for b in ["pic.miss", "pic.ways"] {
-        let t = term(b);
-        assert!(
-            t.contains("label %pic.holder."),
-            "{b} must fall to the holder entry: {t}"
-        );
-        assert!(
-            !t.contains("label %pic.miss.call"),
-            "{b} must not skip the holder entry: {t}"
-        );
-    }
+    assert_eq!(
+        targets(&term("pic.holder")),
+        ["pic.holder.kind", "pic.miss"],
+        "{func}"
+    );
     // 3.
+    assert_eq!(
+        targets(&term("pic.miss")),
+        ["pic.ways", "pic.ways.fresh"],
+        "{func}"
+    );
+    assert_eq!(
+        targets(&term("pic.ways.fresh")),
+        ["pic.miss.inherited", "pic.miss.call"],
+        "{func}"
+    );
+    assert_eq!(
+        targets(&term("pic.ways")),
+        ["pic.way.load", "pic.miss.call"],
+        "{func}"
+    );
+    // 4.
     let callers: Vec<&str> = blocks
         .iter()
         .filter(|(_, body)| body.iter().any(|l| l.contains("@js_read_site_holder_hit(")))
@@ -1720,19 +1761,33 @@ fn the_holder_entry_is_checked_past_the_ways_only() {
         callers.len() == 1 && callers[0].starts_with("pic.holder.stub"),
         "the stub is called from pic.holder.stub only: {callers:?}"
     );
-    for b in ["pic.holder.stub", "pic.holder.load"] {
-        let (_, body) = blocks.iter().find(|(l, _)| l.starts_with(b)).unwrap();
+    for b in ["pic.holder.stub", "pic.miss.inherited"] {
         assert!(
-            body.iter()
+            body(b)
+                .iter()
                 .any(|l| l.contains("icmp ne i64 ") && l.ends_with(crate::nanbox::TAG_HOLE_I64)),
             "{b} must decline on TAG_HOLE:\n{func}"
         );
-        let t = term(b);
-        assert!(
-            t.contains("label %pget.recv_merge") && t.contains("label %pic.miss.call"),
-            "{b}: served to the merge, declined to the exit: {t}"
+        assert_eq!(
+            targets(&term(b)),
+            ["pget.recv_merge", "pic.miss.call"],
+            "{b}: served to the merge, declined to the exit"
         );
     }
+    assert!(
+        !body("pic.holder.load")
+            .iter()
+            .any(|l| l.contains(crate::nanbox::TAG_HOLE_I64)),
+        "the holder load has no hole compare:\n{func}"
+    );
+    assert_eq!(targets(&term("pic.holder.load")), ["pget.recv_merge"]);
+    // 5.
+    assert!(
+        body("pic.miss.inherited")
+            .iter()
+            .any(|l| l.contains("@js_inherited_read_cache_hit_f64(")),
+        "the hook calls the inherited-read cache:\n{func}"
+    );
 }
 
 #[path = "array_length_tests.rs"]

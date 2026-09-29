@@ -14,9 +14,9 @@
 //! Every fact is compared on use, so there is no invalidation and no global
 //! word: a key add, delete, descriptor change or `setPrototypeOf` on any object
 //! the entry names moves that object's ShapeId, and a value store to the
-//! holder's slot is seen because the hit LOADS the slot. A stable tombstone
-//! (#9064) can clear the holder's slot without moving its ShapeId, so a loaded
-//! `TAG_HOLE` is a miss.
+//! holder's slot is seen because the hit LOADS the slot. A delete is a shape
+//! transition (#10826), so a holder whose ShapeId matches still has the slot:
+//! the hit needs no `TAG_HOLE` test, as the emitted MRU hit needs none.
 //!
 //! The entry lives in the read site's own cache (`PicCache` words
 //! [`HOLDER_RECV`]..=[`HOLDER_REGISTERED`]). The holder and the hops are
@@ -37,6 +37,14 @@
 //! (names the runtime synthesizes, lazily materialized intrinsics and
 //! `constructor` refuse there). Primary agent only; a worker agent's start
 //! empties every entry.
+//!
+//! A miss whose receiver the live entry already answers is served from the
+//! entry and primes nothing (a caller that does not emit the check, such as
+//! the class-field read's miss arm, reaches here on every read). A site that
+//! refused once, or whose entry was replaced for a different receiver shape
+//! [`MAX_REPRIMES`] times, is LATCHED in its own state word
+//! ([`HOLDER_STATE`]): it never walks or primes again, and its misses take the
+//! path they took before the entry existed.
 
 use super::{key_may_be_accessor, next_prototype, ordinary_receiver, WORKER_AGENTS_EXIST};
 use crate::object::shapes::{
@@ -65,8 +73,17 @@ pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
 pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
 /// Low 32 bits: the first hop's ShapeId. High 32 bits: the second hop's.
 pub const HOLDER_HOP_SHAPES: usize = HOLDER_HOPS + 3;
-/// Nonzero once the cache is on the root list.
-pub const HOLDER_REGISTERED: usize = HOLDER_HOP_SHAPES + 1;
+/// The site's holder state: [`STATE_REGISTERED`], [`STATE_LATCHED`] and the
+/// count of re-primes for a different receiver shape.
+pub const HOLDER_STATE: usize = HOLDER_HOP_SHAPES + 1;
+/// The cache is on the root list.
+const STATE_REGISTERED: i64 = 1;
+/// The site refused, or is polymorphic in its non-own receivers: no walk and
+/// no prime from here on.
+const STATE_LATCHED: i64 = 2;
+const STATE_REPRIME_SHIFT: u32 = 8;
+/// Re-primes for a different receiver shape a site takes before it latches.
+const MAX_REPRIMES: i64 = 4;
 
 pub const HOLDER_ABSENT_DEPTH1: i64 = crate::codegen_abi::PIC_HOLDER_ABSENT_DEPTH1;
 pub const HOLDER_STUB: u64 = 1 << 63;
@@ -97,6 +114,83 @@ pub fn read_holder_stats() -> (u64, u64, u64) {
 #[inline]
 fn refuse() {
     REFUSED_HOLDER.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Refuse, and latch `cache` (when the site has one) so it never walks again.
+#[inline]
+unsafe fn refuse_and_latch(cache: *mut PicCache) {
+    refuse();
+    if !cache.is_null() {
+        (*cache)[HOLDER_STATE] |= STATE_LATCHED;
+    }
+}
+
+/// The entry's answer (value bits) for a receiver whose PIC token is
+/// `token`, or `None` when the entry is empty, names another receiver shape,
+/// or any hop or holder word it recorded has moved. Reads site words and
+/// object words only: a GC leaf.
+///
+/// The loaded slot needs no `TAG_HOLE` test, for the reason the emitted MRU
+/// hit needs none: every delete is a shape transition (#10826), so a holder
+/// whose ShapeId still matches has not had the slot cleared.
+#[inline(always)]
+unsafe fn entry_answer(c: &PicCache, token: i64) -> Option<u64> {
+    if c[HOLDER_RECV] != token || token == 0 {
+        return None;
+    }
+    let kind = c[HOLDER_KIND];
+    let (depth, absent, slot) = if kind >= 0 {
+        (1, kind == HOLDER_ABSENT_DEPTH1, kind as u32)
+    } else {
+        let k = kind as u64;
+        (
+            ((k >> HOLDER_DEPTH_SHIFT) & 0xF) as usize,
+            k & HOLDER_ABSENT_BIT != 0,
+            k as u32,
+        )
+    };
+    let hop_shapes = c[HOLDER_HOP_SHAPES] as u64;
+    let shape_words = [
+        hop_shapes as u32,
+        (hop_shapes >> 32) as u32,
+        (c[HOLDER_SHAPE] as u64 >> 32) as u32,
+    ];
+    for i in 0..depth.saturating_sub(1).min(HOLDER_MAX_DEPTH - 1) {
+        if shape_word(c[HOLDER_HOPS + i] as usize) != shape_words[i] {
+            return None;
+        }
+    }
+    let holder = c[HOLDER_OBJ] as usize;
+    if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
+        return None;
+    }
+    if absent {
+        return Some(crate::value::TAG_UNDEFINED);
+    }
+    Some(slot_bits(holder, slot))
+}
+
+/// The site's holder entry asked for `handle`, without priming: what the
+/// emitted tower's holder check answers, for a runtime caller that asks the
+/// site's words itself (`typed_feedback::guards`' class-field miss arm).
+///
+/// # Safety
+/// `handle` is a pointer above the handle band; `cache_slot` null or the
+/// site's live read cache slot.
+#[inline]
+pub(crate) unsafe fn read_holder_hit(
+    handle: *const ObjectHeader,
+    cache_slot: *mut PicCacheSlot,
+) -> Option<f64> {
+    let cache = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
+    if cache.is_null() {
+        return None;
+    }
+    let stamp = object_shape_stamp(handle);
+    if stamp == 0 {
+        return None;
+    }
+    entry_answer(&*cache, (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64).map(f64::from_bits)
 }
 
 #[inline]
@@ -265,13 +359,30 @@ pub(crate) unsafe fn prime_read_holder(
     {
         return None;
     }
+    // A receiver the live entry answers is served from it: nothing to prime.
+    // A latched site keeps the caller's path.
+    let existing = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
+    if !existing.is_null() {
+        let stamp = object_shape_stamp(obj);
+        if stamp != 0 {
+            let token = (u64::from(stamp) | PIC_ID_TOKEN_BIT) as i64;
+            if let Some(bits) = entry_answer(&*existing, token) {
+                return Some(crate::value::JSValue::from_bits(bits));
+            }
+        }
+        if (*existing)[HOLDER_STATE] & STATE_LATCHED != 0 {
+            return None;
+        }
+    }
     let name = crate::string::header_str_checked(key)?.as_bytes();
     let recv = ordinary_receiver(obj as usize)?;
     // Cheap pre-walk: a receiver the entry could never describe keeps the
-    // caller's path and pays nothing for the getter below.
+    // caller's path and pays nothing for the getter below. A site with no
+    // cache yet stays without one, so the emitted never-primed edge keeps its
+    // inherited-read hook.
     if !holder_name_admitted(name) || key_may_be_accessor(recv, name) || walk(recv, name).is_none()
     {
-        refuse();
+        refuse_and_latch(existing);
         return None;
     }
 
@@ -282,12 +393,16 @@ pub(crate) unsafe fn prime_read_holder(
     let (value, obj) = handle.across_mut::<ObjectHeader, _>(|| {
         crate::object::field_get_set::get_field_by_name_past_inherited_cache(obj, key)
     });
+    // From here a refusal has already run the getter, so the site latches:
+    // the next miss must not walk and run it again only to refuse again.
+    let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
     let name = crate::string::header_str_checked(key)?.as_bytes();
     let Some(recv) = ordinary_receiver(obj as usize) else {
+        refuse_and_latch(cache);
         return Some(value);
     };
     let Some(w) = walk(recv, name) else {
-        refuse();
+        refuse_and_latch(cache);
         return Some(value);
     };
     // Confirm: what the shapes say must be what the getter returned.
@@ -297,10 +412,9 @@ pub(crate) unsafe fn prime_read_holder(
         Some(s) => bits == slot_bits(w.holder, s) && bits != crate::value::TAG_HOLE,
     };
     if !confirmed {
-        refuse();
+        refuse_and_latch(cache);
         return Some(value);
     }
-    let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
     if cache.is_null() {
         return Some(value);
     }
@@ -310,6 +424,19 @@ pub(crate) unsafe fn prime_read_holder(
 
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     let c = &mut *cache;
+    let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    if c[HOLDER_RECV] != 0 && c[HOLDER_RECV] != token {
+        // The site's non-own receivers take more than one shape. One entry
+        // cannot hold them; after a few replacements the site stops priming.
+        let n = (c[HOLDER_STATE] >> STATE_REPRIME_SHIFT) + 1;
+        c[HOLDER_STATE] = (c[HOLDER_STATE] & ((1 << STATE_REPRIME_SHIFT) - 1))
+            | (n << STATE_REPRIME_SHIFT)
+            | if n >= MAX_REPRIMES { STATE_LATCHED } else { 0 };
+        if n >= MAX_REPRIMES {
+            refuse();
+            return;
+        }
+    }
     c[HOLDER_RECV] = 0;
     c[HOLDER_OBJ] = w.holder as i64;
     c[HOLDER_SHAPE] = (u64::from(w.holder_shape) | u64::from(w.hops[2].1) << 32) as i64;
@@ -327,14 +454,14 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         c[HOLDER_HOPS + i] = w.hops[i].0 as i64;
     }
     c[HOLDER_HOP_SHAPES] = (u64::from(w.hops[0].1) | u64::from(w.hops[1].1) << 32) as i64;
-    if c[HOLDER_REGISTERED] == 0 {
-        c[HOLDER_REGISTERED] = 1;
+    if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
+        c[HOLDER_STATE] |= STATE_REGISTERED;
         if let Ok(mut sites) = HOLDER_SITES.lock() {
             sites.push(cache as usize);
         }
     }
     // Last: the entry is live only once every other word is written.
-    c[HOLDER_RECV] = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    c[HOLDER_RECV] = token;
     if w.slot.is_some() {
         PRIMES_HOLDER.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -352,45 +479,11 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
 /// `cache` the site's resolved `PicCache`.
 #[no_mangle]
 pub unsafe extern "C" fn js_read_site_holder_hit(recv: *const u8, cache: *const PicCache) -> f64 {
-    let hole = f64::from_bits(crate::value::TAG_HOLE);
     if cache.is_null() || recv.is_null() {
-        return hole;
+        return f64::from_bits(crate::value::TAG_HOLE);
     }
-    let c = &*cache;
     let token = (u64::from(std::ptr::read((recv as *const u32).add(1))) | PIC_ID_TOKEN_BIT) as i64;
-    if c[HOLDER_RECV] != token {
-        return hole;
-    }
-    let kind = c[HOLDER_KIND];
-    let (depth, absent, slot) = if kind >= 0 {
-        (1, kind == HOLDER_ABSENT_DEPTH1, kind as u32)
-    } else {
-        let k = kind as u64;
-        (
-            ((k >> HOLDER_DEPTH_SHIFT) & 0xF) as usize,
-            k & HOLDER_ABSENT_BIT != 0,
-            k as u32,
-        )
-    };
-    let hop_shapes = c[HOLDER_HOP_SHAPES] as u64;
-    let shape_words = [
-        hop_shapes as u32,
-        (hop_shapes >> 32) as u32,
-        (c[HOLDER_SHAPE] as u64 >> 32) as u32,
-    ];
-    for i in 0..depth.saturating_sub(1).min(HOLDER_MAX_DEPTH - 1) {
-        if shape_word(c[HOLDER_HOPS + i] as usize) != shape_words[i] {
-            return hole;
-        }
-    }
-    let holder = c[HOLDER_OBJ] as usize;
-    if shape_word(holder) != c[HOLDER_SHAPE] as u32 {
-        return hole;
-    }
-    if absent {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    f64::from_bits(slot_bits(holder, slot))
+    f64::from_bits(entry_answer(&*cache, token).unwrap_or(crate::value::TAG_HOLE))
 }
 
 /// Root scan: every live entry's holder and hops are marked and rewritten.
@@ -399,7 +492,8 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         return;
     };
     for &site in sites.iter() {
-        // SAFETY: registered caches are arena allocations that are never freed.
+        // SAFETY: registered caches are PIC-arena allocations
+        // (`pic_arena_alloc`), which are never freed.
         let c = unsafe { &mut *(site as *mut PicCache) };
         if c[HOLDER_RECV] == 0 {
             continue;

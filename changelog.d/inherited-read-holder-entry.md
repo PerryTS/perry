@@ -10,3 +10,12 @@ redefined on any object on the chain, or a `setPrototypeOf`, moves a ShapeId
 the entry compares; a value store is seen because the slot is loaded. No global
 validity word is involved. `process.env` and `arguments` now carry a per-object
 prototype identity in their shape, so no shape-keyed memo admits them.
+
+The entry is asked first where the site own-slot word misses, before the
+polymorphic ways. A receiver it does not describe (a compiled-class instance,
+a second receiver shape) keeps the inherited-read hook it had before, on the
+never-primed edge and on a miss at a site whose ways never primed. A miss the
+live entry answers primes nothing (the class-field read miss arm asks the
+entry directly), and a site that refused once, or was re-primed for four
+different receiver shapes, stops priming, so its misses do not walk the chain
+and run the getter again.

@@ -1021,8 +1021,20 @@ pub(crate) fn lower_generic_property_get(
     // signal byte-identical and go without the hook.
     ctx.current_block = ways_entry_idx;
     let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    // Without typed feedback the site's cache is asked, in order: the holder
+    // entry (`pic.holder`, first — the one answer a non-own key can have),
+    // then the ways; a site with no cache yet goes to the inherited-read hook.
+    let holder_on = !crate::expr::typed_feedback_emission_enabled();
+    let inherited_idx = holder_on.then(|| ctx.new_block("pic.miss.inherited"));
+    let holder_idx = holder_on.then(|| ctx.new_block("pic.holder"));
+    let never_primed_label = inherited_idx
+        .map(|idx| ctx.block_label(idx))
+        .unwrap_or_else(|| cold_label.clone());
+    let present_label = holder_idx
+        .map(|idx| ctx.block_label(idx))
+        .unwrap_or_else(|| miss_label.clone());
     ctx.block()
-        .cond_br(&token_cache.present, &miss_label, &cold_label);
+        .cond_br(&token_cache.present, &present_label, &never_primed_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -1174,9 +1186,22 @@ pub(crate) fn lower_generic_property_get(
     let ways_live = ctx.block().icmp_sgt(I64, &way_state, "0");
     let ways_idx = ctx.new_block("pic.ways");
     let ways_label = ctx.block_label(ways_idx);
-    let holder_idx = ctx.new_block("pic.holder");
-    let holder_label = ctx.block_label(holder_idx);
-    ctx.block().cond_br(&ways_live, &ways_label, &holder_label);
+    // A site whose ways never primed (state 0) has only ever seen receivers
+    // the MRU word or the holder entry named, or none it could learn: its
+    // miss asks the inherited-read hook first, as a never-primed site does.
+    // A megamorphic site (-1) goes straight to the call.
+    match inherited_idx {
+        Some(inh_idx) => {
+            let fresh_idx = ctx.new_block("pic.ways.fresh");
+            let fresh_label = ctx.block_label(fresh_idx);
+            ctx.block().cond_br(&ways_live, &ways_label, &fresh_label);
+            ctx.current_block = fresh_idx;
+            let fresh = ctx.block().icmp_eq(I64, &way_state, "0");
+            let inh_label = ctx.block_label(inh_idx);
+            ctx.block().cond_br(&fresh, &inh_label, &call_label);
+        }
+        None => ctx.block().cond_br(&ways_live, &ways_label, &call_label),
+    }
 
     ctx.current_block = ways_idx;
     // `is_object` is not ANDed in any more: it is statically true on every edge
@@ -1226,8 +1251,7 @@ pub(crate) fn lower_generic_property_get(
         .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
     let way_load_idx = ctx.new_block("pic.way.load");
     let way_load_label = ctx.block_label(way_load_idx);
-    ctx.block()
-        .cond_br(&way_any, &way_load_label, &holder_label);
+    ctx.block().cond_br(&way_any, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;
     if fused_recv.is_some() {
@@ -1286,36 +1310,37 @@ pub(crate) fn lower_generic_property_get(
     }
 
     // The read site's HOLDER entry (`object::method_site::read_holder` in the
-    // runtime), on the two edges where the MRU word and the ways have missed:
-    // the answer for a key that is NOT own on the receiver, as facts of two
-    // shapes. The receiver's ShapeId says the key is not own and which object
-    // is its [[Prototype]]; the holder's ShapeId says the key is an own inline
-    // data slot there (or, for an ABSENT entry, that the terminal object lacks
-    // it). Both are compared here, the holder is a strong root in the site, and
-    // the value is LOADED, so no global word and no invalidation exist. A
-    // stable tombstone (#9064) can clear the holder's slot without moving its
-    // ShapeId, so a loaded `TAG_HOLE` goes to the call.
+    // runtime), asked first on the MRU word's miss edge: the answer for a key
+    // that is NOT own on the receiver, as facts of two shapes. The receiver's
+    // ShapeId says the key is not own and which object is its [[Prototype]];
+    // the holder's ShapeId says the key is an own inline data slot there (or,
+    // for an ABSENT entry, that the terminal object lacks it). Both are
+    // compared here, the holder is a strong root in the site, and the value is
+    // LOADED, so no global word and no invalidation exist. A delete is a shape
+    // transition (#10826), so a matching holder ShapeId proves the slot live:
+    // no `TAG_HOLE` test, as the MRU hit has none.
     //
-    //   [cache + RECV] == token                      else call
+    //   [cache + RECV] == token                      else the ways
     //   kind = [cache + KIND] ; kind <s 0            -> stub (depth 2..4, deep absent)
     //   h = [cache + OBJ] ; [h + 4] == low32([cache + SHAPE])   else call
-    //   kind == ABSENT_DEPTH1                        -> undefined
-    //   v = [h + HDR + 8*kind] ; v != TAG_HOLE       else call
+    //   kind & ABSENT_DEPTH1                         -> undefined
+    //   v = [h + HDR + 8*kind]
     //
-    // A site that never primed has no cache and so no entry; its edge goes
-    // straight to the call, which primes (`get_field_ic_miss_impl`).
-    let holder_arm: Vec<(String, String)> = {
+    // A site that never primed has no cache and so no entry; its edge goes to
+    // the inherited-read hook, then the call, which primes
+    // (`get_field_ic_miss_impl`).
+    let mut holder_arm: Vec<(String, String)> = Vec::with_capacity(4);
+    if let Some(holder_idx) = holder_idx {
         let word = |ctx: &mut FnCtx<'_>, w: usize| {
             let p = ctx.block().gep(I64, &cache_ref, &[(I64, &w.to_string())]);
             ctx.block().load(I64, &p)
         };
-        let mut arms = Vec::with_capacity(3);
         ctx.current_block = holder_idx;
         let recv_word = word(ctx, crate::runtime_abi::PIC_HOLDER_RECV_WORD);
         let recv_eq = ctx.block().icmp_eq(I64, &recv_word, &token);
         let kind_idx = ctx.new_block("pic.holder.kind");
         let kind_label = ctx.block_label(kind_idx);
-        ctx.block().cond_br(&recv_eq, &kind_label, &call_label);
+        ctx.block().cond_br(&recv_eq, &kind_label, &miss_label);
 
         ctx.current_block = kind_idx;
         let kind = word(ctx, crate::runtime_abi::PIC_HOLDER_KIND_WORD);
@@ -1338,12 +1363,15 @@ pub(crate) fn lower_generic_property_get(
         let answer_label = ctx.block_label(answer_idx);
         ctx.block().cond_br(&holder_eq, &answer_label, &call_label);
 
+        // The absent kind is one bit no slot index has: a bit test, not a
+        // compare against a 64-bit immediate.
         ctx.current_block = answer_idx;
-        let absent = ctx.block().icmp_eq(
+        let absent_bit = ctx.block().and(
             I64,
             &kind,
             &crate::runtime_abi::PIC_HOLDER_ABSENT_DEPTH1.to_string(),
         );
+        let absent = ctx.block().icmp_ne(I64, &absent_bit, "0");
         let absent_idx = ctx.new_block("pic.holder.absent");
         let absent_label = ctx.block_label(absent_idx);
         let load_idx = ctx.new_block("pic.holder.load");
@@ -1356,19 +1384,16 @@ pub(crate) fn lower_generic_property_get(
             .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
         let absent_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
-        arms.push((undef, absent_end));
+        holder_arm.push((undef, absent_end));
 
         ctx.current_block = load_idx;
-        let offset = ctx.block().shl(I64, &kind, "3");
         let base = ctx.block().add(I64, &holder, &obj_header_size);
-        let field_addr = ctx.block().add(I64, &base, &offset);
-        let field_ptr = ctx.block().inttoptr(I64, &field_addr);
+        let base_ptr = ctx.block().inttoptr(I64, &base);
+        let field_ptr = ctx.block().gep(DOUBLE, &base_ptr, &[(I64, &kind)]);
         let val = ctx.block().load(DOUBLE, &field_ptr);
-        let bits = ctx.block().bitcast_double_to_i64(&val);
-        let live = ctx.block().icmp_ne(I64, &bits, crate::nanbox::TAG_HOLE_I64);
         let load_end = ctx.block().label.clone();
-        ctx.block().cond_br(&live, &merge_label, &call_label);
-        arms.push((val, load_end));
+        ctx.block().br(&merge_label);
+        holder_arm.push((val, load_end));
 
         // Depth 2..4 and a deep absent entry: the hop words are compared by a
         // GC-leaf stub (no allocation, no collection, no user code — a leaf in
@@ -1387,9 +1412,39 @@ pub(crate) fn lower_generic_property_get(
             .icmp_ne(I64, &stub_bits, crate::nanbox::TAG_HOLE_I64);
         let stub_end = ctx.block().label.clone();
         ctx.block().cond_br(&served, &merge_label, &call_label);
-        arms.push((stub_val, stub_end));
-        arms
-    };
+        holder_arm.push((stub_val, stub_end));
+    }
+
+    // The inherited-read hook, on the never-primed edge and on a fresh-ways
+    // miss: a receiver whose non-own key the holder entry does not describe
+    // (a compiled-class instance, a second receiver shape, a latched site) is
+    // answered by `js_inherited_read_cache_hit_f64` as before the entry
+    // existed. It is a pure state read — it allocates nothing, triggers no GC
+    // and runs no user code — so it is a leaf in `gc_call_effects.rs` and
+    // `root_reload.rs`. `TAG_HOLE` is its decline sentinel; a decline goes to
+    // the call. The versioned-loop deopt note is emitted here as it is on the
+    // exit, so entering either cold arm still records the bailout.
+    if let Some(idx) = inherited_idx {
+        ctx.current_block = idx;
+        crate::expr::emit_versioned_loop_callback_deopt(ctx);
+        let inh_key_handle = emit_key_handle(ctx, &key_handle_global);
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let recv_ptr = ctx.block().inttoptr(I64, &handle);
+        let key_ptr = ctx.block().inttoptr(I64, &inh_key_handle);
+        let val_inherited = ctx.block().call(
+            DOUBLE,
+            "js_inherited_read_cache_hit_f64",
+            &[(PTR, &recv_ptr), (PTR, &key_ptr)],
+        );
+        let inherited_bits = ctx.block().bitcast_double_to_i64(&val_inherited);
+        let inherited_served =
+            ctx.block()
+                .icmp_ne(I64, &inherited_bits, crate::nanbox::TAG_HOLE_I64);
+        let inherited_end_label = ctx.block().label.clone();
+        ctx.block()
+            .cond_br(&inherited_served, &merge_label, &call_label);
+        holder_arm.push((val_inherited, inherited_end_label));
+    }
 
     // The object exit: one call reproducing every pointer-path arm this tower
     // used to expand.
