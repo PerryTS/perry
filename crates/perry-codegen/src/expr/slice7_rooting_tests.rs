@@ -556,3 +556,104 @@ fn proxy_function_apply_uses_argument_validation_bridge() {
         "Function.prototype.apply must validate and convert its argument list"
     );
 }
+
+// ---------------------------------------------------------------------------
+// expr/static_field_meta.rs — RefreshClassExprCaptures
+// ---------------------------------------------------------------------------
+
+/// A class expression's capture refresh builds its capture array with one
+/// push per capture. The array is live across every capture's lowering, and a
+/// capture can collect, so each push must read the array from its root, not
+/// from the `js_array_alloc` register (gc-root-dominance --stale-registers
+/// flagged `source=alloc -> sink=js_array_push_f64` on #11609).
+#[test]
+fn class_expr_capture_refresh_rereads_its_capture_array_below_each_capture() {
+    let ir = compile_body(
+        "refresh_class_expr_captures",
+        vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            class_value: Box::new(Expr::Undefined),
+            captures: vec![allocating("first"), allocating("second")],
+            env_class: None,
+        })],
+    );
+    require_call_line(&ir, "js_array_alloc");
+    assert_operand_survives_the_window(
+        &ir,
+        "js_array_push_f64",
+        0,
+        "the capture array pushed after the first capture",
+    );
+    let pushes: Vec<usize> = ir
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            l.contains("@js_array_push_f64(") && !l.trim_start().starts_with("declare")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(pushes.len(), 2, "one push per capture:\n{ir}");
+    let last = *pushes.last().unwrap();
+    let line = ir.lines().nth(last).unwrap();
+    let reg = line
+        .split("@js_array_push_f64(i64 ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap_or_else(|| panic!("unexpected push shape: {line}"))
+        .to_string();
+    let def = require_definition_line(&ir, &reg);
+    let alloc = last_alloc_before(&ir, last);
+    assert!(
+        def > alloc,
+        "the second push reads {reg} (line {def}) from above the second capture's allocation \
+         (line {alloc}):\n{ir}"
+    );
+}
+
+fn capture_refresh(name: &str, captures: Vec<Expr>) -> String {
+    compile_body(
+        name,
+        vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            class_value: Box::new(Expr::Undefined),
+            captures,
+            env_class: None,
+        })],
+    )
+}
+
+/// The capture array is ONE accumulator: however many captures collect, the
+/// refresh holds one rooted slot, republished by each push. A slot per push
+/// grew tsc's module-scope closure (hundreds of refreshes of ~75 captures
+/// each) by ~370k blocks and made its compile 3-4x slower.
+#[test]
+fn class_expr_capture_refresh_roots_one_slot_for_any_capture_count() {
+    let one = capture_refresh("refresh_one", vec![allocating("a")]);
+    let three = capture_refresh(
+        "refresh_three",
+        vec![allocating("a"), allocating("b"), allocating("c")],
+    );
+    assert_eq!(call_count(&one, "js_array_push_f64"), 1, "{one}");
+    assert_eq!(call_count(&three, "js_array_push_f64"), 3, "{three}");
+    assert_eq!(
+        temp_root_slot_width(&one),
+        temp_root_slot_width(&three),
+        "three collecting captures must reuse the one capture-array slot:\n{three}"
+    );
+}
+
+/// Captures that cannot collect leave no collection point between two pushes,
+/// so the refresh emits no root at all: the same slot width as a refresh with
+/// no captures.
+#[test]
+fn class_expr_capture_refresh_over_inert_captures_emits_no_root() {
+    let none = capture_refresh("refresh_none", vec![]);
+    let inert = capture_refresh(
+        "refresh_inert",
+        vec![Expr::Number(1.0), Expr::Number(2.0), Expr::Undefined],
+    );
+    assert_eq!(call_count(&inert, "js_array_push_f64"), 3, "{inert}");
+    assert_eq!(
+        temp_root_slot_width(&inert),
+        temp_root_slot_width(&none),
+        "inert captures cannot collect, so the capture array needs no slot:\n{inert}"
+    );
+}

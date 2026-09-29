@@ -91,55 +91,58 @@ pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
 /// (`class C { m() {} static m = 1 }` — both land under one class_id) keeps
 /// whatever behaviour it had.
 pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
-    let nothing_deleted = CLASS_DELETED_KEYS.with(|m| m.borrow().is_empty());
-    if nothing_deleted {
-        let updated = CLASS_DYNAMIC_PROPS.with(|m| {
-            match m
-                .borrow_mut()
-                .get_mut(&class_id)
-                .and_then(|props| props.get_mut(name))
-            {
-                Some(slot) => {
-                    *slot = value;
-                    true
-                }
-                None => false,
-            }
-        });
-        if updated {
-            crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
-            return;
-        }
-    } else {
-        // Un-marking re-exposes a previously `delete`d prototype key to
-        // `class_instance_has_member` / `lookup_prototype_method` — the one
-        // direction a cached "this chain resolves nothing" verdict must not
-        // survive (#10696).
-        CLASS_DELETED_KEYS.with(|m| {
-            if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
-                keys.remove(name);
-            }
-        });
+    // Un-marking re-exposes a previously `delete`d prototype key to
+    // `class_instance_has_member` / `lookup_prototype_method` — the one
+    // direction a cached "this chain resolves nothing" verdict must not
+    // survive (#10696).
+    let was_deleted = CLASS_DELETED_KEYS.with(|m| {
+        m.borrow_mut()
+            .get_mut(&class_id)
+            .is_some_and(|keys| keys.remove(name))
+    });
+    if was_deleted {
         super::class_lookup_surface_gen_bump();
     }
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        let created = m
-            .borrow_mut()
-            .entry(class_id)
-            .or_default()
-            .insert(name.to_string(), value)
-            .is_none();
-        if created {
-            crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
-                order
-                    .borrow_mut()
-                    .entry(class_id)
-                    .or_default()
-                    .push(name.to_string());
-            });
-        }
-    });
-    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    // The class function object's own-property bag (barriered, traced).
+    crate::object::class_value::class_static_set(class_id, name, value);
+    class_static_alias_sync(class_id, name);
+}
+
+/// Keep a declared static field's compiled alias (its `@perry_static_*`
+/// global, which statically lowered `C.x` reads and writes) coherent with the
+/// class function object's own property: the global holds the value while
+/// `name` is a plain writable own data property, and `TAG_HOLE` otherwise —
+/// deleted, an accessor, or read-only — which sends compiled reads and writes
+/// to the generic [[Get]] / [[Set]] (`js_class_static_field_get` / `_put`).
+/// Called after every mutation of a class static.
+pub(crate) fn class_static_alias_sync(class_id: u32, name: &str) {
+    let Some(slot) = CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
+        slots
+            .borrow()
+            .get(&class_id)
+            .and_then(|f| f.get(name))
+            .copied()
+    }) else {
+        return;
+    };
+    let plain = !class_is_key_deleted(class_id, name)
+        && class_static_defined_attrs(class_id, name).is_none_or(|(writable, _, _)| writable)
+        && class_own_static_accessor_ptrs(class_id, name).is_none()
+        && super::class_dynamic_static_accessor_descriptor(
+            class_id,
+            name,
+            crate::object::class_value::class_value(class_id),
+        )
+        .is_none();
+    let value = plain
+        .then(|| crate::object::class_value::class_static_get(class_id, name))
+        .flatten()
+        .unwrap_or(f64::from_bits(crate::value::TAG_HOLE));
+    // SAFETY: codegen only registers addresses of process-lifetime LLVM
+    // globals, and those slots are mutable GC roots.
+    unsafe {
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(slot as *mut f64, value);
+    }
 }
 
 /// Associate a declared static field's runtime-table entry with the LLVM
@@ -168,20 +171,7 @@ pub(crate) fn class_register_declared_static_global_slot(
 /// static, through its compiled backing cell as well. This is the terminal
 /// write used by `C.x`, `C["x"]`, and `C[key]` runtime assignment paths.
 pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
-    let global_slot = CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
-        slots
-            .borrow()
-            .get(&class_id)
-            .and_then(|fields| fields.get(name))
-            .copied()
-    });
-    if let Some(global_slot) = global_slot {
-        // SAFETY: codegen only registers addresses of process-lifetime LLVM
-        // globals, and those slots are mutable GC roots.
-        unsafe {
-            crate::gc::runtime_store_root_nanbox_f64_raw_slot(global_slot as *mut f64, value);
-        }
-    }
+    // The store re-syncs the declared static's compiled alias.
     class_dynamic_prop_root_store(class_id, name, value);
 }
 
@@ -191,11 +181,7 @@ pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value
 /// constructor ref so `verifyProperty(C, "field", …)` sees a real data
 /// descriptor (test262 class/elements static-field-declaration & friends).
 pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<f64> {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .and_then(|props| props.get(name).copied())
-    })
+    crate::object::class_value::class_static_get(class_id, name)
 }
 
 /// Enumerable own string keys of a class constructor: the static fields (and
@@ -216,27 +202,10 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
 }
 
 pub(crate) fn class_own_dynamic_prop_names(class_id: u32) -> Vec<String> {
-    let mut names = crate::object::CLASS_DYNAMIC_PROP_ORDER
-        .with(|order| order.borrow().get(&class_id).cloned().unwrap_or_default());
-    CLASS_DYNAMIC_PROPS.with(|props| {
-        let props = props.borrow();
-        let Some(props) = props.get(&class_id) else {
-            names.clear();
-            return;
-        };
-        names.retain(|name| props.contains_key(name));
-        // Registries populated by older/native paths may predate the order
-        // side table. Keep those visible with a deterministic fallback.
-        let mut missing: Vec<String> = props
-            .keys()
-            .filter(|name| !names.contains(name))
-            .cloned()
-            .collect();
-        missing.sort();
-        names.extend(missing);
-    });
-    names.retain(|key| !crate::object::is_internal_runtime_key(key));
-    names
+    crate::object::class_value::class_static_entries(class_id)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// #7190: record a `defineProperty`-installed static key's attributes. Called
@@ -256,6 +225,24 @@ pub(crate) fn class_static_set_defined_attrs(
             .or_default()
             .insert(name.to_string(), (writable, enumerable, configurable));
     });
+    class_static_alias_sync(class_id, name);
+}
+
+/// Forget the recorded attributes of static `name` (it becomes an ordinary
+/// writable, enumerable, configurable data property again) and re-sync its
+/// compiled alias. A static FIELD definition does this: DefineField creates
+/// the property with CreateDataPropertyOrThrow, replacing e.g. the class's
+/// own intrinsic `name`.
+pub(crate) fn class_static_clear_defined_attrs(class_id: u32, name: &str) {
+    let removed = crate::object::CLASS_STATIC_DEFINED_ATTRS.with(|m| {
+        m.borrow_mut()
+            .get_mut(&class_id)
+            .and_then(|k| k.remove(name))
+            .is_some()
+    });
+    if removed {
+        class_static_alias_sync(class_id, name);
+    }
 }
 
 /// `(writable, enumerable)` if this static key was installed by
@@ -274,25 +261,12 @@ pub(crate) fn class_static_key_is_non_enumerable(class_id: u32, name: &str) -> b
 /// only — does not read the value, so it never invokes a static getter. Used by
 /// the `in` operator on a class ref (#6149).
 pub(crate) fn class_has_own_dynamic_prop(class_id: u32, name: &str) -> bool {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .map(|props| props.contains_key(name))
-            .unwrap_or(false)
-    })
+    crate::object::class_value::class_static_get(class_id, name).is_some()
 }
 
 pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        if let Some(props) = m.borrow_mut().get_mut(&class_id) {
-            props.remove(name);
-        }
-    });
-    crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
-        if let Some(names) = order.borrow_mut().get_mut(&class_id) {
-            names.retain(|existing| existing != name);
-        }
-    });
+    crate::object::class_value::class_static_remove(class_id, name);
+    class_static_alias_sync(class_id, name);
 }
 
 pub(crate) fn class_prototype_method_value_cache_root_store(
@@ -518,37 +492,7 @@ pub(crate) fn class_prototype_object_addr_index_rekey(old: usize, new: usize) {
     });
 }
 
-crate::perry_thread_local! {
-    /// The CONSTRUCTOR's `[[Prototype]]`, set by `Object.setPrototypeOf(Ctor, obj)`
-    /// on a declared class (perry represents those as INT32 ClassRefs, not heap
-    /// Function objects, so they have no closure prototype slot to write).
-    ///
-    /// Deliberately its own table. `CLASS_PROTOTYPE_OBJECTS` means "the object
-    /// INSTANCES of this class inherit from", and the method-dispatch and
-    /// field-read walks read it for exactly that purpose — parking a
-    /// constructor-side link there makes `new Ctor()` inherit the constructor's
-    /// statics and makes prototype-method mirroring write into the user's
-    /// object. Only the static-side lookups consult this table:
-    /// `js_object_get_field_by_name`'s ClassRef arm, the generic `in` presence
-    /// walk, static method dispatch, and `Object.getPrototypeOf`.
-    ///
-    /// Effect's `Schema.Opaque` is the motivating shape (`Schema.ts:1887`,
-    /// `:5874`): `class Opaque {}; Object.setPrototypeOf(Opaque, schema)`, then
-    /// `class Partial extends Opaque {}` reads `Partial.ast` through the chain.
-    ///
-    /// Stored as `usize` for the same Send + Sync reason as the tables above.
-    pub static CLASS_STATIC_PROTOTYPES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
-}
-
-crate::perry_thread_local! {
-    /// Class ids whose constructor `[[Prototype]]` was explicitly set to `null`
-    /// (`Object.setPrototypeOf(Ctor, null)`). Absence from CLASS_STATIC_PROTOTYPES
-    /// alone cannot express this: "never linked" must still report the default
-    /// `Function.prototype`, while an explicit null must report `null`. Holds
-    /// class ids only, so the collector has nothing to trace here.
-    pub static CLASS_STATIC_PROTOTYPE_NULLED: RwLock<Option<std::collections::HashSet<u32>>> =
-        RwLock::new(None);
-}
+crate::perry_thread_local! {}
 
 crate::perry_thread_local! {
     /// Lazily materialized `Class.prototype` objects for declared ES classes.
@@ -652,12 +596,21 @@ crate::perry_thread_local! {
     pub static CLASS_OBJECT_VALUES: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
 }
 
+/// Monotone: has any per-evaluation class object (`ClassExprFresh`) been
+/// recorded in this process? While clear, `class_object_value_for_cid` is
+/// `None` for every class, so a read of a class function object's own data
+/// property answers from its own-property object without consulting the
+/// per-evaluation table first.
+pub(crate) static CLASS_OBJECT_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Store the marked class object for its template class id (see
 /// `CLASS_OBJECT_VALUES`).
 pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectHeader) {
     if class_id == 0 || obj_ptr.is_null() {
         return;
     }
+    CLASS_OBJECT_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let bits = crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits();
     CLASS_OBJECT_VALUES.with(|table| {
         let mut guard = table.write().unwrap();
@@ -728,77 +681,54 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     super::class_lookup_surface_gen_bump();
 }
 
+/// `Object.setPrototypeOf(Ctor, proto)`: the class function object's
+/// recorded `[[Prototype]]` (its state record, a traced edge).
 pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
-    CLASS_STATIC_PROTOTYPES.with(|table| {
-        let mut guard = table.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard.as_mut().unwrap().insert(class_id, proto_ptr as usize);
-    });
-    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(set) = guard.as_mut() {
-                set.remove(&class_id);
-            }
-        }
-    });
-    crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    let bits = crate::value::js_nanbox_pointer(proto_ptr as i64).to_bits();
+    crate::closure::closure_set_static_prototype(
+        crate::object::class_value::class_value_ptr(class_id) as usize,
+        bits,
+    );
 }
 
+/// `Object.setPrototypeOf(Ctor, null)`.
 pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
     if class_id == 0 {
         return;
     }
-    CLASS_STATIC_PROTOTYPES.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                map.remove(&class_id);
-            }
-        }
-    });
-    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
-        let mut guard = table.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(std::collections::HashSet::new());
-        }
-        guard.as_mut().unwrap().insert(class_id);
-    });
+    crate::closure::closure_set_static_prototype(
+        crate::object::class_value::class_value_ptr(class_id) as usize,
+        crate::value::TAG_NULL,
+    );
+}
+
+fn class_recorded_prototype_bits(class_id: u32) -> Option<u64> {
+    if class_id == 0 {
+        return None;
+    }
+    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
+    crate::closure::closure_static_prototype(
+        crate::object::class_value::class_value_ptr(class_id) as usize
+    )
 }
 
 /// True when `Object.setPrototypeOf(Ctor, null)` explicitly severed the
 /// constructor's prototype chain, as opposed to never having linked one.
 pub(crate) fn class_static_prototype_is_nulled(class_id: u32) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
-    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
-        table
-            .read()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|set| set.contains(&class_id)))
-            .unwrap_or(false)
-    })
+    class_recorded_prototype_bits(class_id) == Some(crate::value::TAG_NULL)
 }
 
 /// The constructor-side `[[Prototype]]` recorded for `class_id`, or null.
 pub(crate) fn class_static_prototype(class_id: u32) -> *mut ObjectHeader {
-    if class_id == 0 {
-        return std::ptr::null_mut();
-    }
-    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
-    CLASS_STATIC_PROTOTYPES.with(|table| {
-        if let Ok(read) = table.read() {
-            if let Some(map) = read.as_ref() {
-                return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
-            }
+    match class_recorded_prototype_bits(class_id) {
+        Some(bits) if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG => {
+            (bits & crate::value::POINTER_MASK) as *mut ObjectHeader
         }
-        std::ptr::null_mut()
-    })
+        _ => std::ptr::null_mut(),
+    }
 }
 
 pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {

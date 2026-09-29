@@ -217,6 +217,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // skipping per-evaluation closure allocation on the hot loop. See
     // `crates/perry-runtime/src/closure.rs::js_closure_alloc_singleton`.
     module.declare_function("js_closure_alloc_singleton", I64, &[PTR]);
+    // A class constructor as a value: the class's per-agent function object
+    // (`object/class_value.rs`; #11414).
+    module.declare_function("js_class_value", DOUBLE, &[I32]);
+    // A declared static whose compiled alias is detached (`TAG_HOLE`): the
+    // generic [[Get]] / [[Set]] on the class function object.
+    module.declare_function("js_class_static_field_get", DOUBLE, &[I32, PTR, I64]);
+    module.declare_function("js_class_static_field_put", VOID, &[I32, PTR, I64, DOUBLE]);
     // Singleton-cached variant for closures with captures, keyed by
     // `(func_ptr, capture_bits…)`. Args: (func_ptr, capture_count,
     // captures_ptr — pointer to `capture_count` u64 values).

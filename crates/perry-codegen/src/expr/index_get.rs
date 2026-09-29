@@ -41,7 +41,7 @@ use super::{
 };
 
 mod foreign_counter;
-mod guarded_array;
+pub(super) mod guarded_array;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
     packed_f64_loop_index_parts,

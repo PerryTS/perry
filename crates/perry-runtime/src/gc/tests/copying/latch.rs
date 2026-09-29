@@ -330,6 +330,16 @@ fn pin_object_non_young_call_sites_are_never_young() {
              ever young, pin_object_non_young there would be memory corruption"
         );
 
+        // `object/class_value.rs` pins each class function object, which it
+        // allocates born-tenured in the OLD arena.
+        let class_fn = crate::object::class_value::class_value_ptr(0x7A11);
+        let cf_header = header_from_user_ptr(class_fn as *const u8) as *mut GcHeader;
+        assert!(
+            !crate::gc::pin::pin_constrains_copying_minor_for_tests(cf_header),
+            "a class function object is born in the old arena; if it were ever \
+             young, pin_object_non_young there would be memory corruption"
+        );
+
         // Control: a plain nursery object IS young, so the predicate the two
         // assertions above rely on is not vacuously false for everything.
         let young = young_leaf();

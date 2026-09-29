@@ -13,6 +13,51 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
 
 use crate::block::LlBlock;
+
+/// A class constructor as a VALUE (#11414): the class's per-agent function
+/// object. `js_class_value` never collects (`gc_call_effects`) and the object
+/// is pinned for the agent's life, so the result needs no root.
+pub(crate) fn emit_class_value(blk: &mut LlBlock, class_id: u32) -> String {
+    blk.call(
+        DOUBLE,
+        "js_class_value",
+        &[(I32, &(class_id as i32).to_string())],
+    )
+}
+
+/// [`emit_class_value`] behind a per-site cache: a zero-initialised global
+/// (thread-local when the program starts workers, so each agent caches its
+/// own class object) holds the NaN-boxed value after the first use. The object
+/// is pinned for the agent's life, so the cached bits never go stale and the
+/// slot needs no root.
+pub(crate) fn emit_class_value_cached(ctx: &mut FnCtx<'_>, class_id: u32) -> String {
+    let site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let slot = format!("@{}_classval", inline_cache_global_name(ctx, site));
+    let tls = if crate::codegen::program_has_worker() {
+        "thread_local "
+    } else {
+        ""
+    };
+    ctx.typed_parse_rodata
+        .push(format!("{slot} = private {tls}global double 0.0, align 8"));
+    let cached = ctx.block().load(DOUBLE, &slot);
+    let bits = ctx.block().bitcast_double_to_i64(&cached);
+    let empty = ctx.block().icmp_eq(I64, &bits, "0");
+    let from_l = ctx.block_label(ctx.current_block);
+    let miss_idx = ctx.new_block("classval.miss");
+    let join_idx = ctx.new_block("classval.join");
+    let miss_l = ctx.block_label(miss_idx);
+    let join_l = ctx.block_label(join_idx);
+    ctx.block().cond_br(&empty, &miss_l, &join_l);
+    ctx.current_block = miss_idx;
+    let fresh = emit_class_value(ctx.block(), class_id);
+    ctx.block().store(DOUBLE, &fresh, &slot);
+    ctx.block().br(&join_l);
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&cached, &from_l), (&fresh, &miss_l)])
+}
 use crate::codegen::AppMetadata;
 use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;

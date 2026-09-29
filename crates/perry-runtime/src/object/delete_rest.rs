@@ -870,6 +870,15 @@ pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i3
     }
     // Class-ref receiver (`delete C["m"]`): see `js_object_delete_field_value`.
     if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
+        // A symbol key is an own symbol property of the class function object.
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            return unsafe {
+                crate::symbol::js_object_delete_symbol_property(
+                    super::class_value::class_value(class_id),
+                    key,
+                )
+            };
+        }
         return js_object_delete_dynamic(class_id as usize as *mut ObjectHeader, key);
     }
     if !delete_receiver_is_pointer(obj_value) {
