@@ -1488,6 +1488,7 @@ mod field_rep_identity_tests {
             0,
             PROTO,
             0,
+            None,
         ));
         assert_eq!(explicit, legacy);
     }

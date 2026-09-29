@@ -2988,6 +2988,8 @@ js_shadow_slot_get	Leaf
 js_shadow_slot_set	Leaf
 js_shadow_state_addr	Leaf
 js_shape_ordinary_inline_slot_for_key	Reenters
+js_shape_register_static_seed	Leaf
+js_shape_run_static_seed	Reenters
 js_shape_seed_plain	Reenters
 js_shared_array_buffer_new	Reenters
 js_shared_array_buffer_new_value	Reenters
