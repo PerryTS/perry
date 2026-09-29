@@ -113,6 +113,11 @@ path = "tests/native_textfield_selection.rs"
 harness = false
 
 [[test]]
+name = "native_textfield_baseline"
+path = "tests/native_textfield_baseline.rs"
+harness = false
+
+[[test]]
 name = "native_text_spacing"
 path = "tests/native_text_spacing.rs"
 harness = false
