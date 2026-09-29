@@ -509,6 +509,8 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
     // Read from the PRIVATE list, not through `is_dictionary`: at the latch
     // the shape still publishes the old keys when this runs.
     let extra_summary = private_list_summary(obj);
+    // Charter step 3 (R2): the receiver's store facts, read before the mint.
+    let kind = shapes::store_kind::mint_kind(shapes::ShapeObjectKind::Ordinary, obj);
     let handle = scope.root_raw_mut_ptr(obj);
     // The mint is the allocating half; the receiver is never nameable across
     // it (#7341), so there is no pre-call address left to stamp.
@@ -518,7 +520,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             0,
             live_inline_slot_count,
             next_generation(),
-            shapes::ShapeObjectKind::Ordinary,
+            kind,
             0,
             proto_id,
             extra_summary,

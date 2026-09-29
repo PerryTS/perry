@@ -61,10 +61,9 @@ fn packed_set_site_layout_matches_codegen() {
 fn packed_add_refuse_bits_match_codegen() {
     // perry-codegen ADD_REFUSE_RESERVED / ADD_REFUSE_GC_FLAGS, read as one
     // little-endian u32 at the GcHeader: obj_type | gc_flags << 8 | _reserved << 16.
-    let reserved = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-        | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
-        | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
-    assert_eq!(reserved, 0x0C80);
+    // Charter step 3: the numeric proof is a shape kind, not a refused bit.
+    let reserved = crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+    assert_eq!(reserved, 0x0C00);
     // ADD_LAYOUT_RESERVED: the states `mark_object_dynamic_shape_unknown` acts on.
     assert_eq!(
         crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT,
