@@ -46,10 +46,12 @@
 //! `RootedGroup::adopt_emitted`.
 //!
 //! [`the_result_is_rooted_only_when_the_element_may_be_a_bigint`] is the only
-//! test here with a counterfactual, and it carries its own: the typed-array arm
-//! (`is_provably_not_bigint` proves the element is `Number | undefined`) takes
+//! test here with a counterfactual, and it carries its own: a `number[]`
+//! element (`is_provably_not_bigint` proves it is not a BigInt) takes
 //! `protect == false` and its returned register is produced ABOVE the write —
-//! measured, not assumed. That is the same shape as the unrooted lowering, so
+//! measured, not assumed. (The counterfactual was a `Uint8Array` element until
+//! typed-array updates got their own lowering, `expr/typed_array_update.rs`,
+//! which never reaches this arm.) That is the same shape as the unrooted lowering, so
 //! the two arms together show the root is what moves the read.
 //!
 //! # The remaining test is a PIPELINE assertion, and says so
@@ -285,10 +287,10 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
         vec![
             Stmt::Let {
                 id: 0,
-                name: "ta".to_string(),
-                ty: Type::Named("Uint8Array".to_string()),
+                name: "nums".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
-                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(4.0))))),
+                init: Some(Expr::Array(vec![Expr::Number(4.0)])),
             },
             Stmt::Return(Some(Expr::IndexUpdate {
                 object: Box::new(Expr::LocalGet(0)),
@@ -303,7 +305,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
     let typed_produced = producer_line(&typed, &returned_register(&typed));
     assert!(
         typed_produced < typed_write,
-        "a typed-array element can never be a BigInt, so the result must keep the register \
+        "a number[] element is never a BigInt, so the result must keep the register \
          js_to_numeric produced — no slot, no re-read. Produced at line {typed_produced}, the \
          write is at line {typed_write}; if this is BELOW the write the \
          `is_provably_not_bigint` gate has stopped gating.\n{typed}"
