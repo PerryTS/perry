@@ -482,14 +482,17 @@ pub(crate) fn lower_member_tail(
                             if !matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_)))
                     );
                     // The collapse exists only to feed intrinsic static
-                    // lowering. A built-in with no intrinsic static surface
-                    // is only ever the real object it is (a constructor
-                    // function object with its own properties): `X.prop`
-                    // reads that object's own or inherited property, never
-                    // `globalThis.prop`. `.name` / `.length` keep their
-                    // dedicated folds below, which key on the collapse.
+                    // lowering. A built-in constructor with no intrinsic
+                    // static surface is only ever the real function object
+                    // it is, with its own properties: `X.prop` reads that
+                    // object's own or inherited property, never
+                    // `globalThis.prop`. Namespace objects (`console`,
+                    // `process`, `Buffer`) are not constructors and keep
+                    // their intrinsic lowering. `.name` / `.length` keep
+                    // their dedicated folds below, which key on the collapse.
                     let receiver_is_plain_builtin_object =
-                        !crate::analysis::has_intrinsic_static_surface(property)
+                        crate::analysis::builtin_constructor_length(property).is_some()
+                            && !crate::analysis::has_intrinsic_static_surface(property)
                             && !matches!(outer_static_member, Some("name" | "length"));
                     if !receiver_is_plain_builtin_object
                         && !outer_is_prototype_or_proto
