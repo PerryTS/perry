@@ -66,6 +66,16 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // of one shape compare plus a slot load. Different emitted code, so an
     // object built with regions must not be served to a build without them.
     "PERRY_REGION_READS",
+    // #10884 step 4b loop regions (#11650). `PERRY_REGIONS=0|off|false`
+    // disables loop regions altogether (the A/B arm), so the same loop lowers
+    // as versioned-guard code or as plain per-access code.
+    "PERRY_REGIONS",
+    // `PERRY_REGION_NODES_PER_BARE=<n>` moves the size limit `pays` applies to
+    // a region candidate, so it decides which loops are versioned.
+    "PERRY_REGION_NODES_PER_BARE",
+    // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
+    // stored, which drops the spill-reading copies from the emitted loop.
+    "PERRY_REGION_SPILL",
     // #10777: gates computing numeric-by-construction provenance AFTER the
     // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
     // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the

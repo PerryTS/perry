@@ -803,6 +803,11 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_PTR_NUMARRAY_LOCALS",
         // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
         "PERRY_JSCVT",
+        // #10884 / #11650 loop regions: the kill switch and three tuning knobs.
+        "PERRY_REGION_READS",
+        "PERRY_REGIONS",
+        "PERRY_REGION_NODES_PER_BARE",
+        "PERRY_REGION_SPILL",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.
