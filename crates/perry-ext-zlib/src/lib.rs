@@ -480,8 +480,7 @@ pub unsafe extern "C" fn js_ext_zlib_native_dispatch(
 mod tests {
     use super::*;
     use perry_ffi::{
-        alloc_closure, alloc_string, read_buffer_bytes, register_closure_arity, JsString, JsValue,
-        RawClosureHeader,
+        alloc_closure, alloc_string, read_buffer_bytes, JsString, JsValue, RawClosureHeader,
     };
     use std::cell::Cell;
 
@@ -492,6 +491,7 @@ mod tests {
 
     extern "C" fn record_dispatch_callback(
         _closure: *const RawClosureHeader,
+        _this: perry_ffi::JsThis,
         err: f64,
         value: f64,
     ) -> f64 {
@@ -569,8 +569,10 @@ mod tests {
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         DISPATCH_CALLBACK_OK.with(|ok| ok.set(false));
 
-        register_closure_arity(record_dispatch_callback as *const u8, 2);
-        let callback = alloc_closure(record_dispatch_callback as *const u8, 0);
+        let callback = alloc_closure(
+            perry_ffi::js_function_info!(record_dispatch_callback, 2; with_declared(2)),
+            0,
+        );
         assert!(!callback.is_null());
 
         let input = alloc_buffer(b"captured zlib export");
@@ -593,7 +595,12 @@ mod tests {
 
     #[test]
     fn external_dispatch_accepts_options_and_honors_level_zero() {
-        extern "C" fn callback(_closure: *const RawClosureHeader, err: f64, output: f64) -> f64 {
+        extern "C" fn callback(
+            _closure: *const RawClosureHeader,
+            _this: perry_ffi::JsThis,
+            err: f64,
+            output: f64,
+        ) -> f64 {
             assert_eq!(err.to_bits(), JsValue::NULL.bits());
             let bytes = read_buffer_bytes(
                 JsValue::from_bits(output.to_bits()).as_pointer::<BufferHeader>(),
@@ -608,9 +615,12 @@ mod tests {
         }
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         let scope = perry_ffi::TransientRootScope::enter();
-        register_closure_arity(callback as *const u8, 2);
         let callback = scope.root_nanbox(f64::from_bits(
-            JsValue::from_object_ptr(alloc_closure(callback as *const u8, 0)).bits(),
+            JsValue::from_object_ptr(alloc_closure(
+                perry_ffi::js_function_info!(callback, 2; with_declared(2)),
+                0,
+            ))
+            .bits(),
         ));
         let data = scope.root_nanbox(f64::from_bits(
             JsValue::from_object_ptr(alloc_buffer(&vec![b'A'; 4096])).bits(),

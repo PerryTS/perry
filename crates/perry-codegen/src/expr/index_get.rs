@@ -50,6 +50,7 @@ use foreign_counter::{
     affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
     packed_f64_loop_offset_read,
 };
+pub(crate) use guarded_array::emit_array_region_guard;
 mod inline_dyn_typed_array;
 
 use guarded_array::{
@@ -716,6 +717,10 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     let Expr::IndexGet { object, index } = expr else {
         return Ok(None);
     };
+    // A planned-bare region read lowers through the value path's hook.
+    if crate::stmt::region_loop::is_bare_index_get(ctx, expr) {
+        return Ok(None);
+    }
     // Masked-window fast path first: the dense range guard proved the whole
     // static index window at loop entry, so the read needs neither the static
     // layout proof below nor a per-access guard. The fact can only exist for
@@ -1102,6 +1107,10 @@ fn lower_bounded_array_index_get_checked(
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // Step 4b / array S3: a planned-bare element read inside a loop region.
+    if let Some(v) = crate::stmt::region_loop::try_lower_bare_index_get(ctx, expr)? {
+        return Ok(v);
+    }
     match expr {
         Expr::IndexGet { object, index } => {
             // #10509: must precede every receiver-proof tier below.

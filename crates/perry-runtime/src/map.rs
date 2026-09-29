@@ -3052,8 +3052,6 @@ fn js_map_foreach_impl(
         // appends are visited too. Bounding the walk by `size` exposed holes
         // and truncated later entries (#9072).
         let mut i = 0usize;
-        // #9445: the displaced receiver is rooted ONCE here, not once per callback.
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         loop {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
             if i >= (*map).used as usize {
@@ -3076,13 +3074,10 @@ fn js_map_foreach_impl(
             }
             let args = [value, key, map_value];
             let cb = callback_handle.get_nanbox_f64();
-            let this_v = this_handle.get_nanbox_f64();
-            // Bind `thisArg` for the duration of the call (matches the
-            // URLSearchParams.forEach pattern); `js_native_call_value`
+            let this_v = crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64());
+            // `thisArg` is the callback's receiver; the value-call path
             // dispatches the NaN-boxed callback with the full arg vector.
-            crate::object::js_implicit_this_set(this_v);
-            let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
-            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+            let _ = crate::closure::native_call_value_this(cb, this_v, args.as_ptr(), args.len());
         }
     }
     let map = map_handle.get_raw_const_ptr::<MapHeader>();

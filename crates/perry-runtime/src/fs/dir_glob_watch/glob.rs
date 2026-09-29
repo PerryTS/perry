@@ -739,7 +739,6 @@ fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions<'_>) -> Res
         return Ok(false);
     };
     let scope = RuntimeHandleScope::new();
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let result = crate::exception::catch_js_throw(|| {
         let arg = if options.with_file_types {
             unsafe { build_dirent_object(&entry.dirent_name, &entry.dirent_parent, entry.kind) }
@@ -749,10 +748,10 @@ fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions<'_>) -> Res
         let arg = scope.root_nanbox_f64(arg);
         crate::closure::js_closure_call1(
             extract_closure_ptr(callback.get_nanbox_f64()),
+            crate::closure::plain_call_receiver(),
             arg.get_nanbox_f64(),
         )
     });
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
     result.map(|value| crate::value::js_is_truthy(value) != 0)
 }
 

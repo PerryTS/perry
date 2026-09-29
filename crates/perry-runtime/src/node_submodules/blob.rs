@@ -10,8 +10,7 @@ use super::consumers::{
 };
 use super::fs_promises::{promise_rejected, promise_value};
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
@@ -88,23 +87,33 @@ fn blob_reader_promise_rejected(reason: f64) -> f64 {
     })
 }
 
-extern "C" fn blob_text_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_text_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_text_value(&bytes))
 }
 
-extern "C" fn blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_array_buffer_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_array_buffer_value(&bytes))
 }
 
-extern "C" fn blob_bytes_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_bytes_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     blob_reader_promise_value(bytes_to_uint8_array_value(&bytes))
 }
 
 extern "C" fn blob_slice_method(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
     content_type: f64,
@@ -129,26 +138,38 @@ extern "C" fn blob_slice_method(
     blob_value_from_bytes_and_type(&bytes[lo as usize..hi as usize], &content_type)
 }
 
-extern "C" fn blob_stream_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn blob_stream_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let bytes = captured_blob_bytes(closure);
     crate::node_stream::js_node_stream_readable_from(bytes_to_uint8_array_value(&bytes))
 }
 
-extern "C" fn file_blob_text_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_text_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_text_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
-extern "C" fn file_blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_array_buffer_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_array_buffer_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
-extern "C" fn file_blob_bytes_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_bytes_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
         Ok(bytes) => blob_reader_promise_value(bytes_to_uint8_array_value(&bytes)),
         Err(reason) => blob_reader_promise_rejected(reason),
@@ -157,6 +178,7 @@ extern "C" fn file_blob_bytes_method(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn file_blob_slice_method(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     start: f64,
     end: f64,
     content_type: f64,
@@ -193,27 +215,42 @@ extern "C" fn file_blob_slice_method(
     blob_value_from_file_state(child)
 }
 
-extern "C" fn file_blob_stream_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     file_blob_stream_value(captured_file_blob_id(closure))
 }
 
-extern "C" fn file_blob_stream_get_reader_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_get_reader_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     let obj = js_object_alloc(0, 4);
     set_named_value(
         obj,
         b"read",
-        file_blob_stream_method_value(file_blob_stream_next_method as *const u8, 0, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_next_method, 0; with_declared(0)),
+            stream_id,
+        ),
     );
     set_named_value(
         obj,
         b"releaseLock",
-        file_blob_stream_method_value(file_blob_stream_undefined_method as *const u8, 0, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_undefined_method, 0; with_declared(0)),
+            stream_id,
+        ),
     );
     set_named_value(
         obj,
         b"cancel",
-        file_blob_stream_method_value(file_blob_stream_cancel_method as *const u8, 1, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_cancel_method, 1; with_declared(1)),
+            stream_id,
+        ),
     );
     set_named_value(
         obj,
@@ -223,11 +260,17 @@ extern "C" fn file_blob_stream_get_reader_method(closure: *const ClosureHeader) 
     object_value(obj)
 }
 
-extern "C" fn file_blob_stream_next_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_next_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     file_blob_stream_next(captured_file_blob_stream_id(closure))
 }
 
-extern "C" fn file_blob_stream_return_method(closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_return_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     FILE_BLOB_STREAMS.with(|streams| {
         if let Some(state) = streams.borrow_mut().get_mut(&stream_id) {
@@ -237,20 +280,34 @@ extern "C" fn file_blob_stream_return_method(closure: *const ClosureHeader) -> f
     resolved_iterator_promise(f64::from_bits(crate::value::TAG_UNDEFINED), true)
 }
 
-extern "C" fn file_blob_stream_values_method(closure: *const ClosureHeader, _options: f64) -> f64 {
+extern "C" fn file_blob_stream_values_method(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    _options: f64,
+) -> f64 {
     let _ = closure;
-    crate::object::js_implicit_this_get()
+    this.as_f64()
 }
 
-extern "C" fn file_blob_stream_async_iterator_method(_closure: *const ClosureHeader) -> f64 {
-    crate::object::js_implicit_this_get()
+extern "C" fn file_blob_stream_async_iterator_method(
+    _closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    this.as_f64()
 }
 
-extern "C" fn file_blob_stream_undefined_method(_closure: *const ClosureHeader) -> f64 {
+extern "C" fn file_blob_stream_undefined_method(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn file_blob_stream_cancel_method(closure: *const ClosureHeader, _reason: f64) -> f64 {
+extern "C" fn file_blob_stream_cancel_method(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _reason: f64,
+) -> f64 {
     let stream_id = captured_file_blob_stream_id(closure);
     FILE_BLOB_STREAMS.with(|streams| {
         if let Some(state) = streams.borrow_mut().get_mut(&stream_id) {
@@ -290,38 +347,29 @@ fn object_value(obj: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
-#[allow(clippy::missing_transmute_annotations)]
 fn blob_method_value(
-    func: *const u8,
-    arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
     backing: *mut crate::buffer::BufferHeader,
 ) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 1);
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, backing as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-#[allow(clippy::missing_transmute_annotations)]
-fn file_blob_method_value(func: *const u8, arity: u32, id: usize) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 1);
+fn file_blob_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-#[allow(clippy::missing_transmute_annotations)]
-fn file_blob_stream_method_value(func: *const u8, arity: u32, id: usize) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 1);
+fn file_blob_stream_method_value(info: *const crate::closure::JsFunctionInfo, id: usize) -> f64 {
+    let closure = js_closure_alloc(info, 1);
     js_closure_set_capture_ptr(closure, 0, id as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
-#[allow(clippy::missing_transmute_annotations)]
-fn file_blob_stream_self_method_value(func: *const u8, arity: u32) -> f64 {
-    js_register_closure_arity(func, arity);
-    let closure = js_closure_alloc(func, 0);
+fn file_blob_stream_self_method_value(info: *const crate::closure::JsFunctionInfo) -> f64 {
+    let closure = js_closure_alloc(info, 0);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -337,27 +385,42 @@ fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
     set_named_value(
         obj,
         b"text",
-        blob_method_value(blob_text_method as *const u8, 0, backing),
+        blob_method_value(
+            crate::fn_info!(blob_text_method, 0; with_declared(0)),
+            backing,
+        ),
     );
     set_named_value(
         obj,
         b"arrayBuffer",
-        blob_method_value(blob_array_buffer_method as *const u8, 0, backing),
+        blob_method_value(
+            crate::fn_info!(blob_array_buffer_method, 0; with_declared(0)),
+            backing,
+        ),
     );
     set_named_value(
         obj,
         b"bytes",
-        blob_method_value(blob_bytes_method as *const u8, 0, backing),
+        blob_method_value(
+            crate::fn_info!(blob_bytes_method, 0; with_declared(0)),
+            backing,
+        ),
     );
     set_named_value(
         obj,
         b"slice",
-        blob_method_value(blob_slice_method as *const u8, 3, backing),
+        blob_method_value(
+            crate::fn_info!(blob_slice_method, 3; with_declared(3)),
+            backing,
+        ),
     );
     set_named_value(
         obj,
         b"stream",
-        blob_method_value(blob_stream_method as *const u8, 0, backing),
+        blob_method_value(
+            crate::fn_info!(blob_stream_method, 0; with_declared(0)),
+            backing,
+        ),
     );
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
@@ -386,27 +449,42 @@ fn blob_value_from_file_state(state: FileBlobState) -> f64 {
     set_named_value(
         obj,
         b"text",
-        file_blob_method_value(file_blob_text_method as *const u8, 0, id),
+        file_blob_method_value(
+            crate::fn_info!(file_blob_text_method, 0; with_declared(0)),
+            id,
+        ),
     );
     set_named_value(
         obj,
         b"arrayBuffer",
-        file_blob_method_value(file_blob_array_buffer_method as *const u8, 0, id),
+        file_blob_method_value(
+            crate::fn_info!(file_blob_array_buffer_method, 0; with_declared(0)),
+            id,
+        ),
     );
     set_named_value(
         obj,
         b"bytes",
-        file_blob_method_value(file_blob_bytes_method as *const u8, 0, id),
+        file_blob_method_value(
+            crate::fn_info!(file_blob_bytes_method, 0; with_declared(0)),
+            id,
+        ),
     );
     set_named_value(
         obj,
         b"slice",
-        file_blob_method_value(file_blob_slice_method as *const u8, 3, id),
+        file_blob_method_value(
+            crate::fn_info!(file_blob_slice_method, 3; with_declared(3)),
+            id,
+        ),
     );
     set_named_value(
         obj,
         b"stream",
-        file_blob_method_value(file_blob_stream_method as *const u8, 0, id),
+        file_blob_method_value(
+            crate::fn_info!(file_blob_stream_method, 0; with_declared(0)),
+            id,
+        ),
     );
     object_value(obj)
 }
@@ -562,30 +640,40 @@ fn file_blob_stream_value(blob_id: usize) -> f64 {
         obj,
         b"getReader",
         file_blob_stream_method_value(
-            file_blob_stream_get_reader_method as *const u8,
-            0,
+            crate::fn_info!(file_blob_stream_get_reader_method, 0; with_declared(0)),
             stream_id,
         ),
     );
     set_named_value(
         obj,
         b"next",
-        file_blob_stream_method_value(file_blob_stream_next_method as *const u8, 0, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_next_method, 0; with_declared(0)),
+            stream_id,
+        ),
     );
     set_named_value(
         obj,
         b"return",
-        file_blob_stream_method_value(file_blob_stream_return_method as *const u8, 0, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_return_method, 0; with_declared(0)),
+            stream_id,
+        ),
     );
     set_named_value(
         obj,
         b"values",
-        file_blob_stream_self_method_value(file_blob_stream_values_method as *const u8, 1),
+        file_blob_stream_self_method_value(
+            crate::fn_info!(file_blob_stream_values_method, 1; with_declared(1)),
+        ),
     );
     set_named_value(
         obj,
         b"cancel",
-        file_blob_stream_method_value(file_blob_stream_cancel_method as *const u8, 1, stream_id),
+        file_blob_stream_method_value(
+            crate::fn_info!(file_blob_stream_cancel_method, 1; with_declared(1)),
+            stream_id,
+        ),
     );
     set_named_value(obj, b"locked", bool_value(false));
     let obj_value = object_value(obj);
@@ -597,8 +685,7 @@ fn file_blob_stream_value(blob_id: usize) -> f64 {
                 obj_value,
                 sym_value,
                 file_blob_stream_self_method_value(
-                    file_blob_stream_async_iterator_method as *const u8,
-                    0,
+                    crate::fn_info!(file_blob_stream_async_iterator_method, 0; with_declared(0)),
                 ),
             );
         }

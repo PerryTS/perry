@@ -733,13 +733,19 @@ unsafe fn call_one_shot_callback(callback: i64, result: Result<Vec<u8>, String>)
                 make_buffer_f64(&bytes)
                     .unwrap_or_else(|| f64::from_bits(JsValue::UNDEFINED.bits())),
             );
-            let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
-                .call2(err, out.get());
+            let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader).call2(
+                perry_ffi::JsThis::UNDEFINED,
+                err,
+                out.get(),
+            );
         }
         Err(msg) => {
             let err = roots.root_nanbox(build_error_object(&msg));
-            let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
-                .call2(err.get(), f64::from_bits(JsValue::UNDEFINED.bits()));
+            let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader).call2(
+                perry_ffi::JsThis::UNDEFINED,
+                err.get(),
+                f64::from_bits(JsValue::UNDEFINED.bits()),
+            );
         }
     }
 }
@@ -1357,7 +1363,7 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
                             if callback.get() != 0 {
                                 let _ =
                                     JsClosure::from_raw(callback.get() as *const RawClosureHeader)
-                                        .call1(buffer.get());
+                                        .call1(perry_ffi::JsThis::UNDEFINED, buffer.get());
                             }
                         }
                     }
@@ -1371,7 +1377,8 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
             let roots = TransientRootScope::enter();
             for callback in roots.root_addrs(&listeners_for(id, "finish")) {
                 if callback.get() != 0 {
-                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader).call0();
+                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
+                        .call0(perry_ffi::JsThis::UNDEFINED);
                 }
             }
         }
@@ -1387,7 +1394,8 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
             drop_buffered_stream(&mut statics().lock().unwrap(), id);
             for callback in end_callbacks {
                 if callback.get() != 0 {
-                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader).call0();
+                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
+                        .call0(perry_ffi::JsThis::UNDEFINED);
                 }
             }
             for destination in destinations {
@@ -1395,7 +1403,8 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
             }
             for callback in close_callbacks {
                 if callback.get() != 0 {
-                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader).call0();
+                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
+                        .call0(perry_ffi::JsThis::UNDEFINED);
                 }
             }
         }
@@ -1407,13 +1416,14 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
             for callback in callbacks {
                 if callback.get() != 0 {
                     let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
-                        .call1(error.get());
+                        .call1(perry_ffi::JsThis::UNDEFINED, error.get());
                 }
             }
         }
         ZlibEvent::Callback(callback) => {
             if callback != 0 {
-                let _ = JsClosure::from_raw(callback as *const RawClosureHeader).call0();
+                let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
+                    .call0(perry_ffi::JsThis::UNDEFINED);
             }
         }
         ZlibEvent::OneShotCallback(_, _, _) => {

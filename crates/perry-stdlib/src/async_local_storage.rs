@@ -56,7 +56,12 @@ unsafe fn validate_callback(callback: f64) -> *const ClosureHeader {
 unsafe fn call_with_forwarded_args(cb: *const ClosureHeader, args_array: i64) -> f64 {
     let closure_env = cb as i64;
     if args_array == 0 {
-        return js_closure_call_array(closure_env, std::ptr::null(), 0);
+        return js_closure_call_array(
+            closure_env,
+            perry_runtime::closure::plain_call_receiver(),
+            std::ptr::null(),
+            0,
+        );
     }
     let arr = args_array as *const ArrayHeader;
     let len = js_array_length(arr) as i64;
@@ -65,7 +70,12 @@ unsafe fn call_with_forwarded_args(cb: *const ClosureHeader, args_array: i64) ->
     } else {
         perry_runtime::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64
     };
-    js_closure_call_array(closure_env, data, len)
+    js_closure_call_array(
+        closure_env,
+        perry_runtime::closure::plain_call_receiver(),
+        data,
+        len,
+    )
 }
 
 /// AsyncLocalStorage handle. Store stacks live in perry-runtime's active

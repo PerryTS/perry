@@ -9,7 +9,7 @@ use std::cell::Cell;
 use crate::array::{js_array_length, ArrayHeader};
 use crate::closure::{
     js_closure_alloc, js_closure_call1, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_rest, ClosureHeader,
+    ClosureHeader,
 };
 use crate::string::StringHeader;
 use crate::value::{
@@ -75,7 +75,6 @@ fn register_thunks_once() {
         if flag.get() {
             return;
         }
-        js_register_closure_rest(logger_thunk as *const u8, 0);
         flag.set(true);
     });
 }
@@ -165,7 +164,11 @@ fn call_enabled_callback_once(scope: &crate::gc::RuntimeHandleScope, closure: *m
 
     let logger_value = nanbox_closure(closure);
     let logger_handle = scope.root_nanbox_f64(logger_value);
-    js_closure_call1(callback_ptr, logger_handle.get_nanbox_f64());
+    js_closure_call1(
+        callback_ptr,
+        crate::closure::plain_call_receiver(),
+        logger_handle.get_nanbox_f64(),
+    );
 }
 
 fn write_stderr_line(line: &str) {
@@ -186,7 +189,11 @@ fn write_stderr_line(line: &str) {
         );
         let write_f64 = f64::from_bits(write_value.bits());
         if let Some(write_ptr) = closure_ptr(write_f64) {
-            js_closure_call1(write_ptr, line_handle.get_nanbox_f64());
+            js_closure_call1(
+                write_ptr,
+                crate::closure::plain_call_receiver(),
+                line_handle.get_nanbox_f64(),
+            );
             return;
         }
     }
@@ -194,7 +201,11 @@ fn write_stderr_line(line: &str) {
     eprint!("{line}");
 }
 
-extern "C" fn logger_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+extern "C" fn logger_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    rest_value: f64,
+) -> f64 {
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -244,7 +255,7 @@ pub extern "C" fn js_util_debuglog(section: f64, callback: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let section_handle = scope.root_nanbox_f64(section_value);
     let callback_handle = scope.root_nanbox_f64(callback);
-    let closure = js_closure_alloc(logger_thunk as *const u8, 4);
+    let closure = js_closure_alloc(crate::fn_info!(logger_thunk, 1; with_rest(0)), 4);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }

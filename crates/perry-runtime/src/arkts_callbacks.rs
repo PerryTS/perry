@@ -172,7 +172,7 @@ pub extern "C" fn perry_arkts_invoke_callback(idx: i64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     arkts_log(&format!("invoke calling closure idx={}", idx));
-    let result = js_closure_call0(raw);
+    let result = js_closure_call0(raw, crate::closure::plain_call_receiver());
     arkts_log(&format!("invoke RETURN idx={}", idx));
     result
 }
@@ -211,7 +211,7 @@ pub extern "C" fn perry_arkts_invoke_callback1(idx: i64, arg_d: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     arkts_log(&format!("invoke1 calling closure idx={}", idx));
-    let result = js_closure_call1(raw, arg_d);
+    let result = js_closure_call1(raw, crate::closure::plain_call_receiver(), arg_d);
     arkts_log(&format!("invoke1 RETURN idx={}", idx));
     result
 }

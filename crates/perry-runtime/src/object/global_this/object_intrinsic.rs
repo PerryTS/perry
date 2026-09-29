@@ -81,12 +81,11 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     // below, and both live for the life of the realm.
     let _no_move = crate::gc::GcSuppressScope::new();
     let _immortal = crate::gc::ImmortalLayoutScope::new();
-    let func_ptr = global_this_object_thunk as *const u8;
-    let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
+    let info = crate::fn_info!(global_this_object_thunk, 1; with_declared(1));
+    let closure_ptr = crate::closure::js_closure_alloc(info, 0);
     if closure_ptr.is_null() {
         return None;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 1);
     install_builtin_constructor_statics("Object", closure_ptr);
     super::super::native_module::set_bound_native_closure_name(closure_ptr, "Object");
     if let Some(len) = builtin_constructor_spec_length("Object") {

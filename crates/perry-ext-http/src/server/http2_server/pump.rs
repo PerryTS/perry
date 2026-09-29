@@ -7,7 +7,7 @@ use perry_ffi::{
     alloc_buffer, get_handle, get_handle_mut, iter_handles_of, JsClosure, RawClosureHeader,
 };
 
-use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
+use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::ResponseShape;
 use crate::server::server::{finalize_or_park_request, HttpPendingRequest};
 use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
@@ -64,9 +64,7 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
             let raw = handler.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }
@@ -80,9 +78,7 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
             let raw = callback as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }
@@ -106,7 +102,8 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
                 let raw = callback as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    let _ = closure.call2(stream_f64, headers_f64.get());
+                    let _ =
+                        closure.call2(perry_ffi::JsThis::UNDEFINED, stream_f64, headers_f64.get());
                 }
                 js_promise_run_microtasks();
             }

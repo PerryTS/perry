@@ -43,7 +43,11 @@ pub extern "C" fn js_literal_shape_initialize(
 mod tests {
     use super::*;
 
-    extern "C" fn collecting_setter(_closure: *const crate::ClosureHeader, _value: f64) -> f64 {
+    extern "C" fn collecting_setter(
+        _closure: *const crate::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _value: f64,
+    ) -> f64 {
         crate::gc::gc_collect_minor();
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
@@ -67,7 +71,7 @@ mod tests {
         );
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-        let setter = crate::closure::js_closure_alloc(collecting_setter as *const u8, 0);
+        let setter = crate::closure::js_closure_alloc(crate::fn_info!(collecting_setter, 1), 0);
         let descriptor = crate::object::js_object_alloc(0, 0);
         let set_key = crate::js_string_from_bytes(b"set".as_ptr(), 3);
         crate::object::js_object_set_field_by_name(

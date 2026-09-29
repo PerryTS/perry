@@ -1,6 +1,7 @@
 use super::super::barrier::RememberedSetClearState;
 use super::super::*;
 use super::support::*;
+use crate::closure::js_closure_alloc;
 
 unsafe fn field_index_not_on_last_page(fields: *mut u64, field_count: u32) -> usize {
     assert!(field_count > 1);
@@ -1442,7 +1443,7 @@ fn test_incremental_barrier_marks_closure_capture_store() {
     reset_remembered_set();
     clear_marks();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 1);
+    let closure = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 1);
     mark_user_ptr(closure as usize);
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
@@ -1464,7 +1465,7 @@ fn test_incremental_barrier_marks_closure_static_prototype_store() {
     reset_remembered_set();
     clear_marks();
     let proto = unsafe { alloc_nursery_test_object(0).0 as usize };
-    let closure = crate::closure::js_closure_alloc(test_no_capture_singleton_func as *const u8, 0);
+    let closure = js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
     mark_user_ptr(closure as usize);
     let valid_ptrs = build_valid_pointer_set();
     let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
@@ -1577,7 +1578,7 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let callback = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let callback = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     let next = crate::promise::js_promise_then(promise, callback, std::ptr::null());
 
     assert!(
@@ -1606,8 +1607,8 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let fulfill = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
-    let reject = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let fulfill = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
+    let reject = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     crate::promise::js_promise_attach_handlers(promise, fulfill, reject);
 
     assert!(
@@ -1622,7 +1623,7 @@ fn test_promise_pointer_field_stores_dirty_old_page() {
     reset_remembered_set();
     clear_marks();
     let promise = unsafe { alloc_old_test_promise() };
-    let on_finally = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 0);
+    let on_finally = js_closure_alloc(crate::fn_info!(test_captured_singleton_func, 0), 0);
     let _next = crate::promise::js_promise_finally(promise, on_finally);
     let (fulfill_wrap, reject_wrap) = unsafe { ((*promise).on_fulfilled, (*promise).on_rejected) };
 

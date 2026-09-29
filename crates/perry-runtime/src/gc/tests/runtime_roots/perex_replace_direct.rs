@@ -114,6 +114,7 @@ fn direct_templates_match_the_ordinary_loop() {
 
 extern "C" fn describe(
     _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     capture: f64,
     position: f64,
@@ -166,7 +167,7 @@ fn a_template_replacement_keeps_its_pieces_native() {
 
     let before = native();
     let (out, _, direct) = replace_all(b"(b)?a", b"g", "bä a ba".as_bytes(), |scope, _| {
-        function(scope, describe as *const u8, 4).get_nanbox_f64()
+        function(scope, crate::fn_info!(describe, 4; with_declared(4))).get_nanbox_f64()
     });
     assert!(direct, "fixture: the callback must take the direct path");
     assert_eq!(
@@ -186,7 +187,7 @@ fn direct_callbacks_receive_the_ordinary_arguments() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
     let callback = |scope: &RuntimeHandleScope, _: &RuntimeHandle<'_>| {
-        function(scope, describe as *const u8, 4).get_nanbox_f64()
+        function(scope, crate::fn_info!(describe, 4; with_declared(4))).get_nanbox_f64()
     };
     let (output, _) = both(b"(b)?a", b"g", "bä a ba".as_bytes(), callback);
     assert_eq!(
@@ -197,6 +198,7 @@ fn direct_callbacks_receive_the_ordinary_arguments() {
 
 extern "C" fn meddle(
     c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
     matched: f64,
     _position: f64,
     _input: f64,
@@ -207,12 +209,16 @@ extern "C" fn meddle(
     // Rewind the receiver and give it an own exec that matches nothing. Every
     // match was collected before the first call, so neither can change them.
     api::finish(crate::regex::perex_dispatch::set_last_index(&state, 0.0));
-    let never = function(&scope, never_exec as *const u8, 1);
+    let never = function(&scope, crate::fn_info!(never_exec, 1; with_declared(1)));
     put(&state, b"exec", never.get_nanbox_f64());
     matched.get_nanbox_f64()
 }
 
-extern "C" fn never_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn never_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     f64::from_bits(crate::value::TAG_NULL)
 }
 
@@ -222,14 +228,18 @@ fn a_replacer_cannot_change_which_matches_are_replaced() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
     let callback = |scope: &RuntimeHandleScope, re: &RuntimeHandle<'_>| {
-        captured(scope, meddle as *const u8, 3, re).get_nanbox_f64()
+        captured(scope, crate::fn_info!(meddle, 3; with_declared(3)), re).get_nanbox_f64()
     };
     let (output, last) = both(b"o", b"g", b"foo boo", callback);
     assert_eq!(output, b"foo boo");
     assert_eq!(last, 0.0);
 }
 
-extern "C" fn counting_exec(c: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn counting_exec(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let state = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(c, 0));
     put(&state, b"calls", get(&state, b"calls") + 1.0);
@@ -244,7 +254,11 @@ fn an_own_exec_or_named_groups_keep_the_ordinary_loop() {
 
     let (_, _, served) = replace_all(b"a", b"g", b"banana", |scope, re| {
         put(re, b"calls", 0.0);
-        let exec = captured(scope, counting_exec as *const u8, 1, re);
+        let exec = captured(
+            scope,
+            crate::fn_info!(counting_exec, 1; with_declared(1)),
+            re,
+        );
         put(re, b"exec", exec.get_nanbox_f64());
         text(scope, b"X").get_nanbox_f64()
     });

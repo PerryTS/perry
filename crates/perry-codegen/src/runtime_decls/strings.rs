@@ -196,9 +196,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
 
     // Closure / function-as-value primitives (Phase D).
     //
-    // - js_closure_alloc(func_ptr, capture_count) -> *mut ClosureHeader
-    //     Allocates a closure object pointing at the given function with
-    //     space for `capture_count` captured-value slots.
+    // - js_closure_alloc(info, capture_count) -> *mut ClosureHeader
+    //     Allocates a function object running the body the given
+    //     `JsFunctionInfo` (`crate::fn_info`) describes, with space for
+    //     `capture_count` captured-value slots.
     // - js_closure_set/get_capture_bits(closure, idx, bits)
     //     Read/write a captured value's raw JSValueBits at slot `idx`.
     // - js_closure_set/get_capture_f64(closure, idx, value)
@@ -213,9 +214,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_closure_alloc", I64, &[PTR, I32]);
     module.declare_function("js_closure_alloc_init", I64, &[PTR, I32, PTR]);
     // Singleton-cached variant for non-capturing closures and FuncRef
-    // wrappers — same `func_ptr` returns the same cached ClosureHeader,
+    // wrappers — the same body info returns the same cached ClosureHeader,
     // skipping per-evaluation closure allocation on the hot loop. See
-    // `crates/perry-runtime/src/closure.rs::js_closure_alloc_singleton`.
+    // `crates/perry-runtime/src/closure/alloc.rs::js_closure_alloc_singleton`.
     module.declare_function("js_closure_alloc_singleton", I64, &[PTR]);
     // A class constructor as a value: the class's per-agent function object
     // (`object/class_value.rs`; #11414).
@@ -225,7 +226,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_static_field_get", DOUBLE, &[I32, PTR, I64]);
     module.declare_function("js_class_static_field_put", VOID, &[I32, PTR, I64, DOUBLE]);
     // Singleton-cached variant for closures with captures, keyed by
-    // `(func_ptr, capture_bits…)`. Args: (func_ptr, capture_count,
+    // `(info, capture_bits…)`. Args: (info, capture_count,
     // captures_ptr — pointer to `capture_count` u64 values).
     module.declare_function(
         "js_closure_alloc_with_captures_singleton",
@@ -237,41 +238,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
     module.declare_function("js_closure_set_capture_f64", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_closure_get_capture_f64", DOUBLE, &[I64, I32]);
-    // Issue #493: register a closure body's rest-param arity in the runtime
-    // side-table so `js_closure_callN` can bundle trailing args at call
-    // sites where codegen doesn't know the closure's arity statically
-    // (e.g. `obj.cb(a, b, c)` where `cb` is a class field holding an
-    // arrow with `...rest`). Called once per closure body at module init.
-    module.declare_function("js_register_closure_rest", VOID, &[PTR, I32]);
-    // Refs #915 (gap 1 from #899): variant that flags the rest param as the
-    // HIR-synthesized `arguments` array — the dispatcher then bundles ALL
-    // passed args into the rest slot, matching JS spec semantics for
-    // `arguments.length` in a `function(a, b) { …arguments… }` returned from
-    // another function.
-    module.declare_function("js_register_closure_synthetic_arguments", VOID, &[PTR, I32]);
-    module.declare_function("js_register_closure_rest_and_arguments", VOID, &[PTR, I32]);
-    module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
-    module.declare_function("js_register_closure_length", VOID, &[PTR, I32]);
-    module.declare_function("js_register_closure_arrow_function", VOID, &[PTR]);
-    module.declare_function(
-        "js_register_closure_trusted_direct",
-        VOID,
-        &[PTR, PTR, I32, I64],
-    );
-    module.declare_function(
-        "js_register_closure_versioned_loop_direct",
-        VOID,
-        &[PTR, PTR, I32, I64],
-    );
     module.declare_function(
         "js_closure_resolve_versioned_loop_direct_call",
         PTR,
         &[I64, I32],
     );
-    module.declare_function("js_register_closure_strict_function", VOID, &[PTR]);
-    module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
-    module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
-    module.declare_function("js_register_closure_async_generator_function", VOID, &[PTR]);
     // #5504: tag-checking unbox for dynamic call callees — throws
     // `TypeError: value is not a function` instead of masking a
     // non-pointer value's low 48 bits into a wild closure pointer.
@@ -283,101 +254,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE],
     );
-    module.declare_function("js_closure_call0", DOUBLE, &[I64]);
-    module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_closure_call1_receiverless", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_call3", DOUBLE, &[I64, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_closure_resolve_arrow_direct_call", PTR, &[I64, I32]);
-    module.declare_function(
-        "js_closure_call4",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call5",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call6",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call7",
-        DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_closure_call8",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call9",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call10",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call11",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call12",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call13",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call14",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call15",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
-    module.declare_function(
-        "js_closure_call16",
-        DOUBLE,
-        &[
-            I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-            DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,
-        ],
-    );
+    // `js_closure_call{N}(callee, this, a0..aN-1)`, generated from the ABI
+    // table so the declarations cannot drift from `perry_abi`.
+    for (argc, name) in crate::runtime_abi::JS_CLOSURE_CALL_ENTRIES
+        .iter()
+        .enumerate()
+    {
+        let mut params = vec![I64, I64];
+        params.extend(std::iter::repeat_n(DOUBLE, argc));
+        module.declare_function(name, DOUBLE, &params);
+    }
+    module.declare_function("js_closure_resolve_plain_direct_call", PTR, &[I64, I32]);
 
     // Phase B.16 / D follow-ups: more runtime functions discovered
     // by the test-files sweep histogram.

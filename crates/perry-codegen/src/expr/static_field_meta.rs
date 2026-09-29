@@ -504,9 +504,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let has_rest_str = (*has_rest as i64).to_string();
                         let definition_order_str = definition_order.to_string();
                         // A static one's own function object runs its
-                        // closure-convention entry (string pool).
+                        // closure-convention entry's `JsFunctionInfo` (string pool).
                         let entry_i64 = if *is_static {
-                            ctx.block().ptrtoint(&format!("@{}__clo", llvm_name), I64)
+                            let info = ctx.block().fn_info_ref(&format!("{llvm_name}__clo"));
+                            ctx.block().ptrtoint(&info, I64)
                         } else {
                             "0".to_string()
                         };

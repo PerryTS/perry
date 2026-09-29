@@ -14,7 +14,7 @@ use perry_ffi::{
 };
 
 use crate::server::ensure_gc_scanner_registered;
-use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
+use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::{ResponseShape, ServerResponse};
 use crate::server::types::{
     extract_host, extract_port, js_handle_clear_side_tables, js_promise_run_microtasks,
@@ -1156,9 +1156,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         }
         let this_val = handle_to_pointer_f64(server_handle);
         let socket_val = handle_to_pointer_f64(socket_handle);
-        with_implicit_this(this_val, || {
-            crate::server::request::emit_one_arg_to_listeners(&listeners, socket_val)
-        });
+        crate::server::request::emit_one_arg_to_listeners(&listeners, this_val, socket_val);
         count += 1;
     }
 
@@ -1428,9 +1426,8 @@ fn process_pending(pending: HttpPendingRequest) {
                 let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    with_implicit_this(server_this, || {
-                        let _ = closure.call2(req_f64, res_f64);
-                    });
+                    let _ =
+                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
                 }
                 js_promise_run_microtasks();
             }
@@ -1462,9 +1459,7 @@ fn process_pending(pending: HttpPendingRequest) {
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
                 // `'request'` listener — same `this` = server binding.
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }
@@ -1478,9 +1473,7 @@ fn process_pending(pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
             }
             js_promise_run_microtasks();
         }

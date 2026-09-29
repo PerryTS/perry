@@ -80,11 +80,10 @@ pub(super) unsafe fn call_native_namespace_override(
     }
     RUNNING.with(|r| r.borrow_mut().push((module, method_name.to_string())));
     let _running = Running;
-    let _this_scope =
-        crate::object::ImplicitThisScope::bind(root_scope, namespace_handle.get_nanbox_f64());
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args_handles);
-    Some(crate::closure::js_native_call_value(
+    Some(crate::closure::native_call_value_this(
         bound_handle.get_nanbox_f64(),
+        crate::closure::JsThis::from_f64(namespace_handle.get_nanbox_f64()),
         args.as_ptr(),
         args.len(),
     ))

@@ -24,10 +24,14 @@ fn regex<'s>(scope: &'s RuntimeHandleScope, source: &[u8], flags: &[u8]) -> Runt
         flags.get_nanbox_f64(),
     ) as i64))
 }
-fn function<'s>(scope: &'s RuntimeHandleScope, fp: *const u8, arity: u32) -> RuntimeHandle<'s> {
-    crate::closure::js_register_closure_arity(fp, arity);
+/// A function object running the body `info` describes (its declared arity
+/// included).
+fn function<'s>(
+    scope: &'s RuntimeHandleScope,
+    info: *const crate::closure::JsFunctionInfo,
+) -> RuntimeHandle<'s> {
     scope.root_nanbox_f64(js_nanbox_pointer(
-        crate::closure::js_closure_alloc_singleton(fp) as i64,
+        crate::closure::js_closure_alloc_singleton(info) as i64,
     ))
 }
 fn get(owner: &RuntimeHandle<'_>, name: &[u8]) -> f64 {
@@ -132,23 +136,47 @@ fn retained_input_population() -> usize {
             && bytes(js_nanbox_string(p as i64)) == b"a unique input retained only by the iterator"
     })
 }
-extern "C" fn identity(_: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+extern "C" fn identity(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    arg: f64,
+) -> f64 {
     arg
 }
-extern "C" fn throw_getter(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn throw_getter(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::exception::js_throw(941.0)
 }
-extern "C" fn throw_exec(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn throw_exec(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     gc_collect_minor();
     crate::exception::js_throw(942.0)
 }
-extern "C" fn no_match(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+extern "C" fn no_match(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
     f64::from_bits(TAG_NULL)
 }
-extern "C" fn return_this(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
-    crate::object::js_implicit_this_get()
+extern "C" fn return_this(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    _: f64,
+) -> f64 {
+    this.as_f64()
 }
-extern "C" fn factory(_: *const crate::closure::ClosureHeader, receiver: f64, flags: f64) -> f64 {
+extern "C" fn factory(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    receiver: f64,
+    flags: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let flags = scope.root_nanbox_f64(flags);
@@ -165,7 +193,7 @@ fn custom<'s>(
     let matcher = object(scope);
     put(&receiver, b"matcher", matcher.get_nanbox_f64());
     let holder = object(scope);
-    let constructor = function(scope, factory as *const u8, 2);
+    let constructor = function(scope, crate::fn_info!(factory, 2; with_declared(2)));
     symbol(&holder, "species", constructor.get_nanbox_f64());
     put(&receiver, b"constructor", holder.get_nanbox_f64());
     let flags = text(scope, flags);
@@ -333,7 +361,7 @@ fn perex_match_all_is_lazy_observes_exec_changes_and_retries_after_throw() {
     super::perex_public::register_host_roots();
     let scope = RuntimeHandleScope::new();
     let (receiver, matcher) = custom(&scope, b"gu");
-    let method = function(&scope, throw_exec as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(throw_exec, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
     let empty = text(&scope, b"");
     put(&matcher, b"0", empty.get_nanbox_f64());
@@ -357,7 +385,7 @@ fn perex_match_all_is_lazy_observes_exec_changes_and_retries_after_throw() {
     );
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
     assert_eq!(external_side_live_bytes(), live);
-    let method = function(&scope, return_this as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(return_this, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
     let step = scope.root_nanbox_f64(next(&iter));
     assert_eq!(
@@ -365,7 +393,7 @@ fn perex_match_all_is_lazy_observes_exec_changes_and_retries_after_throw() {
         matcher.get_nanbox_f64().to_bits()
     );
     assert_eq!(get(&matcher, b"lastIndex"), 2.0);
-    let method = function(&scope, no_match as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(no_match, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
     let step = scope.root_nanbox_f64(next(&iter));
     assert_eq!(get(&step, b"done").to_bits(), crate::value::TAG_TRUE);
@@ -379,9 +407,9 @@ fn perex_match_all_string_hooks_precede_coercion_but_follow_global_validation() 
     let scope = RuntimeHandleScope::new();
     let receiver = object(&scope);
     let pattern = object(&scope);
-    let throw = function(&scope, throw_getter as *const u8, 0);
+    let throw = function(&scope, crate::fn_info!(throw_getter, 0; with_declared(0)));
     put(&receiver, b"toString", throw.get_nanbox_f64());
-    let hook = function(&scope, identity as *const u8, 1);
+    let hook = function(&scope, crate::fn_info!(identity, 1; with_declared(1)));
     symbol(&pattern, "matchAll", hook.get_nanbox_f64());
     let method = scope.root_nanbox_f64(crate::collection_iter::builtin_prototype_method(
         "String", "matchAll",
@@ -425,9 +453,9 @@ fn perex_match_all_nonglobal_does_not_read_zero_and_builtin_next_has_its_own_bra
     super::perex_public::register_host_roots();
     let scope = RuntimeHandleScope::new();
     let (receiver, matcher) = custom(&scope, b"");
-    let method = function(&scope, return_this as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(return_this, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
-    let throw = function(&scope, throw_getter as *const u8, 0);
+    let throw = function(&scope, crate::fn_info!(throw_getter, 0; with_declared(0)));
     getter(&matcher, b"0", &throw);
     let input = text(&scope, b"original");
     let iter = scope.root_nanbox_f64(api::finish(match_all::regexp(
@@ -435,7 +463,7 @@ fn perex_match_all_nonglobal_does_not_read_zero_and_builtin_next_has_its_own_bra
         input.get_nanbox_f64(),
     )));
     let builtin = scope.root_nanbox_f64(get(&iter, b"next"));
-    let override_next = function(&scope, identity as *const u8, 1);
+    let override_next = function(&scope, crate::fn_info!(identity, 1; with_declared(1)));
     put(&iter, b"next", override_next.get_nanbox_f64());
     let argument = scope.root_nanbox_f64(57.0);
     assert_eq!(
@@ -489,7 +517,10 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
     let holder = scope.root_nanbox_f64(get(&receiver, b"constructor"));
     let factory = scope.root_nanbox_f64(api::finish(dispatch::get_symbol(&holder, "species")));
     let handler = object(&scope);
-    let collecting = function(&scope, collecting_missing_construct as *const u8, 0);
+    let collecting = function(
+        &scope,
+        crate::fn_info!(collecting_missing_construct, 0; with_declared(0)),
+    );
     getter(&handler, b"construct", &collecting);
     let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
         factory.get_nanbox_f64(),
@@ -499,7 +530,7 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
         proxy.get_nanbox_f64()
     ));
     symbol(&holder, "species", proxy.get_nanbox_f64());
-    let method = function(&scope, no_match as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(no_match, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
     let input = text(&scope, b"input through proxy species");
     let iter = scope.root_nanbox_f64(api::finish(match_all::regexp(
@@ -511,7 +542,10 @@ fn perex_match_all_proxy_species_and_dynamic_regexp_constructors_keep_original_s
     assert_eq!(get(&step, b"done").to_bits(), crate::value::TAG_TRUE);
 }
 
-extern "C" fn collecting_missing_construct(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn collecting_missing_construct(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     gc_collect_minor();
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -520,41 +554,61 @@ thread_local! { static ORDER: Cell<u64> = const { Cell::new(0) }; }
 fn ordered(event: u64) {
     ORDER.with(|n| n.set(n.get() * 10 + event));
 }
-fn ordered_field(event: u64, name: &[u8]) -> f64 {
+fn ordered_field(this: crate::closure::JsThis, event: u64, name: &[u8]) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     ordered(event);
     gc_collect_minor();
     get(&receiver, name)
 }
-extern "C" fn ordered_input(_: *const crate::closure::ClosureHeader) -> f64 {
-    ordered_field(1, b"text")
+extern "C" fn ordered_input(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    ordered_field(this, 1, b"text")
 }
-extern "C" fn ordered_constructor(_: *const crate::closure::ClosureHeader) -> f64 {
-    ordered_field(2, b"holder")
+extern "C" fn ordered_constructor(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    ordered_field(this, 2, b"holder")
 }
-extern "C" fn ordered_species(_: *const crate::closure::ClosureHeader) -> f64 {
-    ordered_field(3, b"factory")
+extern "C" fn ordered_species(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    ordered_field(this, 3, b"factory")
 }
-extern "C" fn ordered_flags(_: *const crate::closure::ClosureHeader) -> f64 {
-    ordered_field(4, b"flagText")
+extern "C" fn ordered_flags(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    ordered_field(this, 4, b"flagText")
 }
 extern "C" fn ordered_factory(
     closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     receiver: f64,
     flags: f64,
 ) -> f64 {
     ordered(5);
-    factory(closure, receiver, flags)
+    factory(closure, this, receiver, flags)
 }
-extern "C" fn ordered_index(_: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn ordered_index(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     ordered(6);
     gc_collect_minor();
     1.75
 }
-extern "C" fn ordered_set_index(_: *const crate::closure::ClosureHeader, index: f64) -> f64 {
+extern "C" fn ordered_set_index(
+    _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    index: f64,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     ordered(7);
     gc_collect_minor();
     put(&receiver, b"seenIndex", index);
@@ -572,19 +626,34 @@ fn perex_match_all_species_and_lastindex_order_survives_collecting_callbacks() {
     let (receiver, matcher) = custom(&scope, b"g");
     let holder = object(&scope);
     put(&receiver, b"holder", holder.get_nanbox_f64());
-    let factory = function(&scope, ordered_factory as *const u8, 2);
+    let factory = function(
+        &scope,
+        crate::fn_info!(ordered_factory, 2; with_declared(2)),
+    );
     put(&holder, b"factory", factory.get_nanbox_f64());
     let flags = text(&scope, b"gu");
     put(&receiver, b"flagText", flags.get_nanbox_f64());
     for (name, fp) in [
-        (b"constructor".as_slice(), ordered_constructor as *const u8),
-        (b"flags", ordered_flags as *const u8),
-        (b"lastIndex", ordered_index as *const u8),
+        (
+            b"constructor".as_slice(),
+            crate::fn_info!(ordered_constructor, 0; with_declared(0)),
+        ),
+        (
+            b"flags",
+            crate::fn_info!(ordered_flags, 0; with_declared(0)),
+        ),
+        (
+            b"lastIndex",
+            crate::fn_info!(ordered_index, 0; with_declared(0)),
+        ),
     ] {
-        let method = function(&scope, fp, 0);
+        let method = function(&scope, fp);
         getter(&receiver, name, &method);
     }
-    let method = function(&scope, ordered_species as *const u8, 0);
+    let method = function(
+        &scope,
+        crate::fn_info!(ordered_species, 0; with_declared(0)),
+    );
     let key = js_nanbox_pointer(crate::symbol::well_known_symbol("species") as i64);
     accessor(
         &holder,
@@ -592,7 +661,10 @@ fn perex_match_all_species_and_lastindex_order_survives_collecting_callbacks() {
         method.get_nanbox_f64(),
         f64::from_bits(TAG_UNDEFINED),
     );
-    let setter = function(&scope, ordered_set_index as *const u8, 1);
+    let setter = function(
+        &scope,
+        crate::fn_info!(ordered_set_index, 1; with_declared(1)),
+    );
     accessor(
         &matcher,
         js_nanbox_string(crate::string::canonical_key(b"lastIndex") as i64),
@@ -602,9 +674,9 @@ fn perex_match_all_species_and_lastindex_order_survives_collecting_callbacks() {
     let input = object(&scope);
     let text = text(&scope, "😀".as_bytes());
     put(&input, b"text", text.get_nanbox_f64());
-    let coercer = function(&scope, ordered_input as *const u8, 0);
+    let coercer = function(&scope, crate::fn_info!(ordered_input, 0; with_declared(0)));
     put(&input, b"toString", coercer.get_nanbox_f64());
-    let method = function(&scope, throw_exec as *const u8, 1);
+    let method = function(&scope, crate::fn_info!(throw_exec, 1; with_declared(1)));
     put(&matcher, b"exec", method.get_nanbox_f64());
     ORDER.with(|n| n.set(0));
     let before = text.get_nanbox_f64().to_bits();
@@ -619,7 +691,11 @@ fn perex_match_all_species_and_lastindex_order_survives_collecting_callbacks() {
     assert_eq!(bytes(get(&matcher, b"seenFlags")), b"gu");
 }
 
-extern "C" fn arrow_species(_: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+extern "C" fn arrow_species(
+    _: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
     value
 }
 
@@ -633,8 +709,11 @@ fn perex_match_all_species_rejects_proxy_of_arrow_before_flags_and_keeps_revoked
     let (receiver, _) = custom(&scope, b"g");
     let holder = scope.root_nanbox_f64(get(&receiver, b"constructor"));
     let constructor = scope.root_nanbox_f64(api::finish(dispatch::get_symbol(&holder, "species")));
-    let arrow = function(&scope, arrow_species as *const u8, 1);
-    crate::closure::js_register_closure_arrow_function(arrow_species as *const u8);
+    let arrow = function(
+        &scope,
+        crate::fn_info!(arrow_species, 1; with_declared(1), with_flags(crate::closure::FN_ARROW)),
+    );
+
     let handler = object(&scope);
     let arrow_proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
         arrow.get_nanbox_f64(),
@@ -644,7 +723,7 @@ fn perex_match_all_species_rejects_proxy_of_arrow_before_flags_and_keeps_revoked
         arrow_proxy.get_nanbox_f64()
     ));
     symbol(&holder, "species", arrow_proxy.get_nanbox_f64());
-    let throw = function(&scope, throw_getter as *const u8, 0);
+    let throw = function(&scope, crate::fn_info!(throw_getter, 0; with_declared(0)));
     getter(&receiver, b"flags", &throw);
     let input = text(&scope, b"input");
     let error = crate::exception::catch_js_throw(|| {

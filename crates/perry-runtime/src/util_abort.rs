@@ -1,8 +1,7 @@
 //! `node:util` AbortSignal helper surface.
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::{js_object_alloc, js_object_set_field_by_name};
 use crate::string::js_string_from_bytes;
@@ -77,7 +76,10 @@ fn promise_from_capture(closure: *const ClosureHeader, index: u32) -> *mut crate
     js_nanbox_get_pointer(f64::from_bits(bits)) as *mut crate::promise::Promise
 }
 
-extern "C" fn aborted_resolve_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn aborted_resolve_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let promise = promise_from_capture(closure, 0);
     let signal = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
     if !promise.is_null() {
@@ -101,8 +103,7 @@ pub extern "C" fn js_util_aborted(signal: f64, resource: f64) -> f64 {
 
     let promise = crate::promise::js_promise_new();
     let promise_value = js_nanbox_pointer(promise as i64);
-    let listener_func = aborted_resolve_listener as *const u8;
-    js_register_closure_arity(listener_func, 0);
+    let listener_func = crate::fn_info!(aborted_resolve_listener, 0; with_declared(0));
     let listener = js_closure_alloc(listener_func, 2);
     js_closure_set_capture_ptr(listener, 0, promise_value.to_bits() as i64);
     js_closure_set_capture_ptr(listener, 1, signal.to_bits() as i64);

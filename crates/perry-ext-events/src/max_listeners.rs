@@ -114,10 +114,14 @@ unsafe fn call_process_emit_warning(warning: f64) {
     let process_value = JsValue::from_bits(process.to_bits());
     let process_obj = process_value.as_pointer::<ObjectHeader>();
     let emit_warning = get_object_field_by_str(process_obj, "emitWarning");
-    let previous_this = js_implicit_this_set(process);
+    // `process.emitWarning(warning)`: a method call of `process`.
     let args = [warning];
-    js_native_call_value(emit_warning, args.as_ptr(), args.len());
-    js_implicit_this_set(previous_this);
+    js_native_call_value(
+        emit_warning,
+        perry_ffi::JsThis::from_f64(process),
+        args.as_ptr(),
+        args.len(),
+    );
 }
 
 pub(super) unsafe fn emit_max_listeners_warning(

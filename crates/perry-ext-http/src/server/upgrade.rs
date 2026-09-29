@@ -65,7 +65,12 @@ pub(crate) fn fire_upgrade_listeners(
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 delivered = true;
-                let _ = closure.call3(req_f64, ws_id_f64, head_arg.get());
+                let _ = closure.call3(
+                    perry_ffi::JsThis::UNDEFINED,
+                    req_f64,
+                    ws_id_f64,
+                    head_arg.get(),
+                );
             }
             js_promise_run_microtasks();
         }

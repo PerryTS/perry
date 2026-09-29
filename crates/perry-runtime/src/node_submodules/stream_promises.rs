@@ -176,7 +176,10 @@ pub(crate) fn signal_reason(_signal: f64) -> f64 {
     abort_error_value()
 }
 
-extern "C" fn stream_promises_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_abort_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let promise_value = js_closure_get_capture_f64(closure, 0);
     let signal = js_closure_get_capture_f64(closure, 1);
     let promise =
@@ -193,7 +196,7 @@ pub(crate) fn register_abort_listener(signal: f64, promise: *mut crate::promise:
     let Some(signal_obj) = object_ptr_from_value(signal) else {
         return;
     };
-    let closure = js_closure_alloc(stream_promises_abort_listener as *const u8, 2);
+    let closure = js_closure_alloc(crate::fn_info!(stream_promises_abort_listener, 0), 2);
     js_closure_set_capture_f64(closure, 0, promise_value_from_ptr(promise));
     js_closure_set_capture_f64(closure, 1, signal);
     let event = b"abort";
@@ -216,6 +219,7 @@ fn event_value(name: &[u8]) -> f64 {
 
 extern "C" fn stream_promises_finished_error_listener(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
@@ -223,7 +227,10 @@ extern "C" fn stream_promises_finished_error_listener(
     undefined_value()
 }
 
-extern "C" fn stream_promises_finished_side_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_finished_side_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
     let readable_side = js_closure_get_capture_f64(closure, 1).to_bits() == crate::value::TAG_TRUE;
     if readable_side {
@@ -235,7 +242,10 @@ extern "C" fn stream_promises_finished_side_listener(closure: *const ClosureHead
     undefined_value()
 }
 
-extern "C" fn stream_promises_finished_close_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn stream_promises_finished_close_listener(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
     if finished_state_bool(state, b"settled") {
         return undefined_value();
@@ -261,20 +271,7 @@ fn add_once_listener(stream_handle: i64, event: &[u8], listener: f64) {
     let _ = crate::node_stream::js_node_stream_method_once(stream_handle, event, listener);
 }
 
-fn register_finished_listener_arities() {
-    crate::closure::js_register_closure_arity(
-        stream_promises_finished_error_listener as *const u8,
-        1,
-    );
-    crate::closure::js_register_closure_arity(
-        stream_promises_finished_side_listener as *const u8,
-        0,
-    );
-    crate::closure::js_register_closure_arity(
-        stream_promises_finished_close_listener as *const u8,
-        0,
-    );
-}
+fn register_finished_listener_arities() {}
 
 fn finished_state_key(name: &[u8]) -> *mut crate::string::StringHeader {
     js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -409,25 +406,36 @@ fn pending_finished_promise(
         return promise_value_from_ptr(promise);
     }
 
-    let error_listener = js_closure_alloc(stream_promises_finished_error_listener as *const u8, 1);
+    let error_listener = js_closure_alloc(
+        crate::fn_info!(stream_promises_finished_error_listener, 1; with_declared(1)),
+        1,
+    );
     js_closure_set_capture_ptr(error_listener, 0, state as i64);
     add_once_listener(handle, b"error", listener_value(error_listener));
 
     if need_readable {
-        let end_listener = js_closure_alloc(stream_promises_finished_side_listener as *const u8, 2);
+        let end_listener = js_closure_alloc(
+            crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
+            2,
+        );
         js_closure_set_capture_ptr(end_listener, 0, state as i64);
         js_closure_set_capture_f64(end_listener, 1, f64::from_bits(crate::value::TAG_TRUE));
         add_once_listener(handle, b"end", listener_value(end_listener));
     }
     if need_writable {
-        let finish_listener =
-            js_closure_alloc(stream_promises_finished_side_listener as *const u8, 2);
+        let finish_listener = js_closure_alloc(
+            crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
+            2,
+        );
         js_closure_set_capture_ptr(finish_listener, 0, state as i64);
         js_closure_set_capture_f64(finish_listener, 1, f64::from_bits(crate::value::TAG_FALSE));
         add_once_listener(handle, b"finish", listener_value(finish_listener));
     }
 
-    let close_listener = js_closure_alloc(stream_promises_finished_close_listener as *const u8, 1);
+    let close_listener = js_closure_alloc(
+        crate::fn_info!(stream_promises_finished_close_listener, 0; with_declared(0)),
+        1,
+    );
     js_closure_set_capture_ptr(close_listener, 0, state as i64);
     add_once_listener(handle, b"close", listener_value(close_listener));
 
@@ -442,11 +450,14 @@ fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f
     let Some(func) = get_object_property(destination, method) else {
         return undefined_value();
     };
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(destination));
-    let result = unsafe { crate::closure::js_native_call_value(func, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
-    result
+    unsafe {
+        crate::closure::native_call_value_this(
+            func,
+            crate::closure::JsThis::from_f64(destination),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 fn write_chunks_to_destination(destination: f64, chunks: &[f64]) {
@@ -537,6 +548,7 @@ fn validate_pipeline_promise_args(source: f64, destination: f64) -> Option<f64> 
 
 extern "C" fn stream_promises_pipeline_callback(
     closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     err: f64,
     value: f64,
 ) -> f64 {
@@ -562,6 +574,7 @@ fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_pipeline(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     source: f64,
     destination: f64,
     options_or_rest: f64,
@@ -582,8 +595,10 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     let promise = crate::promise::js_promise_new();
     let promise_value = promise_value_from_ptr(promise);
 
-    crate::closure::js_register_closure_arity(stream_promises_pipeline_callback as *const u8, 2);
-    let callback = js_closure_alloc(stream_promises_pipeline_callback as *const u8, 1);
+    let callback = js_closure_alloc(
+        crate::fn_info!(stream_promises_pipeline_callback, 2; with_declared(2)),
+        1,
+    );
     js_closure_set_capture_f64(callback, 0, promise_value);
 
     let mut args = crate::array::js_array_alloc(4);
@@ -607,6 +622,7 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
 #[allow(non_snake_case)] // thunk name mirrors JS API surface
 pub(crate) extern "C" fn thunk_streamP_finished(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     stream: f64,
     options: f64,
 ) -> f64 {

@@ -210,100 +210,76 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             }
             continue;
         }
-        let func_ptr = match name {
-            "Array" => global_this_array_thunk as *const u8,
+        let info = match name {
+            "Array" => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)),
             // #10423: `F(p, body)` through a `Function` value creates a
             // function, exactly like `new F(p, body)`.
-            "Function" => global_this_function_call_thunk as *const u8,
-            "String" => global_this_string_thunk as *const u8,
+            "Function" => {
+                crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0))
+            }
+            "String" => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)),
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
             // global value coerce like the bare-call lowering does.
-            "Number" => global_this_number_thunk as *const u8,
-            "Boolean" => global_this_boolean_thunk as *const u8,
-            "Error" => error_constructor_call_thunk as *const u8,
-            "TypeError" => type_error_constructor_call_thunk as *const u8,
-            "RangeError" => range_error_constructor_call_thunk as *const u8,
-            "ReferenceError" => reference_error_constructor_call_thunk as *const u8,
-            "SyntaxError" => syntax_error_constructor_call_thunk as *const u8,
-            "EvalError" => eval_error_constructor_call_thunk as *const u8,
-            "URIError" => uri_error_constructor_call_thunk as *const u8,
+            "Number" => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)),
+            "Boolean" => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)),
+            "Error" => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)),
+            "TypeError" => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)),
+            "RangeError" => {
+                crate::fn_info!(range_error_constructor_call_thunk, 1; with_declared(1))
+            }
+            "ReferenceError" => {
+                crate::fn_info!(reference_error_constructor_call_thunk, 1; with_declared(1))
+            }
+            "SyntaxError" => {
+                crate::fn_info!(syntax_error_constructor_call_thunk, 1; with_declared(1))
+            }
+            "EvalError" => crate::fn_info!(eval_error_constructor_call_thunk, 1; with_declared(1)),
+            "URIError" => crate::fn_info!(uri_error_constructor_call_thunk, 1; with_declared(1)),
             "MessageChannel" => {
-                crate::messaging::js_message_channel_constructor_call_error as *const u8
+                crate::fn_info!(crate::messaging::js_message_channel_constructor_call_error, 0; with_declared(0))
             }
-            "MessagePort" => crate::messaging::js_message_port_constructor_call_error as *const u8,
+            "MessagePort" => {
+                crate::fn_info!(crate::messaging::js_message_port_constructor_call_error, 0; with_declared(0))
+            }
             "BroadcastChannel" => {
-                crate::messaging::js_broadcast_channel_constructor_call_error as *const u8
+                crate::fn_info!(crate::messaging::js_broadcast_channel_constructor_call_error, 1; with_declared(1))
             }
-            "Date" => global_this_date_thunk as *const u8,
-            "Blob" => global_this_blob_thunk as *const u8,
-            "File" => global_this_file_thunk as *const u8,
-            "Headers" => global_this_headers_thunk as *const u8,
-            "Request" => global_this_request_thunk as *const u8,
-            "Response" => global_this_response_thunk as *const u8,
-            "URLPattern" => global_this_url_pattern_call_thunk as *const u8,
-            "Storage" => crate::web_storage::storage_constructor_illegal as *const u8,
-            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
-                webcrypto_illegal_constructor_thunk as *const u8
-            }
-            "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-            | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
-            | "BigInt64Array" | "BigUint64Array" => typed_array_constructor_call_thunk as *const u8,
-            // #4569: collection constructors throw when called without `new`.
-            "RegExp" => regexp_constructor_call_thunk as *const u8,
-            "Map" => map_constructor_call_thunk as *const u8,
-            "Set" => set_constructor_call_thunk as *const u8,
-            "WeakMap" => weak_map_constructor_call_thunk as *const u8,
-            "WeakSet" => weak_set_constructor_call_thunk as *const u8,
-            "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
-            "Promise" => promise_constructor_call_thunk as *const u8,
-            "ArrayBuffer" | "SharedArrayBuffer" | "DataView" => {
-                construct_only_builtin_call_thunk as *const u8
-            }
-            _ => global_this_builtin_noop_thunk as *const u8,
-        };
-        let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
-        if closure_ptr.is_null() {
-            continue;
-        }
-        match name {
-            "Array" | "Function" => {
-                crate::closure::js_register_closure_rest(func_ptr, 0);
-            }
-            "Date" => {
-                crate::closure::js_register_closure_arity(func_ptr, 1);
-            }
-            "String" | "Number" | "Boolean" | "BroadcastChannel" => {
-                crate::closure::js_register_closure_arity(func_ptr, 1);
-            }
-            "Headers" => {
-                crate::closure::js_register_closure_arity(func_ptr, 1);
-            }
-            "Blob" | "Request" | "Response" => {
-                crate::closure::js_register_closure_arity(func_ptr, 2);
-            }
-            "File" => {
-                crate::closure::js_register_closure_arity(func_ptr, 3);
-            }
-            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
-            | "EvalError" | "URIError" => {
-                crate::closure::js_register_closure_arity(func_ptr, 1);
-            }
-            "MessageChannel" | "MessagePort" | "Storage" => {
-                crate::closure::js_register_closure_arity(func_ptr, 0);
-            }
+            "Date" => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)),
+            "Blob" => crate::fn_info!(global_this_blob_thunk, 2; with_declared(2)),
+            "File" => crate::fn_info!(global_this_file_thunk, 3; with_declared(3)),
+            "Headers" => crate::fn_info!(global_this_headers_thunk, 1; with_declared(1)),
+            "Request" => crate::fn_info!(global_this_request_thunk, 2; with_declared(2)),
+            "Response" => crate::fn_info!(global_this_response_thunk, 2; with_declared(2)),
             "URLPattern" => {
-                crate::closure::js_register_closure_arity(func_ptr, 2);
+                crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2))
             }
-            // RegExp(pattern, flags) — the call form constructs (22.2.4).
-            "RegExp" => {
-                crate::closure::js_register_closure_arity(func_ptr, 2);
+            "Storage" => {
+                crate::fn_info!(crate::web_storage::storage_constructor_illegal, 0; with_declared(0))
+            }
+            "Crypto" | "CryptoKey" | "SubtleCrypto" => {
+                crate::fn_info!(webcrypto_illegal_constructor_thunk, 0)
             }
             "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
             | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
             | "BigInt64Array" | "BigUint64Array" => {
-                crate::closure::js_register_closure_arity(func_ptr, 0);
+                crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0))
             }
-            _ => {}
+            // #4569: collection constructors throw when called without `new`.
+            "RegExp" => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)),
+            "Map" => crate::fn_info!(map_constructor_call_thunk, 1),
+            "Set" => crate::fn_info!(set_constructor_call_thunk, 1),
+            "WeakMap" => crate::fn_info!(weak_map_constructor_call_thunk, 1),
+            "WeakSet" => crate::fn_info!(weak_set_constructor_call_thunk, 1),
+            "WeakRef" => crate::fn_info!(weak_ref_constructor_call_thunk, 1),
+            "Promise" => crate::fn_info!(promise_constructor_call_thunk, 1),
+            "ArrayBuffer" | "SharedArrayBuffer" | "DataView" => {
+                crate::fn_info!(construct_only_builtin_call_thunk, 0)
+            }
+            _ => crate::fn_info!(global_this_builtin_noop_thunk, 1),
+        };
+        let closure_ptr = crate::closure::js_closure_alloc(info, 0);
+        if closure_ptr.is_null() {
+            continue;
         }
         // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
         // on the constructor closure so rebound usage like
@@ -417,10 +393,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             }
             // Populate well-known method properties on the prototype
             // (currently just `Array.prototype.slice`). Methods are
-            // ClosureHeader-backed thunks that read their receiver from
-            // `IMPLICIT_THIS` and dispatch to the corresponding native
-            // entry point — works in tandem with `.call`/`.apply` since
-            // those arms (#970) rebind IMPLICIT_THIS before forwarding.
+            // ClosureHeader-backed thunks that take their receiver as
+            // `this` and dispatch to the corresponding native entry
+            // point — works in tandem with `.call`/`.apply` since those
+            // arms (#970) pass the explicit receiver when forwarding.
             populate_builtin_prototype_methods(name, proto_obj);
             if name == "Function" {
                 // SAFETY: `proto_obj` is the live, just-populated prototype.
@@ -609,84 +585,140 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {
-        let (func_ptr, arity, has_rest, enumerable) = match name {
-            "eval" => (global_this_eval_thunk as *const u8, 1, false, false),
-            "fetch" => (
-                super::super::global_fetch::global_this_fetch_thunk as *const u8,
+        let (info, arity, enumerable) = match name {
+            "eval" => (
+                crate::fn_info!(global_this_eval_thunk, 1; with_declared(1)),
                 1,
-                true,
+                false,
+            ),
+            "fetch" => (
+                crate::fn_info!(super::super::global_fetch::global_this_fetch_thunk, 2; with_rest(1)),
+                1,
                 true,
             ),
             "structuredClone" => (
-                global_this_structured_clone_thunk as *const u8,
+                crate::fn_info!(global_this_structured_clone_thunk, 2; with_declared(2)),
                 2,
-                false,
                 true,
             ),
-            "atob" => (global_this_atob_thunk as *const u8, 1, false, true),
-            "btoa" => (global_this_btoa_thunk as *const u8, 1, false, true),
-            "setTimeout" => (global_this_set_timeout_thunk as *const u8, 2, true, true),
-            "clearTimeout" => (global_this_clear_timeout_thunk as *const u8, 1, false, true),
-            "setInterval" => (global_this_set_interval_thunk as *const u8, 2, true, true),
+            "atob" => (
+                crate::fn_info!(global_this_atob_thunk, 1; with_declared(1)),
+                1,
+                true,
+            ),
+            "btoa" => (
+                crate::fn_info!(global_this_btoa_thunk, 1; with_declared(1)),
+                1,
+                true,
+            ),
+            "setTimeout" => (
+                crate::fn_info!(global_this_set_timeout_thunk, 3; with_rest(2)),
+                2,
+                true,
+            ),
+            "clearTimeout" => (
+                crate::fn_info!(global_this_clear_timeout_thunk, 1; with_declared(1)),
+                1,
+                true,
+            ),
+            "setInterval" => (
+                crate::fn_info!(global_this_set_interval_thunk, 3; with_rest(2)),
+                2,
+                true,
+            ),
             "clearInterval" => (
-                global_this_clear_interval_thunk as *const u8,
+                crate::fn_info!(global_this_clear_interval_thunk, 1; with_declared(1)),
                 1,
-                false,
                 true,
             ),
-            "setImmediate" => (global_this_set_immediate_thunk as *const u8, 1, true, true),
-            "clearImmediate" => (
-                global_this_clear_immediate_thunk as *const u8,
+            "setImmediate" => (
+                crate::fn_info!(global_this_set_immediate_thunk, 2; with_rest(1)),
                 1,
-                false,
+                true,
+            ),
+            "clearImmediate" => (
+                crate::fn_info!(global_this_clear_immediate_thunk, 1; with_declared(1)),
+                1,
                 true,
             ),
             "queueMicrotask" => (
-                global_this_queue_microtask_thunk as *const u8,
+                crate::fn_info!(global_this_queue_microtask_thunk, 1; with_declared(1)),
                 1,
-                false,
                 true,
             ),
             // `gc([force])` — value form of the bare `gc()` call-intrinsic.
             // Non-enumerable (a debug/diagnostic global). The optional `force`
             // arg is accepted (arity 1) but ignored — Perry's gc is full.
-            "gc" => (global_this_gc_thunk as *const u8, 1, false, false),
-            // #2905: standard global helper functions.
-            "parseInt" => (global_this_parse_int_thunk as *const u8, 2, false, false),
-            "parseFloat" => (global_this_parse_float_thunk as *const u8, 1, false, false),
-            "isNaN" => (global_this_is_nan_thunk as *const u8, 1, false, false),
-            "isFinite" => (global_this_is_finite_thunk as *const u8, 1, false, false),
-            "encodeURI" => (global_this_encode_uri_thunk as *const u8, 1, false, false),
-            "decodeURI" => (global_this_decode_uri_thunk as *const u8, 1, false, false),
-            "encodeURIComponent" => (
-                global_this_encode_uri_component_thunk as *const u8,
+            "gc" => (
+                crate::fn_info!(global_this_gc_thunk, 1; with_declared(1)),
                 1,
                 false,
+            ),
+            // #2905: standard global helper functions.
+            "parseInt" => (
+                crate::fn_info!(global_this_parse_int_thunk, 2; with_declared(2)),
+                2,
+                false,
+            ),
+            "parseFloat" => (
+                crate::fn_info!(global_this_parse_float_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "isNaN" => (
+                crate::fn_info!(global_this_is_nan_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "isFinite" => (
+                crate::fn_info!(global_this_is_finite_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "encodeURI" => (
+                crate::fn_info!(global_this_encode_uri_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "decodeURI" => (
+                crate::fn_info!(global_this_decode_uri_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "encodeURIComponent" => (
+                crate::fn_info!(global_this_encode_uri_component_thunk, 1; with_declared(1)),
+                1,
                 false,
             ),
             "decodeURIComponent" => (
-                global_this_decode_uri_component_thunk as *const u8,
+                crate::fn_info!(global_this_decode_uri_component_thunk, 1; with_declared(1)),
                 1,
-                false,
                 false,
             ),
             // #4511: legacy escape/unescape (ES Annex B).
             // #4511: legacy escape/unescape (ES Annex B).
-            "escape" => (global_this_escape_thunk as *const u8, 1, false, false),
-            "unescape" => (global_this_unescape_thunk as *const u8, 1, false, false),
+            "escape" => (
+                crate::fn_info!(global_this_escape_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
+            "unescape" => (
+                crate::fn_info!(global_this_unescape_thunk, 1; with_declared(1)),
+                1,
+                false,
+            ),
             _ => continue,
         };
-        let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
+        let closure_ptr = crate::closure::js_closure_alloc(info, 0);
         if closure_ptr.is_null() {
             continue;
         }
-        if has_rest {
-            crate::closure::js_register_closure_rest(func_ptr, arity);
-        } else {
-            crate::closure::js_register_closure_arity(func_ptr, arity);
-        }
         unsafe {
-            crate::builtins::js_register_function_name(func_ptr, name.as_ptr(), name.len() as u32);
+            crate::builtins::js_register_function_name(
+                (*info).code,
+                name.as_ptr(),
+                name.len() as u32,
+            );
         }
         super::super::native_module::set_builtin_closure_length(closure_ptr as usize, arity);
         // Every global helper installed here (parseInt/parseFloat/isNaN/
@@ -813,9 +845,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
         js_object_set_field_by_name(singleton(), key, value);
     }
     super::super::native_module::install_global_webcrypto(singleton());
-    let func_ptr = global_this_crypto_getter_thunk as *const u8;
-    crate::closure::js_register_closure_arity(func_ptr, 0);
-    let getter = crate::closure::js_closure_alloc(func_ptr, 0);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(global_this_crypto_getter_thunk, 0; with_declared(0)),
+        0,
+    );
     let getter_bits = if getter.is_null() {
         0
     } else {
@@ -1044,12 +1077,13 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
         return;
     }
     ERROR_CONSTRUCTOR_PTR.with(|c| c.set(ctor as usize));
-    let func_ptr = global_this_error_capture_stack_trace_thunk as *const u8;
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+        0,
+    );
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, 2);
     super::super::native_module::set_bound_native_closure_name(closure, "captureStackTrace");
 
     let key = crate::string::js_string_from_bytes(b"captureStackTrace".as_ptr(), 17);
@@ -1066,16 +1100,14 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
     install_error_static_fn(
         ctor,
         "isError",
-        global_this_error_is_error_thunk as *const u8,
-        1,
+        crate::fn_info!(global_this_error_is_error_thunk, 1; with_declared(1)),
     );
 
     // #2904: `Error.prepareStackTrace` — default stack-formatting hook.
     install_error_static_fn(
         ctor,
         "prepareStackTrace",
-        global_this_error_prepare_stack_trace_thunk as *const u8,
-        2,
+        crate::fn_info!(global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
     );
 
     // #2904: `Error.stackTraceLimit` — writable number controlling captured
@@ -1097,14 +1129,12 @@ fn install_error_static_methods(ctor: *mut crate::closure::ClosureHeader) {
 fn install_error_static_fn(
     ctor: *mut crate::closure::ClosureHeader,
     name: &str,
-    func_ptr: *const u8,
-    arity: u32,
+    info: *const crate::closure::JsFunctionInfo,
 ) {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
         return;
     }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
     super::super::native_module::set_bound_native_closure_name(closure, name);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);

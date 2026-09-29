@@ -90,9 +90,10 @@ pub(crate) const PARENT_DENSE_CAP: usize = 1 << 16;
 /// INNER map is a [`StaticNameMap`], keyed by member name.
 /// (body func_ptr, param_count, has_rest, closure-convention entry or 0).
 pub type StaticMethodTable = PtrHashMap<u32, StaticNameMap<(usize, u32, bool, usize)>>;
-/// class_id -> { name -> (getter func_ptr, setter func_ptr) } for static accessors.
+/// class_id -> { name -> accessor halves (and the setter's `.length`) } for
+/// static accessors.
 /// Outer map fast-hashed, inner map a [`StaticNameMap`] — see above.
-pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<(usize, usize)>>;
+pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<super::class_registry::AccessorDecl>>;
 /// A class's static members by name. The names come from program source, so
 /// the map keeps a randomly keyed, flood-resistant hasher: `ahash::RandomState`,
 /// the runtime's hasher for untrusted string keys (as in `json::parser`), in
@@ -106,8 +107,9 @@ pub type StaticNameMap<V> = HashMap<String, V, ahash::RandomState>;
 pub type StringMemberOrderTable = HashMap<(u32, bool, String), u32>;
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
-/// class_id -> (has_synthetic_arguments, has_rest) for a registered constructor.
-pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool)>;
+/// class_id -> (has_synthetic_arguments, has_rest, parameters before the first
+/// trailing array) for a registered constructor.
+pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 
 /// One compiled image's class metadata: every class-id-keyed table module init
 /// writes. Field docs live on the `static` handles that select them.

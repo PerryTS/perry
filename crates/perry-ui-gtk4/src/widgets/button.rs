@@ -18,7 +18,7 @@ pub(crate) fn scan_gtk4_button_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
 }
 
@@ -47,7 +47,7 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
         if let Some(closure_f64) = closure_f64 {
             let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
             unsafe {
-                js_closure_call0(closure_ptr as *const u8);
+                js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
             }
         }
     });

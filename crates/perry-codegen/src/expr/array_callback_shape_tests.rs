@@ -228,7 +228,7 @@ fn captureless_inline_some_passes_the_callback_body_directly() {
     assert!(
         ir.contains("some.inline.loop")
             && ir.contains(
-                "call double @perry_closure_array_some_captureless_ts__99(i64 0, double "
+                "call double @perry_closure_array_some_captureless_ts__99(i64 0, i64 9222246136947933185, double "
             )
             && ir.contains("call i64 @js_array_live_head(")
             && ir.contains("call i32 @js_is_truthy("),

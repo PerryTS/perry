@@ -22,7 +22,7 @@ extern "C" {
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call2(closure: *const u8, arg0: f64, arg1: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg0: f64, arg1: f64) -> f64;
     fn js_string_from_bytes(ptr: *const u8, len: u32) -> *mut u8;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
@@ -107,7 +107,7 @@ unsafe fn invoke_callback(closure_f64: f64, status: Status) {
     }
     let connected = bool_to_jsvalue(status.connected);
     let kind = nanbox_str(status.kind);
-    js_closure_call2(ptr, connected, kind);
+    js_closure_call2(ptr, perry_ffi::JsThis::UNDEFINED, connected, kind);
 }
 
 fn classify(path: *mut c_void) -> Status {

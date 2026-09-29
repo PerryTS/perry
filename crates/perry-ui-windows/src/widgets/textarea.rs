@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::{alloc_control_id, register_widget, WidgetKind};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
@@ -179,7 +179,7 @@ pub fn handle_change(handle: i64) {
                 let str_ptr =
                     perry_runtime::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = unsafe { js_nanbox_string(str_ptr as i64) };
-                unsafe { js_closure_call1(ptr, nanboxed) };
+                unsafe { js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, nanboxed) };
             }
         }
     }

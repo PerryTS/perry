@@ -30,7 +30,10 @@
 
 use super::*;
 
-extern "C" fn test_bound_method_body(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn test_bound_method_body(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
 
@@ -65,7 +68,7 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
     js_shadow_slot_set(
         0,
         ptr_bits(crate::closure::js_closure_alloc(
-            test_bound_method_body as *const u8,
+            crate::fn_info!(test_bound_method_body, 0),
             crate::closure::CAPTURES_THIS_FLAG | 1,
         ) as usize),
     );
@@ -254,7 +257,7 @@ fn weak_entry_addr_for(map: f64, key: f64) -> usize {
 #[test]
 fn test_fresh_closure_capture_slots_are_initialized_7154() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    let closure = crate::closure::js_closure_alloc(test_bound_method_body as *const u8, 3);
+    let closure = crate::closure::js_closure_alloc(crate::fn_info!(test_bound_method_body, 0), 3);
     unsafe {
         let slots = crate::closure::closure_capture_slots_mut(closure);
         for i in 0..3 {

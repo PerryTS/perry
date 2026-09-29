@@ -2,9 +2,13 @@
 
 use super::*;
 
+/// The callbacks run with `this` bound to the emitting server (Node's
+/// `EventEmitter` contract); `this_value` is the rooted receiver, re-read for
+/// every callback.
 struct DeferredCallbacksCall {
     callbacks: *const perry_ffi::TransientRootedAddr,
     len: usize,
+    this_value: *const perry_ffi::TransientRootedNanbox,
 }
 
 unsafe extern "C" fn call_deferred_callbacks(data: *mut std::ffi::c_void) -> f64 {
@@ -18,7 +22,7 @@ unsafe extern "C" fn call_deferred_callbacks(data: *mut std::ffi::c_void) -> f64
         }
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         if !closure.is_null() {
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::from_f64((*call.this_value).get()));
             fired += 1;
         }
     }
@@ -134,10 +138,12 @@ where
     // #8082: the drained snapshot crosses each callback — root it.
     let scope = perry_ffi::TransientRootScope::enter();
     let rooted = scope.root_addrs(&cbs);
+    let this_rooted = scope.root_nanbox(this_val);
     perry_ext_ws::attached_server_listening(server_handle);
     let mut call = DeferredCallbacksCall {
         callbacks: rooted.as_ptr(),
         len: rooted.len(),
+        this_value: &this_rooted,
     };
     unsafe {
         crate::js_async_hooks_provider_run_catching_with_this(
@@ -178,9 +184,11 @@ where
     let this_value = handle_to_pointer_f64(server_handle);
     let scope = perry_ffi::TransientRootScope::enter();
     let callbacks = scope.root_addrs(&callbacks);
+    let this_rooted = scope.root_nanbox(this_value);
     let mut call = DeferredCallbacksCall {
         callbacks: callbacks.as_ptr(),
         len: callbacks.len(),
+        this_value: &this_rooted,
     };
     unsafe {
         crate::js_async_hooks_provider_run_catching_with_this(
@@ -351,6 +359,8 @@ struct DeferredErrorCall {
     callbacks: *const perry_ffi::TransientRootedAddr,
     len: usize,
     error: *const ListenError,
+    /// The rooted receiver: the emitting server (see `DeferredCallbacksCall`).
+    this_value: *const perry_ffi::TransientRootedNanbox,
 }
 
 unsafe extern "C" fn call_deferred_error_callbacks(data: *mut std::ffi::c_void) -> f64 {
@@ -369,7 +379,8 @@ unsafe extern "C" fn call_deferred_error_callbacks(data: *mut std::ffi::c_void) 
         }
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         if !closure.is_null() {
-            let _ = closure.call1(error.get());
+            let this = perry_ffi::JsThis::from_f64((*call.this_value).get());
+            let _ = closure.call1(this, error.get());
             fired += 1;
         }
     }
@@ -451,10 +462,12 @@ where
     let this_val = handle_to_pointer_f64(server_handle);
     let scope = perry_ffi::TransientRootScope::enter();
     let rooted = scope.root_addrs(&cbs);
+    let this_rooted = scope.root_nanbox(this_val);
     let mut call = DeferredErrorCall {
         callbacks: rooted.as_ptr(),
         len: rooted.len(),
         error: &error as *const ListenError,
+        this_value: &this_rooted,
     };
     unsafe {
         crate::js_async_hooks_provider_run_catching_with_this(

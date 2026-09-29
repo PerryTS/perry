@@ -21,8 +21,6 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
         if !crate::proxy::is_callable_function(method.get_nanbox_f64()) {
             throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
         }
-        let previous_this =
-            scope.root_nanbox_f64(js_implicit_this_set(constructor.get_nanbox_f64()));
         let called = crate::exception::catch_js_throw(|| unsafe {
             let args = [value.get_nanbox_f64()];
             if crate::proxy::js_proxy_is_proxy(method.get_nanbox_f64()) != 0 {
@@ -32,10 +30,14 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
                     &args,
                 )
             } else {
-                crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1)
+                crate::closure::native_call_value_this(
+                    method.get_nanbox_f64(),
+                    crate::closure::JsThis::from_f64(constructor.get_nanbox_f64()),
+                    args.as_ptr(),
+                    1,
+                )
             }
         });
-        js_implicit_this_set(previous_this.get_nanbox_f64());
         match called {
             Ok(result) => crate::value::js_is_truthy(result) != 0,
             Err(error) => crate::exception::js_throw(error),

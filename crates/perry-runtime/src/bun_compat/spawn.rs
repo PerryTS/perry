@@ -6,13 +6,11 @@
 
 use super::*;
 use crate::child_process::{
-    cp_array_ptr, cp_box_ptr, cp_box_string, cp_build_object, cp_cast0, cp_cast1, cp_cast2,
-    cp_get_field, cp_object_ptr, cp_set_field, cp_undefined, CpFn, TAG_FALSE_F64, TAG_NULL_F64,
-    TAG_TRUE_F64,
+    cp_array_ptr, cp_box_ptr, cp_box_string, cp_build_object, cp_get_field, cp_object_ptr,
+    cp_set_field, cp_undefined, CpFn, TAG_FALSE_F64, TAG_NULL_F64, TAG_TRUE_F64,
 };
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
-    js_register_closure_arity, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::value::JSValue;
 
@@ -72,7 +70,12 @@ fn call_value(callback: f64, args: &[f64]) -> f64 {
     let args = scope.root_nanbox_f64_slice(args);
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     unsafe {
-        crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(
+            callback.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     }
 }
 
@@ -85,42 +88,26 @@ fn call_method(receiver: f64, name: &[u8], args: &[f64]) -> f64 {
     }
     let method = scope.root_nanbox_f64(method);
     let args = scope.root_nanbox_f64_slice(args);
-    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-        receiver.get_nanbox_f64(),
-    ));
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    let result = unsafe {
-        crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), args.len())
-    };
-    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
-    result
+    unsafe {
+        crate::closure::native_call_value_this(
+            method.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
-fn closure_with_captures(func: *const u8, arity: u32, captures: &[f64]) -> f64 {
-    js_register_closure_arity(func, arity);
+/// `info` records the body's declared arity.
+fn closure_with_captures(info: *const crate::closure::JsFunctionInfo, captures: &[f64]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let captures = scope.root_nanbox_f64_slice(captures);
-    let closure = js_closure_alloc(func, captures.len() as u32);
+    let closure = js_closure_alloc(info, captures.len() as u32);
     for (index, value) in captures.iter().enumerate() {
         js_closure_set_capture_f64(closure, index as u32, value.get_nanbox_f64());
     }
     cp_box_ptr(closure as *const u8)
-}
-
-fn register_bun_spawn_arities() {
-    js_register_closure_arity(bun_terminal_write as *const u8, 1);
-    js_register_closure_arity(bun_terminal_resize as *const u8, 2);
-    js_register_closure_arity(bun_terminal_set_raw_mode as *const u8, 1);
-    js_register_closure_arity(bun_terminal_ref as *const u8, 0);
-    js_register_closure_arity(bun_terminal_unref as *const u8, 0);
-    js_register_closure_arity(bun_terminal_close as *const u8, 0);
-    #[cfg(unix)]
-    {
-        js_register_closure_arity(bun_pty_subprocess_kill as *const u8, 1);
-        js_register_closure_arity(bun_pty_subprocess_ref as *const u8, 0);
-        js_register_closure_arity(bun_pty_subprocess_unref as *const u8, 0);
-        js_register_closure_arity(bun_pty_subprocess_dispose as *const u8, 0);
-    }
 }
 
 fn captured_at(closure: *const ClosureHeader, index: u32) -> f64 {
@@ -179,19 +166,31 @@ fn clone_options(options: f64) -> f64 {
 // Readable / writable stream facade
 // -------------------------------------------------------------------------
 
-extern "C" fn bun_readable_text(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_readable_text(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::node_submodules::consume_text(captured_at(closure, 0))
 }
 
-extern "C" fn bun_readable_json(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_readable_json(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::node_submodules::consume_json(captured_at(closure, 0))
 }
 
-extern "C" fn bun_readable_array_buffer(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_readable_array_buffer(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::node_submodules::consume_array_buffer(captured_at(closure, 0))
 }
 
-extern "C" fn bun_readable_bytes(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_readable_bytes(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     crate::node_submodules::consume_bytes(captured_at(closure, 0))
 }
 
@@ -202,25 +201,35 @@ fn decorate_readable(stream: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     for (name, function) in [
-        (b"text".as_slice(), bun_readable_text as *const u8),
-        (b"json".as_slice(), bun_readable_json as *const u8),
+        (
+            b"text".as_slice(),
+            crate::fn_info!(bun_readable_text, 0; with_declared(0)),
+        ),
+        (
+            b"json".as_slice(),
+            crate::fn_info!(bun_readable_json, 0; with_declared(0)),
+        ),
         (
             b"arrayBuffer".as_slice(),
-            bun_readable_array_buffer as *const u8,
+            crate::fn_info!(bun_readable_array_buffer, 0; with_declared(0)),
         ),
-        (b"bytes".as_slice(), bun_readable_bytes as *const u8),
+        (
+            b"bytes".as_slice(),
+            crate::fn_info!(bun_readable_bytes, 0; with_declared(0)),
+        ),
     ] {
-        let method = scope.root_nanbox_f64(closure_with_captures(
-            function,
-            0,
-            &[stream.get_nanbox_f64()],
-        ));
+        let method =
+            scope.root_nanbox_f64(closure_with_captures(function, &[stream.get_nanbox_f64()]));
         cp_set_field(stream.get_nanbox_f64(), name, method.get_nanbox_f64());
     }
     stream.get_nanbox_f64()
 }
 
-extern "C" fn bun_sink_flush(_closure: *const ClosureHeader, _wait: f64) -> f64 {
+extern "C" fn bun_sink_flush(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _wait: f64,
+) -> f64 {
     0.0
 }
 
@@ -229,8 +238,7 @@ fn decorate_sink(stream: f64) -> f64 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let stream = scope.root_nanbox_f64(stream);
         let flush = scope.root_nanbox_f64(closure_with_captures(
-            bun_sink_flush as *const u8,
-            1,
+            crate::fn_info!(bun_sink_flush, 1; with_declared(1)),
             &[stream.get_nanbox_f64()],
         ));
         cp_set_field(stream.get_nanbox_f64(), b"flush", flush.get_nanbox_f64());
@@ -394,7 +402,12 @@ fn normalized_options(options: f64) -> Result<(f64, Vec<std::fs::File>), f64> {
 // Non-PTY Subprocess facade
 // -------------------------------------------------------------------------
 
-extern "C" fn bun_subprocess_exit(closure: *const ClosureHeader, code: f64, signal: f64) -> f64 {
+extern "C" fn bun_subprocess_exit(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    code: f64,
+    signal: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let subprocess = scope.root_nanbox_f64(captured_at(closure, 0));
     let code = scope.root_nanbox_f64(code);
@@ -531,8 +544,7 @@ fn finish_non_pty_subprocess(subprocess: f64, options: f64) -> f64 {
         on_exit.get_nanbox_f64(),
     );
     let listener = scope.root_nanbox_f64(closure_with_captures(
-        bun_subprocess_exit as *const u8,
-        2,
+        crate::fn_info!(bun_subprocess_exit, 2; with_declared(2)),
         &[subprocess.get_nanbox_f64()],
     ));
     let event = scope.root_nanbox_f64(cp_box_string("exit"));
@@ -570,7 +582,11 @@ fn terminal_set_refed(terminal: f64, refed: bool) {
     );
 }
 
-extern "C" fn bun_terminal_write(closure: *const ClosureHeader, data: f64) -> f64 {
+extern "C" fn bun_terminal_write(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    data: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     let data = scope.root_nanbox_f64(data);
@@ -589,7 +605,12 @@ extern "C" fn bun_terminal_write(closure: *const ClosureHeader, data: f64) -> f6
     0.0
 }
 
-extern "C" fn bun_terminal_resize(closure: *const ClosureHeader, columns: f64, rows: f64) -> f64 {
+extern "C" fn bun_terminal_resize(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    columns: f64,
+    rows: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     let columns = number_i32(columns).unwrap_or(0);
@@ -608,7 +629,11 @@ extern "C" fn bun_terminal_resize(closure: *const ClosureHeader, columns: f64, r
     cp_undefined()
 }
 
-extern "C" fn bun_terminal_set_raw_mode(closure: *const ClosureHeader, enabled: f64) -> f64 {
+extern "C" fn bun_terminal_set_raw_mode(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    enabled: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     let enabled = crate::value::js_is_truthy(enabled) != 0;
@@ -626,7 +651,10 @@ extern "C" fn bun_terminal_set_raw_mode(closure: *const ClosureHeader, enabled: 
     cp_undefined()
 }
 
-extern "C" fn bun_terminal_ref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_terminal_ref(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     #[cfg(unix)]
@@ -634,7 +662,10 @@ extern "C" fn bun_terminal_ref(closure: *const ClosureHeader) -> f64 {
     terminal.get_nanbox_f64()
 }
 
-extern "C" fn bun_terminal_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_terminal_unref(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     #[cfg(unix)]
@@ -642,7 +673,10 @@ extern "C" fn bun_terminal_unref(closure: *const ClosureHeader) -> f64 {
     terminal.get_nanbox_f64()
 }
 
-extern "C" fn bun_terminal_close(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_terminal_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     if bool_field(terminal.get_nanbox_f64(), b"closed") {
@@ -673,7 +707,6 @@ fn terminal_options_i32(options: f64, key: &[u8], default: i32) -> i32 {
 /// callback owner. The underlying PTY is attached lazily by `Bun.spawn`.
 #[no_mangle]
 pub extern "C" fn js_bun_terminal_new(options: f64) -> f64 {
-    register_bun_spawn_arities();
     #[cfg(not(unix))]
     {
         let _ = options;
@@ -688,12 +721,30 @@ pub extern "C" fn js_bun_terminal_new(options: f64) -> f64 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let options = scope.root_nanbox_f64(options);
         let methods: [(&str, CpFn); 6] = [
-            ("write", cp_cast1(bun_terminal_write)),
-            ("resize", cp_cast2(bun_terminal_resize)),
-            ("setRawMode", cp_cast1(bun_terminal_set_raw_mode)),
-            ("ref", cp_cast0(bun_terminal_ref)),
-            ("unref", cp_cast0(bun_terminal_unref)),
-            ("close", cp_cast0(bun_terminal_close)),
+            (
+                "write",
+                crate::fn_info!(bun_terminal_write, 1; with_declared(1)),
+            ),
+            (
+                "resize",
+                crate::fn_info!(bun_terminal_resize, 2; with_declared(2)),
+            ),
+            (
+                "setRawMode",
+                crate::fn_info!(bun_terminal_set_raw_mode, 1; with_declared(1)),
+            ),
+            (
+                "ref",
+                crate::fn_info!(bun_terminal_ref, 0; with_declared(0)),
+            ),
+            (
+                "unref",
+                crate::fn_info!(bun_terminal_unref, 0; with_declared(0)),
+            ),
+            (
+                "close",
+                crate::fn_info!(bun_terminal_close, 0; with_declared(0)),
+            ),
         ];
         let terminal = scope.root_nanbox_f64(cp_box_ptr(cp_build_object(
             &methods,
@@ -740,7 +791,11 @@ pub extern "C" fn js_bun_terminal_new(options: f64) -> f64 {
 }
 
 #[cfg(unix)]
-extern "C" fn bun_terminal_data_bridge(closure: *const ClosureHeader, text: f64) -> f64 {
+extern "C" fn bun_terminal_data_bridge(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    text: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let terminal = scope.root_nanbox_f64(captured_at(closure, 0));
     let text = scope.root_nanbox_f64(text);
@@ -758,7 +813,11 @@ extern "C" fn bun_terminal_data_bridge(closure: *const ClosureHeader, text: f64)
 }
 
 #[cfg(unix)]
-extern "C" fn bun_pty_subprocess_exit(closure: *const ClosureHeader, payload: f64) -> f64 {
+extern "C" fn bun_pty_subprocess_exit(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    payload: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let subprocess = scope.root_nanbox_f64(captured_at(closure, 0));
     let terminal = scope.root_nanbox_f64(captured_at(closure, 1));
@@ -816,7 +875,11 @@ extern "C" fn bun_pty_subprocess_exit(closure: *const ClosureHeader, payload: f6
 }
 
 #[cfg(unix)]
-extern "C" fn bun_pty_subprocess_kill(closure: *const ClosureHeader, signal: f64) -> f64 {
+extern "C" fn bun_pty_subprocess_kill(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    signal: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let subprocess = scope.root_nanbox_f64(captured_at(closure, 0));
     let terminal = scope.root_nanbox_f64(cp_get_field(subprocess.get_nanbox_f64(), b"terminal"));
@@ -841,7 +904,10 @@ extern "C" fn bun_pty_subprocess_kill(closure: *const ClosureHeader, signal: f64
 }
 
 #[cfg(unix)]
-extern "C" fn bun_pty_subprocess_ref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_pty_subprocess_ref(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let subprocess = scope.root_nanbox_f64(captured_at(closure, 0));
     terminal_set_refed(cp_get_field(subprocess.get_nanbox_f64(), b"terminal"), true);
@@ -849,7 +915,10 @@ extern "C" fn bun_pty_subprocess_ref(closure: *const ClosureHeader) -> f64 {
 }
 
 #[cfg(unix)]
-extern "C" fn bun_pty_subprocess_unref(closure: *const ClosureHeader) -> f64 {
+extern "C" fn bun_pty_subprocess_unref(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let subprocess = scope.root_nanbox_f64(captured_at(closure, 0));
     terminal_set_refed(
@@ -860,8 +929,11 @@ extern "C" fn bun_pty_subprocess_unref(closure: *const ClosureHeader) -> f64 {
 }
 
 #[cfg(unix)]
-extern "C" fn bun_pty_subprocess_dispose(closure: *const ClosureHeader) -> f64 {
-    let _ = bun_pty_subprocess_kill(closure, cp_undefined());
+extern "C" fn bun_pty_subprocess_dispose(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let _ = bun_pty_subprocess_kill(closure, this, cp_undefined());
     cp_undefined()
 }
 
@@ -910,10 +982,22 @@ fn finish_pty_subprocess(command: &str, args: &[String], options: f64, terminal:
     );
 
     let methods: [(&str, CpFn); 4] = [
-        ("kill", cp_cast1(bun_pty_subprocess_kill)),
-        ("ref", cp_cast0(bun_pty_subprocess_ref)),
-        ("unref", cp_cast0(bun_pty_subprocess_unref)),
-        ("dispose", cp_cast0(bun_pty_subprocess_dispose)),
+        (
+            "kill",
+            crate::fn_info!(bun_pty_subprocess_kill, 1; with_declared(1)),
+        ),
+        (
+            "ref",
+            crate::fn_info!(bun_pty_subprocess_ref, 0; with_declared(0)),
+        ),
+        (
+            "unref",
+            crate::fn_info!(bun_pty_subprocess_unref, 0; with_declared(0)),
+        ),
+        (
+            "dispose",
+            crate::fn_info!(bun_pty_subprocess_dispose, 0; with_declared(0)),
+        ),
     ];
     let subprocess = scope.root_nanbox_f64(cp_box_ptr(cp_build_object(
         &methods,
@@ -953,14 +1037,12 @@ fn finish_pty_subprocess(command: &str, args: &[String], options: f64, terminal:
     install_dispose_aliases(subprocess.get_nanbox_f64(), dispose, true);
 
     let data_bridge = scope.root_nanbox_f64(closure_with_captures(
-        bun_terminal_data_bridge as *const u8,
-        1,
+        crate::fn_info!(bun_terminal_data_bridge, 1; with_declared(1)),
         &[terminal.get_nanbox_f64()],
     ));
     crate::pty::pty_register(ipty.get_nanbox_f64(), "data", data_bridge.get_nanbox_f64());
     let exit_bridge = scope.root_nanbox_f64(closure_with_captures(
-        bun_pty_subprocess_exit as *const u8,
-        1,
+        crate::fn_info!(bun_pty_subprocess_exit, 1; with_declared(1)),
         &[subprocess.get_nanbox_f64(), terminal.get_nanbox_f64()],
     ));
     crate::pty::pty_register(ipty.get_nanbox_f64(), "exit", exit_bridge.get_nanbox_f64());
@@ -1026,7 +1108,6 @@ fn parse_command(command_or_options: f64, options: f64) -> (String, Vec<String>,
 /// `Bun.spawn(cmd, options?)` / `Bun.spawn({ cmd, ...options })`.
 #[no_mangle]
 pub extern "C" fn js_bun_spawn(command_or_options: f64, options: f64) -> f64 {
-    register_bun_spawn_arities();
     let scope = crate::gc::RuntimeHandleScope::new();
     let command_or_options = scope.root_nanbox_f64(command_or_options);
     let options_arg = scope.root_nanbox_f64(options);

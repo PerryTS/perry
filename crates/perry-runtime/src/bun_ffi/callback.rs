@@ -311,7 +311,10 @@ fn validate_callback_types(ret: u8, args: &[u8]) {
     }
 }
 
-extern "C" fn callback_close_thunk(closure: *const ClosureHeader) -> f64 {
+extern "C" fn callback_close_thunk(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let index = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
     if let Some(record) = CALLBACKS.lock().unwrap().get_mut(index) {
         close_record(record);
@@ -320,10 +323,10 @@ extern "C" fn callback_close_thunk(closure: *const ClosureHeader) -> f64 {
 }
 
 fn close_closure(index: usize) -> f64 {
-    let function = callback_close_thunk as *const u8;
-    crate::closure::js_register_closure_arity(function, 0);
-    crate::closure::js_register_closure_length(function, 0);
-    let closure = crate::closure::js_closure_alloc(function, 1);
+    let closure = crate::closure::js_closure_alloc(
+        crate::fn_info!(callback_close_thunk, 0; with_declared(0), with_length(0)),
+        1,
+    );
     crate::closure::js_closure_set_capture_bits(closure, 0, index as u64);
     crate::object::set_bound_native_closure_name(closure, "close");
     crate::object::set_builtin_closure_length(closure as usize, 0);
@@ -569,6 +572,7 @@ unsafe fn invoke_record(
     match crate::exception::js_call_catching(|| {
         crate::closure::js_native_call_value(
             callback.get_nanbox_f64(),
+            crate::closure::plain_call_receiver(),
             arguments.as_ptr(),
             arguments.len(),
         )

@@ -355,6 +355,7 @@ thread_local! {
 
 extern "C" fn record_first_arg(
     _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
     value: f64,
     _index: f64,
     _receiver: f64,
@@ -374,7 +375,7 @@ fn take_visits() -> Vec<f64> {
 
 fn recording_callback() -> *const ClosureHeader {
     take_visits();
-    js_closure_alloc(record_first_arg as *const u8, 0)
+    js_closure_alloc(crate::fn_info!(record_first_arg, 3), 0)
 }
 
 #[test]

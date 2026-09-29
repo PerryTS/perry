@@ -328,18 +328,15 @@ pub(crate) fn try_lower_static_dispatch(
                 // register captured before it — see the rationale on this
                 // closure's opening comment.
                 let recv_box = group.reread(ctx, recv_idx)?;
-                // #7211: rooted save/restore — the displaced implicit `this` is
-                // live across the static method body below, which is user code.
-                let prev_this = crate::rooting::implicit_this_save(ctx, &recv_box);
                 // Receiver-sensitive static `this`: arm the one-shot override with
                 // the ACTUAL receiver box so the callee prologue's
                 // `js_static_this_resolve` binds `this` to it (spec
                 // OrdinaryCallBindThis). This must cover the dynamic-value receiver
                 // shapes too (ClassExprFresh / factory `Call` / `LocalGet`), not
                 // just plain class-refs: the prologue consumes the armed override
-                // or falls back to the LEXICAL class-ref — it never reads implicit
-                // `this` — so the previous implicit-this-only treatment of these
-                // shapes silently bound `this` to the shared template. A class
+                // or falls back to the LEXICAL class-ref, so binding the
+                // receiver any other way silently bound `this` to the shared
+                // template. A class
                 // EXPRESSION's per-evaluation statics are OWN properties of the
                 // fresh heap class object (never written to the template's
                 // static-field globals), so `this.<field>` inside the static body
@@ -355,7 +352,6 @@ pub(crate) fn try_lower_static_dispatch(
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                 let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
-                crate::rooting::implicit_this_restore(ctx, prev_this);
                 let Some((via_property, generic_pred, join_idx)) = guarded else {
                     return Ok(Some(result));
                 };
@@ -432,6 +428,8 @@ pub(crate) fn try_lower_static_dispatch(
                     "js_native_call_value",
                     &[
                         (DOUBLE, &callee_val),
+                        // A plain call, as it has always been lowered here.
+                        (I64, crate::expr::body_call::JS_THIS_UNDEFINED),
                         (I64, &args_ptr_i64),
                         (I64, &args_len),
                     ],

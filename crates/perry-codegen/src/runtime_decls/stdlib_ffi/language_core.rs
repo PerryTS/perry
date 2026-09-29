@@ -45,34 +45,58 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_math_tan", DOUBLE, &[DOUBLE]);
 
     // ========== Atomics ==========
-    module.declare_function("js_atomics_load", DOUBLE, &[PTR, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_is_lock_free", DOUBLE, &[PTR, DOUBLE]);
-    module.declare_function("js_atomics_store", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_add", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_sub", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_and", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_or", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_atomics_xor", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_load", DOUBLE, &[I64, I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_atomics_is_lock_free", DOUBLE, &[I64, I64, DOUBLE]);
+    module.declare_function(
+        "js_atomics_store",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_atomics_add",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_atomics_sub",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_atomics_and",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_atomics_or", DOUBLE, &[I64, I64, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_atomics_xor",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_atomics_exchange",
         DOUBLE,
-        &[PTR, DOUBLE, DOUBLE, DOUBLE],
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_atomics_compare_exchange",
         DOUBLE,
-        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
-    module.declare_function("js_atomics_notify", DOUBLE, &[PTR, DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_atomics_notify",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_atomics_wait",
         DOUBLE,
-        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_atomics_wait_async",
         DOUBLE,
-        &[PTR, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+        &[I64, I64, DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
 
     // ========== Number ==========
@@ -109,11 +133,13 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // pointer to a `[N x double]` stack buffer; declare it PTR (ABI-identical
     // to I64 in the integer register class) so call sites can pass an alloca
     // directly. See `try_lower_closure_call_fallthrough` (#3527).
-    module.declare_function("js_closure_call_array", DOUBLE, &[I64, PTR, I64]);
+    module.declare_function("js_closure_call_array", DOUBLE, &[I64, I64, PTR, I64]);
+    // V8's callback trampoline (`func(env, args, len)`): its address only.
+    module.declare_function("js_closure_v8_callback", DOUBLE, &[I64, PTR, I64]);
     module.declare_function(
         "js_closure_call_apply_with_spread",
         DOUBLE,
-        &[DOUBLE, PTR, I64, I64],
+        &[DOUBLE, I64, PTR, I64, I64],
     );
     module.declare_function("js_create_callback", DOUBLE, &[I64, I64, I64]);
 
@@ -322,7 +348,8 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // ========== Class registration ==========
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
-    module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
+    // The last argument is the setter's default-aware spec `.length`.
+    module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64, I32]);
     module.declare_function(
         "js_register_class_string_member_order",
         VOID,
@@ -348,7 +375,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function(
         "js_register_class_static_setter",
         VOID,
-        &[I64, I64, I64, I64],
+        &[I64, I64, I64, I64, I32],
     );
     module.declare_function(
         "js_register_class_method",
@@ -359,12 +386,14 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64, I64]);
     // Constructor synth/rest flags: (class_id, has_synthetic_arguments,
-    // has_rest) — consulted by the `super(...spread)` apply path so it packs a
-    // pass-through parent ctor's `arguments` / rest slot correctly.
+    // has_rest, rest_fixed) — consulted by the `super(...spread)` apply path
+    // so it packs a pass-through parent ctor's `arguments` / rest slot
+    // correctly, and by the dynamic construct path, which bundles every
+    // argument from `rest_fixed` on into the rest array (-1: no rest bundle).
     module.declare_function(
         "js_register_class_constructor_flags",
         VOID,
-        &[I64, I64, I64],
+        &[I64, I64, I64, I64],
     );
     // #1788: register a class STATIC method + dispatch an inherited static
     // method on a class value (subclass extends a class-expression value).
@@ -391,16 +420,13 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // `js_native_call_method`'s field-scan dispatch when invoking a
     // closure-typed class field method-style. `Expr::This` codegen reads
     // this when the lexical this_stack is empty.
-    module.declare_function("js_implicit_this_get", DOUBLE, &[]);
-    module.declare_function("js_implicit_this_get_sloppy", DOUBLE, &[]);
-    module.declare_function("js_implicit_this_set", DOUBLE, &[DOUBLE]);
     // Static-method prologue `this`: takes the one-shot receiver override
     // armed by dynamic static dispatch / call/apply, else returns the
     // lexical class-ref argument.
     module.declare_function("js_static_this_resolve", DOUBLE, &[DOUBLE]);
     module.declare_function("js_static_this_resolve_class", DOUBLE, &[I32, PTR]);
     module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
-    module.declare_function("js_static_method_entry_enter", VOID, &[I32]);
+    module.declare_function("js_static_method_entry_enter", VOID, &[I32, I64]);
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",
@@ -441,7 +467,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, I64, I64, I64],
     );
-    module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64, I64]);
     module.declare_function("js_new_from_handle", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_instance", DOUBLE, &[I64, I64, I64, I64, I64]);
     module.declare_function("js_runtime_init", VOID, &[]);
