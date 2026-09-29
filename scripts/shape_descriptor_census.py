@@ -971,7 +971,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     class_probe = function_body(object_mod, "object_is_regular")
     require_code(
         class_probe,
-        r"ShapeObjectKind::Ordinary",
+        r"shape_object_kind_by_id\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
         "ordinary-object descriptor kind authority",
     )
 
