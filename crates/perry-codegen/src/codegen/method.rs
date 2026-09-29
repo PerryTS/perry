@@ -668,6 +668,8 @@ pub(super) fn compile_method(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        region_loops: Vec::new(),
+        region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: index_i32_param_slots,
         numeric_accumulator_f64_slots: HashMap::new(),

@@ -676,6 +676,41 @@ impl Appended {
         }
     }
 
+    /// The same slot, spelled with its text's ATOM when one exists — the one
+    /// string a read site's pooled key also is (`string::intern::AtomTable`).
+    ///
+    /// Applied to every key this module WRITES into a list, and nowhere else:
+    /// the trie validates edges by bytes, so which string object a list holds
+    /// never changes which node a probe reaches, only whether a later key
+    /// compare against the list can stop at pointer equality. Heap strings
+    /// only — an SSO slot stays an SSO slot, so `is_pointer` (and with it the
+    /// backing's all-pointer layout) is unchanged by the substitution.
+    ///
+    /// `h` is this slot's `edge_hash`, which for a string IS the FNV-1a hash of
+    /// its bytes — the atom table's hash.
+    ///
+    /// # Safety
+    /// The operand is live.
+    unsafe fn atomized(self, h: u64) -> Self {
+        match self {
+            Appended::Key(key) if !key.is_null() => match crate::string::atom_for_key(key, h) {
+                Some(atom) => Appended::Key(atom),
+                None => self,
+            },
+            // An SSO short string carries its bytes in the value itself, so
+            // its bits ARE its identity: equal texts are already equal words
+            // and there is no heap string to replace with an atom.
+            Appended::Slot(v) if v.is_short_string() => self,
+            Appended::Slot(v) if v.is_string() => {
+                match crate::string::atom_for_key(v.as_string_ptr(), h) {
+                    Some(atom) => Appended::Slot(JSValue::string_ptr(atom as *mut StringHeader)),
+                    None => self,
+                }
+            }
+            _ => self,
+        }
+    }
+
     /// Is the appended slot a heap string POINTER? An SSO short string and a
     /// tombstone are not, and either one costs the child its all-pointer
     /// layout — see `Node::all_ptr`.
@@ -789,6 +824,8 @@ pub(crate) unsafe fn extend_slot(
     if let Some(hit) = probe(parent, parent_len, appended, entry, h) {
         return hit;
     }
+    // A new list is about to be WRITTEN: it holds the atom of this key's text.
+    let appended = appended.atomized(appended.slot_hash());
 
     // Whether the child's slots are all heap string pointers is the parent's
     // answer AND this slot's, so it is read before the allocation and never
@@ -1180,6 +1217,20 @@ pub(crate) unsafe fn canonicalize(
     // GC_STORE_AUDIT(INIT): fresh is unpublished; publish length only after
     // all elements are initialized, with no intervening GC allocation.
     std::ptr::copy_nonoverlapping(slots, dst, len as usize);
+    // Every heap key of the new list is its text's atom where one exists (see
+    // `Appended::atomized`). Heap string to heap string, so `all_ptr` holds.
+    for i in 0..len as usize {
+        let slot = Appended::Slot(JSValue::from_bits((*dst.add(i)).to_bits()));
+        if let Appended::Slot(v) = slot {
+            if v.is_string() {
+                if let Appended::Slot(atom) = slot.atomized(slot.slot_hash()) {
+                    // GC_STORE_AUDIT(INIT): `fresh` is unpublished; its length
+                    // is set on the next line, after the last slot is written.
+                    *dst.add(i) = f64::from_bits(atom.bits());
+                }
+            }
+        }
+    }
     if with_attrs {
         let attrs = crate::object::key_attrs::keys_attrs(fresh);
         crate::object::key_attrs::copy_entries(keys, 0, attrs, len);
