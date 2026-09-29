@@ -96,6 +96,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+pub(crate) mod field_rep;
 pub(crate) mod key_attrs;
 pub(crate) use census::object_tables_census;
 #[cfg(test)]

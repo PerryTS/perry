@@ -23,6 +23,10 @@ pub const AGENT_PTR_SLOTS: usize = 4;
 /// Slot 1: the address of this agent's implicit-`this` cell
 /// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
 pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;
+/// Slot 2: this agent's stack limit (#10812) — not a pointer to anything, the
+/// lowest frame address a compiled prologue accepts before it throws
+/// `RangeError: Maximum call stack size exceeded`. Null means unchecked.
+pub const AGENT_PTR_STACK_LIMIT: usize = 2;
 /// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): directly
 /// after `implicit_this` (128), behind fixed-size fields only.
 pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 136;

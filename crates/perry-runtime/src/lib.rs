@@ -199,6 +199,7 @@ mod registry_latch_probes;
 pub mod safe_area;
 pub mod set;
 pub mod shared_sab;
+pub mod stack_guard;
 pub(crate) mod state;
 pub mod string;
 pub mod symbol;

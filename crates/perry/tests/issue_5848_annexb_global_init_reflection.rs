@@ -29,8 +29,12 @@ fn perry_bin() -> PathBuf {
 
 fn compile_and_run(dir: &std::path::Path, entry: &std::path::Path) -> (bool, String) {
     let output = dir.join("main_bin");
+    // #11591: Script semantics (GlobalDeclarationInstantiation) apply only
+    // under the global-script opt-in the Test262 runner uses; a plain `.ts`
+    // entry is a module, whose declarations never reach the global object.
     let compile = Command::new(perry_bin())
         .current_dir(dir)
+        .env("PERRY_GLOBAL_SCRIPT_THIS", "1")
         .arg("compile")
         .arg(entry)
         .arg("-o")

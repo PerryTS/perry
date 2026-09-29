@@ -1497,6 +1497,8 @@ pub(super) fn compile_method(
     } else {
         None
     };
+    // #10812: throw a catchable RangeError before the native stack runs out.
+    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if ctor_no_super_throw {
         ctx.block()
             .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
