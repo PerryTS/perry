@@ -361,6 +361,7 @@ pub(crate) fn lower_index_set_fast(
     }
     if let Some(cold_idx) = cold_guard_idx {
         ctx.current_block = cold_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_GUARD_MISS);
         // Repsel 4a.2 (#6904): self-heal a stale growth-forwarded binding —
         // follow the chain and write the live head back to the local slot
         // (safe: this fast path is only taken for a plain stack local, and
@@ -396,6 +397,7 @@ pub(crate) fn lower_index_set_fast(
         .cond_br(&guard_ok, &guarded_label, &guard_fallback_label);
 
     ctx.current_block = guard_fallback_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_FALLBACK);
     {
         let strict_flag = if assignment_strict { "1" } else { "0" };
         let fallback_box = ctx.block().call(
@@ -470,6 +472,7 @@ pub(crate) fn lower_index_set_fast(
 
     // FASTEST: in-bounds path. Store directly, jump to merge.
     ctx.current_block = inbounds_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_INBOUNDS);
     // #7715 B3: on the JSValue arm the barrier is emitted separately, behind an
     // inline live test of the stored VALUE and then of the parent array's
     // generation — see `emit_write_barrier_slot_value_and_generation_tested`.
@@ -634,6 +637,7 @@ pub(crate) fn lower_index_set_fast(
         .cond_br(&can_extend_inline, &extend_inline_label, &realloc_label);
 
     ctx.current_block = extend_inline_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_APPEND);
     if widened_numeric_extend {
         // Hole-fill loop: for (j = length; j < idx; j++) slot[j] = TAG_HOLE.
         // The counter lives in an entry-block alloca (a non-entry alloca
@@ -757,6 +761,7 @@ pub(crate) fn lower_index_set_fast(
 
     // SLOW: realloc needed. Call the runtime, write new ptr to local.
     ctx.current_block = realloc_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_STORE_FALLBACK);
     {
         let blk = ctx.block();
         crate::expr::emit_typed_feedback_record_call(

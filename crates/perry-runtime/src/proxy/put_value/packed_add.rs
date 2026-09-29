@@ -264,14 +264,15 @@ pub(crate) fn note_packed_add_carriers() {
 
 // ---------------------------------------------------------------------------
 // Store census (`PERRY_STORE_CENSUS`): compile-time instrumentation writes
-// counters 0..16 from emitted code; the runtime classifies its own paths in
-// 16..32. Printed at exit when the variable is set at run time.
+// counters 0..16 and the array-element counters 32..48 from emitted code; the
+// runtime classifies its own paths in 16..32. Printed at exit when the
+// variable is set at run time.
 // ---------------------------------------------------------------------------
 
 /// The census counters. **Indices below [`CENSUS_RUNTIME_BASE`] are owned by
 /// `perry-codegen/src/expr/store_census.rs`.**
 #[no_mangle]
-pub static PERRY_STORE_CENSUS: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+pub static PERRY_STORE_CENSUS: [AtomicU64; 48] = [const { AtomicU64::new(0) }; 48];
 #[allow(dead_code)]
 pub const CENSUS_RUNTIME_BASE: usize = 16;
 pub(crate) const C_ADD_RT_INLINE: usize = 16;
@@ -285,7 +286,7 @@ pub(crate) const C_FULL_KEYADD_SPILL: usize = 23;
 pub(crate) const C_PRIME_UNVERIFIED: usize = 24;
 
 #[cfg_attr(test, allow(dead_code))]
-const CENSUS_NAMES: [&str; 32] = [
+const CENSUS_NAMES: [&str; 48] = [
     "emit.pic.word_hit",
     "emit.pic.way_hit",
     "emit.add.inline_hit",
@@ -318,6 +319,22 @@ const CENSUS_NAMES: [&str; 32] = [
     "rt.29",
     "rt.30",
     "rt.31",
+    "emit.elem.read.fast",
+    "emit.elem.read.hole_arm",
+    "emit.elem.read.cold_arm",
+    "emit.elem.read.fallback_call",
+    "emit.elem.read.other_tier",
+    "emit.elem.store.inbounds",
+    "emit.elem.store.append_inline",
+    "emit.elem.store.guard_miss",
+    "emit.elem.store.fallback_call",
+    "emit.elem.store.kind_change",
+    "emit.elem.store.f64_cold",
+    "emit.43",
+    "emit.44",
+    "emit.45",
+    "emit.46",
+    "emit.47",
 ];
 
 #[inline]

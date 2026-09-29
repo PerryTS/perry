@@ -296,6 +296,7 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     };
 
     ctx.current_block = fast_idx;
+    super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
     // #7715 B3: the barrier is emitted separately, behind an inline live test
     // of the stored VALUE and then of the parent array's generation, so the
     // store emitter is told not to emit it. Everything else — the slot write,
@@ -451,6 +452,8 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     ctx.block().br(&merge_label);
 
     ctx.current_block = slow_idx;
+    super::store_census::bump(ctx, super::store_census::ELEM_STORE_GUARD_MISS);
+    super::store_census::bump(ctx, super::store_census::ELEM_STORE_FALLBACK);
     fallback(ctx)?;
     ctx.block().br(&merge_label);
 

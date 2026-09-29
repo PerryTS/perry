@@ -40,6 +40,7 @@ pub(super) fn lower_trusted_plain_array_index_get(
     array_handle: &str,
     idx_i32: &str,
 ) -> String {
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -59,6 +60,7 @@ fn lower_trusted_numeric_array_index_get(
     idx_i32: &str,
     coerce_numeric_fallback: bool,
 ) -> String {
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -119,6 +121,7 @@ pub(super) fn lower_region_validated_array_index_get(
         .cond_br(&access.valid_i1, &fast_label, &fallback_label);
 
     ctx.current_block = fast_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     let array_handle = ctx.block().load(I64, &access.base_handle_slot);
     let fast_value = if require_numeric_layout {
         lower_trusted_numeric_array_index_get(ctx, &array_handle, idx_i32, coerce_numeric_fallback)
@@ -485,6 +488,7 @@ pub(super) fn lower_guarded_array_index_get(
         // indices below `length` as named properties), and a prototype chain
         // without index properties. Anything else takes the boxed fallback.
         ctx.current_block = hole_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
         {
             let blk = ctx.block();
             let index_negative = blk.icmp_slt(I32, idx_i32, "0");
@@ -516,6 +520,7 @@ pub(super) fn lower_guarded_array_index_get(
             // arrays into raw-f64 layout (then this call site goes inline on
             // every later read); everything else routes to the boxed fallback.
             ctx.current_block = cold_idx;
+            crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_COLD);
             // Self-heal a stale growth-forwarded binding first (see
             // `receiver_repair_slot`): follow the chain, write the live head
             // back to the local slot. This iteration still takes the guard
@@ -574,6 +579,7 @@ pub(super) fn lower_guarded_array_index_get(
 
     let inline_oob = inline_oob_idx.map(|oob_idx| {
         ctx.current_block = oob_idx;
+        crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_HOLE);
         let value = if require_numeric_layout && coerce_numeric_fallback {
             // This is ToNumber(undefined), matching the boxed fallback.
             "0x7FF8000000000000".to_string()
@@ -587,6 +593,7 @@ pub(super) fn lower_guarded_array_index_get(
     });
 
     ctx.current_block = fallback_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     // Materialize the f64 index only here (cold path) so the int→fp conversion
     // stays out of the numeric loop's hot region.
     let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
@@ -645,6 +652,7 @@ pub(super) fn lower_guarded_array_index_get(
     }
 
     ctx.current_block = fast_idx;
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
     let fast_blk = ctx.block();
     let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
         (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => fast_blk.phi(

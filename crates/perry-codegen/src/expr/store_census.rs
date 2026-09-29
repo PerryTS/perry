@@ -9,7 +9,8 @@
 //! Off (the default) this emits nothing.
 //!
 //! **Indices must equal `perry_runtime::proxy::put_value::packed_add`'s
-//! `CENSUS_NAMES`** (the runtime owns 16..32).
+//! `CENSUS_NAMES`** (the runtime owns 16..32; the array-element counters are
+//! 32..48).
 
 use super::FnCtx;
 use crate::types::I64;
@@ -43,6 +44,29 @@ pub(crate) const ADD_LAYOUT_FORGET: usize = 13;
 /// Key-add inline hit on one of the runtime block's first ways (counted on
 /// its own edge, then also as [`ADD_HIT`]).
 pub(crate) const ADD_WAY_HIT: usize = 14;
+
+/// Array element read: the guarded tier's in-bounds, non-hole load.
+pub(crate) const ELEM_READ_FAST: usize = 32;
+/// Array element read: the hole / out-of-bounds arm (guard word passed).
+pub(crate) const ELEM_READ_HOLE: usize = 33;
+/// Array element read: the guard word failed (the cold arm).
+pub(crate) const ELEM_READ_COLD: usize = 34;
+/// Array element read: the runtime fallback call.
+pub(crate) const ELEM_READ_FALLBACK: usize = 35;
+/// Array element read served by another tier (trusted, region-validated).
+pub(crate) const ELEM_READ_OTHER_TIER: usize = 36;
+/// Array element store: the inline in-bounds overwrite.
+pub(crate) const ELEM_STORE_INBOUNDS: usize = 37;
+/// Array element store: the inline append at `index == length`.
+pub(crate) const ELEM_STORE_APPEND: usize = 38;
+/// Array element store: the inline guard word failed.
+pub(crate) const ELEM_STORE_GUARD_MISS: usize = 39;
+/// Array element store: a runtime set / extend call.
+pub(crate) const ELEM_STORE_FALLBACK: usize = 40;
+/// Array element store: an F64 array took a non-Number (header cleared first).
+pub(crate) const ELEM_STORE_KIND_CHANGE: usize = 41;
+/// Array element store: an F64 array took a Number needing the cold convert.
+pub(crate) const ELEM_STORE_F64_COLD: usize = 42;
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
