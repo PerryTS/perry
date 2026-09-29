@@ -275,6 +275,7 @@ pub(super) fn verify_arrays(
     emitted: &[(usize, usize)],
     recheck: Recheck,
     dirty_slot: Option<&str>,
+    valid_slot: Option<&str>,
 ) -> bool {
     if emitted.is_empty() {
         return true;
@@ -289,10 +290,18 @@ pub(super) fn verify_arrays(
         (LlInst::Store { val, ptr, .. }, Some(d)) => ptr == d && val == "true",
         _ => false,
     };
-    // State per block entry: the set of (collected, dirty-set) combinations
-    // some path reaches it with, as a 4-bit mask over `c | d << 1`.
+    // A nested body region's G-tail leaves the loop region: no later
+    // iteration runs F-body on these facts.
+    let leaves = |inst: &LlInst| match (inst, valid_slot) {
+        (LlInst::Store { val, ptr, .. }, Some(v)) => ptr == v && val == "false",
+        _ => false,
+    };
+    // State per block entry: the set of (collected, dirty-set, left)
+    // combinations some path reaches it with, as an 8-bit mask over
+    // `c | d << 1 | l << 2`.
     const C: u8 = 1;
     const D: u8 = 2;
+    const L: u8 = 4;
     let diag = std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("4");
     let step = |mask: u8, inst: &LlInst| -> u8 {
         if diag && bare::inst_may_collect(inst) {
@@ -304,7 +313,7 @@ pub(super) fn verify_arrays(
             eprintln!("[perry region] array verify: may collect: {what}");
         }
         let mut out = 0u8;
-        for combo in 0..4u8 {
+        for combo in 0..8u8 {
             if mask & (1 << combo) == 0 {
                 continue;
             }
@@ -315,12 +324,19 @@ pub(super) fn verify_arrays(
             if sets_dirty(inst) {
                 c |= D;
             }
+            if leaves(inst) {
+                c |= L;
+            }
             out |= 1 << c;
         }
         out
     };
-    let collected = |mask: u8| mask & ((1 << C) | (1 << (C | D))) != 0;
+    // Any combination with C, for a read; for an exit, the combinations
+    // with C that neither left the region nor (Dirty) set the flag.
+    let collected = |mask: u8| (0..8u8).any(|c| c & C != 0 && mask & (1 << c) != 0);
     let collected_clean = |mask: u8| mask & (1 << C) != 0;
+    let collected_staying =
+        |mask: u8| (0..8u8).any(|c| c & C != 0 && c & L == 0 && mask & (1 << c) != 0);
     let mut state: HashMap<usize, u8> = HashMap::new();
     let mut work = vec![(entry, 1u8)];
     let mut exit_mask = 0u8;
@@ -361,7 +377,7 @@ pub(super) fn verify_arrays(
     match recheck {
         Recheck::Always => true,
         Recheck::Dirty => !collected_clean(exit_mask),
-        Recheck::None => !collected(exit_mask),
+        Recheck::None => !collected_staying(exit_mask),
     }
 }
 

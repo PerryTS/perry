@@ -857,17 +857,17 @@ pub(super) fn plan(
         record: true,
     };
     let end = match inner {
-        // The nested body region's tail: F-tail keeps the loop's facts,
-        // G-tail sets the loop's dirty flag. Loop accesses inside it are not
-        // recorded (the tail lowers under the body region's facts).
+        // The nested body region's tail: F-tail keeps the loop's facts
+        // (its fact trees set the dirty flag), G-tail leaves the loop region.
+        // Loop accesses inside it are not recorded (the tail lowers under
+        // the body region's facts).
         Some((k, _, _)) => {
             let st = p.stmts(&tail[..k], Some(fresh.clone()));
             p.record = false;
             p.in_inner = true;
-            let mut st = p.stmts(&tail[k..], st);
+            let st = p.stmts(&tail[k..], st);
             p.in_inner = false;
             p.record = true;
-            dirty(&mut st);
             st
         }
         None => p.stmts(tail, Some(fresh.clone())),
