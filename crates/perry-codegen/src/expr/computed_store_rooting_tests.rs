@@ -992,3 +992,69 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
         "the realloc-path barrier must use {new_head}, returned by the grow helper; got `{barrier}`"
     );
 }
+
+/// #11635 — `F.prototype.x = f()` for a function declaration `F`
+/// (`Expr::RegisterFunctionPrototypeMethod`). `F` is evaluated first and was
+/// held in a register across the value's lowering, so an evacuating minor
+/// inside the value's call left `js_register_function_prototype_method`
+/// reading the retired closure (moment 2.31.0's `proto.toIsoString =
+/// deprecate(...)`). The function operand here is a call result — a value no
+/// local slot can re-derive — so only a temp root can carry it across the
+/// window. Its reload must sit below the allocating value and its store above.
+#[test]
+fn function_prototype_registration_roots_the_function_across_an_allocating_value() {
+    let make_func = Expr::Call {
+        callee: Box::new(Expr::LocalGet(1)),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let ir = compile_body_with_params(
+        "func_proto_register",
+        vec![param(1, "mk", Type::Any)],
+        vec![Stmt::Expr(Expr::RegisterFunctionPrototypeMethod {
+            func: Box::new(make_func),
+            method_name: "toIsoString".to_string(),
+            value: Box::new(allocating_value()),
+        })],
+    );
+    assert!(
+        calls(&ir, "js_register_function_prototype_method"),
+        "the registration arm was not reached:\n{ir}"
+    );
+    // The value operand is itself rooted across the registration call, so it
+    // reaches the call as a reload; the window is the value's ALLOCATION.
+    let alloc = ir
+        .lines()
+        .position(|l| l.contains("@js_object_alloc") && !l.trim_start().starts_with("declare"))
+        .unwrap_or_else(|| panic!("the allocating value was not emitted:\n{ir}"));
+    let func = call_operand_of(&ir, "js_register_function_prototype_method", 0);
+    let reload = producer_line(&ir, &func);
+    let reload_line = ir.lines().nth(reload).expect("producer line exists");
+    assert!(
+        reload_line.contains("load ptr addrspace(1), ptr "),
+        "the function operand ({func}) is not reloaded from a root slot:\n{ir}"
+    );
+    assert!(
+        reload > alloc,
+        "the function operand is reloaded at line {reload}, above the value's allocation at \
+         line {alloc}, so the register it names can be from-space:\n{ir}"
+    );
+    let slot = reload_line
+        .rsplit_once(", ptr ")
+        .map(|(_, tail)| tail.split(',').next().unwrap_or(tail).trim())
+        .expect("a root reload names its slot");
+    assert!(
+        ir.lines()
+            .take(alloc)
+            .any(|l| l.contains("store ptr addrspace(1)")
+                && !l.contains(" null,")
+                && l.rsplit_once(", ptr ").is_some_and(|(_, tail)| tail
+                    .split(',')
+                    .next()
+                    .unwrap_or(tail)
+                    .trim()
+                    == slot)),
+        "root slot {slot} has no store above the value's allocation:\n{ir}"
+    );
+}
