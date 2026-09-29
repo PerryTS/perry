@@ -115,6 +115,8 @@ fn try_emit_spec_static_call(
     }
 
     let spec_name = crate::codegen::spec_function_name(fname, &plan.reps);
+    // #10812: a recursion clone skips its entry stack check; check here.
+    crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &spec_name);
     let tuple_note: Vec<String> = plan.reps.iter().map(|r| r.label()).collect();
 
     // Emit the raw argument vector and the specialized call. Factored out so

@@ -379,6 +379,8 @@ struct Census {
     /// and deduplicated once the walk is over). Feeds the shape table's
     /// "carried by a live object" rows (#9706).
     live_shape_ids: Vec<u32>,
+    /// Charter step 5, stage 0 (`census_field_repr`).
+    field_repr: super::census_field_repr::FieldReprCensus,
 }
 
 const SPACE_NAMES: [&str; 6] = [
@@ -464,11 +466,16 @@ impl Census {
             entry.meta += 1;
             self.obj_meta += 1;
         }
+        let slots = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+            as *const u64;
         let live = match crate::object::shapes::object_shape_descriptor(obj) {
             Some(d) => {
-                self.live_shape_ids
-                    .push(crate::object::shapes::object_shape_stamp(obj));
-                (d.live_inline_slot_count as usize).min(slot_capacity)
+                let stamp = crate::object::shapes::object_shape_stamp(obj);
+                self.live_shape_ids.push(stamp);
+                let live = (d.live_inline_slot_count as usize).min(slot_capacity);
+                self.field_repr
+                    .note_object(stamp, slots, live, obj as usize);
+                live
             }
             None => {
                 entry.unshaped += 1;
@@ -476,8 +483,6 @@ impl Census {
             }
         };
         entry.slot_live += live as u64;
-        let slots = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
-            as *const u64;
         for i in 0..live {
             self.obj_slot_tags[slot_kind(*slots.add(i))] += 1;
         }
@@ -920,6 +925,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
             "slot_tags": tags(&c.clo_slot_tags),
         },
         "size_histogram": hist(&c.size_hist),
+        "field_repr": c.field_repr.summary(),
         "side_tables": side,
     });
 

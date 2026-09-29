@@ -966,7 +966,9 @@ pub(super) fn compile_module_entry(
         // via `Object.prototype.hasOwnProperty.call(globalThis, name)` — the
         // check the Test262 async harness uses for `$DONE`). ESM modules
         // (import/export syntax or top-level await) instead bind in the
-        // module record and do NOT reflect.
+        // module record and do NOT reflect. #11591: HIR only fills these lists
+        // under the global-script opt-in (`PERRY_GLOBAL_SCRIPT_THIS`); a `.ts`
+        // entry is a module under Node, so by default both are empty.
         //
         // Gated additionally on the program actually referencing `globalThis`:
         // if it never reads the global object the reflection is unobservable,
