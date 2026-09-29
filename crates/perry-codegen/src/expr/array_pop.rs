@@ -205,6 +205,8 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         // gets the hole sentinel (`array_truncate_length`): `[length,
         // capacity)` stays hole-filled, which element reads bounded by
         // `capacity` rely on. A hole is not an edge, so no barrier.
+        // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is not a heap pointer; the
+        // store writes no edge.
         blk.store(I64, crate::nanbox::TAG_HOLE_I64, &elem_ptr);
         blk.store(I32, &new_length, &len_ptr);
         blk.br(&merge_label);

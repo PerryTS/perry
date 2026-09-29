@@ -64,9 +64,9 @@ pub(crate) unsafe fn array_truncate_length(arr: *mut ArrayHeader, new_length: u3
     if new_length < end {
         let elements = array_elements_ptr(arr);
         for i in new_length..end {
-            // GC_STORE_AUDIT(BARRIERED): the slot leaves the live range when
-            // `length` is lowered below; a hole is not an edge, and the
-            // collector never traced the slot past the new length.
+            // GC_STORE_AUDIT(POINTER_FREE): the slot leaves the live range when
+            // `length` is lowered below; TAG_HOLE is not a heap pointer, so no
+            // edge is written and no barrier applies.
             elements.add(i as usize).write(crate::value::TAG_HOLE);
         }
     }
