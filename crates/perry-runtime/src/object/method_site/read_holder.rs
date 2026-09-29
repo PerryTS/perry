@@ -75,13 +75,14 @@ pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
 pub const HOLDER_HOP_SHAPES: usize = HOLDER_HOPS + 3;
 /// The site's holder state: [`STATE_REGISTERED`], [`STATE_LATCHED`] and the
 /// count of re-primes for a different receiver shape.
-pub const HOLDER_STATE: usize = HOLDER_HOP_SHAPES + 1;
+pub const HOLDER_STATE: usize = crate::codegen_abi::PIC_HOLDER_STATE_WORD;
 /// The cache is on the root list.
 const STATE_REGISTERED: i64 = 1;
 /// The site refused, or is polymorphic in its non-own receivers: no walk and
 /// no prime from here on.
-const STATE_LATCHED: i64 = 2;
+const STATE_LATCHED: i64 = crate::codegen_abi::PIC_HOLDER_STATE_LATCHED;
 const STATE_REPRIME_SHIFT: u32 = 8;
+const _: () = assert!(HOLDER_STATE == HOLDER_HOP_SHAPES + 1);
 /// Re-primes for a different receiver shape a site takes before it latches.
 const MAX_REPRIMES: i64 = 4;
 

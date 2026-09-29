@@ -68,6 +68,11 @@ pub const PIC_HOLDER_RECV_WORD: usize = 12;
 pub const PIC_HOLDER_OBJ_WORD: usize = 13;
 pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
 pub const PIC_HOLDER_KIND_WORD: usize = 15;
+/// The site's holder state word, and its bit for a LATCHED site: one that
+/// refused, or whose non-own receivers took several shapes. Its misses ask the
+/// inherited-read hook, as a never-primed site's do.
+pub const PIC_HOLDER_STATE_WORD: usize = 20;
+pub const PIC_HOLDER_STATE_LATCHED: i64 = 2;
 /// The kind word of a depth-1 ABSENT entry: the answer is `undefined`.
 pub const PIC_HOLDER_ABSENT_DEPTH1: i64 = 1 << 62;
 /// Words in a property-read cache: MRU, way state, four ways, the holder entry.

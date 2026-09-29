@@ -1021,20 +1021,17 @@ pub(crate) fn lower_generic_property_get(
     // signal byte-identical and go without the hook.
     ctx.current_block = ways_entry_idx;
     let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
-    // Without typed feedback the site's cache is asked, in order: the holder
-    // entry (`pic.holder`, first — the one answer a non-own key can have),
-    // then the ways; a site with no cache yet goes to the inherited-read hook.
+    // Without typed feedback, a site with no cache yet goes to the
+    // inherited-read hook; a site with one asks its ways (when live) and then
+    // its holder entry (`pic.holder`).
     let holder_on = !crate::expr::typed_feedback_emission_enabled();
     let inherited_idx = holder_on.then(|| ctx.new_block("pic.miss.inherited"));
     let holder_idx = holder_on.then(|| ctx.new_block("pic.holder"));
     let never_primed_label = inherited_idx
         .map(|idx| ctx.block_label(idx))
         .unwrap_or_else(|| cold_label.clone());
-    let present_label = holder_idx
-        .map(|idx| ctx.block_label(idx))
-        .unwrap_or_else(|| miss_label.clone());
     ctx.block()
-        .cond_br(&token_cache.present, &present_label, &never_primed_label);
+        .cond_br(&token_cache.present, &miss_label, &never_primed_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -1186,19 +1183,22 @@ pub(crate) fn lower_generic_property_get(
     let ways_live = ctx.block().icmp_sgt(I64, &way_state, "0");
     let ways_idx = ctx.new_block("pic.ways");
     let ways_label = ctx.block_label(ways_idx);
-    // A site whose ways never primed (state 0) has only ever seen receivers
-    // the MRU word or the holder entry named, or none it could learn: its
-    // miss asks the inherited-read hook first, as a never-primed site does.
-    // A megamorphic site (-1) goes straight to the call.
-    match inherited_idx {
-        Some(inh_idx) => {
-            let fresh_idx = ctx.new_block("pic.ways.fresh");
-            let fresh_label = ctx.block_label(fresh_idx);
-            ctx.block().cond_br(&ways_live, &ways_label, &fresh_label);
-            ctx.current_block = fresh_idx;
+    // A fresh site (state 0) asks the holder entry at once, and a way miss
+    // asks it too. The holder sits BEHIND the way-state branch, not before
+    // it, so a polymorphic own-key site's way hit pays nothing for it (Zod
+    // reads through ways far more often than through a holder), and a
+    // megamorphic site (-1) goes to the call as before.
+    let past_ways_label = holder_idx
+        .map(|idx| ctx.block_label(idx))
+        .unwrap_or_else(|| call_label.clone());
+    match holder_idx {
+        Some(_) => {
+            let quiet_idx = ctx.new_block("pic.ways.quiet");
+            let quiet_label = ctx.block_label(quiet_idx);
+            ctx.block().cond_br(&ways_live, &ways_label, &quiet_label);
+            ctx.current_block = quiet_idx;
             let fresh = ctx.block().icmp_eq(I64, &way_state, "0");
-            let inh_label = ctx.block_label(inh_idx);
-            ctx.block().cond_br(&fresh, &inh_label, &call_label);
+            ctx.block().cond_br(&fresh, &past_ways_label, &call_label);
         }
         None => ctx.block().cond_br(&ways_live, &ways_label, &call_label),
     }
@@ -1251,7 +1251,8 @@ pub(crate) fn lower_generic_property_get(
         .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
     let way_load_idx = ctx.new_block("pic.way.load");
     let way_load_label = ctx.block_label(way_load_idx);
-    ctx.block().cond_br(&way_any, &way_load_label, &call_label);
+    ctx.block()
+        .cond_br(&way_any, &way_load_label, &past_ways_label);
 
     ctx.current_block = way_load_idx;
     if fused_recv.is_some() {
@@ -1310,7 +1311,7 @@ pub(crate) fn lower_generic_property_get(
     }
 
     // The read site's HOLDER entry (`object::method_site::read_holder` in the
-    // runtime), asked first on the MRU word's miss edge: the answer for a key
+    // runtime), asked where the MRU word and the ways missed: the answer for a key
     // that is NOT own on the receiver, as facts of two shapes. The receiver's
     // ShapeId says the key is not own and which object is its [[Prototype]];
     // the holder's ShapeId says the key is an own inline data slot there (or,
@@ -1320,7 +1321,7 @@ pub(crate) fn lower_generic_property_get(
     // transition (#10826), so a matching holder ShapeId proves the slot live:
     // no `TAG_HOLE` test, as the MRU hit has none.
     //
-    //   [cache + RECV] == token                      else the ways
+    //   [cache + RECV] == token                      else pic.holder.miss
     //   kind = [cache + KIND] ; kind <s 0            -> stub (depth 2..4, deep absent)
     //   h = [cache + OBJ] ; [h + 4] == low32([cache + SHAPE])   else call
     //   kind & ABSENT_DEPTH1                         -> undefined
@@ -1340,7 +1341,26 @@ pub(crate) fn lower_generic_property_get(
         let recv_eq = ctx.block().icmp_eq(I64, &recv_word, &token);
         let kind_idx = ctx.new_block("pic.holder.kind");
         let kind_label = ctx.block_label(kind_idx);
-        ctx.block().cond_br(&recv_eq, &kind_label, &miss_label);
+        let holder_miss_idx = ctx.new_block("pic.holder.miss");
+        let holder_miss_label = ctx.block_label(holder_miss_idx);
+        ctx.block()
+            .cond_br(&recv_eq, &kind_label, &holder_miss_label);
+
+        // A LATCHED site (it refused, or its non-own receivers took several
+        // shapes) asks the inherited-read hook, as a never-primed site does:
+        // the entry will not describe its receivers. Any other miss goes to
+        // the call, which primes.
+        ctx.current_block = holder_miss_idx;
+        let state = word(ctx, crate::runtime_abi::PIC_HOLDER_STATE_WORD);
+        let latched_bit = ctx.block().and(
+            I64,
+            &state,
+            &crate::runtime_abi::PIC_HOLDER_STATE_LATCHED.to_string(),
+        );
+        let latched = ctx.block().icmp_ne(I64, &latched_bit, "0");
+        let inh_label =
+            ctx.block_label(inherited_idx.expect("the hook exists whenever the holder arm does"));
+        ctx.block().cond_br(&latched, &inh_label, &call_label);
 
         ctx.current_block = kind_idx;
         let kind = word(ctx, crate::runtime_abi::PIC_HOLDER_KIND_WORD);

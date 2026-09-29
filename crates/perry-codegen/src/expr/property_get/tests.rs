@@ -495,10 +495,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
         .filter(|&x| x > ways)
         .min()
         .unwrap()];
+    // The way-miss edge goes on to the site's holder entry (`pic.holder`),
+    // whose own misses reach the call.
     assert!(
-        ways_body.contains("pic.way.load") && ways_body.contains("pic.miss.call"),
+        ways_body.contains("pic.way.load") && ways_body.contains("label %pic.holder."),
         "pic.ways must end in a branch choosing between the way load and the \
-         miss call — otherwise the compares are not gating anything:\n{ways_body}"
+         holder entry on the way to the miss call — otherwise the compares are \
+         not gating anything:\n{ways_body}"
     );
     assert!(
         !ways_body.contains("call double @js_object_get_field_ic"),
@@ -552,8 +555,8 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     );
     // T1: the landing block is now the single slow exit itself, and the
     // dominance is structural — `pic.miss` has exactly ONE predecessor,
-    // `pic.holder` (whose only predecessor is `pic.token.ways`, reached from
-    // `pic.token.miss`), which `pic.token` dominates. Assert that directly:
+    // `pic.token.ways` (reached from `pic.token.miss`), which `pic.token`
+    // dominates. Assert that directly:
     // routing any receiver-validation failure back into `pic.miss` would add a
     // predecessor and immediately re-introduce the phis #7907 removed.
     // `pic.miss` carries a numeric suffix and `pic.miss.call` starts with the
@@ -581,7 +584,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         .count();
     assert_eq!(
         preds, 1,
-        "pic.miss must have exactly one predecessor (pic.holder), or it is \
+        "pic.miss must have exactly one predecessor (pic.token.ways), or it is \
          no longer dominated by pic.token:\n{ir}"
     );
     assert!(
@@ -1620,15 +1623,16 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // `pic.way.live` is GONE with the way path's `TAG_HOLE` compare: the
         // load block has nothing left to decide and branches to the merge.
         "pic.way.load",
-        // a site whose ways never primed asks the inherited-read hook before
-        // the call, as a never-primed site does
-        "pic.ways.fresh",
-        "pic.miss.inherited",
-        // the holder entry (`method_site::read_holder`), first on the MRU
-        // miss edge: the receiver word, the kind, the inline depth-1 compare
-        // and load (or `undefined` for an absent entry), and the GC-leaf stub
-        // for depth 2..4
+        // the holder entry (`method_site::read_holder`), past the ways: the
+        // receiver word, the kind, the inline depth-1 compare and load (or
+        // `undefined` for an absent entry), and the GC-leaf stub for depth
+        // 2..4; a receiver it does not name at a LATCHED site asks the
+        // inherited-read hook before the call. `pic.ways.quiet` splits a
+        // fresh site (to the holder) from a megamorphic one (to the call).
+        "pic.ways.quiet",
         "pic.holder",
+        "pic.holder.miss",
+        "pic.miss.inherited",
         "pic.holder.kind",
         "pic.holder.inline",
         "pic.holder.answer",
@@ -1659,23 +1663,24 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     );
 }
 
-/// The read site's holder entry is the first answer asked where the MRU word
+/// The read site's holder entry is asked where the MRU word and the ways
 /// missed, and the inherited-read hook is kept for what it does not describe:
 ///
-/// 1. `pic.token.ways`: a present cache goes to `pic.holder`; the never-primed
-///    edge goes to the inherited-read hook (`pic.miss.inherited`);
-/// 2. `pic.holder`: a receiver word that is not the entry's goes on to the
-///    ways (`pic.miss`), never straight to the exit;
-/// 3. `pic.miss`: live ways go to `pic.ways`, otherwise `pic.ways.fresh`,
-///    which asks the hook only for a site whose ways never primed (a
-///    megamorphic site goes to the call);
+/// 1. `pic.token.ways`: a present cache goes to the ways (`pic.miss`); the
+///    never-primed edge goes to the inherited-read hook (`pic.miss.inherited`);
+/// 2. `pic.miss` with no live way goes to `pic.ways.quiet`, which sends a
+///    fresh site to `pic.holder` and a megamorphic one to the call;
+///    `pic.ways` with no matching way goes to `pic.holder`;
+/// 3. `pic.holder`: a receiver word that is not the entry's goes to
+///    `pic.holder.miss`, which asks the hook only for a LATCHED site (any
+///    other miss goes to the call, which primes);
 /// 4. the stub is called from `pic.holder.stub` only, declines on `TAG_HOLE`
 ///    to the exit; the inline load has no hole compare (a delete is a shape
 ///    transition, #10826) and goes to the merge only;
 /// 5. the hook calls `js_inherited_read_cache_hit_f64` and declines to the
 ///    exit.
 #[test]
-fn the_holder_entry_is_asked_first_and_the_hook_is_kept() {
+fn the_holder_entry_is_asked_past_the_ways_and_the_hook_is_kept() {
     let ir = emit(false, None);
     let func = ir
         .split("\ndefine ")
@@ -1726,29 +1731,34 @@ fn the_holder_entry_is_asked_first_and_the_hook_is_kept() {
     // 1.
     assert_eq!(
         targets(&term("pic.token.ways")),
-        ["pic.holder", "pic.miss.inherited"],
+        ["pic.miss", "pic.miss.inherited"],
         "{func}"
     );
     // 2.
     assert_eq!(
-        targets(&term("pic.holder")),
-        ["pic.holder.kind", "pic.miss"],
-        "{func}"
-    );
-    // 3.
-    assert_eq!(
         targets(&term("pic.miss")),
-        ["pic.ways", "pic.ways.fresh"],
+        ["pic.ways", "pic.ways.quiet"],
         "{func}"
     );
     assert_eq!(
-        targets(&term("pic.ways.fresh")),
-        ["pic.miss.inherited", "pic.miss.call"],
+        targets(&term("pic.ways.quiet")),
+        ["pic.holder", "pic.miss.call"],
         "{func}"
     );
     assert_eq!(
         targets(&term("pic.ways")),
-        ["pic.way.load", "pic.miss.call"],
+        ["pic.way.load", "pic.holder"],
+        "{func}"
+    );
+    // 3.
+    assert_eq!(
+        targets(&term("pic.holder")),
+        ["pic.holder.kind", "pic.holder.miss"],
+        "{func}"
+    );
+    assert_eq!(
+        targets(&term("pic.holder.miss")),
+        ["pic.miss.inherited", "pic.miss.call"],
         "{func}"
     );
     // 4.
