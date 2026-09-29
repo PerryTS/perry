@@ -120,13 +120,6 @@ define_class!(
             unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
         }
 
-        #[unsafe(method(drawInteriorWithFrame:inView:))]
-        fn draw_interior(&self, frame: CGRect, view: &NSView) {
-            draw_on_font_baseline(self, || unsafe {
-                msg_send![super(self), drawInteriorWithFrame: frame, inView: view]
-            });
-        }
-
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
             let insets = self.ivars().get();
