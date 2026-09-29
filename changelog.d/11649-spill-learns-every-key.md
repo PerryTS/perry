@@ -1,0 +1,1 @@
+A class (and `Object.create` birth shape) now learns its width from every spilled key an object stores, not only from the first one. The old gate made the learned width creep up one key per birth, so objects built by a factory with helper-added keys landed on several shapes with the same keys (#11570), and read sites kept missing.

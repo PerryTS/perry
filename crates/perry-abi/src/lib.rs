@@ -12,8 +12,12 @@ pub const ARRAY_HEADER_SIZE: usize = 8;
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
 /// Slot 0 is reserved (the megamorphic follow-up's shape-record directory);
 /// slot 1 held the implicit-`this` cell's address until this-as-a-parameter
-/// deleted the cell, and is free.
+/// deleted the cell, and is free; slot 2 is the stack limit.
 pub const AGENT_PTR_SLOTS: usize = 4;
+/// Slot 2: this agent's stack limit (#10812) — not a pointer to anything, the
+/// lowest frame address a compiled prologue accepts before it throws
+/// `RangeError: Maximum call stack size exceeded`. Null means unchecked.
+pub const AGENT_PTR_STACK_LIMIT: usize = 2;
 /// `tls_hot::HotTls::agent_ptrs` (Apple aarch64 TSD path; LP64): the first
 /// inline value, behind fixed-size fields only.
 pub const HOT_TLS_AGENT_PTRS_OFFSET: usize = 128;

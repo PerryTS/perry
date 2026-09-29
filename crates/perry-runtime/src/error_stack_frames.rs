@@ -188,13 +188,17 @@ mod walk {
         fp
     }
 
+    // #11625: use `libc`'s own declarations instead of hand-rolling a local
+    // `extern "C"` block. `libc::pthread_t` is `uintptr_t` (a `usize`) on
+    // Apple targets, not a pointer — a second, ad hoc declaration here that
+    // typed the parameter as `*mut core::ffi::c_void` was ABI-compatible
+    // (both are one word, passed in the same register) but a distinct Rust
+    // type from `stack_guard.rs`'s `libc`-typed declaration of the same
+    // symbol, which `-D warnings` promotes `clashing_extern_declarations`
+    // into a hard build failure.
     #[cfg(target_vendor = "apple")]
     fn stack_top_uncached() -> usize {
-        unsafe extern "C" {
-            fn pthread_self() -> *mut core::ffi::c_void;
-            fn pthread_get_stackaddr_np(thread: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-        }
-        unsafe { pthread_get_stackaddr_np(pthread_self()) as usize }
+        unsafe { libc::pthread_get_stackaddr_np(libc::pthread_self()) as usize }
     }
 
     #[cfg(all(target_os = "linux", not(target_vendor = "apple")))]

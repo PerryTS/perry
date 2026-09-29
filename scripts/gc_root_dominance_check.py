@@ -1310,8 +1310,36 @@ def audit_poll_reach(roots=SYMBOL_ROOTS, bodies=None):
 
 
 # Bit-level / identity producers a heap address flows through unchanged.
-TRANSPARENT_OPS = ("or i64", "and i64", "bitcast", "inttoptr", "ptrtoint",
-                   "select", "phi", "add i64", "sub i64")
+#
+# Matched on the instruction's OPCODE (and, for the integer ops, its type), never
+# as a substring of the line. The substring form was correct only by accident:
+# `xor i64` -- the NaN-box re-tag, and the handle derivation
+# `bits ^ POINTER_TAG` that `root_reload.rs` treats as transparent -- was
+# tracked solely because the text "or i64" occurs inside it, and any line whose
+# REGISTER NAMES contained "phi", "select" or "bitcast" was taken for a
+# transparent op and skipped as a use. Deleting the word "or" from the old tuple
+# would have made every xor-derived stale handle invisible with every self-test
+# still green; `self_test()` now carries the xor fixtures that turn red instead.
+TRANSPARENT_OPS = ("or i64", "and i64", "xor i64", "add i64", "sub i64",
+                   "bitcast", "inttoptr", "ptrtoint", "select", "phi")
+# `%r = <opcode> <first type token>`: the two tokens a TRANSPARENT_OPS entry
+# names. No flags are skipped: `add nuw i64` was never matched by "add i64"
+# and still is not, so the change widens nothing but the xor it names.
+_OPCODE_RE = re.compile(r"^\s*%[\w.$-]+\s*=\s*([a-z]+)\s+(\S+)")
+
+
+# opcode -> the type it must carry ("" = any), derived from TRANSPARENT_OPS
+# once: this predicate runs for every instruction of every closure walk.
+_TRANSPARENT_TYPE = {op.partition(" ")[0]: op.partition(" ")[2] for op in TRANSPARENT_OPS}
+
+
+def rhs_is_transparent(text):
+    """Is `text` (a whole instruction, `%r = ...`) one of TRANSPARENT_OPS?"""
+    m = _OPCODE_RE.match(text)
+    if not m:
+        return False
+    want_ty = _TRANSPARENT_TYPE.get(m.group(1))
+    return want_ty is not None and (not want_ty or m.group(2) == want_ty)
 TRANSPARENT_CALLS = {"js_ctor_return_override"}
 # Calls that ROOT their argument (protecting it from that point on).
 # `js_box_set_bits` publishes into a mutable-capture box, which `BOX_REGISTRY`
@@ -1332,7 +1360,7 @@ def is_transparent(ins):
         return True
     if ins.callee is not None:
         return False
-    return any(op in ins.text for op in TRANSPARENT_OPS)
+    return rhs_is_transparent(ins.text)
 
 
 def provenance(def_of, reg, limit=64):
@@ -2376,7 +2404,7 @@ def _reaches_alloc(defs, reg, limit=32):
             if ALLOC_RE.match(cm.group(1)):
                 return True
             continue
-        if any(op in rhs for op in TRANSPARENT_OPS):
+        if rhs_is_transparent("%x = " + rhs):
             q.extend(re.findall(r"%([\w.$]+)", rhs))
     return False
 
@@ -3884,6 +3912,49 @@ entry.0:
 """
 
 
+# The HANDLE form of the same window: the receiver is un-tagged with `xor`
+# (`bits ^ POINTER_TAG`), not masked with `and`. A region-scoped guard keeps
+# exactly this register (the object's address) for every access it covers, and
+# `root_reload.rs` re-derives it as a transparent `xor`, so the checker must
+# follow the same derivation or a handle held across a collecting call is
+# invisible. Before the opcode match this was reported only because the text
+# "or i64" happens to occur inside "xor i64".
+_SELFTEST_XOR_HANDLE_WINDOW = """\
+define double @perry_fn_selftest__xor_handle(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %def = load double, ptr %d
+  %db = bitcast double %def to i64
+  %dh = xor i64 %db, 9222809086901354496
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %out = call double @js_object_get_field_by_name_f64(i64 %dh, i64 %a3)
+  ret double %out
+}
+"""
+
+# The fix: the handle is re-derived from the slot BELOW the collecting call.
+_SELFTEST_XOR_HANDLE_RELOADED = """\
+define double @perry_fn_selftest__xor_handle_reloaded(double %a1, double %a2, i64 %a3) {
+entry.0:
+  %d = alloca double
+  store double %a2, ptr %d
+  call void @js_shadow_slot_bind(i32 1, ptr %d)
+  %rb = bitcast double %a1 to i64
+  %rh = and i64 %rb, 281474976710655
+  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %def = load double, ptr %d
+  %db = bitcast double %def to i64
+  %dh = xor i64 %db, 9222809086901354496
+  %out = call double @js_object_get_field_by_name_f64(i64 %dh, i64 %a3)
+  ret double %out
+}
+"""
+
+
 # ------------------------------------------------- the STATEPOINT mode ---
 #
 # Everything above this line reads the SHADOW-STACK lowering. Since #7370 that
@@ -4791,6 +4862,24 @@ __SAFEPOINT__
 }
 """.replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
 
+# `_SELFTEST_SP_STALE` with the raw word un-tagged by `xor` before the
+# safepoint and only the xor result used below it: the region-guard handle. The
+# stale register is the DERIVED one, so the forward closure has to cross the
+# `xor` to see it.
+_SELFTEST_SP_XOR_STALE = """\
+define double @perry_fn_selftest__sp_xor_stale(double %a) gc "statepoint-example" {
+entry.0:
+  %rs4gc.b1 = bitcast double %a to i64
+  %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
+  %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  %h = xor i64 %raw, 9222809086901354496
+__SAFEPOINT__
+  %rs4gc.s1.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate.p1(token %tok, i32 0, i32 0)
+  %r = call double @js_object_get_field_by_name_f64(i64 %h, i64 0)
+  ret double %r
+}
+""".replace("__SAFEPOINT__", _sp(live=("rs4gc.s1",)))
+
 # ★★ THE CONTROL FOR THE TRACKED/UNTRACKED LINE, and the one fixture whose
 # absence was found by sabotage rather than by design.
 #
@@ -5051,7 +5140,8 @@ def statepoint_self_test():
                            ("roundtrip", _SELFTEST_SP_TRACKED_ROUNDTRIP),
                            ("quoted", _SELFTEST_SP_QUOTED_NAME),
                            ("phi_safe_edge", _SELFTEST_SP_PHI_SAFE_EDGE),
-                           ("phi_hazard_edge", _SELFTEST_SP_PHI_HAZARD_EDGE)):
+                           ("phi_hazard_edge", _SELFTEST_SP_PHI_HAZARD_EDGE),
+                           ("xor_stale", _SELFTEST_SP_XOR_STALE)):
             p = os.path.join(td, f"sp_{name}.ll")
             with open(p, "w") as fh:
                 fh.write(text)
@@ -5080,6 +5170,15 @@ def statepoint_self_test():
                       "--moving-only -- the arm CI gates on -- drops it and "
                       "the proof is vacuous.", file=sys.stderr)
                 ok = False
+
+        hits = _scan_statepoints([paths["xor_stale"]], moving_only=True)
+        if len(hits) != 1 or hits[0].kind_class != "stale":
+            print("self-test FAIL: a raw word un-tagged by `xor` above a "
+                  "safepoint and used below it must report exactly one stale "
+                  f"hazard, got {[(h.kind_class, h.kind) for h in hits]}. The "
+                  "forward closure must cross `xor`, the handle derivation "
+                  "root_reload.rs and region guards use.", file=sys.stderr)
+            ok = False
 
         hits = _scan_statepoints([paths["reloaded"]], moving_only=True)
         if hits:
@@ -5799,6 +5898,50 @@ def self_test():
                   "slotload use. A non-zero count means the check fires on the "
                   "code shape rather than on the staleness.", file=sys.stderr)
             ok = False
+
+        # The xor-derived HANDLE, both directions (see the fixtures).
+        xh = os.path.join(td, "xor_handle_window.ll")
+        xh_fixed = os.path.join(td, "xor_handle_reloaded.ll")
+        for p, text in ((xh, _SELFTEST_XOR_HANDLE_WINDOW),
+                        (xh_fixed, _SELFTEST_XOR_HANDLE_RELOADED)):
+            with open(p, "w") as fh:
+                fh.write(text)
+        for moving_only in (False, True):
+            got = _stale_kinds_probe(xh, moving_only=moving_only).get("slotload", 0)
+            if got != 1:
+                print("self-test FAIL: a receiver handle derived from a shadow "
+                      "slot by `xor` (bits ^ POINTER_TAG) and used below the "
+                      "generic GET dispatch must report exactly one slotload "
+                      f"hazard (moving_only={moving_only}), got {got}. `xor` must "
+                      "be a transparent op: root_reload.rs re-derives through it, "
+                      "and region-scoped guards hold exactly this register.",
+                      file=sys.stderr)
+                ok = False
+            got = _stale_kinds_probe(xh_fixed, moving_only=moving_only).get("slotload", 0)
+            if got != 0:
+                print("self-test FAIL: re-deriving the xor handle BELOW the call is "
+                      f"the fix; the control must report 0, got {got}.",
+                      file=sys.stderr)
+                ok = False
+        # The matcher itself: opcode and type, never a substring of the line.
+        for text, want in (
+                ("  %h = xor i64 %b, 9222809086901354496", True),
+                ("  %h = or i64 %b, 1", True),
+                ("  %h = and i64 %b, 281474976710655", True),
+                ("  %h = bitcast double %v to i64", True),
+                ("  %h = phi i64 [ %a, %bb1 ], [ %b, %bb2 ]", True),
+                ("  %h = add nuw i64 %b, 16", False),
+                ("  %h = xor i32 %b, 1", False),
+                ("  %h = fadd double %phi.3, %select.1", False),
+                ("  store double %bitcast.7, ptr %slot", False),
+                ("  %h = load double, ptr %phi.slot", False)):
+            if rhs_is_transparent(text) != want:
+                print(f"self-test FAIL: rhs_is_transparent({text.strip()!r}) "
+                      f"must be {want}: transparency is the instruction's opcode "
+                      "and type, not a substring of the line (a register named "
+                      "`%phi.3` does not make a load transparent).",
+                      file=sys.stderr)
+                ok = False
 
         # The packed entry is the name emitted by generic property reads now,
         # and since T1 the SLOW entry is the only one most sites carry at all:

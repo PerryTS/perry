@@ -12,6 +12,7 @@
 //! hotkey wiring — user code binds `commandPaletteShow()` to ⌘K
 //! themselves via `addKeyboardShortcut`.
 
+use crate::srgb;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -277,14 +278,8 @@ pub fn show() {
         let layer: *mut AnyObject = msg_send![content, layer];
         let _: () = msg_send![layer, setCornerRadius: 12.0_f64 as CGFloat];
         let _: () = msg_send![layer, setMasksToBounds: true];
-        let bg_color: *mut AnyObject = msg_send![
-            AnyClass::get(c"NSColor").unwrap(),
-            colorWithCalibratedRed: 0.96 as CGFloat,
-            green: 0.96 as CGFloat,
-            blue: 0.96 as CGFloat,
-            alpha: 0.98 as CGFloat
-        ];
-        let cg: *mut AnyObject = msg_send![bg_color, CGColor];
+        let bg_color = srgb::ns_color(0.96, 0.96, 0.96, 0.98);
+        let cg: *mut AnyObject = msg_send![&*bg_color, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
 
         // Search field at the top.
