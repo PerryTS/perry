@@ -45,6 +45,8 @@ use crate::gc::{GcHeader, GC_HEADER_SIZE};
 /// Raising any sub-band past this value requires auditing every
 /// `is_handle_band` caller.
 pub const HANDLE_BAND_MAX: usize = 0x100000;
+// Emitted receiver tests and the read miss front share this floor.
+const _: () = assert!(HANDLE_BAND_MAX == perry_abi::RECEIVER_HANDLE_FLOOR);
 
 /// Exclusive end of the generic perry-stdlib `common/handle.rs` registry band
 /// (`[1, COMMON_HANDLE_BAND_END)`). The registry panics rather than allocate

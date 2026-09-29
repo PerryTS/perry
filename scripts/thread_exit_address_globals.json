@@ -4092,6 +4092,16 @@
    "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
   },
   {
+   "file": "crates/perry-runtime/src/object/shapes_store.rs",
+   "names": [
+    "EMPTY_CHUNK",
+    "EMPTY_PAGE",
+    "PERRY_EMPTY_SHAPE_DIR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty page directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
+  },
+  {
    "file": "crates/perry-runtime/src/object/static_shapes.rs",
    "names": [
     "STATIC_SEED"

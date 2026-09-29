@@ -594,7 +594,7 @@ pub(super) fn compile_closure(
     // Emit the same frame the top-level function path gets (function.rs).
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, body);
-    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
@@ -624,8 +624,6 @@ pub(super) fn compile_closure(
     } else {
         std::collections::HashMap::new()
     };
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -863,6 +861,12 @@ pub(super) fn compile_closure(
                 .extend(callback_shapes.clone());
         }
     }
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
 
     // Representation-selection context gates (see codegen/function.rs).
     // Async-step closures (CPS-rewritten `async` closures — the rewrite clears

@@ -151,6 +151,17 @@ fn pool_atom(text: &str) -> *const crate::StringHeader {
     crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
 }
 
+/// The megamorphic confirm as the miss entry asks it: this agent's directory,
+/// the site's key as NaN-boxed bits.
+unsafe fn confirmed(id: u32, key: *const crate::StringHeader, guess: usize) -> bool {
+    shapes::slot_guess_confirmed(
+        shapes::ordinary_dir_addr(),
+        id,
+        crate::JSValue::string_ptr(key as *mut _).bits(),
+        guess,
+    )
+}
+
 /// A seeded literal shape answers the megamorphic read's slot-guess confirm
 /// (`shapes::slot_guess_confirmed`: the position bound, then ONE pointer
 /// compare of the listed key against the site's key atom) exactly as a shape
@@ -159,7 +170,7 @@ fn pool_atom(text: &str) -> *const crate::StringHeader {
 /// atoms confirms nothing, and every megamorphic read of a seeded literal
 /// falls to the by-name walk (lead_mega1 225.8 -> 435.8 instructions/read).
 ///
-/// Sabotage: drop the atom mint in `canonical_keys_for_names` -> the seeded
+/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the seeded
 /// record's confirms fail (the minted twin's still pass).
 #[test]
 fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
@@ -181,17 +192,51 @@ fn a_seeded_literal_shape_answers_the_megamorphic_confirm_like_a_minted_one() {
         (minted, a, 0, "minted `a` at 0"),
         (minted, k1, 1, "minted `k1` at 1"),
     ] {
-        assert_eq!(
-            shapes::test_positional_of_id(id),
-            Some((true, true)),
-            "{what}: the record must answer by position"
+        // POSBOUND is a fact of the record: a seeded shape (built by the
+        // slab insert, like every other) carries it, nonzero, equal to its
+        // definition.
+        let (stored, by_facts) = shapes::test_positional_of_id(id).expect("a record");
+        assert!(
+            stored > 0 && stored == by_facts,
+            "{what}: the record must answer by position (POSBOUND {stored}, by facts {by_facts})"
         );
         assert!(
-            unsafe { shapes::slot_guess_confirmed(id, key, guess) },
+            unsafe { confirmed(id, key, guess) },
             "{what}: the megamorphic confirm must accept the key atom"
         );
     }
     // And refutes a wrong guess or another key.
-    assert!(!unsafe { shapes::slot_guess_confirmed(seeded, a, 1) });
-    assert!(!unsafe { shapes::slot_guess_confirmed(seeded, k1, 1) });
+    assert!(!unsafe { confirmed(seeded, a, 1) });
+    assert!(!unsafe { confirmed(seeded, k1, 1) });
+}
+
+/// A class key list answers the megamorphic confirm when the class registers
+/// BEFORE any pool holding its key texts has run. Module init order is the
+/// import order: a class of module A registers (`js_build_class_keys_array`,
+/// then its ShapeId) while the only literal of one of its keys lives in the
+/// pool of module B, which runs later. The list built at registration must
+/// hold the atom B's pool then finds, or every megamorphic read of the class
+/// through B's key falls to the by-name walk.
+///
+/// Sabotage: drop the atom mint in `build_longlived_keys_array` -> the
+/// class's confirms fail.
+#[test]
+fn a_class_registered_before_the_pools_answers_the_megamorphic_confirm() {
+    const CLASS_ID: u32 = 0x0074_1c77;
+    let packed = b"ltca_x\0ltca_only_in_b\0";
+    let keys =
+        crate::object::js_build_class_keys_array(CLASS_ID, 2, packed.as_ptr(), packed.len() as u32)
+            as u64;
+    let id = shapes::js_object_shape_id_for_class_keys(keys, 2, CLASS_ID);
+    // Module B's pool runs afterwards and mints its key literals.
+    let (x, b) = (pool_atom("ltca_x"), pool_atom("ltca_only_in_b"));
+    assert!(
+        unsafe { confirmed(id, x, 0) },
+        "class `x` at 0: the megamorphic confirm must accept the key atom"
+    );
+    assert!(
+        unsafe { confirmed(id, b, 1) },
+        "class `only_in_b` at 1: the megamorphic confirm must accept the key atom"
+    );
+    assert!(!unsafe { confirmed(id, x, 1) });
 }

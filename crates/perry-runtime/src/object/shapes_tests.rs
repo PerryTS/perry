@@ -1480,6 +1480,44 @@ mod field_rep_identity_tests {
         assert_eq!(shape_descriptor_by_id(any).map(|d| d.rep), Some(REP_ANY));
     }
 
+    /// POSBOUND is a fact of every record, a rep-typed one included: a shape
+    /// minted with an `F64` slot through the rep-aware entry carries the
+    /// bound its facts define, the same bound as its all-`Any` sibling
+    /// (`rep` is not an input of the definition), and its stored bound agrees
+    /// with the definition.
+    #[test]
+    fn a_rep_typed_shape_carries_its_own_position_bound() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = crate::array::js_array_alloc_with_length(3);
+        let mint_keys = |rep: u64| {
+            publish_shape_result(shape_descriptor_ensure_with_rep(
+                keys,
+                3,
+                3,
+                0,
+                ShapeObjectKind::Ordinary,
+                0,
+                PROTO,
+                0,
+                rep,
+                None,
+            ))
+        };
+        let any = mint_keys(REP_ANY);
+        let typed = mint_keys(with_slot_rep(0, 1, REP_F64));
+        assert_ne!(any, typed, "premise: the rep makes a different shape");
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(any),
+            Some((3, 3)),
+            "premise: the all-Any shape answers three positions"
+        );
+        assert_eq!(
+            crate::object::shapes::test_positional_of_id(typed),
+            Some((3, 3)),
+            "the rep-typed shape must carry its own, agreeing POSBOUND"
+        );
+    }
+
     /// P1 is inert: the all-`Any` entry points mint the same id as an explicit
     /// `REP_ANY` request, so no existing caller's shape changes.
     #[test]
