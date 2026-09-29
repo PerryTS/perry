@@ -34,7 +34,7 @@ use crate::types::{I32, I64, I8};
 
 /// Payloads below this are native-registry handles, never heap cells
 /// (`js_native_call_method`'s small-handle test, `addr_class::HANDLE_BAND_MAX`).
-pub(crate) const HANDLE_FLOOR: u64 = 0x10_0000;
+pub(crate) const HANDLE_FLOOR: u64 = crate::runtime_abi::RECEIVER_HANDLE_FLOOR as u64;
 /// `POINTER_TAG | HANDLE_FLOOR`: subtracting it maps exactly the heap-object
 /// receivers onto `[0, RECEIVER_SPAN)`.
 pub(crate) const RECEIVER_BIAS: u64 = crate::nanbox::POINTER_TAG | HANDLE_FLOOR;

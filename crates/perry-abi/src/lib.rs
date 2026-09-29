@@ -16,6 +16,13 @@ pub const AGENT_PTR_SLOTS: usize = 4;
 /// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no
 /// thread-local.
 pub const AGENT_PTR_SHAPE_DIR: usize = 0;
+/// Payloads below this are native-registry handles, never heap cells
+/// (`addr_class::HANDLE_BAND_MAX`). A generic read site's fused receiver test
+/// computes `payload - RECEIVER_HANDLE_FLOOR` on its pointer edge, and its
+/// miss front (`js_object_get_field_ic_front`) takes the receiver in exactly
+/// that form: the front adds the floor back inside its load displacements,
+/// and the site passes the value its test already holds.
+pub const RECEIVER_HANDLE_FLOOR: usize = 0x10_0000;
 /// Slot 1: the address of this agent's implicit-`this` cell
 /// (`tls_hot::HotTls::implicit_this`), which a direct method call binds.
 pub const AGENT_PTR_IMPLICIT_THIS: usize = 1;

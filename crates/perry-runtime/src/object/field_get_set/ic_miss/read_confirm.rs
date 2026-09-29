@@ -56,9 +56,14 @@ unsafe fn inline_slot(obj: *const ObjectHeader, slot: usize) -> f64 {
 ///   nothing; never null. A `length` site passes the empty one on purpose: an
 ///   Array-subclass receiver serves `length` from its elements store, which no
 ///   key list names.
-/// * `obj_handle` — the receiver's payload. The site calls only on the
-///   ShapeId compare's false edge, which its small-handle test dominates, so
-///   this is a real object pointer (its `+4` word was just loaded).
+/// * `obj_biased` — the receiver's payload minus
+///   `perry_abi::RECEIVER_HANDLE_FLOOR`: the value the site's fused receiver
+///   test already holds on its pointer edge, so passing it costs the site a
+///   register move where the payload cost a 10-byte constant and an add
+///   (first-read D4: every way hit pays this edge). The front adds the floor
+///   back in its load displacements. The site calls only on the ShapeId
+///   compare's false edge, which its small-handle test dominates, so the
+///   payload is a real object pointer (its `+4` word was just loaded).
 /// * `key_bits` — the site's key exactly as its pool global holds it: the
 ///   interned key, STRING-tagged, which is also how a canonical key list
 ///   stores it, so the confirm compares one word.
@@ -74,12 +79,13 @@ unsafe fn inline_slot(obj: *const ObjectHeader, slot: usize) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_field_ic_front(
     dir: *const u8,
-    obj_handle: i64,
+    obj_biased: i64,
     key_bits: u64,
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
-    let obj = obj_handle as usize as *const ObjectHeader;
+    let obj =
+        (obj_biased as usize).wrapping_add(perry_abi::RECEIVER_HANDLE_FLOOR) as *const ObjectHeader;
     let shape_id = (*obj).parent_class_id;
     // `pic_slot_peek` without its null test: the slot is the site's global.
     let cache = (*(cache_slot as *const std::sync::atomic::AtomicPtr<crate::object::PicCache>))
@@ -93,8 +99,12 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
         (*cache)[PIC_WAY_STATE]
     };
     if state > 0 {
-        // 1. The ways. A way token is `PIC_ID_TOKEN_BIT | ShapeId`; an empty
-        // way is 0 and cannot match.
+        // 1. The ways (first-read D4), in order, each hit loading its own
+        // way's slot; the ShapeId is the one loaded above. A way token is
+        // `PIC_ID_TOKEN_BIT | ShapeId`; an empty way is 0 and cannot match.
+        // No spill re-test: a way never holds a spill or overflow entry
+        // (`pic_prime_get` publishes a spill entry only to the compact word,
+        // and refuses to cascade an overflow-encoded slot into a way).
         let token = (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64;
         for w in 0..PIC_WAYS {
             if (*cache)[PIC_WAY_BASE + 2 * w] == token {
@@ -204,7 +214,8 @@ pub(crate) unsafe fn test_site_miss_read(
         crate::object::shapes::ordinary_dir_addr()
     };
     let key_bits = key as usize as u64 | crate::value::STRING_TAG;
-    let v = js_object_get_field_ic_front(dir, obj_handle, key_bits, cache_slot, packed);
+    let obj_biased = obj_handle.wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR as i64);
+    let v = js_object_get_field_ic_front(dir, obj_biased, key_bits, cache_slot, packed);
     if v.to_bits() != crate::value::TAG_HOLE {
         return v;
     }
@@ -347,7 +358,9 @@ mod tests {
         let packed = AtomicU64::new(word);
         let dir = crate::object::shapes::ordinary_dir_addr();
         let bits = unsafe {
-            super::js_object_get_field_ic_front(dir, obj as i64, key_bits, cache_slot, &packed)
+            // The operand form a site passes (`obj_biased`, see the front).
+            let biased = (obj as i64).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR as i64);
+            super::js_object_get_field_ic_front(dir, biased, key_bits, cache_slot, &packed)
                 .to_bits()
         };
         (bits, packed.load(Ordering::Relaxed))

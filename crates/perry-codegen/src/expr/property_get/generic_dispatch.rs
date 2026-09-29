@@ -1096,7 +1096,19 @@ pub(crate) fn lower_generic_property_get(
                 EMPTY_SHAPE_DIR,
             )
         };
-        let front_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        // The receiver as the fused test's biased value (payload minus
+        // `RECEIVER_HANDLE_FLOOR`, the front's operand form): one register
+        // move here, where the payload is a 10-byte constant and an add,
+        // since LLVM folds `biased + floor` back into `bits - POINTER_TAG`.
+        // A `length` site has no fused test and subtracts the floor itself.
+        let front_recv = match fused_recv.as_ref() {
+            Some(f) => f.biased.clone(),
+            None => ctx.block().sub(
+                I64,
+                &entry_handle,
+                &crate::runtime_abi::RECEIVER_HANDLE_FLOOR.to_string(),
+            ),
+        };
         let key_box = ctx.block().load(DOUBLE, &key_handle_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let answered = ctx.block().call(
@@ -1104,7 +1116,7 @@ pub(crate) fn lower_generic_property_get(
             "js_object_get_field_ic_front",
             &[
                 (PTR, &dir),
-                (I64, &front_handle),
+                (I64, &front_recv),
                 (I64, &key_bits),
                 (PTR, &cache_slot_ref),
                 (PTR, &packed_ref),
