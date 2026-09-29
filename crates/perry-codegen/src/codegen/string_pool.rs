@@ -8,7 +8,7 @@ use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
-use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::helpers::{sanitize_member, scoped_static_method_name};
 use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
@@ -96,6 +96,13 @@ impl<'a> InitChunker<'a> {
     }
 }
 
+/// Pool literals at most this long are minted as ATOMS. **Must equal
+/// `INTERN_MAX_BYTE_LEN` in `perry-runtime/src/string/intern.rs`**, the
+/// longest key the runtime interns; `js_string_pool_atom` falls back to a
+/// plain allocation past it, so a mismatch costs only the atom, never
+/// correctness.
+pub(crate) const POOL_ATOM_MAX_BYTE_LEN: usize = 64;
+
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
 /// allocates + NaN-boxes + GC-roots each handle exactly once at startup.
@@ -117,9 +124,6 @@ pub(super) fn emit_string_pool(
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
-    // Imported class stubs: their ShapeId slots are registered so they follow
-    // the defining module's typed ShapeId (`js_register_imported_class_shape_slot`).
-    imported_class_stubs: &[perry_hir::Class],
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -446,12 +450,30 @@ pub(super) fn emit_string_pool(
         let bytes_ref = format!("@{}", entry.bytes_global);
         let handle_ref = format!("@{}", entry.handle_global);
         let len_str = entry.byte_len.to_string();
-        let from_bytes_fn = if entry.is_wtf8 {
-            "js_string_from_wtf8_bytes"
+        // A literal short enough to be a property key becomes its text's ATOM
+        // (`js_string_pool_atom`): one string object per key text for the
+        // whole agent, shared by every module's pool, every canonical shape
+        // key list and every intern hit — so a read site's key and the
+        // receiver's shape key compare by pointer (S3b). Longer literals, and
+        // WTF-8 ones (lone surrogates: never an identifier key), keep the
+        // plain allocation.
+        let atomize =
+            !entry.is_wtf8 && entry.byte_len > 0 && entry.byte_len <= POOL_ATOM_MAX_BYTE_LEN;
+        let handle = if atomize {
+            let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
+            blk.call(
+                I64,
+                "js_string_pool_atom",
+                &[(PTR, &bytes_ref), (I32, &len_str), (I64, &hash), (I32, "0")],
+            )
         } else {
-            "js_string_from_bytes"
+            let from_bytes_fn = if entry.is_wtf8 {
+                "js_string_from_wtf8_bytes"
+            } else {
+                "js_string_from_bytes"
+            };
+            blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)])
         };
-        let handle = blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
         // Plain store, no remembered-set write barrier: the handle slot is
         // registered as a permanent global root on the very next line (always
@@ -612,30 +634,26 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    let imported_stub_classes: std::collections::HashSet<String> = imported_class_stubs
-        .iter()
-        .map(|stub| sanitize(&stub.name))
-        .collect();
     for (idx, (global_name, packed, field_count, raw_mask_words, pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        // Resolve class id from the global name. The global name is
-        // `perry_class_keys_<modprefix>__<class>` so we strip the
-        // prefix to recover the sanitized class name and look up
-        // the id by walking class_ids. Since multiple classes might
-        // have the same sanitized name (rare but possible), we just
-        // pick the first matching one — class_ids is keyed by the
-        // pre-sanitized name so a direct lookup works for ASCII.
-        let prefix = format!("perry_class_keys_{}__", module_prefix);
-        let sanitized_class = global_name.strip_prefix(&prefix).unwrap_or("");
-        let class_id = class_ids
-            .iter()
-            .find(|(k, _)| sanitize(k) == sanitized_class)
-            .map(|(_, &v)| v)
-            .unwrap_or(0);
-
+        // The birth's class id, typed-ness and live bound come from the ONE
+        // derivation the driver's pre-pass also uses to name this birth's
+        // content (`static_shape_ids::class_birth`); `requested` is that
+        // content's static id — the definer's for a structural stub of the
+        // definer's facts — (0 = none).
+        let birth = super::static_shape_ids::class_birth(
+            module_prefix,
+            &class_keys_init_data[idx],
+            class_header_image_inits,
+            class_ids,
+        );
+        let class_id = birth.class_id;
+        let requested = super::static_shape_ids::requested_shape_id_for_keys_global(global_name)
+            .unwrap_or(0)
+            .to_string();
         let cid_str = class_id.to_string();
         let fc_str = field_count.to_string();
         let packed_ref = if packed.is_empty() {
@@ -675,21 +693,13 @@ pub(super) fn emit_string_pool(
         // global is registered first, so the shape record and every future
         // instance refer to the rooted/rewriteable canonical array.
         // #8405: a pointer-bearing layout that is provable at allocation gets
-        // its own process-global typed ShapeId. Registering the immutable mask
-        // beside that id here makes `SIDE_MASK | INTACT` a complete header
-        // image; every later construction can stamp it without calling the
-        // per-object installer. The class id plus exact masks form the stable
-        // identity, so a same-keys object with a different representation can
-        // never alias this descriptor.
-        const GC_LAYOUT_AND_INTACT_MASK: u64 = 0xD000;
-        const GC_SIDE_MASK_AND_INTACT: u64 = 0x9000;
-        let typed_side_mask =
-            class_header_image_inits
-                .get(global_name)
-                .is_some_and(|&(_, packed, _)| {
-                    ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
-                });
-        let shape_id = if typed_side_mask {
+        // its own typed ShapeId. Installing the immutable mask beside that id
+        // here makes `SIDE_MASK | INTACT` a complete header image; every later
+        // construction can stamp it without calling the per-object installer.
+        // The masks are part of the id's content (design step 4), so a
+        // same-keys object with a different representation can never alias
+        // this descriptor.
+        let shape_id = if birth.typed {
             let raw_mask_ref = if raw_mask_words.is_empty() {
                 "null".to_string()
             } else {
@@ -713,6 +723,28 @@ pub(super) fn emit_string_pool(
                     (I32, &raw_mask_words.len().to_string()),
                     (PTR, &pointer_mask_ref),
                     (I32, &pointer_mask_words.len().to_string()),
+                    (I32, &requested),
+                ],
+            )
+        } else if requested != "0" {
+            // Design step 4: the per-class mint with the driver's static id.
+            // Class registration precedes every instance, so this is the first
+            // mint of these facts in the agent unless an importing module's
+            // own mint of the same content (same id) already ran.
+            let live = if birth.wide_live > 0 {
+                birth.wide_live
+            } else {
+                *field_count
+            };
+            blk.call(
+                I32,
+                "js_object_shape_id_for_class_keys_static",
+                &[
+                    (I64, &arr),
+                    (I32, &fc_str),
+                    (I32, &live.to_string()),
+                    (I32, &cid_str),
+                    (I32, &requested),
                 ],
             )
         } else {
@@ -721,8 +753,8 @@ pub(super) fn emit_string_pool(
             // A class born WIDE (constructor key-add slack) gets a birth
             // shape whose live bound is the widened slot count its header
             // image allocates (`codegen/mod.rs`, `birth_live`).
-            match class_header_image_inits.get(global_name) {
-                Some(&(_, _, birth_live)) if birth_live > *field_count => blk.call(
+            match birth.wide_live {
+                birth_live if birth_live > 0 => blk.call(
                     I32,
                     "js_object_shape_id_for_class_keys_live",
                     &[
@@ -770,39 +802,6 @@ pub(super) fn emit_string_pool(
                 "store <2 x i64> {}, ptr {}, align 8",
                 image, image_global
             ));
-        }
-
-        // An imported class's typed ShapeId can only be minted by its defining
-        // module, and that module may initialize AFTER this string pool runs
-        // (this is the entry module, or the two are in an import cycle). Hand
-        // the runtime this module's ShapeId and image slots so it points them
-        // at the typed id whenever it exists; otherwise every instance built
-        // here misses the defining module's exact store guards. The registry
-        // keeps these addresses, so an image that can be unloaded registers
-        // nothing.
-        if strings_outlive_registry
-            && !typed_side_mask
-            && class_id != 0
-            && imported_stub_classes.contains(sanitized_class)
-        {
-            let image_ref = if class_header_image_inits.contains_key(global_name) {
-                format!(
-                    "@{}",
-                    crate::typed_shape::header_image_global_name_from_keys_global(global_name)
-                )
-            } else {
-                "null".to_string()
-            };
-            blk.call_void(
-                "js_register_imported_class_shape_slot",
-                &[
-                    (I32, &cid_str),
-                    (I32, &fc_str),
-                    (PTR, &global_ref),
-                    (PTR, &shape_global),
-                    (PTR, &image_ref),
-                ],
-            );
         }
     }
 
@@ -969,6 +968,12 @@ pub(super) fn emit_string_pool(
         // #1788: static methods are emitted as `perry_static_*` (no `this`
         // param). Collect them for the runtime CLASS_STATIC_METHODS table.
         for sm in &class.static_methods {
+            // A `static { }` block is lowered to a synthetic static method the
+            // class's initializer calls directly. It is not a member: never
+            // registered, so no reflection (`Reflect.ownKeys(C)`) can see it.
+            if sm.name.starts_with("__perry_static_init_") {
+                continue;
+            }
             let llvm_name = scoped_static_method_name(module_prefix, cid, class_name, &sm.name);
             let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
             // Spec `.length`: leading formal params before the first default/rest

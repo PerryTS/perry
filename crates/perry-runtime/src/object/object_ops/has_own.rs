@@ -233,21 +233,17 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                     {
                         super::super::class_registry::class_name_for_id(class_id).is_some()
                     } else {
-                        let has_public_data = CLASS_DYNAMIC_PROPS.with(|m| {
-                            m.borrow()
-                                .get(&class_id)
-                                .is_some_and(|props| props.contains_key(key))
-                        });
+                        let has_public_data =
+                            crate::object::class_value::class_static_get(class_id, key).is_some();
                         has_public_data
                             || (!key.starts_with('#')
                                 && (super::super::class_registry::lookup_static_method_in_chain(
                                     class_id, key,
                                 )
                                 .is_some()
-                                    || super::super::class_registry::class_own_static_accessor_ptrs(
+                                    || crate::object::class_value::class_static_has_own_accessor(
                                         class_id, key,
-                                    )
-                                    .is_some()))
+                                    )))
                     }
                 })
                 .unwrap_or(false);
@@ -540,7 +536,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable.
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let bits = obj_value.to_bits();
-            if (bits >> 48) == 0x7FFE {
+            if crate::object::class_value::legacy_class_value_word(bits).is_some() {
                 // ClassRef receivers: statics live in the class registry and
                 // are non-enumerable like builtin statics.
                 return f64::from_bits(TAG_FALSE);
@@ -603,15 +599,8 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                     // ClassBody default, but a generic descriptor can flip it
                     // (Object.defineProperty(C, "x", { enumerable: true })).
                     let is_enumerable_static_accessor =
-                        super::super::class_registry::static_accessor_attrs_in_use()
-                            && super::super::class_registry::static_declared_accessor_ptrs(
-                                class_id, key_name,
-                            )
-                            .is_some()
-                            && super::super::class_registry::static_accessor_attrs(
-                                class_id, key_name,
-                            )
-                            .0;
+                        crate::object::class_value::class_static_own_accessor(class_id, key_name)
+                            .is_some_and(|(_, enumerable, _)| enumerable);
                     return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
                         TAG_TRUE
                     } else {

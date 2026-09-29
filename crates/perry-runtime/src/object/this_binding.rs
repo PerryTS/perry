@@ -172,6 +172,42 @@ pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
     })
 }
 
+/// [`js_static_this_resolve`] for a static method of class `class_id`: the
+/// armed override if any, else the class's function object, cached in the
+/// method's own zero-initialised `slot` (the object is pinned, so the cached
+/// bits never go stale) — no per-call class-table lookup.
+// #1561-style force-keep: only generated IR calls this.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_STATIC_THIS_RESOLVE_CLASS: unsafe extern "C" fn(i32, *mut f64) -> f64 =
+    js_static_this_resolve_class;
+
+/// # Safety
+/// `slot` is null or the calling static method's own `double` cache global.
+#[no_mangle]
+pub unsafe extern "C" fn js_static_this_resolve_class(class_id: i32, slot: *mut f64) -> f64 {
+    let armed = STATIC_THIS_OVERRIDE.with(|c| {
+        let (armed, bits) = c.get();
+        if armed {
+            c.set((false, crate::value::TAG_UNDEFINED));
+        }
+        armed.then_some(bits)
+    });
+    if let Some(bits) = armed {
+        return f64::from_bits(bits);
+    }
+    if !slot.is_null() && (*slot).to_bits() != 0 {
+        return *slot;
+    }
+    let value = super::class_value::class_value(class_id as u32);
+    if !slot.is_null() {
+        // GC_STORE_AUDIT(ROOT): a compiled cache slot holding a PINNED class
+        // function object (never moves), also rooted by the class-value table.
+        *slot = value;
+    }
+    value
+}
+
 /// Read the current implicit `this` (issue #519).
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get() -> f64 {

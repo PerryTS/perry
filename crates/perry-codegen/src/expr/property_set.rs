@@ -1308,7 +1308,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 // `-O3` pipeline.
                                 // Only the call's own operands are materialized (the key
                                 // handle + expected ShapeId), not the inline-store scaffolding.
-                                let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                                let expected_shape_id = crate::typed_shape::class_shape_id_operand(
                                     ctx,
                                     &class_name,
                                     &keys_global_name,

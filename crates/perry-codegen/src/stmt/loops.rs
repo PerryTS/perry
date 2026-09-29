@@ -822,8 +822,8 @@ fn lower_strided_tagged_fill_loop(
 /// and emit one Number tag test each in the current (fast preheader) block,
 /// branching to the slow preheader when any holds a non-Number — the
 /// induction base case, exactly like the stable-packed clone's admission.
-/// The returned ids ride the scope's `PackedF64LoopFact`, where
-/// `is_numeric_expr` consults them so `s += arr[i]` lowers to a native
+/// The returned ids open the clone's 5L Number scope
+/// (`materialize_number_locals`), which `local_is_number` answers from so `s += arr[i]` lowers to a native
 /// `fadd` instead of `js_dynamic_string_or_number_add` per iteration.
 /// Range-loop wrapper: accumulators are collected against the loop's single
 /// counter-accessed array (the `arr[counter]` leaf of the accumulator walk).
@@ -864,7 +864,7 @@ fn emit_range_loop_accumulator_admission(
 }
 
 /// The live state of a packed clone's accumulator admission: the admitted
-/// ids (they ride the scope's fact so `is_numeric_expr` sees them), the
+/// ids (they open the clone's Number scope, see `local_is_number`), the
 /// unboxed subset (id, F64 alloca, real slot) whose reads/writes redirect
 /// through `ctx.numeric_accumulator_f64_slots`, and the side-exit trampoline
 /// that writes the live values back before entering the slow clone.
@@ -1473,8 +1473,9 @@ fn lower_packed_f64_versioned_for(
             allow_holes: false,
             window_validated: false,
             affine_indices: false,
-            numeric_accumulators: acc_scope.accumulators.clone(),
         });
+    ctx.receiver_descriptors
+        .materialize_number_locals(packed_scope_id, &acc_scope.accumulators);
     // The guard just proved a live, non-forwarded plain array, and the
     // matched body cannot change its length (in-bounds stores only, no
     // calls/closures/awaits) — so hoist the length ONCE as the fast clone's
@@ -3259,6 +3260,10 @@ fn push_packed_f64_range_facts(
     numeric_accumulators: &[u32],
     affine_window_proven: &std::collections::BTreeSet<u32>,
 ) {
+    // The range guard tag-tested every admitted accumulator; the scope ends
+    // with the caller's `dematerialize_scope(scope_id)`.
+    ctx.receiver_descriptors
+        .materialize_number_locals(scope_id, numeric_accumulators);
     for access in &matched.arrays {
         if access.counter.is_some() {
             ctx.receiver_descriptors
@@ -3275,7 +3280,6 @@ fn push_packed_f64_range_facts(
                     allow_holes: !matched.dense,
                     window_validated: true,
                     affine_indices: false,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 });
         }
         // #9253: an affine access publishes a receiver-only fact. No window
@@ -3296,7 +3300,6 @@ fn push_packed_f64_range_facts(
                     // the range clamp and the per-read bounds check.
                     window_validated: affine_window_proven.contains(&access.array_id),
                     affine_indices: true,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 });
         }
         if let Some((lo, hi)) = access.stat {
@@ -3310,7 +3313,6 @@ fn push_packed_f64_range_facts(
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
                     allows_stores: allow_masked_stores,
-                    numeric_accumulators: numeric_accumulators.to_vec(),
                 },
             );
         }
@@ -3414,7 +3416,6 @@ fn lower_masked_window_ta_tier(
                 values_i32,
                 elem,
                 allows_stores: false,
-                numeric_accumulators: Vec::new(),
             },
         );
     }
@@ -5840,7 +5841,7 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+    let expected_shape_id = crate::typed_shape::class_shape_id_operand(
         ctx,
         &matched.class_name,
         &matched.keys_global_name,

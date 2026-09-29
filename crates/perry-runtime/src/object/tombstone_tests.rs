@@ -1118,3 +1118,65 @@ fn stable_tombstone_bound_move_mints_a_new_shape_id() {
         assert_eq!(after.hole_count, shape.hole_count);
     }
 }
+
+/// The two in-place stable-tombstone updaters rewrite the hole count (and, in
+/// the uncached one, the summary) of a live record without reinserting it,
+/// and both are inputs of the positional bit (`ShapeRecord::position_bound`).
+/// Both refresh the bit, but today no update can FLIP it: the updaters only
+/// accept a stable-tombstone receiver's detached record, which carries a
+/// private-epoch (nonzero) semantic generation, so it is never positional,
+/// hole or not. Driven to zero holes directly, each updater must leave the bit
+/// equal to its definition, and the premise that pins the bit false is
+/// asserted, so the day an updater admits a generation-0 record this test
+/// is where the refresh starts to matter.
+#[test]
+fn in_place_tombstone_updates_keep_the_positional_bit_equal_to_its_facts() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        for cached in [true, false] {
+            let name: &[u8] = if cached {
+                b"posbit_cached"
+            } else {
+                b"posbit_plain"
+            };
+            let (obj, shape) = stable_receiver_one_hole(0, name);
+            let id = super::shapes::object_shape_stamp(obj);
+            let keys = shape.keys as usize as *mut crate::ArrayHeader;
+            let updated = if cached {
+                super::shapes::try_update_stable_tombstone_shape_cached(
+                    obj,
+                    shape,
+                    shape.logical_key_count,
+                    shape.live_inline_slot_count,
+                    0,
+                )
+            } else {
+                super::shapes::try_update_stable_tombstone_shape(
+                    obj,
+                    keys,
+                    shape.logical_key_count,
+                    shape.live_inline_slot_count,
+                    0,
+                )
+            };
+            assert_eq!(
+                updated,
+                Some(id),
+                "premise: the updater (cached={cached}) ran in place"
+            );
+            let after = super::shapes::object_shape_descriptor(obj).unwrap();
+            assert_eq!(after.hole_count, 0, "premise: the update wrote zero holes");
+            assert_ne!(
+                after.semantic_generation, 0,
+                "premise: an in-place-updatable record is a private epoch (nonzero generation)"
+            );
+            let (bit, facts) = super::shapes::test_positional_of_id(id).unwrap();
+            assert_eq!(
+                bit, facts,
+                "INVARIANT: the in-place update (cached={cached}) left the positional bit stale"
+            );
+        }
+    }
+}

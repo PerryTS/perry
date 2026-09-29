@@ -1144,8 +1144,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .get(&crate::namespace_member_class_key(name, property))
                         .copied();
                     if let Some(cid) = class_cid {
-                        let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
-                        return Ok(double_literal(f64::from_bits(bits)));
+                        return Ok(super::emit_class_value_cached(ctx, cid));
                     }
                     // Issue #680: prefer the per-namespace map so
                     // `random.make` and `tracer.make` resolve to their
@@ -1688,7 +1687,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let field_idx_str = field_index.to_string();
                         let expected_class_id_str = expected_class_id.to_string();
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let expected_shape_id = crate::typed_shape::load_class_shape_id(
+                        let expected_shape_id = crate::typed_shape::class_shape_id_operand(
                             ctx,
                             &class_name,
                             &keys_global_name,
@@ -1708,7 +1707,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 blk.and(I64, &key_bits, POINTER_MASK_I64)
                             };
                             // S2: guard + load is a GC-leaf call; the by-name
-                            // fallback is the cold collecting arm.
+                            // fallback is the cold collecting arm. The site's
+                            // own read cache: what the guard cannot prove, the
+                            // One Path read answers from the receiver's shape.
+                            let cache_slot =
+                                format!("@{}", generic_dispatch::allocate_property_cache(ctx));
                             let ic_args = [
                                 (I64, site_id.as_str()),
                                 (DOUBLE, recv_box.as_str()),
@@ -1717,6 +1720,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, key_raw.as_str()),
                                 (I32, field_idx_str.as_str()),
                                 (I32, requires_raw_f64_str),
+                                (PTR, cache_slot.as_str()),
                             ];
                             let val = crate::expr::ic_fast_split::emit_hole_declining_split(
                                 ctx,
@@ -1798,12 +1802,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // forward the precheck's value into this cold block,
                         // which keeps a copy of it alive across the hit path's
                         // `shl` (+1 `mov` per read, measured on `cls`).
-                        let ic_shape_id = {
-                            let global = crate::typed_shape::shape_id_global_name_from_keys_global(
-                                &keys_global_name,
-                            );
-                            ctx.block().load_volatile(I32, &format!("@{global}"))
-                        };
+                        let ic_shape_id = crate::typed_shape::class_shape_id_operand_on_block(
+                            ctx.block(),
+                            &keys_global_name,
+                            true,
+                        );
+                        // The site's own read cache. A receiver the
+                        // pre-check cannot prove (an `Object.create` child
+                        // reading through `this`, an instance past the birth
+                        // shape, a subclass) is answered from ITS shape by the
+                        // One Path read behind the call, like any receiver,
+                        // instead of by the site-less by-name walk.
+                        let cache_slot =
+                            format!("@{}", generic_dispatch::allocate_property_cache(ctx));
                         let val_ic = ctx.block().call(
                             DOUBLE,
                             "js_class_field_get_ic",
@@ -1815,6 +1826,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &key_raw),
                                 (I32, &field_idx_str),
                                 (I32, requires_raw_f64_str),
+                                (PTR, &cache_slot),
                             ],
                         );
                         let ic_end_label = ctx.block().label.clone();

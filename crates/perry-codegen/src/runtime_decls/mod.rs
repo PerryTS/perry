@@ -159,6 +159,10 @@ pub fn declare_phase1(module: &mut LlModule) {
     // Strings (enough to produce string literals for later phases).
     module.declare_function("js_string_from_bytes", I64, &[PTR, I32]);
     module.declare_function("js_string_from_wtf8_bytes", I64, &[PTR, I32]);
+    // S3b: a pooled literal short enough to be a key is minted as the atom of
+    // its text (`string/intern.rs::js_string_pool_atom`): bytes, len, FNV-1a
+    // hash, is_wtf8.
+    module.declare_function("js_string_pool_atom", I64, &[PTR, I32, I64, I32]);
 
     // Type checks.
     module.declare_function("js_is_truthy", I32, &[DOUBLE]);

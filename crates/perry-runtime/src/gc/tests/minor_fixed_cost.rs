@@ -178,3 +178,44 @@ fn small_int_cache_writer_publishing_a_young_string_is_caught() {
     crate::string::test_write_small_int_cache_slot(255, young);
     crate::string::debug_assert_small_string_caches_not_minor_relevant();
 }
+
+/// An atom minted from a young string and reachable ONLY through the atom
+/// table survives a moving minor: the table names the forwarded, live copy
+/// (found again by text and by `atom_for_key`), not from-space. The atom
+/// young log is what makes the minor visit that slot.
+#[test]
+fn young_atom_is_rewritten_through_the_atom_young_log() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _clear = ClearTablesOnDrop;
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    crate::string::test_clear_intern_table();
+
+    let bytes = b"minor-fixed-cost-young-atom";
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    let young = crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0);
+    assert!(crate::arena::pointer_in_nursery(young as usize));
+    assert_eq!(
+        crate::string::atom_lookup(bytes, hash),
+        Some(young as *const _)
+    );
+
+    let _ = gc_collect_minor();
+
+    let tabled = crate::string::atom_lookup(bytes, hash).expect("the atom must stay tabled");
+    assert_ne!(
+        tabled as usize, young as usize,
+        "the table must name the evacuated copy, not from-space"
+    );
+    unsafe {
+        assert_string_bytes(tabled, bytes);
+        let fresh = crate::string::js_string_pool_atom(bytes.as_ptr(), bytes.len() as u32, hash, 0);
+        assert_eq!(
+            fresh as usize, tabled as usize,
+            "the pool must reuse the live atom"
+        );
+        assert!(crate::string::is_atom_for_test(tabled));
+        // A second string with the same text resolves to the same atom.
+        let other = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        assert_eq!(crate::string::atom_for_key(other, hash), Some(tabled));
+    }
+}

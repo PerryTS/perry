@@ -11,6 +11,8 @@ use tempfile::tempdir;
 /// to vary one field mutate the returned value before hashing.
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: Some("aarch64-apple-darwin".to_string()),
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
@@ -801,6 +803,11 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_PTR_NUMARRAY_LOCALS",
         // FEAT_JSCVT single-instruction ToInt32 (apple-arm64).
         "PERRY_JSCVT",
+        // #10884 / #11650 loop regions: the kill switch and three tuning knobs.
+        "PERRY_REGION_READS",
+        "PERRY_REGIONS",
+        "PERRY_REGION_NODES_PER_BARE",
+        "PERRY_REGION_SPILL",
     ] {
         // Sample state without the var, with the var, and with a different
         // value — all three keys must be distinct.
@@ -840,8 +847,9 @@ fn store_then_lookup_path_with_ffi_round_trips_manifest() {
     let cache = ObjectCache::new(dir.path(), "test-target", true);
     let key = 0x6439_0001;
     cache.store_ffi_manifest(key, &["js_ws_connect_start", "js_ws_send"]);
+    cache.store_static_seeds(key, &[]);
     cache.store(key, b"object bytes");
-    let (path, symbols) = cache
+    let (path, symbols, _) = cache
         .lookup_path_with_ffi(key)
         .expect("object + manifest both present must hit");
     assert!(path.is_file());
@@ -859,12 +867,47 @@ fn empty_ffi_manifest_is_a_hit_with_no_symbols() {
     let cache = ObjectCache::new(dir.path(), "test-target", true);
     let key = 0x6439_0002;
     cache.store_ffi_manifest(key, &[]);
+    cache.store_static_seeds(key, &[]);
     cache.store(key, b"object bytes");
-    let (_, symbols) = cache
+    let (_, symbols, _) = cache
         .lookup_path_with_ffi(key)
         .expect("empty manifest is still a complete entry");
     assert!(symbols.is_empty());
     assert_eq!(cache.hits(), 1);
+}
+
+/// Design step 4: the static shape seed lines survive a store -> lookup round
+/// trip, and an entry without its seed sidecar is a miss (a warm build must
+/// link the seed set a cold build linked).
+#[test]
+fn static_seeds_round_trip_and_an_entry_without_them_misses() {
+    let dir = tempdir().unwrap();
+    let cache = ObjectCache::new(dir.path(), "test-target", true);
+    let key = 0x1165_3001;
+    cache.store_ffi_manifest(key, &[]);
+    cache.store(key, b"object bytes");
+    assert!(
+        cache.lookup_path_with_ffi(key).is_none(),
+        "an entry without its seed sidecar must miss"
+    );
+    let line = perry_codegen::encode_static_seed(
+        0x1000_0042,
+        &perry_codegen::BirthShape {
+            keys: b"u\0v\0".to_vec(),
+            key_count: 2,
+            live: 2,
+            proto: perry_codegen::BirthProto::Literal,
+            typed: None,
+        },
+    );
+    cache.store_static_seeds(key, &[line.as_str()]);
+    let (_, _, seeds) = cache.lookup_path_with_ffi(key).expect("complete entry");
+    assert_eq!(seeds, vec![line.clone()]);
+    let (id, shape) = perry_codegen::decode_static_seed(&seeds[0]).expect("decodes");
+    assert_eq!(
+        (id, shape.keys.as_slice(), shape.key_count),
+        (0x1000_0042, &b"u\0v\0"[..], 2)
+    );
 }
 
 /// #6439 regression: an object written by a pre-manifest perry has no
