@@ -145,7 +145,9 @@ pub(super) struct CopyingNurseryCollector {
     pub(super) ptrs: CopyingPointerSet,
     pub(super) worklist: Vec<*mut GcHeader>,
     pub(super) marked_headers: Vec<*mut GcHeader>,
-    pub(super) moved_headers: Vec<*mut GcHeader>,
+    /// Every moved or promoted-in-place survivor: chunked, never reallocated
+    /// (gc/header_list.rs).
+    pub(super) moved_headers: super::header_list::HeaderList,
     pub(super) large_excluded_headers: crate::fast_hash::PtrHashSet<usize>,
     pub(super) sticky: StickyRememberedSet,
     pub(super) stats: CopyingNurseryTraceStats,
@@ -209,9 +211,10 @@ pub(super) struct CopyingNurseryCollector {
 }
 
 /// Survivor count of the previous copying minor, used only to pre-size this
-/// one's `worklist` / `moved_headers`.
+/// one's `worklist`. (`moved_headers` is a chunked list and needs no
+/// pre-size; see gc/header_list.rs.)
 ///
-/// Both grow to one entry per survivor — 750 k on a fully-live nursery — from
+/// It grows to one entry per survivor — 750 k on a fully-live nursery — from
 /// `Vec::new()`, so each cycle paid ~20 reallocations whose `memmove` and
 /// `mi_malloc` were visible in a symbolicated profile of the MARK loop. A
 /// nursery's survivor count is strongly autocorrelated between adjacent cycles
@@ -271,7 +274,7 @@ impl CopyingNurseryCollector {
             ptrs,
             worklist: Vec::with_capacity(estimate),
             marked_headers: Vec::new(),
-            moved_headers: Vec::with_capacity(estimate),
+            moved_headers: super::header_list::HeaderList::default(),
             large_excluded_headers: crate::fast_hash::new_ptr_hash_set(),
             sticky: StickyRememberedSet::default(),
             stats: CopyingNurseryTraceStats {
@@ -734,7 +737,7 @@ impl CopyingNurseryCollector {
         // read-modify-write of one byte per survivor, in mark order, over a
         // cohort far larger than any cache.
         clear_marks_in(&self.marked_headers);
-        clear_marks_in(&self.moved_headers);
+        self.moved_headers.clear_marks();
     }
 }
 
@@ -1226,6 +1229,20 @@ pub(super) fn run_copied_minor_attempt(
             "policy (should_promote_young_untraced)"
         })
     });
+    // A TRACED promoting cycle expects the young generation to survive whole,
+    // so size its worklist for that once, from the census's mean object size,
+    // instead of letting the `Vec` double its way up from the last minor's
+    // survivor count. A doubling `realloc` copies into fresh pages while the
+    // allocator keeps the old ones resident: ~3 MB for the 131 k-object tree a
+    // program's first minor promotes on binary-trees at n = 3, where the
+    // previous count is zero. An over-estimate reserves address space it never
+    // touches; an under-estimate falls back to ordinary growth.
+    if promoting_in_place && !untraced {
+        let expected = from_space_bytes / super::mean_surviving_object_bytes().max(GC_HEADER_SIZE);
+        collector
+            .worklist
+            .reserve(expected.min(SURVIVOR_ESTIMATE_CAP));
+    }
     let reset_phase_start = PhaseDiag::start(&phase_diag);
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
     if let Some(diag) = phase_diag.as_mut() {
@@ -1446,8 +1463,9 @@ pub(super) fn run_copied_minor_attempt(
     // runs later), which the per-object gate requires.
     let forwarding_phase_start = PhaseDiag::start(&phase_diag);
     if !collector.skip_remembering {
-        let promoted_sticky =
-            rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
+        let promoted_sticky = rebuild_evacuated_old_to_young_remembered_set_from_chunks(
+            &collector.moved_headers.chunk_entries().collect::<Vec<_>>(),
+        );
         promoted_sticky.restore();
         collector.sticky.extend(promoted_sticky);
     }

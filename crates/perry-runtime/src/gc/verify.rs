@@ -525,10 +525,30 @@ fn cross_check_covered_parent(header: *mut GcHeader, sticky: &mut StickyRemember
 pub(super) fn rebuild_evacuated_old_to_young_remembered_set(
     evacuated_headers: &[*mut GcHeader],
 ) -> StickyRememberedSet {
+    // SAFETY: `*mut GcHeader` and `usize` have the same size and alignment,
+    // and the slice is only read.
+    let words = unsafe {
+        std::slice::from_raw_parts(
+            evacuated_headers.as_ptr().cast::<usize>(),
+            evacuated_headers.len(),
+        )
+    };
+    rebuild_evacuated_old_to_young_remembered_set_from_chunks(&[words])
+}
+
+/// [`rebuild_evacuated_old_to_young_remembered_set`] over header addresses
+/// stored in chunks (`gc::header_list`). Deliberately not generic: it is the
+/// one loop both forms run, so the per-survivor work has a single call site
+/// and stays inlined into it.
+pub(super) fn rebuild_evacuated_old_to_young_remembered_set_from_chunks(
+    chunks: &[&[usize]],
+) -> StickyRememberedSet {
     let mut sticky = StickyRememberedSet::default();
-    for &header in evacuated_headers {
-        unsafe {
-            remember_evacuated_old_copy_young_slots(&mut sticky, header);
+    for chunk in chunks {
+        for &word in chunk.iter() {
+            unsafe {
+                remember_evacuated_old_copy_young_slots(&mut sticky, word as *mut GcHeader);
+            }
         }
     }
     sticky

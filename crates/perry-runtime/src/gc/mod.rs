@@ -175,6 +175,8 @@ mod diag_sites;
 pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
+/// The copying minor's moved-survivor list: chunked, never reallocated (#11549).
+mod header_list;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
 mod sticky_remembered;
