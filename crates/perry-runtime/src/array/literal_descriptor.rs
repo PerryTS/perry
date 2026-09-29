@@ -154,6 +154,7 @@ mod tests {
             1,
             POINTERS.as_ptr(),
             1,
+            0,
         );
         let shape = LiteralShape {
             class_id: CLASS_ID,

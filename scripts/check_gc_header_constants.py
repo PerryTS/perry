@@ -219,10 +219,10 @@ REGISTRY: list[Restatement] = [
      "OBJ_FLAG_PLAIN_ORDINARY", "proxy/reflect: plain-ordinary veto"),
     ("crates/perry-codegen/src/expr/proxy_reflect_write_ic.rs", "STABLE_TOMBSTONES_OBJ_FLAG",
      "OBJ_FLAG_STABLE_TOMBSTONES", "proxy write IC: stable-tombstones veto"),
-    ("crates/perry-codegen/src/codegen/string_pool.rs", "GC_LAYOUT_AND_INTACT_MASK",
+    ("crates/perry-codegen/src/codegen/static_shape_ids.rs", "GC_LAYOUT_AND_INTACT_MASK",
      "GC_LAYOUT_POINTER_FREE | GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
      "module init: the header-image layout bits it may rewrite"),
-    ("crates/perry-codegen/src/codegen/string_pool.rs", "GC_SIDE_MASK_AND_INTACT",
+    ("crates/perry-codegen/src/codegen/static_shape_ids.rs", "GC_SIDE_MASK_AND_INTACT",
      "GC_LAYOUT_SIDE_MASK | GC_OBJ_TYPED_LAYOUT_INTACT",
      "module init: the side-mask + intact pair it writes"),
 ]

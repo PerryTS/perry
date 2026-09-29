@@ -2180,6 +2180,7 @@ js_object_set_symbol_method	Reenters
 js_object_set_symbol_property	Reenters
 js_object_shape_id_for_class_keys	Reenters
 js_object_shape_id_for_class_keys_live	Reenters
+js_object_shape_id_for_class_keys_static	Reenters
 js_object_shape_id_for_keys	Reenters
 js_object_super_call	Reenters
 js_object_super_get	Reenters
@@ -2798,7 +2799,6 @@ js_register_handle_property_set_dispatch	Leaf
 js_register_handle_property_set_dispatch_extension	Leaf
 js_register_handle_prototype_dispatch	Leaf
 js_register_http_agent_handle_probe	Leaf
-js_register_imported_class_shape_slot	Reenters
 js_register_jsx_render_stream	Leaf
 js_register_net_socket_handle_probe	Leaf
 js_register_node_stream_web_adapter_callbacks	Leaf
@@ -2988,6 +2988,9 @@ js_shadow_slot_get	Leaf
 js_shadow_slot_set	Leaf
 js_shadow_state_addr	Leaf
 js_shape_ordinary_inline_slot_for_key	Reenters
+js_shape_register_static_seed	Leaf
+js_shape_run_static_seed	Reenters
+js_shape_seed_plain	Reenters
 js_shared_array_buffer_new	Reenters
 js_shared_array_buffer_new_value	Reenters
 js_sharp_blur	Reenters

@@ -8,7 +8,7 @@ use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
-use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::helpers::{sanitize_member, scoped_static_method_name};
 use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
 
@@ -124,9 +124,6 @@ pub(super) fn emit_string_pool(
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
-    // Imported class stubs: their ShapeId slots are registered so they follow
-    // the defining module's typed ShapeId (`js_register_imported_class_shape_slot`).
-    imported_class_stubs: &[perry_hir::Class],
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -637,30 +634,26 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
-    let imported_stub_classes: std::collections::HashSet<String> = imported_class_stubs
-        .iter()
-        .map(|stub| sanitize(&stub.name))
-        .collect();
     for (idx, (global_name, packed, field_count, raw_mask_words, pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        // Resolve class id from the global name. The global name is
-        // `perry_class_keys_<modprefix>__<class>` so we strip the
-        // prefix to recover the sanitized class name and look up
-        // the id by walking class_ids. Since multiple classes might
-        // have the same sanitized name (rare but possible), we just
-        // pick the first matching one — class_ids is keyed by the
-        // pre-sanitized name so a direct lookup works for ASCII.
-        let prefix = format!("perry_class_keys_{}__", module_prefix);
-        let sanitized_class = global_name.strip_prefix(&prefix).unwrap_or("");
-        let class_id = class_ids
-            .iter()
-            .find(|(k, _)| sanitize(k) == sanitized_class)
-            .map(|(_, &v)| v)
-            .unwrap_or(0);
-
+        // The birth's class id, typed-ness and live bound come from the ONE
+        // derivation the driver's pre-pass also uses to name this birth's
+        // content (`static_shape_ids::class_birth`); `requested` is that
+        // content's static id — the definer's for a structural stub of the
+        // definer's facts — (0 = none).
+        let birth = super::static_shape_ids::class_birth(
+            module_prefix,
+            &class_keys_init_data[idx],
+            class_header_image_inits,
+            class_ids,
+        );
+        let class_id = birth.class_id;
+        let requested = super::static_shape_ids::requested_shape_id_for_keys_global(global_name)
+            .unwrap_or(0)
+            .to_string();
         let cid_str = class_id.to_string();
         let fc_str = field_count.to_string();
         let packed_ref = if packed.is_empty() {
@@ -700,21 +693,13 @@ pub(super) fn emit_string_pool(
         // global is registered first, so the shape record and every future
         // instance refer to the rooted/rewriteable canonical array.
         // #8405: a pointer-bearing layout that is provable at allocation gets
-        // its own process-global typed ShapeId. Registering the immutable mask
-        // beside that id here makes `SIDE_MASK | INTACT` a complete header
-        // image; every later construction can stamp it without calling the
-        // per-object installer. The class id plus exact masks form the stable
-        // identity, so a same-keys object with a different representation can
-        // never alias this descriptor.
-        const GC_LAYOUT_AND_INTACT_MASK: u64 = 0xD000;
-        const GC_SIDE_MASK_AND_INTACT: u64 = 0x9000;
-        let typed_side_mask =
-            class_header_image_inits
-                .get(global_name)
-                .is_some_and(|&(_, packed, _)| {
-                    ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
-                });
-        let shape_id = if typed_side_mask {
+        // its own typed ShapeId. Installing the immutable mask beside that id
+        // here makes `SIDE_MASK | INTACT` a complete header image; every later
+        // construction can stamp it without calling the per-object installer.
+        // The masks are part of the id's content (design step 4), so a
+        // same-keys object with a different representation can never alias
+        // this descriptor.
+        let shape_id = if birth.typed {
             let raw_mask_ref = if raw_mask_words.is_empty() {
                 "null".to_string()
             } else {
@@ -738,6 +723,28 @@ pub(super) fn emit_string_pool(
                     (I32, &raw_mask_words.len().to_string()),
                     (PTR, &pointer_mask_ref),
                     (I32, &pointer_mask_words.len().to_string()),
+                    (I32, &requested),
+                ],
+            )
+        } else if requested != "0" {
+            // Design step 4: the per-class mint with the driver's static id.
+            // Class registration precedes every instance, so this is the first
+            // mint of these facts in the agent unless an importing module's
+            // own mint of the same content (same id) already ran.
+            let live = if birth.wide_live > 0 {
+                birth.wide_live
+            } else {
+                *field_count
+            };
+            blk.call(
+                I32,
+                "js_object_shape_id_for_class_keys_static",
+                &[
+                    (I64, &arr),
+                    (I32, &fc_str),
+                    (I32, &live.to_string()),
+                    (I32, &cid_str),
+                    (I32, &requested),
                 ],
             )
         } else {
@@ -746,8 +753,8 @@ pub(super) fn emit_string_pool(
             // A class born WIDE (constructor key-add slack) gets a birth
             // shape whose live bound is the widened slot count its header
             // image allocates (`codegen/mod.rs`, `birth_live`).
-            match class_header_image_inits.get(global_name) {
-                Some(&(_, _, birth_live)) if birth_live > *field_count => blk.call(
+            match birth.wide_live {
+                birth_live if birth_live > 0 => blk.call(
                     I32,
                     "js_object_shape_id_for_class_keys_live",
                     &[
@@ -795,39 +802,6 @@ pub(super) fn emit_string_pool(
                 "store <2 x i64> {}, ptr {}, align 8",
                 image, image_global
             ));
-        }
-
-        // An imported class's typed ShapeId can only be minted by its defining
-        // module, and that module may initialize AFTER this string pool runs
-        // (this is the entry module, or the two are in an import cycle). Hand
-        // the runtime this module's ShapeId and image slots so it points them
-        // at the typed id whenever it exists; otherwise every instance built
-        // here misses the defining module's exact store guards. The registry
-        // keeps these addresses, so an image that can be unloaded registers
-        // nothing.
-        if strings_outlive_registry
-            && !typed_side_mask
-            && class_id != 0
-            && imported_stub_classes.contains(sanitized_class)
-        {
-            let image_ref = if class_header_image_inits.contains_key(global_name) {
-                format!(
-                    "@{}",
-                    crate::typed_shape::header_image_global_name_from_keys_global(global_name)
-                )
-            } else {
-                "null".to_string()
-            };
-            blk.call_void(
-                "js_register_imported_class_shape_slot",
-                &[
-                    (I32, &cid_str),
-                    (I32, &fc_str),
-                    (PTR, &global_ref),
-                    (PTR, &shape_global),
-                    (PTR, &image_ref),
-                ],
-            );
         }
     }
 

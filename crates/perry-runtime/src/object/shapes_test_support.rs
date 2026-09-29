@@ -255,3 +255,13 @@ pub(crate) fn test_install_external_shape_id(
         crate::object::shapes::ShapeObjectKind::Ordinary,
     )
 }
+
+/// Does the record of `id` in this agent carry a carrier flag (never pruned
+/// while no object carries it)? For the static-id seed tests.
+pub(crate) fn test_shape_record_is_carrier(id: u32) -> bool {
+    crate::state::state()
+        .shapes
+        .slab()
+        .get(id)
+        .is_some_and(|record| record.cache_carrier())
+}

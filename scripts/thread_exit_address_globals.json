@@ -2858,14 +2858,6 @@
    "why": "Lazily built unwinder over loaded images' .eh_frame sections plus a rows cache keyed by code PC; addresses are of mapped image sections/code, not the GC heap."
   },
   {
-   "file": "crates/perry-runtime/src/gc/layout/typed_shape.rs",
-   "names": [
-    "REGISTERED_TYPED_SHAPES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Module-init registry of typed ShapeIds: layout keys (class id, proto id from class_proto_id = tag|class id, mask words), descriptors, and ImportedShapeSlot addresses of executable data-section globals (typed_shape.rs:106-118); no GC-heap addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/object/chain_store.rs",
    "names": [
     "CHAIN_STORE_SKIPPED"

@@ -154,6 +154,7 @@ unsafe fn stamp_reserved_floor_shape(
         floor,
         proto_id,
         shapes::receiver_extra_summary(obj),
+        None,
     ));
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     shapes::debug_assert_object_shape_parity_for_keys(

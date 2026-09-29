@@ -254,6 +254,8 @@ pub(crate) fn malloc_state_slot_index() -> u32 {
 
 pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
     let total = GC_HEADER_SIZE + size;
+    // Checked before anything is reserved: see `gc_header_size_word`.
+    let size_word = super::gc_header_size_word(total);
     let layout = Layout::from_size_align(total, 8).unwrap();
 
     // Issue #34: malloc-heavy workloads that don't push arena blocks
@@ -287,7 +289,7 @@ pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
         (*header).gc_flags = super::barrier::gc_birth_extra_flags(); // not arena; allocate-black while a budgeted cycle marks
         super::barrier::gc_note_black_birth(header);
         (*header)._reserved = 0;
-        (*header).size = total as u32;
+        (*header).size = size_word;
 
         let user_ptr = raw.add(GC_HEADER_SIZE);
 
@@ -325,6 +327,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
 
         for &size in sizes {
             let total = GC_HEADER_SIZE + size;
+            let size_word = super::gc_header_size_word(total);
             let layout = Layout::from_size_align(total, 8).unwrap();
             let raw = alloc(layout);
             if raw.is_null() {
@@ -341,7 +344,7 @@ pub fn gc_malloc_batch(sizes: &[usize], obj_type: u8) -> Vec<*mut u8> {
             (*header).gc_flags = super::barrier::gc_birth_extra_flags();
             super::barrier::gc_note_black_birth(header);
             (*header)._reserved = 0;
-            (*header).size = total as u32;
+            (*header).size = size_word;
 
             allocated_bytes = allocated_bytes.saturating_add(total as u64);
             headers.push(header);
@@ -612,6 +615,7 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
     let old_total = unsafe { (*old_header).size as usize };
     let obj_type = unsafe { (*old_header).obj_type };
     let new_total = GC_HEADER_SIZE + new_payload_size;
+    let new_size_word = super::gc_header_size_word(new_total);
 
     let old_layout = Layout::from_size_align(old_total, 8).unwrap();
 
@@ -622,7 +626,7 @@ pub fn gc_realloc(old_user_ptr: *mut u8, new_payload_size: usize) -> *mut u8 {
         }
 
         let new_header = new_raw as *mut GcHeader;
-        (*new_header).size = new_total as u32;
+        (*new_header).size = new_size_word;
 
         let prev_in_alloc = GC_FLAGS.with(|f| {
             let prev = f.get();
