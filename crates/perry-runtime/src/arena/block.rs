@@ -344,6 +344,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             object_starts: new_object_start_bitmap(size),
             dead_cycles: 0,
             old_free_holes: false,
+            pinned_summary: false,
         });
     }
     let data = unsafe { alloc(layout) };
@@ -357,6 +358,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
         object_starts: new_object_start_bitmap(size),
         dead_cycles: 0,
         old_free_holes: false,
+        pinned_summary: false,
     })
 }
 
@@ -435,6 +437,13 @@ pub(crate) struct ArenaBlock {
     /// lets every other reset skip the walk over all chains. Taking a hole
     /// leaves it set — it may over-approximate, never under-approximate.
     pub(crate) old_free_holes: bool,
+    /// Some header in this block may carry `GC_FLAG_PINNED`. Set by the pin
+    /// setters (`gc::pin_object` / `pin_object_non_young`, through
+    /// [`note_pinned_arena_header`]); cleared by the pinned-root walk when a
+    /// walk of the block finds no pinned header. The header bit is the
+    /// authority: this only says which blocks the walk must visit, so it may
+    /// over-approximate and must never under-approximate.
+    pub(crate) pinned_summary: bool,
 }
 
 impl ArenaBlock {
@@ -644,6 +653,7 @@ impl Arena {
                 object_starts: Box::new([]),
                 dead_cycles: 0,
                 old_free_holes: false,
+                pinned_summary: false,
             }],
             current: 0,
             generation,

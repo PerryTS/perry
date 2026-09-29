@@ -206,6 +206,7 @@ pub unsafe fn pin_object(header: *mut GcHeader) {
         YOUNG_PIN_EVER.store(true, Ordering::Release);
     }
     (*header).gc_flags |= GC_FLAG_PINNED;
+    note_pin_root(header);
 }
 
 /// Set `GC_FLAG_PINNED` on an object the CALLER has already proven cannot be
@@ -250,6 +251,7 @@ pub unsafe fn pin_object_non_young(header: *mut GcHeader) {
          latch stays disarmed and the copying minor will relocate it"
     );
     (*header).gc_flags |= GC_FLAG_PINNED;
+    note_pin_root(header);
 }
 
 /// Test accessor for the young-pin predicate, so
@@ -734,5 +736,144 @@ mod report_tests {
         let report = pinned_young_move_report(0x1000, GC_TYPE_MAP, 64, flags);
         assert!(report.contains("NOT an anomaly"), "{report}");
         assert!(report.contains("tenures in place"), "{report}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A pinned object is a root.
+//
+// A pin means exactly two things to the collector: the object is not moved
+// and it is not swept. It does NOT mean "already marked": the pin's holder is
+// an external reference the collector cannot see, so the object is a root and
+// is marked and traced like any other — otherwise a child reachable only
+// through it (a promise's reaction closure, an object's key list) is freed
+// while the pinned parent lives on (the cross-thread promise use-after-free).
+//
+// The header bit is the authority. What the root scan needs is only where to
+// look, and the heap already has a walkable home for every pinnable object:
+//
+// * arena objects: their block. `ArenaBlock::pinned_summary` says the block
+//   may hold one (`arena/pinned.rs`);
+// * `gc_malloc` objects: the malloc registry the sweep already walks.
+//   `MALLOC_PIN_SUMMARY` says it may hold one.
+//
+// Both summaries are set here, next to the header bit, and nowhere else.
+// Leaf objects are not noted: a leaf has no child slot, so its pin keeps it
+// live (no sweep) and there is nothing to trace through it. That is what
+// keeps the long-lived small-int and ASCII string caches' pins free.
+// ---------------------------------------------------------------------------
+
+crate::perry_thread_local! {
+    /// This thread's malloc registry may hold a pinned, non-leaf header.
+    static MALLOC_PIN_SUMMARY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Note `header` (just pinned) in the summary of the space that holds it.
+///
+/// # Safety
+///
+/// As [`pin_object`].
+#[inline]
+unsafe fn note_pin_root(header: *mut GcHeader) {
+    if super::types::gc_type_rewrite_descriptor_kind((*header).obj_type)
+        == super::types::GcRewriteDescriptorKind::Leaf
+    {
+        return;
+    }
+    if (*header).gc_flags & GC_FLAG_ARENA == 0
+        || !crate::arena::note_pinned_arena_header(header as usize)
+    {
+        MALLOC_PIN_SUMMARY.with(|s| s.set(true));
+    }
+}
+
+/// The pinned non-leaf headers of this thread, found through the summaries.
+/// Clears a summary whose walk found nothing.
+fn collect_pinned_root_headers(include_tenured: bool) -> Vec<*mut GcHeader> {
+    let mut out = Vec::new();
+    crate::arena::collect_pinned_arena_headers(include_tenured, &mut out);
+    if MALLOC_PIN_SUMMARY.with(|s| s.get()) {
+        let mut found = false;
+        super::malloc::MALLOC_STATE.with(|state| {
+            for &header in state.borrow().objects.iter() {
+                // SAFETY: every non-null registry entry is a live gc_malloc
+                // header until the sweep frees and removes it.
+                if !header.is_null() && unsafe { (*header).gc_flags } & GC_FLAG_PINNED != 0 {
+                    found = true;
+                    out.push(header);
+                }
+            }
+        });
+        MALLOC_PIN_SUMMARY.with(|s| s.set(found));
+    }
+    out
+}
+
+/// Root scanner: every pinned object is a root, visited in each marking pass
+/// and fix-up pass. A pinned object never moves, so its own slot rewrite is a
+/// no-op, but the rewrite passes fix up the children it holds through it.
+pub(crate) fn scan_pinned_object_roots_mut(visitor: &mut super::RuntimeRootVisitor<'_>) {
+    #[cfg(test)]
+    if pinned_mark_sabotage::skipping_pinned_roots() {
+        return;
+    }
+    for header in collect_pinned_root_headers(!visitor.young_scope()) {
+        // SAFETY: a pinned header's user pointer follows its 8-byte header.
+        let mut user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) };
+        visitor.visit_raw_mut_ptr_slot(&mut user);
+    }
+}
+
+/// Does a mark entry treat this pinned header as already marked? Never: a pin
+/// is not a mark. Only the test-only sabotage arm (A) restores the old,
+/// broken short-circuit, so the tests can prove they fail without the fix.
+#[inline(always)]
+pub(crate) fn pinned_counts_as_marked(flags: u8) -> bool {
+    #[cfg(test)]
+    {
+        flags & GC_FLAG_PINNED != 0 && pinned_mark_sabotage::treating_pinned_as_marked()
+    }
+    #[cfg(not(test))]
+    {
+        let _ = flags;
+        false
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod pinned_mark_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PINNED_AS_MARKED: Cell<bool> = const { Cell::new(false) };
+        static SKIP_PINNED_ROOTS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn treating_pinned_as_marked() -> bool {
+        PINNED_AS_MARKED.with(|c| c.get())
+    }
+
+    pub(crate) fn skipping_pinned_roots() -> bool {
+        SKIP_PINNED_ROOTS.with(|c| c.get())
+    }
+
+    /// Sabotage arm: (A) `pinned_as_marked` makes every mark entry treat a
+    /// pinned header as marked again; (B) `skip_roots` drops the pinned-root
+    /// scan. Restores both on drop.
+    pub(crate) struct Guard;
+
+    impl Guard {
+        pub(crate) fn new(pinned_as_marked: bool, skip_roots: bool) -> Self {
+            PINNED_AS_MARKED.with(|c| c.set(pinned_as_marked));
+            SKIP_PINNED_ROOTS.with(|c| c.set(skip_roots));
+            Guard
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PINNED_AS_MARKED.with(|c| c.set(false));
+            SKIP_PINNED_ROOTS.with(|c| c.set(false));
+        }
     }
 }

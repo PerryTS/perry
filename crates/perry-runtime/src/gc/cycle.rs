@@ -233,7 +233,7 @@ impl BlockPersistCycleState {
             }
             let header = header_ptr as *mut GcHeader;
             unsafe {
-                if (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) != 0 {
+                if (*header).gc_flags & GC_FLAG_MARKED != 0 {
                     self.block_has_live[block_idx] = true;
                 }
             }
