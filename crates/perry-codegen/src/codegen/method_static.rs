@@ -63,7 +63,7 @@ pub(in crate::codegen) fn compile_static_method(
     // dynamic dispatch, and that object may be reachable only from this slot.
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, &f.body);
-    let shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if crate::codegen::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
@@ -80,8 +80,6 @@ pub(in crate::codegen) fn compile_static_method(
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -189,6 +187,12 @@ pub(in crate::codegen) fn compile_static_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    crate::codegen::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags =

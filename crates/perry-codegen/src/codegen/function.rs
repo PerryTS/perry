@@ -1064,7 +1064,10 @@ pub(super) fn compile_function(
     // statement lowering.  `enable_shadow_frame` deliberately retains the
     // original upper-bound size, so the remaining preassigned slot indices
     // stay valid even when filtering leaves holes.
-    shadow_slot_map.retain(|id, _| !native_facts.number_by_construction_locals().contains(id));
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 

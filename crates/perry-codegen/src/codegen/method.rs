@@ -357,7 +357,7 @@ pub(super) fn compile_method(
     // nothing else when the caller holds it only in a register temp).
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, method_body);
-    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(
@@ -377,8 +377,6 @@ pub(super) fn compile_method(
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -483,6 +481,12 @@ pub(super) fn compile_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
     let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids

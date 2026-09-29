@@ -690,6 +690,26 @@ pub(crate) fn decide_straight_line_store_outline(
     }
 }
 
+/// 5L (step5 DESIGN §3.4, §4.4): a Number local never holds a pointer, so it
+/// owns no root slot. Every write to a member of the function's Number-local
+/// set (`local_is_number`'s outermost scope) is Number-producing, and every
+/// leaf of that rule yields a canonical double: a boxed Number is outside the
+/// tag band by definition, and each raw lane (typed-array and DataView floats,
+/// F64 field slots, POD fields) is canonicalised where it is read. The value
+/// is therefore never a NaN-box pointer pattern, so it needs no shadow-slot
+/// bind, no lexical-death clear and no incremental root shading.
+///
+/// Called once per body kind (function, method, static method, closure,
+/// module init) after the fact graph is built and after any slot index that
+/// is derived from the unpruned map's size is taken, since the frame keeps
+/// the unpruned size and the retained indices keep their positions.
+pub(crate) fn drop_number_local_root_slots(
+    shadow_slot_map: &mut HashMap<u32, u32>,
+    number_locals: &std::collections::HashSet<u32>,
+) {
+    shadow_slot_map.retain(|id, _| !number_locals.contains(id));
+}
+
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],

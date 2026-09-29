@@ -189,6 +189,8 @@ mod clone_suffix_tests;
 mod closure;
 mod closure_collect;
 mod constructor_contracts;
+#[cfg(test)]
+mod number_local_root_tests;
 pub use constructor_contracts::{ConstructorContracts, ResolvedConstructorContracts};
 mod ctor_arity;
 pub use ctor_arity::{
