@@ -112,6 +112,8 @@ fn side_mask_baked_header_word() -> String {
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        static_shape_ids: Vec::new(),
+        program_class_shape_ids: Default::default(),
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
@@ -645,13 +647,13 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
 }
 
 /// A module's string pool can run before the defining module of a class it
-/// imports has initialized (the entry module, an import cycle), so only the
-/// runtime knows when that class's typed ShapeId exists. The imported stub must
-/// hand the runtime its keys, ShapeId and header-image globals right after
-/// storing them — and must not do so from an image that can be unloaded,
-/// because the runtime keeps the addresses.
+/// imports has initialized (the entry module, an import cycle). With link-time
+/// ids (design step 4) the stub's mint carries the static id the driver gave
+/// its content — the id the definer's typed install uses when exactly one
+/// typed layout matches — so either init order converges on one id without
+/// the runtime keeping any module's global addresses.
 #[test]
-fn imported_stub_registers_its_shape_slots_for_the_defining_modules_typed_id() {
+fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     let module = || {
         let mut module = Module::new("imported_shape_slots.ts");
         module.init = vec![Stmt::Let {
@@ -669,45 +671,32 @@ fn imported_stub_registers_its_shape_slots_for_the_defining_modules_typed_id() {
         }];
         module
     };
-    const REGISTER: &str = "call void @js_register_imported_class_shape_slot(";
-
     let mut opts = ir_opts();
     opts.imported_classes.push(imported_remote());
+    let births = crate::module_birth_shapes(&module(), opts.clone()).unwrap();
+    assert_eq!(births.len(), 1, "the stub is this module's one class birth");
+    assert!(!births[0].defined, "an imported stub is not a definition");
+    let ids = crate::assign_static_shape_ids(births.iter().map(|b| &b.shape));
+    let id = ids[&births[0].shape];
+    opts.static_shape_ids = vec![(births[0].shape.clone(), id)];
     let ir = String::from_utf8(compile_module(&module(), opts).unwrap())
         .expect("LLVM IR should be UTF-8");
-    let register_at = ir
-        .find(REGISTER)
-        .unwrap_or_else(|| panic!("the imported stub must register its shape slots:\n{ir}"));
-    let call = ir[register_at..].lines().next().unwrap();
+    let mint = ir
+        .lines()
+        .find(|l| l.contains("call i32 @js_object_shape_id_for_class_keys_static("))
+        .unwrap_or_else(|| panic!("the stub must mint with its static id:\n{ir}"));
     assert!(
-        call.contains("@perry_class_keys_")
-            && call.contains("@perry_class_shape_id_")
-            && call.contains("i32 55,"),
-        "registration must name the stub's keys and ShapeId globals and its class id:\n{call}"
+        mint.contains(&format!("i32 {id})")) && mint.contains("i32 55,"),
+        "the mint must carry the class id and the driver's id {id}:\n{mint}"
     );
-    // Look for the ShapeId store by name rather than taking whichever
-    // `store i32` happens to be last.
     assert!(
-        ir[..register_at]
-            .rfind("@perry_class_shape_id_")
-            .is_some_and(|at| ir[at..register_at].contains("store i32 ")
-                || ir[..at].rfind("store i32 ").is_some()),
-        "the slot is registered after this module stored its own id:\n{ir}"
+        !ir.contains("js_register_imported_class_shape_slot"),
+        "no module global address is handed to the runtime any more:\n{ir}"
     );
     // S6: there is no poisonable guard twin to seed or register any more; the
     // class-field guards compare against the ShapeId global itself.
     assert!(
         !ir.contains("perry_class_guard_shape_"),
         "no poisonable guard expectation may be emitted:\n{ir}"
-    );
-
-    let mut dylib = ir_opts();
-    dylib.output_type = "dylib".to_string();
-    dylib.imported_classes.push(imported_remote());
-    let dylib_ir = String::from_utf8(compile_module(&module(), dylib).unwrap())
-        .expect("LLVM IR should be UTF-8");
-    assert!(
-        !dylib_ir.contains(REGISTER),
-        "an unloadable image must not lend global addresses to the registry:\n{dylib_ir}"
     );
 }

@@ -565,7 +565,7 @@ pub(super) fn emit_pshape_argument_dispatch(
         let class_id = *ctx.class_ids.get(&arg.fact.class_name)?;
         let keys_global = ctx.class_keys_globals.get(&arg.fact.class_name)?.clone();
         let shape_id =
-            crate::typed_shape::load_class_shape_id(ctx, &arg.fact.class_name, &keys_global);
+            crate::typed_shape::class_shape_id_operand(ctx, &arg.fact.class_name, &keys_global);
         guarded.push((
             arg,
             value,
@@ -981,7 +981,7 @@ pub(super) fn emit_guarded_direct_method_call(
 
     let expected_class_id_str = expected_class_id.to_string();
     let expected_shape_id =
-        crate::typed_shape::load_class_shape_id(ctx, receiver_class_name, &keys_global_name);
+        crate::typed_shape::class_shape_id_operand(ctx, receiver_class_name, &keys_global_name);
 
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
@@ -1004,6 +1004,9 @@ pub(super) fn emit_guarded_direct_method_call(
     let subclass_shape_ids: Vec<String> = subclass_arms
         .iter()
         .map(|arm| {
+            if let Some(id) = crate::typed_shape::static_class_shape_id(&arm.keys_global) {
+                return id.to_string();
+            }
             let shape_global =
                 crate::typed_shape::shape_id_global_name_from_keys_global(&arm.keys_global);
             let slot = ctx.func.entry_init_load_global(&shape_global, I32);
