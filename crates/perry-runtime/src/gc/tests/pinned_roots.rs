@@ -13,11 +13,23 @@ use crate::gc::pin::pinned_mark_sabotage;
 use crate::object::ObjectHeader;
 
 /// The copying-nursery isolation guard empties the scanner registry; install
-/// the two families these tests rely on.
+/// the families these tests rely on.
+///
+/// The shape table's scanner is one of them. A store of a new key into an old
+/// parent transitions it to a shape whose ordered keys array is born young, and
+/// that keys word lives in the shape descriptor, outside the GC heap, so no
+/// barrier can record it: `scan_shape_table_rekey_mut` is what keeps it across
+/// a minor (see `gc/shape_keys_edge.rs`). Without it an old parent's slot
+/// survives, forwarded, while the key that names it is lost, and the lookup
+/// reads `undefined`.
 fn pinned_guard() -> CopyingNurseryTestGuard {
     let guard = CopyingNurseryTestGuard::new(1);
     gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
     gc_register_named_mutable_root_scanner("promise", promise_mutable_root_scanner);
+    gc_register_named_mutable_root_scanner(
+        "shape_table",
+        crate::object::shapes::scan_shape_table_rekey_mut,
+    );
     guard
 }
 
@@ -36,7 +48,10 @@ enum Birth {
 #[derive(Clone, Copy, Debug)]
 enum Collection {
     Full,
+    /// A direct minor: the copying nursery when eligible.
     Minor,
+    /// An explicit `gc()` under forced evacuation: a moving minor.
+    Evacuate,
 }
 
 /// An empty object of `INLINE_SLOT_FLOOR` slots from a non-young allocator,
@@ -84,9 +99,11 @@ fn header_of(user: *mut u8) -> *mut GcHeader {
     unsafe { user.sub(GC_HEADER_SIZE) as *mut GcHeader }
 }
 
-/// Build, collect, read back. Returns whether the child survived intact.
-fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
-    let _guard = pinned_guard();
+/// A `birth` parent in shadow slot 0 holding a fresh young string under `KEY`
+/// (stored through the runtime's own store path, write barrier included).
+/// With `pin`, the parent is pinned and slot 0 cleared, so the pin is its only
+/// root. Returns the parent.
+fn build_parent(birth: Birth, pin: bool) -> *mut ObjectHeader {
     let parent = match birth {
         Birth::Young => crate::object::js_object_alloc(0, 2),
         _ => unsafe { raw_bag(birth) },
@@ -104,11 +121,35 @@ fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
         unsafe { crate::gc::pin::js_gc_pin_user_ptr(parent as *mut u8) };
         js_shadow_slot_set(0, 0);
     }
+    parent
+}
+
+/// Build, collect, read back. Returns whether the child survived intact.
+///
+/// The read-back sees a freed child only when its cell is handed back, and a
+/// full collection force-marks every object of a recent block holding
+/// anything live (`BLOCK_PERSIST_WINDOW`), so this is the behavioural check;
+/// [`full_mark_reaches_child`] is the exact one for the full trace.
+fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
+    let _guard = pinned_guard();
+    let parent = build_parent(birth, pin);
     match collection {
         Collection::Full => crate::gc::js_gc_collect(),
         Collection::Minor => {
             let _ = crate::gc::gc_collect_minor();
         }
+        Collection::Evacuate => {
+            let _force = super::support::ForcedEvacuationTestGuard::on();
+            crate::gc::js_gc_collect();
+        }
+    }
+    if pin {
+        // A pin means "don't move": the parent is still where it was.
+        let flags = unsafe { (*header_of(parent as *mut u8)).gc_flags };
+        assert!(
+            flags & GC_FLAG_FORWARDED == 0 && flags & GC_FLAG_PINNED != 0,
+            "{birth:?} pinned parent was moved by a {collection:?} collection (flags={flags:#x})"
+        );
     }
     reuse_freed_cells();
     let parent: *mut ObjectHeader = if pin { parent } else { slot_ptr() };
@@ -119,6 +160,39 @@ fn child_survives(birth: Birth, pin: bool, collection: Collection) -> bool {
         unsafe { crate::gc::unpin_object(header_of(parent as *mut u8)) };
     }
     intact
+}
+
+/// The full trace's own marking, stopped before block persistence and the
+/// sweep: the registered root scanners (the pin scanner among them), then the
+/// mark worklist. Returns
+/// whether it marked the child a pinned `birth` parent holds.
+fn full_mark_reaches_child(birth: Birth) -> bool {
+    let _guard = pinned_guard();
+    let parent = build_parent(birth, true);
+    let v = crate::object::js_object_get_field_by_name(parent, string(KEY));
+    let child = (v.bits() & POINTER_MASK) as usize;
+    assert_ne!(child, 0, "premise: the child was stored");
+    clear_marks();
+    clear_mark_seeds();
+    let valid_ptrs = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid_ptrs);
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+    let parent_marked = unsafe { (*header_of(parent as *mut u8)).gc_flags } & GC_FLAG_MARKED != 0;
+    let child_marked = unsafe { (*header_of(child as *mut u8)).gc_flags } & GC_FLAG_MARKED != 0;
+    clear_marks();
+    clear_mark_seeds();
+    unsafe { crate::gc::unpin_object(header_of(parent as *mut u8)) };
+    parent_marked && child_marked
+}
+
+#[test]
+fn full_mark_traces_through_every_pinned_birth() {
+    for birth in [Birth::Young, Birth::BornTenured, Birth::Old, Birth::Malloc] {
+        assert!(
+            full_mark_reaches_child(birth),
+            "the full trace did not mark and trace through a pinned {birth:?} parent"
+        );
+    }
 }
 
 fn assert_child_survives(birth: Birth, collection: Collection) {
@@ -142,9 +216,16 @@ macro_rules! birth_matrix {
 birth_matrix! {
     young_parent_full: Birth::Young, Collection::Full;
     young_parent_minor: Birth::Young, Collection::Minor;
+    young_parent_evacuate: Birth::Young, Collection::Evacuate;
     born_tenured_parent_full: Birth::BornTenured, Collection::Full;
+    born_tenured_parent_minor: Birth::BornTenured, Collection::Minor;
+    born_tenured_parent_evacuate: Birth::BornTenured, Collection::Evacuate;
     old_parent_full: Birth::Old, Collection::Full;
+    old_parent_minor: Birth::Old, Collection::Minor;
+    old_parent_evacuate: Birth::Old, Collection::Evacuate;
     malloc_parent_full: Birth::Malloc, Collection::Full;
+    malloc_parent_minor: Birth::Malloc, Collection::Minor;
+    malloc_parent_evacuate: Birth::Malloc, Collection::Evacuate;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,8 +320,11 @@ fn aged_bridge_promise_reaction_survives_full_collections() {
 #[test]
 fn sabotage_pinned_counts_as_marked_frees_the_child() {
     let _sabotage = pinned_mark_sabotage::Guard::new(true, false);
-    assert!(!child_survives(Birth::BornTenured, true, Collection::Full));
-    assert!(!child_survives(Birth::Malloc, true, Collection::Full));
+    for birth in [Birth::Young, Birth::BornTenured, Birth::Old, Birth::Malloc] {
+        assert!(!full_mark_reaches_child(birth), "{birth:?}");
+    }
+    // The copying minor's own mark entry for a malloc or longlived object.
+    assert!(!child_survives(Birth::Malloc, true, Collection::Minor));
     assert!(!pinned_promise_reaction_runs(true, 4));
 }
 
@@ -248,7 +332,9 @@ fn sabotage_pinned_counts_as_marked_frees_the_child() {
 #[test]
 fn sabotage_no_pinned_roots_frees_the_child() {
     let _sabotage = pinned_mark_sabotage::Guard::new(false, true);
-    assert!(!child_survives(Birth::BornTenured, true, Collection::Full));
-    assert!(!child_survives(Birth::Malloc, true, Collection::Full));
+    for birth in [Birth::Young, Birth::BornTenured, Birth::Old, Birth::Malloc] {
+        assert!(!full_mark_reaches_child(birth), "{birth:?}");
+    }
+    assert!(!child_survives(Birth::Malloc, true, Collection::Minor));
     assert!(!pinned_promise_reaction_runs(true, 4));
 }
