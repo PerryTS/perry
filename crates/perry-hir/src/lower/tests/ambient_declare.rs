@@ -85,8 +85,22 @@ fn function_declared_before_the_ambient_line_reads_the_global() {
 /// `declare var` in a Script entry used to be published as a non-configurable
 /// global property before user code ran, so a later
 /// `Object.defineProperty(globalThis, "dVar", …)` threw.
+///
+/// #11591: a plain `.ts` entry (no import/export) is a module under Node, not
+/// a Script — GlobalDeclarationInstantiation's `var`-to-`globalThis`
+/// reflection now applies only under the explicit global-script opt-in
+/// (`PERRY_GLOBAL_SCRIPT_THIS`), same as the sibling `crates/perry/tests/`
+/// reflection tests (#5579/#5848/#8595). Those opt in per-subprocess via the
+/// env var; this test lowers in-process instead, and
+/// `global_script_this_enabled`'s flag is a process-wide `OnceLock` that
+/// some *other* test in this `--lib` binary freezes to `false` well before
+/// this one runs (any ordinary identifier reassignment reads it via
+/// `expr_assign`'s `mirrors_script_var` — #11625), so setting the env var
+/// here has no effect. Use the `cfg(test)`-only, thread-scoped override
+/// instead.
 #[test]
 fn ambient_var_is_not_a_script_global_var() {
+    let _force_script_this = super::lower_expr::ForceGlobalScriptThisForTest::enable();
     let source = r#"
         declare var dVar: any;
         var realVar = 1;

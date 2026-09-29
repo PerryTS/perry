@@ -50,7 +50,10 @@ pub struct Module {
     /// source order. For a *Script* (a non-ESM entry program), these become
     /// own properties of the global object per GlobalDeclarationInstantiation,
     /// so `Object.prototype.hasOwnProperty.call(globalThis, name)` is true.
-    /// ESM modules (imports/exports/top-level await) do NOT reflect. Codegen
+    /// ESM modules (imports/exports/top-level await) do NOT reflect, and since
+    /// #11591 neither does a plain `.ts` entry (a module under Node): the list
+    /// is filled only under the global-script opt-in `PERRY_GLOBAL_SCRIPT_THIS`.
+    /// Codegen
     /// consumes this in the entry-module branch to emit the `globalThis[name]
     /// = <fn>` stores. Only `hir.functions` carries nested closures and
     /// object-literal methods too, which must NOT be reflected — hence this

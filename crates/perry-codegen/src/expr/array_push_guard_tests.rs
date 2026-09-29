@@ -553,6 +553,92 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
     m
 }
 
+/// The instruction that defines `reg` in `body` (`  %reg = ...`) and the
+/// label of the basic block it sits in.
+fn defining_line<'a>(body: &'a str, reg: &str) -> Option<(&'a str, &'a str)> {
+    let head = format!("{reg} = ");
+    let mut label = "entry";
+    for line in body.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            label = line.trim_end_matches(':');
+        } else if line.trim().starts_with(&head) {
+            return Some((line.trim(), label));
+        }
+    }
+    None
+}
+
+/// Follow `reg` back through `bitcast`s to the instruction that produced the
+/// bits, and that instruction's block.
+fn bits_source<'a>(body: &'a str, reg: &str) -> (&'a str, &'a str) {
+    let mut reg = reg.to_string();
+    loop {
+        let (line, label) =
+            defining_line(body, &reg).unwrap_or_else(|| panic!("{reg} is not defined:\n{body}"));
+        match line.split_once(" = bitcast ") {
+            // `bitcast double %x to i64` / `bitcast i64 %x to double`
+            Some((_, rest)) => reg = rest.split_whitespace().nth(1).expect("operand").to_string(),
+            None => return (line, label),
+        }
+    }
+}
+
+/// The compare in `line` (`%r = icmp eq i64 %a, %b`): its second operand.
+fn icmp_i64_rhs(line: &str) -> &str {
+    let (_, ops) = line
+        .split_once("icmp eq i64 ")
+        .unwrap_or_else(|| panic!("not an i64 equality compare: {line}"));
+    ops.split_once(", ").expect("two operands").1.trim()
+}
+
+/// The pre-append head the field write-back compares against must be READ
+/// FROM ITS ROOT after the push, never held in a register across it. The push
+/// evaluates its argument and can collect; bits taken before it are then a
+/// stale-register use (gc-root-dominance's curated budget counted exactly this
+/// compare, and every copy of a loop around it copied the use). The push
+/// lowering always splits blocks, so the test is structural and holds in every
+/// rooting mode (temp-root call, alloca load, statepoint slot read): tracing
+/// the compared bits back through bitcasts must land in the SAME block as the
+/// compare. Held bits land in the block above the push, and this goes red.
+#[test]
+fn the_field_write_back_compares_a_rooted_pre_append_head() {
+    let ir = ir_for(field_push_module(Some("items".to_string())));
+    let body = function_body(&ir, "add");
+
+    // "did the local change?": `%moved = icmp eq i1 %same, false`.
+    let moved = body
+        .lines()
+        .map(str::trim)
+        .find(|l| l.contains("= icmp eq i1 ") && l.ends_with(", false"))
+        .unwrap_or_else(|| panic!("the local-changed test must exist:\n{body}"));
+    let same = moved
+        .split_once("icmp eq i1 ")
+        .and_then(|(_, r)| r.split_once(','))
+        .map(|(a, _)| a.trim())
+        .expect("operand");
+    // "does the field still hold the old head?": the branch into the store.
+    let br = body
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("br i1 ") && l.contains("label %apush.field.writeback"))
+        .unwrap_or_else(|| panic!("the field-still-held branch must exist:\n{body}"));
+    let held = br["br i1 ".len()..]
+        .split(',')
+        .next()
+        .expect("condition")
+        .trim();
+
+    for (what, cmp) in [("local-changed", same), ("field-still-held", held)] {
+        let (line, cmp_block) = defining_line(body, cmp).expect("the compare is defined");
+        let (src, src_block) = bits_source(body, icmp_i64_rhs(line));
+        assert_eq!(
+            src_block, cmp_block,
+            "the {what} compare must read the pre-append head from its root right there, \
+             not hold bits across the push (source `{src}`):\n{body}"
+        );
+    }
+}
+
 /// #8897: the field write-back after `this.items.push(v)` must be decided on
 /// the receiver local's HANDLE BITS, not on JS equality — equality sees
 /// through the growth-forwarding stub a re-allocating append leaves behind,

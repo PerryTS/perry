@@ -1157,6 +1157,7 @@ pub(super) fn install_external_shape_id(
             0,
             proto_id,
             summary,
+            crate::object::field_rep::REP_ANY,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.
