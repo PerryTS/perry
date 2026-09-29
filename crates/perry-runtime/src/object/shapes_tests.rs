@@ -1494,6 +1494,7 @@ mod field_rep_identity_tests {
                 PROTO,
                 0,
                 rep,
+                None,
             ))
         };
         let any = mint_keys(REP_ANY);
