@@ -301,7 +301,6 @@ pub(crate) fn lower_index_set_fast(
             let hdr_capacity = blk.load(I32, &cap_ptr);
             let index_nonnegative = blk.icmp_slt(I32, &idx_i32, "0");
             let index_nonnegative = blk.icmp_eq(I1, &index_nonnegative, "false");
-            let capacity_sane = blk.icmp_ule(I32, &hdr_capacity, "16000000");
             let length_within_capacity = blk.icmp_ule(I32, &hdr_length, &hdr_capacity);
             let index_within_capacity = blk.icmp_ult(I32, &idx_i32, &hdr_capacity);
             // #9371: `new Array(largeLength)` intentionally has length above
@@ -323,7 +322,6 @@ pub(crate) fn lower_index_set_fast(
             }
             guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
             guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
-            guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
             guard_ok = blk.and(I1, &guard_ok, &storage_safe);
             // #9237: kept exactly where it is load-bearing. The comment below
             // is about the RAW store — a `number[]` slot can genuinely receive a

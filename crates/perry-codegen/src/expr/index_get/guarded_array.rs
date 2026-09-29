@@ -181,6 +181,39 @@ pub(super) fn lower_region_validated_array_index_get(
     ))
 }
 
+/// `POINTER_TAG << 48 | 1 MiB`: subtracted from a NaN-boxed receiver, a heap
+/// array handle lands in `[0, HEAP_POINTER_BAND_SPAN)`.
+const HEAP_POINTER_BAND_BASE_I64: &str = "9222527611925692416"; // 0x7FFD_0000_0010_0000
+/// `2^48 - 1 MiB`: the handles above the runtime-id band.
+const HEAP_POINTER_BAND_SPAN_I64: &str = "281474975662080"; // 0xFFFF_FFF0_0000
+/// The array read's guard mask over the header word `[h-8]` read as an i32:
+/// the type byte, `GC_FLAG_FORWARDED` (0x80 in byte 1) and
+/// `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400 in `_reserved`, bytes 2..3).
+const ARRAY_READ_GUARD_MASK_I32: &str = "67141887"; // 0x0400_80FF
+/// The masked word of a readable array: `GC_TYPE_ARRAY`, every masked flag clear.
+const ARRAY_READ_GUARD_EXPECT_I32: &str = "1";
+
+/// The GC header's first word, `{obj_type, gc_flags, _reserved}`, of `handle`.
+fn emit_array_guard_word(blk: &mut crate::block::LlBlock, handle: &str) -> String {
+    let word_addr = blk.sub(I64, handle, "8");
+    let word_ptr = blk.inttoptr(I64, &word_addr);
+    blk.load(I32, &word_ptr)
+}
+
+/// The GC header's `_reserved` half-word of `handle` (the array's own flags).
+fn emit_array_reserved(blk: &mut crate::block::LlBlock, handle: &str) -> String {
+    let reserved_addr = blk.sub(I64, handle, "6");
+    let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+    blk.load(I16, &reserved_ptr)
+}
+
+/// `(word & MASK) == EXPECT`: an ordinary array, not forwarded, no element
+/// descriptors.
+fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> String {
+    let masked = blk.and(I32, word, ARRAY_READ_GUARD_MASK_I32);
+    blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32)
+}
+
 pub(super) fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -243,6 +276,11 @@ pub(super) fn lower_guarded_array_index_get(
     // from the original boxed receiver.
     let mut inline_fast_handle: Option<(String, String)> = None;
     let mut runtime_fast_handle: Option<(String, String)> = None;
+    // The value tier's hole arm (inline guard only): the fast block branches
+    // there on a hole instead of selecting `undefined` unguarded.
+    let mut fast_hole_label: Option<String> = None;
+    let mut fast_hole_branch: Option<String> = None;
+    let mut fast_capacity: Option<String> = None;
 
     if inline_guard {
         // Normal builds do not collect feedback. Inline the plain-array
@@ -260,8 +298,27 @@ pub(super) fn lower_guarded_array_index_get(
         // first-touch path verifies-and-rewrites the layout (setting the
         // flag), so the steady state is the inline tier. This ends the
         // typed-`number[]`-slower-than-untyped inversion for reads.
+        // ONE header word is the structural guard (DESIGN arrayread §2.2).
+        // `[h-8]` read as a little-endian i32 is {obj_type, gc_flags,
+        // _reserved}; masked with the type byte, `GC_FLAG_FORWARDED` and
+        // `OBJ_FLAG_ARRAY_DESCRIPTORS` it must equal `GC_TYPE_ARRAY`: an
+        // ordinary array, not a growth/evacuation stub, with no element
+        // descriptors. The rest of the read follows from runtime invariants:
+        // * an in-bounds non-hole element is an own data property, so the
+        //   prototype facts (the process-wide protector byte and the array's
+        //   custom-proto bit) are consulted only on the hole/out-of-bounds arm;
+        // * `[length, capacity)` holds `TAG_HOLE` (`array_truncate_length`), so
+        //   a value read is bounded by `capacity` and a slot past `length`
+        //   reaches the hole arm like any other hole;
+        // * `capacity` is under the allocation ceiling (`ARRAY_MAX_CAPACITY`),
+        //   so the size-derived element base is exact without a plausibility
+        //   bound.
+        // A forwarded stub fails the word; the cold arm follows one edge and
+        // re-checks the destination's word.
         let deref_idx = ctx.new_block(&format!("{}.guard.deref", block_prefix));
         let deref_label = ctx.block_label(deref_idx);
+        let follow_idx = ctx.new_block(&format!("{}.guard.follow", block_prefix));
+        let follow_label = ctx.block_label(follow_idx);
         let live_deref_idx = ctx.new_block(&format!("{}.guard.live", block_prefix));
         let live_deref_label = ctx.block_label(live_deref_idx);
         let cold_guard_idx = if require_numeric_layout {
@@ -275,116 +332,102 @@ pub(super) fn lower_guarded_array_index_get(
         };
         let range_idx = ctx.new_block(&format!("{}.guard.range", block_prefix));
         let range_label = ctx.block_label(range_idx);
-        {
+        let hole_idx = ctx.new_block(&format!("{}.guard.hole", block_prefix));
+        let hole_label = ctx.block_label(hole_idx);
+        if !require_numeric_layout {
+            fast_hole_label = Some(hole_label.clone());
+        }
+        let band_offset = {
+            // POINTER_TAG and a handle above the 1 MiB runtime-id band, as one
+            // range compare: `bits - (POINTER_TAG << 48 | 1 MiB) <u 2^48 - 1 MiB`.
             let blk = ctx.block();
             let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-            let tag = blk.lshr(I64, &arr_bits, "48");
-            let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
-            let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
-            let heap_candidate = blk.and(I1, &is_pointer, &above_handle_band);
+            let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
+            let heap_candidate = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
             blk.cond_br(&heap_candidate, &deref_label, &guard_fail_label);
-        }
+            band_offset
+        };
 
         ctx.current_block = deref_idx;
-        let live_handle = {
+        let (arr_handle, word) = {
             let blk = ctx.block();
-            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+            // In the band the tag is POINTER_TAG, so the handle is the band
+            // offset plus the 1 MiB it was measured from.
+            let arr_handle = blk.add(I64, &band_offset, "1048576");
+            let word = emit_array_guard_word(blk, &arr_handle);
+            let word_ok = emit_array_guard_word_ok(blk, &word);
+            blk.cond_br(&word_ok, &range_label, &follow_label);
+            (arr_handle, word)
+        };
+        let deref_end = ctx.block().label.clone();
 
-            let gc_type_addr = blk.sub(I64, &arr_handle, "8");
-            let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
-            let gc_type = blk.load(I8, &gc_type_ptr);
-            let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
-
-            let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
-            let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
-            let gc_flags = blk.load(I8, &gc_flags_ptr);
-            let forwarded_bits = blk.and(I8, &gc_flags, "128");
-            let is_forwarded = blk.icmp_ne(I8, &forwarded_bits, "0");
-
+        ctx.current_block = follow_idx;
+        let live_handle = {
             // Array growth and GC evacuation leave the live user address in
             // the first payload word of a forwarded array stub. Follow one
-            // edge inline, then re-brand and re-check the destination below.
-            // Longer/corrupt chains remain closed and take the boxed fallback.
-            // This mirrors the common one-edge arm of `clean_arr_ptr` without
-            // paying its allocator/registry probes on every indexed read.
+            // edge, then re-check the destination's word. Longer or corrupt
+            // chains take the boxed fallback. A word that failed for any
+            // other reason selects the original handle and fails again.
+            let blk = ctx.block();
+            let type_byte = blk.and(I32, &word, "255");
+            let is_array = blk.icmp_eq(I32, &type_byte, "1"); // GC_TYPE_ARRAY
+            let forwarded_bit = blk.and(I32, &word, "32768"); // GC_FLAG_FORWARDED << 8
+            let is_forwarded = blk.icmp_ne(I32, &forwarded_bit, "0");
+            let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
             let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
             let forwarding_target = blk.load(I64, &original_arr_ptr);
-            let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
             let live_handle =
                 blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
-
             let live_top = blk.lshr(I64, &live_handle, "48");
             let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
             let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
             let live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
             // A forwarding word is not trusted until its address is in the
-            // heap band. In particular, do not read the destination header
-            // speculatively: malformed or longer chains must reach the boxed
-            // fallback without a native dereference of the selected target.
+            // heap band: never dereference a malformed target.
             blk.cond_br(&live_heap_candidate, &live_deref_label, &fallback_label);
             live_handle
         };
 
         ctx.current_block = live_deref_idx;
-        let (index_in_bounds, reserved) = {
+        {
             let blk = ctx.block();
-            let live_gc_type_addr = blk.sub(I64, &live_handle, "8");
-            let live_gc_type_ptr = blk.inttoptr(I64, &live_gc_type_addr);
-            let live_gc_type = blk.load(I8, &live_gc_type_ptr);
-            let is_array = blk.icmp_eq(I8, &live_gc_type, "1"); // GC_TYPE_ARRAY
-
-            let live_gc_flags_addr = blk.sub(I64, &live_handle, "7");
-            let live_gc_flags_ptr = blk.inttoptr(I64, &live_gc_flags_addr);
-            let live_gc_flags = blk.load(I8, &live_gc_flags_ptr);
-            let live_forwarded_bits = blk.and(I8, &live_gc_flags, "128");
-            let not_forwarded = blk.icmp_eq(I8, &live_forwarded_bits, "0");
-
-            let reserved_addr = blk.sub(I64, &live_handle, "6");
-            let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-            let reserved = blk.load(I16, &reserved_ptr);
-            let descriptor_bits = blk.and(I16, &reserved, "1024");
-            let no_descriptors = blk.icmp_eq(I16, &descriptor_bits, "0");
-
-            // #10593: the process-wide byte AND this array's own custom-proto bit.
-            let default_prototype_chain =
-                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
-
-            let arr_ptr = blk.inttoptr(I64, &live_handle);
-            let length = blk.load(I32, &arr_ptr);
-            let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
-            let capacity = blk.load(I32, &capacity_ptr);
-            let index_nonnegative = blk.icmp_slt(I32, idx_i32, "0");
-            let index_nonnegative = blk.icmp_eq(I1, &index_nonnegative, "false");
-            let index_in_bounds = blk.icmp_ult(I32, idx_i32, &length);
-            let length_sane = blk.icmp_ule(I32, &length, "16000000");
-            let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
-            let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
-
-            let mut structural_ok = blk.and(I1, &is_array, &not_forwarded);
-            structural_ok = blk.and(I1, &structural_ok, &no_descriptors);
-            structural_ok = blk.and(I1, &structural_ok, &default_prototype_chain);
-            structural_ok = blk.and(I1, &structural_ok, &index_nonnegative);
-            structural_ok = blk.and(I1, &structural_ok, &length_sane);
-            structural_ok = blk.and(I1, &structural_ok, &capacity_sane);
-            structural_ok = blk.and(I1, &structural_ok, &length_within_capacity);
-            blk.cond_br(&structural_ok, &range_label, &guard_fail_label);
-
-            // `index_in_bounds` and `reserved` dominate the range block. The
-            // former selects raw load versus the proven-absent result; the
-            // latter carries the optional numeric-layout proof below.
-            (index_in_bounds, reserved)
-        };
+            let live_word = emit_array_guard_word(blk, &live_handle);
+            let word_ok = emit_array_guard_word_ok(blk, &live_word);
+            blk.cond_br(&word_ok, &range_label, &guard_fail_label);
+        }
+        let live_end = ctx.block().label.clone();
 
         let numeric_in_bounds_idx = require_numeric_layout
             .then(|| ctx.new_block(&format!("{}.guard.numeric_in_bounds", block_prefix)));
         let numeric_in_bounds_label = numeric_in_bounds_idx.map(|idx| ctx.block_label(idx));
         let oob_label = ctx.block_label(inline_oob_idx.expect("normal-build OOB block"));
         ctx.current_block = range_idx;
-        {
+        let (range_handle, reserved, bound, range_capacity) = {
             let blk = ctx.block();
-            let mut in_bounds_ok = index_in_bounds.clone();
+            let handle = blk.phi(I64, &[(&arr_handle, &deref_end), (&live_handle, &live_end)]);
+            let arr_ptr = blk.inttoptr(I64, &handle);
+            // `_reserved` for the numeric tier's layout bits; the value tier
+            // reads it on the hole arm only.
+            let reserved = if require_numeric_layout {
+                Some(emit_array_reserved(blk, &handle))
+            } else {
+                None
+            };
+            // A value read is bounded by `capacity` (the hole invariant covers
+            // `[length, capacity)`). The numeric tier exposes raw slot bits
+            // under a dense-layout proof that covers `[0, length)` only, so it
+            // keeps the `length` bound.
+            let (bound, range_capacity) = if require_numeric_layout {
+                (blk.load(I32, &arr_ptr), None)
+            } else {
+                let capacity_addr = blk.add(I64, &handle, "4");
+                let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
+                let capacity = blk.load(I32, &capacity_ptr);
+                (capacity.clone(), Some(capacity))
+            };
+            // Unsigned: a negative index is out of bounds here and is sorted
+            // out on the hole arm.
+            let index_in_bounds = blk.icmp_ult(I32, idx_i32, &bound);
             if require_numeric_layout {
                 // Dense raw-f64 proof: every slot in [0, length) holds
                 // canonical raw f64 bits (GC_ARRAY_RAW_F64_LAYOUT, 0x80).
@@ -396,36 +439,76 @@ pub(super) fn lower_guarded_array_index_get(
                 // raw f64 OR TAG_HOLE, and the fast arm canonicalizes any NaN
                 // payload (TAG_HOLE included) to the quiet NaN — bit-exact
                 // with ToNumber(undefined) for a hole and with ToNumber(NaN)
-                // for a stored NaN. This is the `new Array(n)` mid-fill axis:
-                // such arrays are provably-not-dense until the last slot is
-                // written, so the dense-only tier never fired for them.
+                // for a stored NaN. That reads a hole as undefined without the
+                // hole arm, so it also needs the prototype facts.
                 let raw_mask = if coerce_numeric_fallback {
                     "4224" // 0x1080 = RAW_F64_LAYOUT | RAW_F64_HOLES
                 } else {
                     "128" // dense only: the raw slot is exposed verbatim
                 };
-                let raw_bits = blk.and(I16, &reserved, raw_mask);
+                let reserved = reserved.as_deref().expect("numeric tier loads _reserved");
+                let raw_bits = blk.and(I16, reserved, raw_mask);
                 let is_raw = blk.icmp_ne(I16, &raw_bits, "0");
-                in_bounds_ok = blk.and(I1, &in_bounds_ok, &is_raw);
-            }
-            if require_numeric_layout {
+                let mut in_bounds_ok = blk.and(I1, &index_in_bounds, &is_raw);
+                if coerce_numeric_fallback {
+                    let default_prototype_chain =
+                        crate::expr::array_proto_guard::emit_array_default_prototype_chain(
+                            blk, reserved,
+                        );
+                    in_bounds_ok = blk.and(I1, &in_bounds_ok, &default_prototype_chain);
+                }
                 // An in-bounds array without the requested numeric layout must
-                // still visit the cold rebuilding guard. OOB needs no element
-                // layout at all and can return directly.
+                // still visit the cold rebuilding guard.
                 let in_bounds_idx = numeric_in_bounds_idx.expect("numeric in-bounds block");
                 let in_bounds_label = numeric_in_bounds_label
                     .as_deref()
                     .expect("numeric in-bounds label");
-                blk.cond_br(&index_in_bounds, &in_bounds_label, &oob_label);
+                blk.cond_br(&index_in_bounds, in_bounds_label, &hole_label);
 
                 ctx.current_block = in_bounds_idx;
                 ctx.block()
                     .cond_br(&in_bounds_ok, &fast_label, &guard_fail_label);
-                inline_fast_handle = Some((live_handle, ctx.block().label.clone()));
+                inline_fast_handle = Some((handle.clone(), ctx.block().label.clone()));
             } else {
-                inline_fast_handle = Some((live_handle, blk.label.clone()));
-                blk.cond_br(&in_bounds_ok, &fast_label, &oob_label);
+                inline_fast_handle = Some((handle.clone(), blk.label.clone()));
+                blk.cond_br(&index_in_bounds, &fast_label, &hole_label);
             }
+            (handle, reserved, bound, range_capacity)
+        };
+        // The value tier's fast block has the range block as its only
+        // predecessor: it computes the element base from this capacity.
+        fast_capacity = range_capacity;
+
+        // The hole / out-of-bounds arm. `undefined` needs three facts: a
+        // non-negative index (a negative one is a named property), no own
+        // element past `capacity` (an over-long `new Array(n)` keeps sparse
+        // indices below `length` as named properties), and a prototype chain
+        // without index properties. Anything else takes the boxed fallback.
+        ctx.current_block = hole_idx;
+        {
+            let blk = ctx.block();
+            let index_negative = blk.icmp_slt(I32, idx_i32, "0");
+            let arr_ptr = blk.inttoptr(I64, &range_handle);
+            let length = if require_numeric_layout {
+                bound.clone()
+            } else {
+                blk.load(I32, &arr_ptr)
+            };
+            let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
+            let capacity = blk.load(I32, &capacity_ptr);
+            let past_store = blk.icmp_uge(I32, idx_i32, &capacity);
+            let below_length = blk.icmp_ult(I32, idx_i32, &length);
+            let sparse_candidate = blk.and(I1, &past_store, &below_length);
+            let own_absent = blk.or(I1, &index_negative, &sparse_candidate);
+            let own_absent = blk.xor(I1, &own_absent, "true");
+            let reserved = match reserved.as_deref() {
+                Some(reserved) => reserved.to_string(),
+                None => emit_array_reserved(blk, &range_handle),
+            };
+            let default_prototype_chain =
+                crate::expr::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
+            let undefined_ok = blk.and(I1, &own_absent, &default_prototype_chain);
+            blk.cond_br(&undefined_ok, &oob_label, &fallback_label);
         }
 
         if let Some(cold_idx) = cold_guard_idx {
@@ -606,19 +689,33 @@ pub(super) fn lower_guarded_array_index_get(
     } else {
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let elements_addr = fast_blk.array_elements_addr(&arr_handle);
+        let elements_addr = match fast_capacity.as_deref() {
+            Some(capacity) => fast_blk.array_elements_addr_with_capacity(&arr_handle, capacity),
+            None => fast_blk.array_elements_addr(&arr_handle),
+        };
         let element_addr = fast_blk.add(I64, &elements_addr, &byte_offset);
         let element_ptr = fast_blk.inttoptr(I64, &element_addr);
-        let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
+        // The slot is read as bits: the hole test is an integer compare.
+        let fast_raw_bits = fast_blk.load(I64, &element_ptr);
+        let fast_raw = fast_blk.bitcast_i64_to_double(&fast_raw_bits);
         // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
         // `undefined`.
-        let fast_raw_bits = fast_blk.bitcast_double_to_i64(&fast_raw);
         let is_hole = fast_blk.icmp_eq(I64, &fast_raw_bits, crate::nanbox::TAG_HOLE_I64);
-        let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
-        fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw)
+        if fast_hole_label.is_some() {
+            // Inline tier: a hole (including any slot past `length`) branches
+            // to the hole arm, which owns the prototype facts.
+            fast_hole_branch = Some(is_hole);
+            fast_raw
+        } else {
+            let undef_d = fast_blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+            fast_blk.select(I1, &is_hole, DOUBLE, &undef_d, &fast_raw)
+        }
     };
     let fast_end_label = fast_blk.label.clone();
-    fast_blk.br(&merge_label);
+    match (fast_hole_label.as_deref(), fast_hole_branch.as_deref()) {
+        (Some(hole), Some(is_hole)) => fast_blk.cond_br(is_hole, hole, &merge_label),
+        _ => fast_blk.br(&merge_label),
+    }
     if require_numeric_layout {
         let fast = LoweredValue {
             semantic: SemanticKind::JsNumber,
