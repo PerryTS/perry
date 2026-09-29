@@ -4074,6 +4074,14 @@
    ],
    "verdict": "per_thread",
    "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/static_shapes.rs",
+   "names": [
+    "STATIC_SEED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
   }
  ]
 }
