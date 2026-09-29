@@ -1004,6 +1004,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_header_image_inits,
         class_ids,
         class_table,
+        &hir.classes,
         &hir.class_display_names,
         &class_source_text,
         &ctor_arity_overrides,

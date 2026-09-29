@@ -18,7 +18,8 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     if (obj as usize) > 0 && (obj as usize) < 0x10000 && !key.is_null() {
         if let Some(name) = unsafe { super::super::has_own_helpers::str_from_string_header(key) } {
             let class_id = obj as usize as u32;
-            if name == "name" && !super::super::class_registry::class_is_key_deleted(class_id, name)
+            if name == "name"
+                && !super::super::class_registry::class_static_key_deleted(class_id, name)
             {
                 if let Some(cname) = super::super::class_registry::class_name_for_id(class_id) {
                     let s = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);

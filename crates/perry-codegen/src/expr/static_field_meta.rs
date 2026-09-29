@@ -503,6 +503,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let is_static_str = (*is_static as i64).to_string();
                         let has_rest_str = (*has_rest as i64).to_string();
                         let definition_order_str = definition_order.to_string();
+                        // A static one's own function object runs its
+                        // closure-convention entry's `JsFunctionInfo` (string pool).
+                        let entry_i64 = if *is_static {
+                            let info = ctx.block().fn_info_ref(&format!("{llvm_name}__clo"));
+                            ctx.block().ptrtoint(&info, I64)
+                        } else {
+                            "0".to_string()
+                        };
                         ctx.block().call_void(
                             "js_register_class_computed_method",
                             &[
@@ -513,6 +521,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &is_static_str),
                                 (I64, &has_rest_str),
                                 (I64, &definition_order_str),
+                                (I64, &entry_i64),
                             ],
                         );
                     }
@@ -981,13 +990,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `new <FuncRef>(args)` lowering below stamps the same id on
         // the instance so dispatch finds the method via the regular
         // `(*obj).class_id` walk.
+        //
+        // #11635: `func` is evaluated FIRST and is live across the lowering
+        // of `value`, which is routinely a call (`proto.toIsoString =
+        // deprecate(msg, fn)` in moment). Holding it in a register let an
+        // evacuating minor inside that call move the closure while the
+        // register kept its from-space address, and the runtime then read
+        // the retired closure header in `synthetic_class_id_for_function`.
+        // Root it across the window and re-read it below. `value` is
+        // rooted across the registration call too, because that call is a
+        // `Reenters` runtime entry and the value is the expression result.
         Expr::RegisterFunctionPrototypeMethod {
             func,
             method_name,
             value,
-        } => {
-            let func_double = lower_expr(ctx, func)?;
-            let val_double = lower_expr(ctx, value)?;
+        } => with_rooted_group(ctx, 2, |ctx, group| {
+            let protect_func = any_operand_may_collect(ctx, [value.as_ref()]);
+            let func_i = group.lower(ctx, func, protect_func)?;
+            let val_i = group.lower(ctx, value, true)?;
+            let func_double = group.reread(ctx, func_i)?;
+            let val_double = group.reread(ctx, val_i)?;
             let key_idx = ctx.strings.intern(method_name);
             let key_bytes_global = format!("@{}", ctx.strings.entry(key_idx).bytes_global);
             let key_len = ctx.strings.entry(key_idx).byte_len.to_string();
@@ -1001,8 +1023,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &val_double),
                 ],
             );
-            Ok(val_double)
-        }
+            group.reread(ctx, val_i)
+        }),
         // Read side of #838 followup (b): `<funcDecl>.prototype.<name>`
         // (Ident or computed-string-literal form) lowered into a direct
         // lookup of the prototype-method side-table. Returns the closure

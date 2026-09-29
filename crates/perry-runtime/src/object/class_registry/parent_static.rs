@@ -525,7 +525,9 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     // registered-constructor flat dispatch, which fills user args and
     // snapshot caps by the signature split.
     if let Some(parent_cid) = crate::object::get_parent_class_id(class_id) {
-        if parent_cid != 0 {
+        // Only a compiled parent class has a class function object; a
+        // builtin parent id (`extends Error`) never gets one.
+        if parent_cid != 0 && crate::object::is_class_id_registered(parent_cid) {
             return crate::object::class_value::class_value(parent_cid);
         }
     }
@@ -620,12 +622,47 @@ pub unsafe extern "C" fn js_register_class_static_method(
             .unwrap()
             .entry(class_id as u32)
             .or_default()
-            .insert(
-                name.clone(),
-                (func_ptr as usize, param_count as u32, has_rest != 0),
-            );
+            .entry(name.clone())
+            .and_modify(|e| {
+                (e.0, e.1, e.2) = (func_ptr as usize, param_count as u32, has_rest != 0)
+            })
+            .or_insert((func_ptr as usize, param_count as u32, has_rest != 0, 0));
     }
     crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
+}
+
+/// Record the `JsFunctionInfo` of the closure-convention entry
+/// `<static body>__clo(callee, this, args...)` codegen emitted for ClassBody static method `name` of class `class_id`:
+/// the body of the method's own function object (one per class and method).
+/// Its arity, length and strictness are facts of that info; its name and source
+/// were registered on the code.
+/// Emitted at module init after `js_register_class_static_method`.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_static_method_entry(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    entry: i64,
+) {
+    if class_id == 0 || name_ptr.is_null() || name_len <= 0 || entry == 0 {
+        return;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
+    else {
+        return;
+    };
+    {
+        let mut guard = CLASS_STATIC_METHODS.write().unwrap();
+        let Some(record) = guard
+            .as_mut()
+            .and_then(|all| all.get_mut(&(class_id as u32)))
+            .and_then(|m| m.get_mut(name))
+        else {
+            return;
+        };
+        record.3 = entry as usize;
+    }
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, name);
 }
 
 fn property_key_string(key: f64) -> Option<String> {
@@ -645,7 +682,13 @@ fn property_key_string(key: f64) -> Option<String> {
     }
 }
 
+/// Register a computed-key ClassBody method when the class definition
+/// evaluates its key. A static one with a string key is a ClassBody static
+/// method like any other: `entry` is the `JsFunctionInfo` of its
+/// closure-convention entry (`<body>__clo`), the body of its own function object, whose `name` is the
+/// key.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn js_register_class_computed_method(
     class_id: i64,
     key: f64,
@@ -654,6 +697,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     is_static: i64,
     has_rest: i64,
     definition_order: i64,
+    entry: i64,
 ) {
     if class_id == 0 || func_ptr == 0 {
         return;
@@ -757,9 +801,34 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             if guard.is_none() {
                 *guard = Some(crate::fast_hash::new_ptr_hash_map());
             }
-            guard.as_mut().unwrap().entry(class_id).or_default().insert(
-                name.clone(),
-                (func_ptr as usize, param_count as u32, has_rest != 0),
+            guard
+                .as_mut()
+                .unwrap()
+                .entry(class_id)
+                .or_default()
+                .entry(name.clone())
+                .and_modify(|e| {
+                    (e.0, e.1, e.2, e.3) = (
+                        func_ptr as usize,
+                        param_count as u32,
+                        has_rest != 0,
+                        entry as usize,
+                    )
+                })
+                .or_insert((
+                    func_ptr as usize,
+                    param_count as u32,
+                    has_rest != 0,
+                    entry as usize,
+                ));
+        }
+        if entry != 0 {
+            // SetFunctionName(F, key): the key is known only now.
+            // The name is keyed by the body's code; `entry` is its info.
+            crate::builtins::js_register_function_name(
+                (*(entry as *const crate::closure::JsFunctionInfo)).code,
+                name.as_ptr(),
+                name.len() as u32,
             );
         }
         crate::object::class_value::note_intrinsic_registration(class_id, &name);
@@ -898,19 +967,59 @@ pub(crate) fn class_has_own_static_method(class_id: u32, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn lookup_static_method_in_chain(
+/// ClassBody static method `name` declared by class `class_id` itself:
+/// `(func_ptr, param_count, has_rest)`.
+pub(crate) fn class_own_static_method_entry(
     class_id: u32,
     name: &str,
 ) -> Option<(usize, u32, bool)> {
     let guard = CLASS_STATIC_METHODS.read().ok()?;
-    let map = guard.as_ref()?;
+    let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
+    Some((e.0, e.1, e.2))
+}
+
+/// The closure-convention entry of ClassBody static method `name` declared by
+/// class `class_id` itself: the code of its own function object.
+pub(crate) fn class_own_static_method_code(class_id: u32, name: &str) -> Option<usize> {
+    let guard = CLASS_STATIC_METHODS.read().ok()?;
+    let e = guard.as_ref()?.get(&class_id)?.get(name).copied()?;
+    (e.3 != 0).then_some(e.3)
+}
+
+/// The static method `name` a call on class `class_id` runs: the nearest
+/// declaration whose own property on its class's function object is still
+/// that declaration. A deleted one is skipped (the parent's applies); a
+/// redefined one ends the lookup (the property's value is what runs).
+pub(crate) fn lookup_static_method_in_chain(
+    class_id: u32,
+    name: &str,
+) -> Option<(usize, u32, bool)> {
+    lookup_static_method_owner(class_id, name).map(|(_, e)| e)
+}
+
+/// [`lookup_static_method_in_chain`] plus the class whose declaration runs.
+/// The walk reads the class function objects: a class whose object owns
+/// `name` (declared, assigned, or deleted and reassigned) ends it — its
+/// declaration when the property still is that declaration's function,
+/// otherwise nothing (the property's value is what a call runs).
+pub(crate) fn lookup_static_method_owner(
+    class_id: u32,
+    name: &str,
+) -> Option<(u32, (usize, u32, bool))> {
+    use crate::object::class_value::StaticMethodProperty;
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
-        if let Some(m) = map.get(&cid) {
-            if let Some(&entry) = m.get(name) {
-                return Some(entry);
+        let entry = {
+            let guard = CLASS_STATIC_METHODS.read().ok()?;
+            guard.as_ref()?.get(&cid).and_then(|m| m.get(name)).copied()
+        };
+        match crate::object::class_value::static_method_property(cid, name, entry.map(|e| e.3)) {
+            StaticMethodProperty::Live => {
+                return entry.map(|e| (cid, (e.0, e.1, e.2)));
             }
+            StaticMethodProperty::Replaced => return None,
+            StaticMethodProperty::Deleted => {}
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
@@ -1784,19 +1893,33 @@ pub(crate) use crate::object::class_meta_registry::get_parent_class_id;
 /// if found, `None` otherwise.
 /// Used by `js_assimilate_thenable` (refs #586) and other runtime callers
 /// that need to probe a class for a method without invoking it.
+///
+/// A declared method removed from its class's materialized prototype object
+/// (`delete C.prototype.m`) is not provided by that class: the prototype
+/// object's own keys are the truth, the vtable entry only names the body.
+/// The walk then continues to the parent, as the JS prototype chain does.
 pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize, u32, bool, bool)> {
-    let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
-    let reg = registry.as_ref()?;
     let mut cur = class_id;
     for _ in 0..32 {
-        if let Some(vt) = reg.get(&cur) {
-            if let Some(entry) = vt.methods.get(name) {
-                return Some((
-                    entry.func_ptr,
-                    entry.param_count,
-                    entry.has_synthetic_arguments,
-                    entry.has_rest,
-                ));
+        let found = {
+            let registry = CLASS_VTABLE_REGISTRY.read().unwrap();
+            let reg = registry.as_ref()?;
+            reg.get(&cur)
+                .and_then(|vt| vt.methods.get(name))
+                .map(|entry| {
+                    (
+                        entry.func_ptr,
+                        entry.param_count,
+                        entry.has_synthetic_arguments,
+                        entry.has_rest,
+                    )
+                })
+        };
+        if let Some(entry) = found {
+            // Checked with the registry lock released: the deletedness probe
+            // reads the class tables again.
+            if !super::class_proto_key_deleted(cur, name) {
+                return Some(entry);
             }
         }
         match get_parent_class_id(cur) {

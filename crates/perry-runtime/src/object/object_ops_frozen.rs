@@ -213,6 +213,15 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             // Closures: own props are `name`/`length` + dynamic props — the
             // keys_array walk below would read garbage off the ClosureHeader.
             // Record explicit non-writable/non-configurable attrs.
+            // A class function object's own properties (and their
+            // attributes) live in its own-property object.
+            if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
+                crate::object::class_value::class_static_restrict_all(class_id, true);
+                mark_all_symbol_keys(
+                    obj, /*drop_writable=*/ true, /*drop_configurable=*/ true,
+                );
+                return obj_value;
+            }
             if crate::closure::is_closure_ptr(obj as usize) {
                 let owner = obj as usize;
                 for builtin in ["name", "length"] {
@@ -321,6 +330,13 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
             }
             // Closures: seal via the side tables (drop configurable only) —
             // see the matching arm in `js_object_freeze`.
+            if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
+                crate::object::class_value::class_static_restrict_all(class_id, false);
+                mark_all_symbol_keys(
+                    obj, /*drop_writable=*/ false, /*drop_configurable=*/ true,
+                );
+                return obj_value;
+            }
             if crate::closure::is_closure_ptr(obj as usize) {
                 let owner = obj as usize;
                 for builtin in ["name", "length"] {
@@ -433,6 +449,9 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     // ClosureHeader. `name`/`length` are non-writable but configurable by
     // default, so an un-frozen function fails both levels; `js_object_freeze`
     // / `seal` record explicit attrs that satisfy them.
+    if let Some(class_id) = crate::object::class_value::class_closure_id(obj as usize) {
+        return crate::object::class_value::class_static_integrity(class_id, frozen);
+    }
     if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE || crate::closure::is_closure_ptr(obj as usize)
     {
         let owner = obj as usize;

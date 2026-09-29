@@ -199,7 +199,7 @@ unsafe fn class_ref_has_inherited_static_data(
             Some(parent) if parent != 0 && parent != child => parent,
             _ => break,
         };
-        if !super::super::class_registry::class_is_key_deleted(parent, name)
+        if !super::super::class_registry::class_static_key_deleted(parent, name)
             && super::super::class_registry::class_has_own_dynamic_prop(parent, name)
         {
             return true;
@@ -446,17 +446,19 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                             )
                         };
                     let present = matches!(name, "prototype" | "name" | "length" | "constructor")
-                        || (!super::super::class_registry::class_is_key_deleted(class_id, name)
-                            && (super::super::class_registry::class_has_own_dynamic_prop(
-                                class_id, name,
-                            ) || super::super::class_registry::lookup_static_method_in_chain(
+                        || (!super::super::class_registry::class_static_key_deleted(
+                            class_id, name,
+                        ) && (super::super::class_registry::class_has_own_dynamic_prop(
+                            class_id, name,
+                        )
+                            || super::super::class_registry::lookup_static_method_in_chain(
                                 class_id, name,
                             )
                             .is_some()
-                                || super::super::class_registry::static_accessor_in_chain(
-                                    class_id, name,
-                                )
-                                || inherited_data));
+                            || super::super::class_registry::static_accessor_in_chain(
+                                class_id, name,
+                            )
+                            || inherited_data));
                     if present {
                         return nanbox_true;
                     }

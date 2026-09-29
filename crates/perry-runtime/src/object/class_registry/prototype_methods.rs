@@ -211,9 +211,6 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    // Assignment / defineProperty after `delete C.prototype.m` recreates the
-    // own property and must make it visible to dispatch again.
-    class_unmark_key_deleted(class_id, &name);
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let mut guard = table.write().unwrap();
         if guard.is_none() {

@@ -837,7 +837,7 @@ unsafe fn install_class_getter(proto: *mut ObjectHeader, name: &str) {
             get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
             set: 0,
             raw_get: forty_two_raw_getter as *const () as usize,
-            raw_set: 0,
+            ..Default::default()
         },
         crate::object::PropertyAttrs::new(true, false, true),
     );

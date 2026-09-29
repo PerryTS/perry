@@ -254,7 +254,7 @@ pub(crate) fn class_value_get_field(
             }
         }
         if !name.is_empty() {
-            if super::super::class_registry::class_is_key_deleted(class_id, name) {
+            if super::super::class_registry::class_static_key_deleted(class_id, name) {
                 // Not an own property any more: the read continues on the
                 // class's [[Prototype]].
                 return crate::object::class_value::class_prototype_get(class_id, key, class_value);
@@ -358,7 +358,7 @@ pub(crate) fn class_value_get_field(
                     // Mid.foo` must let `Sub.foo` inherit `Base.foo`, not
                     // resolve to undefined. Skip the registry read for the
                     // deleted level and keep walking up.
-                    if !super::super::class_registry::class_is_key_deleted(p, name) {
+                    if !super::super::class_registry::class_static_key_deleted(p, name) {
                         let inherited = crate::object::class_value::class_static_get(p, name);
                         if let Some(v) = inherited {
                             return JSValue::from_bits(v.to_bits());
@@ -370,6 +370,13 @@ pub(crate) fn class_value_get_field(
             }
             if super::super::class_registry::lookup_static_method_in_chain(class_id, name).is_some()
             {
+                // The declaration's own function object, on whichever class
+                // declares it (`Q.a === P.a`).
+                if let Some(v) =
+                    crate::object::class_value::inherited_static_method_value(class_id, name)
+                {
+                    return JSValue::from_bits(v.to_bits());
+                }
                 let heap_name = {
                     let layout = std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
                     let ptr = std::alloc::alloc(layout);
@@ -447,7 +454,7 @@ pub(crate) fn class_value_get_field(
             // `thrown.constructor.name` to label the thrown error.
             if name == "name"
                 && class_id != 0
-                && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                && !super::super::class_registry::class_static_key_deleted(class_id, name)
             {
                 if let Some(cname) = super::super::class_registry::class_name_for_id(class_id) {
                     let s = crate::string::js_string_from_bytes(cname.as_ptr(), cname.len() as u32);
@@ -457,7 +464,7 @@ pub(crate) fn class_value_get_field(
             if name == "length"
                 && class_id != 0
                 && !is_prototype_ref
-                && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                && !super::super::class_registry::class_static_key_deleted(class_id, name)
             {
                 if let Some(length) = super::super::class_registry::class_length_for_id(class_id) {
                     return JSValue::number(length as f64);
@@ -1149,7 +1156,7 @@ fn get_field_by_name_past_data_probe(
                 let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                     .unwrap_or("");
                 if !name.is_empty()
-                    && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                    && !super::super::class_registry::class_static_key_deleted(class_id, name)
                 {
                     if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
                         .is_some()

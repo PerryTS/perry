@@ -2729,6 +2729,26 @@
       "name": "CLASS_SHAPE",
       "verdict": "not_a_gc_pointer",
       "why": "This agent's class-constructor ShapeId (a u32 shape-directory index minted once and pinned as an external shape carrier), never a heap reference."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/object_intrinsic.rs",
+      "name": "OBJECT_INTRINSICS_BUILDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "A bool: set while this thread builds its %Object% / %Object.prototype% pair, so the build's own stores do not re-enter the build. No address is ever stored in it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OBJECT_INTRINSIC_PTR_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), through the RealmAtomicI64 wrapper OBJECT_INTRINSIC_PTR",
+      "why": "This realm's %Object% constructor (a ClosureHeader), built by ensure_object_intrinsics and adopted as globalThis.Object. The registered object-cache scanner visits the slot through its RealmAtomicI64 wrapper, whose name differs from the thread-local's, so the same-file rule cannot match it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "OBJECT_INTRINSIC_PROTO_PTR_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), through the RealmAtomicI64 wrapper OBJECT_INTRINSIC_PROTO_PTR",
+      "why": "This realm's %Object.prototype%, built by ensure_object_intrinsics and adopted as globalThis.Object.prototype. The registered object-cache scanner visits the slot through its RealmAtomicI64 wrapper, whose name differs from the thread-local's, so the same-file rule cannot match it. Its address is also memoized in the prototype-address cache row, which scan_prototype_addr_cache_roots_mut rewrites."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3660,10 +3680,6 @@
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_DELETED_KEYS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_DYNAMIC_PARENT_VALUE"
     },
     {
@@ -3763,10 +3779,6 @@
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
       "name": "CLASS_PROTOTYPE_METHOD_VALUES"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "CLASS_STATIC_DEFINED_ATTRS"
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",

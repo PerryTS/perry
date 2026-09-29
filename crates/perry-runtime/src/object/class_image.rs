@@ -86,15 +86,20 @@ pub(crate) const PARENT_DENSE_CAP: usize = 1 << 16;
 
 /// class_id -> { name -> (func_ptr, param_count, has_rest) } for static methods.
 ///
-/// OUTER map only takes the fast hasher (see `ClassImageTables`); the INNER
-/// `HashMap<String, _>` stays on SipHash because its keys are JS-supplied
-/// member names.
-pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool)>>;
+/// OUTER map takes the fast pointer hasher (see `ClassImageTables`); the
+/// INNER map is a [`StaticNameMap`], keyed by member name.
+/// (body func_ptr, param_count, has_rest, closure-convention entry or 0).
+pub type StaticMethodTable = PtrHashMap<u32, StaticNameMap<(usize, u32, bool, usize)>>;
 /// class_id -> { name -> accessor halves (and the setter's `.length`) } for
 /// static accessors.
-/// Outer map fast-hashed, inner `String`-keyed map deliberately not — see above.
-pub type StaticAccessorTable =
-    PtrHashMap<u32, HashMap<String, super::class_registry::AccessorDecl>>;
+/// Outer map fast-hashed, inner map a [`StaticNameMap`] — see above.
+pub type StaticAccessorTable = PtrHashMap<u32, StaticNameMap<super::class_registry::AccessorDecl>>;
+/// A class's static members by name. The names come from program source, so
+/// the map keeps a randomly keyed, flood-resistant hasher: `ahash::RandomState`,
+/// the runtime's hasher for untrusted string keys (as in `json::parser`), in
+/// place of std's slower SipHash. A static call that misses its site guard
+/// probes this map once per class on the parent chain.
+pub type StaticNameMap<V> = HashMap<String, V, ahash::RandomState>;
 /// `(class_id, is_static, property_name) -> source-order token` for declared
 /// string-keyed methods and accessors. The token is the member function's HIR
 /// id, which is allocated while walking the class body and therefore orders
@@ -122,10 +127,11 @@ pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool, Option<u32>)>;
 ///
 /// Iteration order is not observable for any of these: nothing in the tree
 /// iterates them (only `get` / `insert` / `contains`). The `String`-keyed
-/// INNER maps of [`StaticMethodTable`] / [`StaticAccessorTable`], and the
-/// `(u32, String)`-keyed `method_bind_lengths` pair below, deliberately stay
-/// on SipHash — their keys are JS-supplied member names, and the inner maps
-/// are enumerated on paths that reach user-visible output.
+/// INNER maps of [`StaticMethodTable`] / [`StaticAccessorTable`] keep a
+/// randomly keyed hasher ([`StaticNameMap`]), and the `(u32, String)`-keyed
+/// `method_bind_lengths` pair below stays on SipHash: their keys are
+/// JS-supplied member names. The inner maps are enumerated on paths that
+/// reach user-visible output, so no caller may rely on their order.
 pub struct ClassImageTables {
     pub(crate) vtables: RwLock<Option<PtrHashMap<u32, ClassVTable>>>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,

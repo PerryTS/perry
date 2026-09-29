@@ -193,6 +193,23 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             );
             continue;
         }
+        if name == "Object" {
+            // %Object% / %Object.prototype% are built on their own (a class
+            // prototype needs them without the realm global); the thread's
+            // realm global adopts them, a `vm`/eval realm gets its own pair.
+            let (object_ctor, _) = object_intrinsics_for_realm(singleton());
+            if !object_ctor.is_null() {
+                let name_key = crate::string::js_string_from_bytes(b"Object".as_ptr(), 6);
+                super::super::define_builtin_data_property(
+                    singleton(),
+                    name_key,
+                    crate::value::js_nanbox_pointer(object_ctor as i64),
+                    name.to_string(),
+                    super::super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            continue;
+        }
         let info = match name {
             "Array" => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)),
             // #10423: `F(p, body)` through a `Function` value creates a
@@ -200,7 +217,6 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             "Function" => {
                 crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0))
             }
-            "Object" => crate::fn_info!(global_this_object_thunk, 1; with_declared(1)),
             "String" => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)),
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
             // global value coerce like the bare-call lowering does.

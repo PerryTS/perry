@@ -586,11 +586,7 @@ fn visit_metadata_nanbox_key(
 
 #[cfg(test)]
 pub(crate) fn test_clear_class_side_table_roots() {
-    // Disambiguate: CLASS_DELETED_KEYS is reachable via both `use super::*`
-    // and `use crate::object::*`; name the canonical definition explicitly.
-    use super::state::CLASS_DELETED_KEYS;
     super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
-    CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
     CLASS_PROTOTYPE_METHODS.with(|table| {
         if let Ok(mut guard) = table.write() {

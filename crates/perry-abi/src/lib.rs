@@ -50,6 +50,17 @@ pub const CLOSURE_INFO_OFFSET: usize = 8;
 pub const CLOSURE_PROPS_OFFSET: usize = 16;
 pub const CLOSURE_HEADER_SIZE: usize = 24;
 
+/// `object::ObjectHeader::parent_class_id`: the object's ShapeId word (LP64
+/// and ILP32 alike; `CLOSURE_SHAPE_OFFSET` is the same word of a closure).
+pub const OBJECT_SHAPE_OFFSET: usize = 4;
+
+/// `object::class_value::StaticCallMemo` (LP64) — the words the emitted
+/// static-call guard reads (`perry-codegen/src/expr/static_method.rs`).
+pub const STATIC_CALL_MEMO_KEY_OFFSET: usize = 0;
+pub const STATIC_CALL_MEMO_C_OFFSET: usize = 8;
+pub const STATIC_CALL_MEMO_OWNER_OFFSET: usize = 16;
+pub const STATIC_CALL_MEMO_VALUE_OFFSET: usize = 24;
+
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;

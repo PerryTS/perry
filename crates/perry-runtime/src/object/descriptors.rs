@@ -231,35 +231,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         );
                     }
                 }
-                // #6943: `js_string_coerce` allocates for every non-heap-string
-                // key and can run a user `toString` / `valueOf` for an object
-                // key, so it can trigger a GC that **evacuates**. `obj` — the
-                // receiver's header, resolved on the line above and
-                // dereferenced by `own_key_present` / `js_object_get_class_id`
-                // below — and `obj_value` (passed to `js_class_method_bind`)
-                // were raw Rust locals across the call.
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
-                let obj_handle = scope.root_raw_mut_ptr(extract_obj_ptr(obj_value));
-                let key_str = crate::builtins::js_string_coerce(key_value);
-                let obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
-                let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-                if !obj.is_null() && !key_str.is_null() && !own_key_present(obj, key_str) {
-                    let class_id = super::js_object_get_class_id(obj as *const ObjectHeader);
-                    if class_id != 0
-                        && !method_name.starts_with('#')
-                        && !super::class_registry::class_is_key_deleted(class_id, &method_name)
-                        && super::class_registry::class_has_own_static_method(
-                            class_id,
-                            &method_name,
-                        )
-                    {
-                        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-                        let value =
-                            super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
-                        return build_data_descriptor(value, true, false, true);
-                    }
-                }
             }
         }
 
@@ -441,7 +412,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some(class_id) = class_ref_id(obj_value) {
             let method_name = metadata_key_to_string(key_value);
             if let Some(method_name) = method_name {
-                if super::class_registry::class_is_key_deleted(class_id, &method_name) {
+                if if class_prototype_ref_id(obj_value).is_some() {
+                    super::class_registry::class_proto_key_deleted(class_id, &method_name)
+                } else {
+                    super::class_registry::class_static_key_deleted(class_id, &method_name)
+                } {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
                 // Private registry entries retain their source spelling, but
@@ -561,23 +536,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 }
                 // Static methods are own properties of the class *constructor*
                 // (not the prototype). `getOwnPropertyDescriptor(C, "m")` for a
-                // `static m() {}` must report a `{ writable, enumerable: false,
-                // configurable }` data property — `hasOwnProperty(C, "m")`
-                // already returns true, so without this the two disagreed and
-                // verifyProperty threw "reading 'enumerable'" on undefined
-                // (Test262 elements/after-same-line-static-*).
-                if super::class_prototype_ref_id(obj_value).is_none()
-                    && super::class_registry::class_has_own_static_method(class_id, &method_name)
-                {
-                    // Bind the static method to the constructor ref to produce a
-                    // callable value, mirroring the `C.m` read path. The name
-                    // bytes are leaked (bounded by the static descriptor set) so
-                    // the pointer js_class_method_bind stashes stays valid.
-                    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-                    let value =
-                        super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
-                    return build_data_descriptor(value, true, false, true);
-                }
                 // Static FIELDS are own data properties of the constructor,
                 // created via CreateDataPropertyOrThrow → writable, enumerable,
                 // configurable all true. Codegen registers each declared
@@ -1166,6 +1124,44 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         }
         if let Some(class_id) = class_ref_id(obj_value) {
             let is_prototype_ref = super::class_prototype_ref_id(obj_value).is_some();
+            // The class function object's own keys, in its bag's creation
+            // order: a key deleted and defined again is a new key and comes
+            // last, as for any object.
+            if !is_prototype_ref {
+                if let Some(fo) = crate::object::class_value::class_value_if_minted(class_id) {
+                    let ptr = fo as usize;
+                    // This agent's live class closure (the enclosing `unsafe`).
+                    let names = crate::closure::props::bag_own_key_names(ptr);
+                    let mut out: Vec<String> = Vec::new();
+                    for intrinsic in ["length", "name", "prototype"] {
+                        if !names.iter().any(|n| n == intrinsic)
+                            && !crate::closure::closure_is_key_deleted(ptr, intrinsic)
+                            && (intrinsic == "prototype"
+                                || !super::class_registry::class_static_key_deleted(
+                                    class_id, intrinsic,
+                                ))
+                        {
+                            out.push(intrinsic.to_string());
+                        }
+                    }
+                    for name in names {
+                        if name.starts_with('#')
+                            || super::field_get_set::is_internal_runtime_key(&name)
+                        {
+                            continue;
+                        }
+                        push_unique_name(&mut out, name);
+                    }
+                    sort_property_names_ecma(&mut out);
+                    let result = crate::array::js_array_alloc(out.len() as u32);
+                    for name in out {
+                        let str_ptr =
+                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                        crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
+                    }
+                    return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+                }
+            }
             let mut names: Vec<String> = if is_prototype_ref {
                 vec!["constructor".to_string()]
             } else {
@@ -1178,7 +1174,12 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             for name in
                 super::class_registry::class_own_string_member_names(class_id, !is_prototype_ref)
             {
-                if !super::class_registry::class_is_key_deleted(class_id, &name) {
+                let deleted = if is_prototype_ref {
+                    super::class_registry::class_proto_key_deleted(class_id, &name)
+                } else {
+                    super::class_registry::class_static_key_deleted(class_id, &name)
+                };
+                if !deleted {
                     push_unique_name(&mut names, name);
                 }
             }
@@ -1196,7 +1197,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     // A deleted `length` / `name` is no longer own.
                     && !(!is_prototype_ref
                         && matches!(n.as_str(), "length" | "name")
-                        && super::class_registry::class_is_key_deleted(class_id, n))
+                        && super::class_registry::class_static_key_deleted(class_id, n))
             });
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
@@ -1277,44 +1278,45 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             }
         }
 
-        // #3655: functions/closures. Own keys are `length`, `name`, then any
-        // user-attached props, then `prototype` (constructors) — matching V8's
-        // ordering. All honor `delete`. Reading `keys_array` off a closure
-        // (below) would be out of bounds.
+        // #3655: functions/closures. Own keys come in creation order: the
+        // function object's own property bag holds them in that order, so a
+        // key deleted and defined again is a new key and comes last, as for
+        // any object. `length`, `name` and `prototype` a function has not
+        // materialized into its bag yet were created with the function,
+        // before every bag key; each honors `delete`. Reading `keys_array`
+        // off a closure (below) would be out of bounds.
         if obj_jv.is_pointer() {
             let ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
             if crate::closure::is_closure_ptr(ptr) {
+                // `is_closure_ptr` proved a live closure cell.
+                let bag_keys = crate::closure::props::bag_own_key_names(ptr);
+                let in_bag = |k: &str| bag_keys.iter().any(|n| n == k);
                 let mut names: Vec<String> = Vec::new();
-                if !crate::closure::closure_is_key_deleted(ptr, "length") {
-                    names.push("length".to_string());
+                for intrinsic in ["length", "name"] {
+                    if !in_bag(intrinsic) && !crate::closure::closure_is_key_deleted(ptr, intrinsic)
+                    {
+                        names.push(intrinsic.to_string());
+                    }
                 }
-                if !crate::closure::closure_is_key_deleted(ptr, "name") {
-                    names.push("name".to_string());
+                if !in_bag("prototype")
+                    && crate::closure::closure_has_own_dynamic_prop(ptr, "prototype")
+                    && !crate::closure::closure_is_key_deleted(ptr, "prototype")
+                {
+                    names.push("prototype".to_string());
                 }
-                let has_prototype = crate::closure::closure_has_own_dynamic_prop(ptr, "prototype")
-                    && !crate::closure::closure_is_key_deleted(ptr, "prototype");
-                // User-attached props (snapshot is already sorted); the
-                // built-in slots are emitted explicitly so skip them here.
-                for (name, _) in crate::closure::closure_dynamic_props_snapshot(ptr) {
-                    if matches!(name.as_str(), "length" | "name" | "prototype") {
+                for name in bag_keys.iter() {
+                    if crate::closure::closure_is_key_deleted(ptr, name) {
                         continue;
                     }
-                    if crate::closure::closure_is_key_deleted(ptr, &name) {
-                        continue;
-                    }
-                    names.push(name);
+                    push_unique_name(&mut names, name.clone());
                 }
+                // Accessors a function keeps outside its bag (the descriptor
+                // side table) follow the bag keys.
                 for name in super::accessor_descriptor_keys_for_obj(ptr) {
-                    if matches!(name.as_str(), "length" | "name" | "prototype") {
-                        continue;
-                    }
                     if crate::closure::closure_is_key_deleted(ptr, &name) {
                         continue;
                     }
                     push_unique_name(&mut names, name);
-                }
-                if has_prototype {
-                    names.push("prototype".to_string());
                 }
                 sort_property_names_ecma(&mut names);
                 let result = crate::array::js_array_alloc(names.len() as u32);
@@ -1403,7 +1405,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 names.push("constructor".to_string());
             }
             for name in super::class_registry::class_own_string_member_names(class_id, false) {
-                if super::class_registry::class_is_key_deleted(class_id, &name) {
+                if super::class_registry::class_proto_key_deleted(class_id, &name) {
                     continue;
                 }
                 if physical.contains(&name) {
