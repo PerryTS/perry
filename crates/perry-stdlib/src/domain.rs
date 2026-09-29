@@ -128,10 +128,7 @@ fn ensure_gc_scanner_registered() {
 }
 
 fn ensure_wrapper_closures_registered() {
-    DOMAIN_WRAPPERS_REGISTERED.call_once(|| {
-        perry_runtime::closure::js_register_closure_rest(domain_bound_wrapper as *const u8, 0);
-        perry_runtime::closure::js_register_closure_rest(domain_intercept_wrapper as *const u8, 0);
-    });
+    DOMAIN_WRAPPERS_REGISTERED.call_once(|| {});
 }
 
 /// `HANDLES` payload releaser (#11471): see `register_handle_payload_releaser`.
@@ -295,26 +292,19 @@ unsafe fn emit_domain_event(handle: Handle, event: &str, args: &[f64]) -> bool {
     // moving minor collection; an unrooted copy then holds a retired
     // from-space address for the NEXT listener in this same loop. Root both
     // through one handle scope and re-read the current bits before every
-    // call.
-    //
-    // #10490: the displaced `this` is the caller's receiver and every listener
-    // is user code that can move it too. Root it ONCE, in that same scope,
-    // before the first `js_implicit_this_set`, and restore it from that root
-    // rather than from a plain per-iteration local.
+    // call. Each listener runs with the domain as `this`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let previous_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
     let listener_handles = scope.root_nanbox_f64_slice(&listeners);
     let arg_handles = scope.root_nanbox_f64_slice(args);
     for listener_handle in &listener_handles {
         let live_args =
             perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-        perry_runtime::object::js_implicit_this_set(receiver);
         let _ = perry_runtime::closure::js_native_call_value(
             listener_handle.get_nanbox_f64(),
+            perry_runtime::closure::JsThis::from_f64(receiver),
             live_args.as_ptr(),
             live_args.len(),
         );
-        perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     }
     true
 }
@@ -335,7 +325,12 @@ unsafe fn call_with_domain(handle: Handle, callback: f64, args: &[f64]) -> f64 {
     // Armed in a C trampoline frame (#9305); the error emit below runs
     // after the trap is popped, exactly as before.
     let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
-        perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len())
+        perry_runtime::closure::js_native_call_value(
+            callback,
+            perry_runtime::closure::plain_call_receiver(),
+            args.as_ptr(),
+            args.len(),
+        )
     });
     exit_domain(handle);
     match outcome {
@@ -399,7 +394,10 @@ pub unsafe extern "C" fn js_domain_run(
 #[no_mangle]
 pub unsafe extern "C" fn js_domain_bind(handle: Handle, callback: f64) -> f64 {
     ensure_wrapper_closures_registered();
-    let closure = perry_runtime::closure::js_closure_alloc(domain_bound_wrapper as *const u8, 2);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(domain_bound_wrapper, 1; with_rest(0)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 1, callback);
     js_nanbox_pointer(closure as i64)
@@ -408,8 +406,10 @@ pub unsafe extern "C" fn js_domain_bind(handle: Handle, callback: f64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_domain_intercept(handle: Handle, callback: f64) -> f64 {
     ensure_wrapper_closures_registered();
-    let closure =
-        perry_runtime::closure::js_closure_alloc(domain_intercept_wrapper as *const u8, 2);
+    let closure = perry_runtime::closure::js_closure_alloc(
+        perry_runtime::fn_info!(domain_intercept_wrapper, 1; with_rest(0)),
+        2,
+    );
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, handle);
     perry_runtime::closure::js_closure_set_capture_f64(closure, 1, callback);
     js_nanbox_pointer(closure as i64)
@@ -459,7 +459,11 @@ pub extern "C" fn js_domain_exit(handle: Handle) -> f64 {
     undefined()
 }
 
-extern "C" fn domain_bound_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn domain_bound_wrapper(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as Handle;
         let callback = perry_runtime::closure::js_closure_get_capture_f64(closure, 1);
@@ -469,7 +473,11 @@ extern "C" fn domain_bound_wrapper(closure: *const ClosureHeader, rest: f64) -> 
     }
 }
 
-extern "C" fn domain_intercept_wrapper(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn domain_intercept_wrapper(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     unsafe {
         let handle = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as Handle;
         let callback = perry_runtime::closure::js_closure_get_capture_f64(closure, 1);

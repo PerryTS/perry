@@ -77,7 +77,7 @@ struct AppEntry {
 }
 
 extern "C" {
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
@@ -352,7 +352,7 @@ pub fn app_run(_app_handle: i64) {
             if let Some(callback) = *cb.borrow() {
                 let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
                 unsafe {
-                    js_closure_call0(ptr);
+                    js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         });
@@ -385,7 +385,7 @@ pub fn app_run(_app_handle: i64) {
             if let Some(callback) = *cb.borrow() {
                 let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
                 unsafe {
-                    js_closure_call0(ptr);
+                    js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
                 }
             }
         });
@@ -667,7 +667,7 @@ fn install_shortcuts_on_window(window: &ApplicationWindow) {
         if let Some(callback) = matched {
             let closure_ptr = unsafe { js_nanbox_get_pointer(callback) };
             unsafe {
-                js_closure_call0(closure_ptr as *const u8);
+                js_closure_call0(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
             }
             glib::Propagation::Stop
         } else {
@@ -718,7 +718,7 @@ fn install_timer(interval_ms: f64, callback: f64) {
         if let Some(callback) = callback {
             let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
             unsafe {
-                js_closure_call0(ptr);
+                js_closure_call0(ptr, perry_ffi::JsThis::UNDEFINED);
             }
         }
         #[cfg(feature = "geisterhand")]

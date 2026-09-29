@@ -747,19 +747,21 @@ pub(super) fn old_page_dirty_for(page: usize) -> bool {
 
 pub(super) extern "C" fn test_no_capture_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }
 
 pub(super) extern "C" fn test_captured_singleton_func(
     _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
 ) -> f64 {
     0.0
 }
 
 pub(super) unsafe fn init_test_closure(ptr: *mut u8) {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).func_ptr = std::ptr::null();
+    (*closure).info = std::ptr::null();
     (*closure).capture_count = 0;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,
@@ -772,7 +774,7 @@ pub(super) unsafe fn init_test_closure_with_one_capture(
     capture_bits: u64,
 ) -> *mut u64 {
     let closure = ptr as *mut crate::closure::ClosureHeader;
-    (*closure).func_ptr = std::ptr::null();
+    (*closure).info = std::ptr::null();
     (*closure).capture_count = 1;
     (*closure).shape_id = crate::closure::shape::function_base_shape(
         crate::closure::shape::FunctionProtoKind::Function,

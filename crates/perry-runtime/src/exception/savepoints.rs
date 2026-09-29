@@ -189,20 +189,10 @@ catch_savepoints! {
     capture: crate::object::call_method_depth_savepoint,
     restore: crate::object::call_method_depth_restore,
     latch: catch_subsystem::ALWAYS, idle: 0;
-    // PR #10564 review finding: the runtime guards that displace IMPLICIT_THIS
-    // around a `super()`/accessor/listener call they don't own (Temporal/Intl
-    // subclass bridges, the handle-method prototype-walk accessor dispatch,
-    // the stdlib listener/getter dispatchers) are a bare save/call/restore
-    // pair, not `ImplicitThisScope` — neither transport runs the restore
-    // statement that follows the call. The captured value is a second root
-    // for the object the live cell's own scanner already protects; see
-    // `scan_pending_trap_roots_mut` below.
-    implicit_this: u64,
-    capture: crate::object::implicit_this_trap_savepoint,
-    restore: crate::object::implicit_this_trap_restore,
-    latch: catch_subsystem::ALWAYS, idle: crate::value::TAG_UNDEFINED;
-    // Same shape as `implicit_this`, for `new.target` (the Temporal/Intl
-    // subclass `super()` bridges save/restore both together).
+    // PR #10564 review finding: the Temporal/Intl subclass `super()` bridges
+    // save/restore `new.target` with a bare statement pair that neither
+    // transport runs; the captured value is a second root for the object the
+    // live cell's scanner protects (see `scan_pending_trap_roots_mut`).
     new_target: u64,
     capture: crate::object::new_target_trap_savepoint,
     restore: crate::object::new_target_trap_restore,
@@ -261,15 +251,15 @@ catch_savepoints! {
     latch: catch_subsystem::DYN_EVAL, idle: 0;
 }
 
-/// Root + rewrite `implicit_this`/`new_target` in every OPEN `try`'s captured
-/// savepoint (PR #10564 review finding).
+/// Root + rewrite `new_target` in every OPEN `try`'s captured savepoint
+/// (PR #10564 review finding).
 ///
-/// `capture()` copies the live cells' bits into this per-depth slab
+/// `capture()` copies the live cell's bits into this per-depth slab
 /// precisely so `js_throw` can put them back after a bare save/call/restore
-/// site (see `object::this_binding::implicit_this_trap_savepoint`) gets
+/// site (see `object::this_binding::new_target_trap_savepoint`) gets
 /// longjmp'd or unwound past. That copy is a second root for the same value
 /// the live cell's own scanner (`object::this_binding::
-/// scan_implicit_this_roots_mut`) already protects, and it is invisible to
+/// scan_dispatch_binding_roots_mut`) already protects, and it is invisible to
 /// that scanner. A moving minor that runs while a `try` is open — before any
 /// throw crosses it — must rewrite this copy too, or a later throw restores a
 /// from-space address. Bounded by `try_depth <= MAX_TRY_DEPTH`, same as every
@@ -283,7 +273,6 @@ pub(super) fn scan_pending_trap_roots_mut(
         // SAFETY: every slot below `try_depth` was written by `capture()` in
         // `try_push_with_kind` before `try_depth` advanced past it.
         let entry = unsafe { entry.assume_init_mut() };
-        visitor.visit_nanbox_u64_slot(&mut entry.implicit_this);
         visitor.visit_nanbox_u64_slot(&mut entry.new_target);
     }
 }

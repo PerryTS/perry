@@ -390,7 +390,7 @@ unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Optio
 /// Call a user-supplied codec closure with `raw` and return its JS value.
 unsafe fn call_codec(callback: *const ClosureHeader, raw: &str) -> f64 {
     let arg = nanbox_string(intern_string(raw));
-    js_closure_call1(callback, arg)
+    js_closure_call1(callback, perry_runtime::closure::plain_call_receiver(), arg)
 }
 
 unsafe fn apply_encode_codec(callback: *const ClosureHeader, raw: &str) -> String {

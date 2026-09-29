@@ -125,7 +125,10 @@ fn test_typed_shape_descriptor_dynamic_pointer_mutation_falls_back_to_unknown_la
     clear_mark_seeds();
 }
 
-extern "C" fn layout_mask_test_closure(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn layout_mask_test_closure(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
 
@@ -134,7 +137,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
 
-    let numeric = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 8);
+    let numeric = crate::closure::js_closure_alloc(crate::fn_info!(layout_mask_test_closure, 0), 8);
     crate::closure::js_closure_set_capture_f64(numeric, 0, 1.0);
     crate::closure::js_closure_set_capture_f64(numeric, 1, 2.0);
     crate::closure::js_closure_set_capture_ptr(numeric, 2, 7);
@@ -154,7 +157,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
 
     let child = crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
-    let mixed = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 8);
+    let mixed = crate::closure::js_closure_alloc(crate::fn_info!(layout_mask_test_closure, 0), 8);
     crate::closure::js_closure_set_capture_f64(mixed, 0, 1.0);
     crate::closure::js_closure_set_capture_f64(
         mixed,

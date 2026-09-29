@@ -595,6 +595,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_closure_call_apply_with_spread",
                 &[
                     (DOUBLE, &cb_box),
+                    // `f(...xs)`: a plain call.
+                    (I64, crate::expr::body_call::JS_THIS_UNDEFINED),
                     (crate::types::PTR, &regs_ptr),
                     (I64, &regs_len),
                     (I64, &spread_handle),

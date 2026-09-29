@@ -407,13 +407,16 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         # ordinary GC slot, and a budgeted dirty scan can hold that address
         # across mutator resumptions that insert descriptors — so a record's
         # address must never move for its lifetime. Chunks are individually
-        # boxed and never reallocated; only the directory of chunk pointers
-        # grows. Putting records into one flat `Vec` (or back into a rehashing
-        # bucket) moves them under the collector's feet.
+        # allocated (a `Slot`: an owned pointer, or the shared all-empty chunk
+        # that is never written) and never reallocated; only the directory of
+        # chunk pointers grows. Putting records into one flat `Vec` (or back
+        # into a rehashing bucket) moves them under the collector's feet.
         (r"slab\s*:\s*(?:std::cell::)?UnsafeCell\s*<\s*ShapeSlab\s*>", "by-id descriptor slab with stable record addresses"),
-        (r"type\s+Chunk\s*=\s*Box\s*<\s*\[\s*UnsafeCell\s*<\s*ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]\s*>", "slab chunks individually boxed, never reallocated"),
-        (r"type\s+Page\s*=\s*Box\s*<\s*\[\s*Option\s*<\s*Chunk\s*>\s*;\s*PAGE_LEN\s*\]\s*>", "slab directory pages hold chunk pointers, not records"),
-        (r"pages\s*:\s*Vec\s*<\s*Option\s*<\s*Page\s*>\s*>", "slab directory is a vector of page pointers"),
+        (r"struct\s+Slot\s*<\s*T\s*>\s*\(\s*std::ptr::NonNull\s*<\s*T\s*>\s*\)", "a slab slot is one pointer to its own allocation"),
+        (r"type\s+ChunkCells\s*=\s*\[\s*UnsafeCell\s*<\s*ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]", "slab chunks individually allocated, never reallocated"),
+        (r"type\s+PageSlots\s*=\s*\[\s*Slot\s*<\s*ChunkCells\s*>\s*;\s*PAGE_LEN\s*\]", "slab pages hold chunk pointers, not records"),
+        (r"type\s+Page\s*=\s*Slot\s*<\s*PageSlots\s*>", "slab directory entries are page pointers"),
+        (r"pages\s*:\s*Vec\s*<\s*Page\s*>", "slab directory is a vector of page pointers"),
         # `keys` must stay the FIRST field of the `#[repr(C)]` record: the
         # record address IS the rewritable keys slot (`keys_slot`).
         (r"#\[repr\(C\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
@@ -1131,8 +1134,8 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     store_path = "crates/perry-runtime/src/object/shapes_store.rs"
     flat_slab = dict(sources)
     flat_slab[store_path] = flat_slab[store_path].replace(
-        "type Chunk = Box<[UnsafeCell<ShapeRecord>; CHUNK_LEN]>;",
-        "type Chunk = Vec<UnsafeCell<ShapeRecord>>;",
+        "type ChunkCells = [UnsafeCell<ShapeRecord>; CHUNK_LEN];",
+        "type ChunkCells = Vec<UnsafeCell<ShapeRecord>>;",
         1,
     )
     expect_rejected(

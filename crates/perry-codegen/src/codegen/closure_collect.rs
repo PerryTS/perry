@@ -730,9 +730,8 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
     // HIR-synthesized `arguments` need to bundle ALL passed args into
     // the rest slot at dispatch time — JS spec semantics for
     // `arguments.length` count every passed arg, not just the trailing
-    // tail after the fixed params. The runtime side reads this through
-    // `js_register_closure_synthetic_arguments` (vs the regular
-    // `js_register_closure_rest`).
+    // tail after the fixed params. The runtime reads this rest kind from the
+    // body's `JsFunctionInfo` (`crate::fn_info`).
     let closure_synthetic_arguments: std::collections::HashSet<u32> = closures
         .iter()
         .filter_map(|(fid, expr)| {
@@ -777,9 +776,10 @@ pub(crate) fn collect_module_closures(hir: &HirModule) -> ModuleClosures {
         })
         .collect();
 
-    // Refs #421: declared param count for every non-rest closure. Used by
-    // `emit_string_pool` to register each closure's ABI arity so the runtime
-    // can pad missing args with TAG_UNDEFINED in the dynamic-dispatch path.
+    // Refs #421: declared param count for every non-rest closure: the
+    // `declared` fact of its `JsFunctionInfo` (`fn.length`'s fallback). The
+    // runtime pads a short call to the body's parameter count, which the info
+    // takes from the body's definition.
     let closure_arities: HashMap<u32, u32> = closures
         .iter()
         .filter_map(|(fid, expr)| {

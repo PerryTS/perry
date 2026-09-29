@@ -1493,11 +1493,10 @@ pub(crate) unsafe fn json_object_getter_value(
         return Some(f64::from_bits(TAG_UNDEFINED));
     }
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
-    let result = crate::closure::js_closure_call0(closure);
-    js_implicit_this_set(prev.get_nanbox_f64());
-    Some(result)
+    Some(crate::closure::js_closure_call0(
+        closure,
+        crate::closure::JsThis::from_f64(receiver),
+    ))
 }
 
 /// Monotonic (#6386): has an accessor descriptor keyed `"constructor"` ever

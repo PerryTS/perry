@@ -85,6 +85,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // by the inline lookup in `expr::hot_tls` (Apple aarch64 targets only;
     // the declaration is unreferenced, and therefore inert, elsewhere).
     module.add_external_global("PERRY_HOT_TSD_KEY", I64);
+    // shapes_store — the never-written empty shape directory, a generic read
+    // site's front operand for `length` and where the agent's own directory
+    // is not readable inline (`property_get/generic_dispatch.rs`).
+    module.add_external_global("PERRY_EMPTY_SHAPE_DIR", I64);
     // #5525 follow-up: the process-global typed-array kind cache + the
     // "any exotic views live" guard, exported from perry-runtime so the codegen
     // can emit a guarded *inline* typed-array element load at the access site
@@ -434,6 +438,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Heap-pointer receiver: (masked obj_handle, key_handle, per-site IC cache
     // SLOT, per-site packed MRU word) -> field value.
     module.declare_function("js_object_get_field_ic_slow", DOUBLE, &[I64, I64, PTR, PTR]);
+    // First-read D3: a generic read site's ShapeId miss asks this GC leaf
+    // first (the agent's shape-directory mirror or null, receiver payload,
+    // the key as its pool global holds it, the site's cache slot and compact
+    // word); `TAG_HOLE` = declined, and the site calls the slow entry.
+    // `perry_shape_dir_cell` is the directory's accessor where emitted code
+    // cannot read the agent's pointer block inline. Both GC leaves.
+    module.declare_function(
+        "js_object_get_field_ic_front",
+        DOUBLE,
+        &[PTR, I64, I64, PTR, PTR],
+    );
+    module.declare_function("perry_shape_dir_cell", PTR, &[]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
     // returns a new object pointer.
@@ -629,7 +645,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
         "initialexec",
     );
-    module.declare_function("perry_implicit_this_cell", PTR, &[]);
+    // Windows x86-64 reaches the same block through the TEB (`agent_ptr.rs`,
+    // `WindowsTeb`): the image TLS index and the block offset in that image's
+    // TLS block. Declarations only; no other target references them.
+    module.add_external_global(crate::expr::agent_ptr::TLS_INDEX_SYMBOL, I32);
+    module.add_external_global(crate::expr::agent_ptr::AGENT_PTRS_SECREL_SYMBOL, I32);
     // #10812: the prologue stack check (`expr/stack_guard.rs`).
     module.declare_function("js_stack_overflow", VOID, &[]);
     module.declare_function(

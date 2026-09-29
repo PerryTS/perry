@@ -4,7 +4,7 @@ use objc2_app_kit::NSOpenPanel;
 use objc2_foundation::{MainThreadMarker, NSString};
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
@@ -36,13 +36,21 @@ pub fn open_dialog(callback: f64) {
                 let bytes = rust_str.as_bytes();
                 let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
-                js_closure_call1(closure_ptr, nanboxed);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
             } else {
-                js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+                js_closure_call1(
+                    closure_ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    f64::from_bits(0x7FFC_0000_0000_0001),
+                );
             }
         } else {
             // User cancelled
-            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+            js_closure_call1(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                f64::from_bits(0x7FFC_0000_0000_0001),
+            );
         }
     }
 }
@@ -72,12 +80,20 @@ pub fn open_folder_dialog(callback: f64) {
                 let bytes = rust_str.as_bytes();
                 let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
-                js_closure_call1(closure_ptr, nanboxed);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
             } else {
-                js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+                js_closure_call1(
+                    closure_ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    f64::from_bits(0x7FFC_0000_0000_0001),
+                );
             }
         } else {
-            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+            js_closure_call1(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                f64::from_bits(0x7FFC_0000_0000_0001),
+            );
         }
     }
 }
@@ -113,12 +129,20 @@ pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_pt
                 let bytes = rust_str.as_bytes();
                 let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
                 let nanboxed = js_nanbox_string(str_ptr as i64);
-                js_closure_call1(closure_ptr, nanboxed);
+                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nanboxed);
             } else {
-                js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+                js_closure_call1(
+                    closure_ptr,
+                    perry_ffi::JsThis::UNDEFINED,
+                    f64::from_bits(0x7FFC_0000_0000_0001),
+                );
             }
         } else {
-            js_closure_call1(closure_ptr, f64::from_bits(0x7FFC_0000_0000_0001));
+            js_closure_call1(
+                closure_ptr,
+                perry_ffi::JsThis::UNDEFINED,
+                f64::from_bits(0x7FFC_0000_0000_0001),
+            );
         }
     }
 }

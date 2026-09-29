@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_async_f(
@@ -92,7 +92,7 @@ unsafe extern "C" fn trampoline(ctx: *mut std::ffi::c_void) {
         let pkg = Box::from_raw(ctx as *mut (f64, i64));
         let (closure, idx) = *pkg;
         let ptr = js_nanbox_get_pointer(closure) as *const u8;
-        js_closure_call1(ptr, idx as f64);
+        js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, idx as f64);
     });
 }
 

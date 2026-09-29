@@ -81,10 +81,10 @@ fn is_plain_async_function_value(func_value: f64) -> bool {
     if ptr.is_null() || !crate::value::addr_class::is_plausible_heap_addr(ptr as usize) {
         return false;
     }
-    let fp = crate::closure::get_valid_func_ptr(ptr);
-    !fp.is_null()
-        && crate::closure::is_registered_async_function(fp)
-        && !crate::closure::is_registered_generator_function(fp)
+    crate::closure::closure_info(ptr).is_some_and(|info| {
+        crate::closure::info_has(info, crate::closure::FN_ASYNC)
+            && !crate::closure::info_has(info, crate::closure::FN_GENERATOR)
+    })
 }
 
 #[no_mangle]

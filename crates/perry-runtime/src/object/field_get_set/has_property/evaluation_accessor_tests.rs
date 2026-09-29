@@ -32,6 +32,7 @@ fn evaluated_class_accessors_are_present_on_the_actual_prototype_chain() {
             b"setOnly".as_ptr(),
             7,
             setter as *const () as i64,
+            1,
         );
         let scope = crate::gc::RuntimeHandleScope::new();
         let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(

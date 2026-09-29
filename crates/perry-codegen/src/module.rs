@@ -99,6 +99,10 @@ pub struct LlModule {
     /// the specialization plan is final (`codegen/mod.rs`), and reads happen
     /// at call-emission/render time, so define order never matters.
     preserve_none_fns: Rc<RefCell<HashSet<String>>>,
+    /// The module's `JsFunctionInfo` requests and facts (`crate::fn_info`),
+    /// shared with every function's register counter; emitted by
+    /// [`Self::emit_fn_infos`] once every function exists.
+    fn_infos: Rc<RefCell<crate::fn_info::FnInfoState>>,
 }
 
 /// The `source_filename` every Perry-emitted module records.
@@ -157,6 +161,7 @@ impl LlModule {
             native_rep_records: Vec::new(),
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
+            fn_infos: Rc::new(RefCell::new(crate::fn_info::FnInfoState::default())),
         }
     }
 
@@ -302,9 +307,50 @@ impl LlModule {
         // #8175: every function shares the module's preserve_nonecc registry,
         // so its call sites and its own define header agree on the convention.
         func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
+        func.set_fn_infos(Rc::clone(&self.fn_infos));
         func.set_null_guard_global(&self.null_guard_global());
         self.functions.push(func);
         self.functions.last_mut().unwrap()
+    }
+
+    /// Record a fact about `body`, a JS body this module defines, in its
+    /// `JsFunctionInfo` (`crate::fn_info`).
+    pub(crate) fn note_fn_info(
+        &self,
+        body: &str,
+        note: impl FnOnce(&mut crate::fn_info::FnInfoFacts),
+    ) {
+        note(self.fn_infos.borrow_mut().facts_mut(body));
+    }
+
+    /// Emit the module's `JsFunctionInfo` globals (`crate::fn_info`): one
+    /// definition per body this module defines that is allocated here, has
+    /// recorded facts, or is an external-linkage value wrapper another module
+    /// may allocate; an `external` declaration for every allocated body
+    /// another module defines. Runs once, after every function exists.
+    pub(crate) fn emit_fn_infos(&mut self) {
+        let lines = {
+            let functions = &self.functions;
+            let by_name: std::collections::HashMap<&str, &LlFunction> =
+                functions.iter().map(|f| (f.name.as_str(), f)).collect();
+            let exported = functions
+                .iter()
+                .filter(|f| {
+                    f.linkage.is_empty() && f.name.starts_with("__perry_wrap_") && is_js_body(f)
+                })
+                .map(|f| f.name.clone());
+            self.fn_infos.borrow().render_globals(
+                |body| {
+                    let f = by_name.get(body)?;
+                    Some(crate::fn_info::DefinedBody {
+                        params: f.params.len().saturating_sub(2),
+                        linkage: f.linkage.clone(),
+                    })
+                },
+                exported,
+            )
+        };
+        self.globals.extend(lines);
     }
 
     /// A defined function by symbol name.
@@ -1184,3 +1230,11 @@ pub(crate) struct OwnedCodegenUnitPart {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `f` is a JS body (`double body(i64 %this_closure, i64 %js_this, ...)`,
+/// `perry_abi::JS_BODY_*`).
+fn is_js_body(f: &LlFunction) -> bool {
+    f.params.len() >= 2
+        && f.params[0].1 == crate::expr::body_call::JS_BODY_CALLEE
+        && f.params[1].1 == crate::expr::body_call::JS_BODY_THIS
+}

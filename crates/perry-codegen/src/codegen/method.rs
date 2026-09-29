@@ -357,7 +357,7 @@ pub(super) fn compile_method(
     // nothing else when the caller holds it only in a register temp).
     // #10663: decided before any statement is lowered.
     crate::codegen::helpers::decide_straight_line_store_outline(lf, method_body);
-    let shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
+    let mut shadow_slot_map = if super::helpers::precise_root_analysis_enabled() {
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::collectors::collect_pointer_typed_locals(
@@ -377,8 +377,6 @@ pub(super) fn compile_method(
         std::collections::HashMap::new()
     };
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
 
     let _ = lf.create_block("entry");
 
@@ -483,6 +481,12 @@ pub(super) fn compile_method(
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
     );
+    super::helpers::drop_number_local_root_slots(
+        &mut shadow_slot_map,
+        native_facts.number_by_construction_locals(),
+    );
+    let shadow_slot_clears_after_stmt =
+        crate::collectors::collect_shadow_slot_clear_points(method_body, &shadow_slot_map);
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
     let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids
@@ -612,7 +616,7 @@ pub(super) fn compile_method(
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
-        resolved_arrow_callback_targets: HashMap::new(),
+        resolved_plain_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
         versioned_loop_deopt_context: None,
@@ -804,7 +808,7 @@ pub(super) fn compile_method(
     };
 
     // Resolve each immutable callback parameter/arity once, before the method
-    // body. The runtime answers null unless the actual value is a plain arrow
+    // body. The runtime answers null unless the actual value is a closure
     // whose declared/rest shape can use this exact call ABI. Exact immutable
     // aliases (`const cb = callback`) reuse the same answer: every successful
     // read has that identity by construction, while a pre-initialisation read
@@ -824,7 +828,7 @@ pub(super) fn compile_method(
         let source_handle = crate::expr::unbox_to_i64(ctx.block(), &source_box);
         let fn_ptr = ctx.block().call(
             PTR,
-            "js_closure_resolve_arrow_direct_call",
+            "js_closure_resolve_plain_direct_call",
             &[(I64, &source_handle), (I32, &arity.to_string())],
         );
         resolved_callback_ptrs.insert((source_param, arity), fn_ptr);
@@ -842,7 +846,7 @@ pub(super) fn compile_method(
         else {
             continue;
         };
-        ctx.resolved_arrow_callback_targets
+        ctx.resolved_plain_callback_targets
             .insert((call.callee_local, call.arity), fn_ptr);
         if let Some(versioned_fn_ptr) = resolved_versioned_callback_ptrs
             .get(&(call.source_param, call.arity))

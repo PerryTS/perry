@@ -15,19 +15,20 @@ use super::{
     supported_locales_of_thunk,
 };
 
+/// `ctor` is the constructor body's info (a rest body, `with_rest(0)`);
+/// each method's info records its declared `arity`, each getter's 0.
 pub(super) fn install_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
-    ctor_ptr: *const u8,
+    ctor: *const crate::closure::JsFunctionInfo,
     ctor_length: u32,
-    methods: &[(&str, *const u8, u32)],
-    getters: &[(&str, *const u8)],
+    methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)],
+    getters: &[(&str, *const crate::closure::JsFunctionInfo)],
 ) {
-    let ctor = crate::closure::js_closure_alloc(ctor_ptr, 0);
+    let ctor = crate::closure::js_closure_alloc(ctor, 0);
     if ctor.is_null() {
         return;
     }
-    crate::closure::js_register_closure_rest(ctor_ptr, 0);
     crate::object::set_bound_native_closure_name(ctor, name);
     crate::object::set_builtin_closure_length(ctor as usize, ctor_length);
     crate::object::set_builtin_property_attrs(
@@ -50,7 +51,7 @@ pub(super) fn install_constructor(
     set_field(proto, "constructor", ctor_value);
     set_builtin_attrs(proto, "constructor", PropertyAttrs::new(true, false, true));
     for (method, ptr, arity) in methods.iter().copied() {
-        install_function(proto, method, ptr, arity, arity, false);
+        install_function(proto, method, ptr, arity);
     }
     // Accessor properties (e.g. `get Intl.NumberFormat.prototype.format`): a
     // getter-only descriptor on the prototype so reflection
@@ -62,7 +63,6 @@ pub(super) fn install_constructor(
         if closure.is_null() {
             continue;
         }
-        crate::closure::js_register_closure_arity(ptr, 0);
         crate::object::set_bound_native_closure_name(closure, &format!("get {getter_name}"));
         crate::object::set_builtin_closure_length(closure as usize, 0);
         // The `get Intl.X.prototype.format` accessor is a built-in
@@ -99,10 +99,8 @@ pub(super) fn install_constructor(
     let supported = install_function(
         ctor as *mut ObjectHeader,
         "supportedLocalesOf",
-        supported_locales_of_thunk as *const u8,
-        0,
+        crate::fn_info!(supported_locales_of_thunk, 1; with_rest(0)),
         1,
-        true,
     );
     crate::closure::closure_set_dynamic_prop(ctor as usize, "supportedLocalesOf", supported);
 

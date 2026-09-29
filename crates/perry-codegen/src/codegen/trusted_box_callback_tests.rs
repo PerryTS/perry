@@ -334,9 +334,23 @@ fn direct_arrow_gets_a_private_body_but_keeps_the_public_validation_path() {
     assert!(!trusted.contains("@js_box_set_bits("));
     assert!(trusted.contains("@js_write_barrier("));
 
-    assert!(ir.contains(
-        "@js_register_closure_trusted_direct(ptr @perry_closure_trusted_box_callback_ts__99, ptr @perry_closure_trusted_box_callback_ts__99$trusted_boxes, i32 1, i64 1)"
-    ));
+    // The body's `JsFunctionInfo` names the trusted clone and its exact
+    // one-box capture layout (`crate::fn_info`).
+    let info = info_line(&ir, "perry_closure_trusted_box_callback_ts__99");
+    assert!(
+        info.contains(
+            "i32 1, ptr @perry_closure_trusted_box_callback_ts__99$trusted_boxes, i64 1, ptr null"
+        ),
+        "{info}"
+    );
+}
+
+/// The `@<body>$info = ...` definition line of `body`.
+fn info_line<'a>(ir: &'a str, body: &str) -> &'a str {
+    let prefix = format!("@{body}$info = ");
+    ir.lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no info for {body} in IR:\n{ir}"))
 }
 
 #[test]
@@ -361,9 +375,13 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
             && special.contains("versioned_callback.deopt.mark"),
         "both observable cold arms must poison the loop before fallback:\n{special}"
     );
-    assert!(ir.contains(
-        "@js_register_closure_versioned_loop_direct(ptr @perry_closure_versioned_loop_callback_ts__100, ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i64 1)"
-    ));
+    let info = info_line(&ir, "perry_closure_versioned_loop_callback_ts__100");
+    assert!(
+        info.contains(
+            "ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i16"
+        ) && info.ends_with("i64 1 }"),
+        "{info}"
+    );
 }
 
 #[test]
@@ -465,7 +483,10 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
 fn closure_first_stored_as_a_value_does_not_get_a_trusted_body() {
     let ir = emit(false);
     assert!(!ir.contains("$trusted_boxes"));
-    assert!(!ir.contains("call void @js_register_closure_trusted_direct("));
+    assert!(
+        !ir.contains("$trusted_boxes"),
+        "no info may name a trusted clone"
+    );
 }
 
 #[test]

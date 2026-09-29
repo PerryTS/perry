@@ -77,7 +77,10 @@ fn addr_of(value: f64) -> usize {
 /// receiver `js_object_define_property` is holding — and then allocates the
 /// payload string, so the retired from-space bytes are reused before the caller
 /// reads its locals again.
-extern "C" fn moving_value_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_value_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     GETTER_COPIED_OBJECTS.with(|c| c.set(c.get() + trace.copying_nursery.copied_objects));
     string_value("payload")
@@ -93,7 +96,7 @@ extern "C" fn moving_value_getter(_closure: *const crate::closure::ClosureHeader
 unsafe fn descriptor_bag_with_moving_value_getter(scope: &RuntimeHandleScope) -> f64 {
     let bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
     let inner = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-    let getter = crate::closure::js_closure_alloc(moving_value_getter as *const u8, 0);
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(moving_value_getter, 0), 0);
     let getter_value = f64::from_bits(ptr_bits(getter as usize));
 
     let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
@@ -252,7 +255,10 @@ fn desc_view_field_values_are_rooted() {
     }
 }
 
-extern "C" fn moving_writable_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn moving_writable_getter(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     GETTER_COPIED_OBJECTS.with(|c| c.set(c.get() + trace.copying_nursery.copied_objects));
     f64::from_bits(crate::value::TAG_TRUE)
@@ -270,7 +276,8 @@ fn array_named_property_attributes_follow_a_move_in_the_final_descriptor_probe()
         let key = scope.root_nanbox_f64(string_value("tag"));
         let bag = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
         let inner = scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-        let getter = crate::closure::js_closure_alloc(moving_writable_getter as *const u8, 0);
+        let getter =
+            crate::closure::js_closure_alloc(crate::fn_info!(moving_writable_getter, 0), 0);
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         crate::object::js_object_set_field_by_name(
             addr_of(inner.get_nanbox_f64()) as *mut crate::object::ObjectHeader,

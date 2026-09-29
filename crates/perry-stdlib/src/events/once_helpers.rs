@@ -38,7 +38,10 @@ unsafe fn remove_stream_or_socket_once_listener(
     }
 }
 
-extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
+extern "C" fn events_once_abort_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
@@ -58,7 +61,11 @@ extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn events_once_stream_resolve_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -77,7 +84,11 @@ extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader,
     undefined_value()
 }
 
-extern "C" fn events_once_stream_reject_listener(closure: *const ClosureHeader, rest: f64) -> f64 {
+extern "C" fn events_once_stream_reject_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    rest: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -115,7 +126,11 @@ fn first_rest_arg_or_undefined(rest: f64) -> f64 {
     }
 }
 
-extern "C" fn events_once_event_target_listener(closure: *const ClosureHeader, arg0: f64) -> f64 {
+extern "C" fn events_once_event_target_listener(
+    closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    arg0: f64,
+) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
@@ -199,7 +214,8 @@ pub unsafe extern "C" fn js_events_once(
         };
         if let Some(signal) = &signal {
             if object_ptr_from_value(signal.get_nanbox_f64()).is_some() {
-                let abort_listener = js_closure_alloc(events_once_abort_listener as *const u8, 2);
+                let abort_listener =
+                    js_closure_alloc(perry_runtime::fn_info!(events_once_abort_listener, 0), 2);
                 let abort_listener = scope.root_raw_mut_ptr(abort_listener);
                 js_closure_set_capture_ptr(abort_listener.get_raw_mut_ptr(), 0, handle);
                 js_closure_set_capture_ptr(
@@ -228,7 +244,10 @@ pub unsafe extern "C" fn js_events_once(
         return promise.get_raw_mut_ptr();
     }
     if let EventHelperTarget::EventTarget(_) = target {
-        let listener = js_closure_alloc(events_once_event_target_listener as *const u8, 3);
+        let listener = js_closure_alloc(
+            perry_runtime::fn_info!(events_once_event_target_listener, 1),
+            3,
+        );
         let listener = scope.root_raw_mut_ptr(listener);
         let target =
             object_ptr_from_value(target_value.get_nanbox_f64()).unwrap_or(std::ptr::null_mut());
@@ -252,15 +271,10 @@ pub unsafe extern "C" fn js_events_once(
     }
     if let EventHelperTarget::NetSocket(handle) = target {
         let listens_for_error = event_name == "error";
-        perry_runtime::closure::js_register_closure_rest(
-            events_once_stream_resolve_listener as *const u8,
-            0,
+        let listener = js_closure_alloc(
+            perry_runtime::fn_info!(events_once_stream_resolve_listener, 1; with_rest(0)),
+            4,
         );
-        perry_runtime::closure::js_register_closure_rest(
-            events_once_stream_reject_listener as *const u8,
-            0,
-        );
-        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
         let listener = scope.root_raw_mut_ptr(listener);
         js_closure_set_capture_ptr(
             listener.get_raw_mut_ptr(),
@@ -273,8 +287,10 @@ pub unsafe extern "C" fn js_events_once(
         if !listens_for_error {
             let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
             let error_event = scope.root_string_ptr(error_event_ptr);
-            let reject_listener =
-                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = js_closure_alloc(
+                perry_runtime::fn_info!(events_once_stream_reject_listener, 1; with_rest(0)),
+                4,
+            );
             let reject_listener = scope.root_raw_mut_ptr(reject_listener);
             js_closure_set_capture_ptr(
                 reject_listener.get_raw_mut_ptr(),
@@ -322,15 +338,10 @@ pub unsafe extern "C" fn js_events_once(
         return promise.get_raw_mut_ptr();
     }
     if let EventHelperTarget::Stream(handle) = target {
-        perry_runtime::closure::js_register_closure_rest(
-            events_once_stream_resolve_listener as *const u8,
-            0,
+        let listener = js_closure_alloc(
+            perry_runtime::fn_info!(events_once_stream_resolve_listener, 1; with_rest(0)),
+            4,
         );
-        perry_runtime::closure::js_register_closure_rest(
-            events_once_stream_reject_listener as *const u8,
-            0,
-        );
-        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
         let listener = scope.root_raw_mut_ptr(listener);
         js_closure_set_capture_ptr(
             listener.get_raw_mut_ptr(),
@@ -345,8 +356,10 @@ pub unsafe extern "C" fn js_events_once(
             let error_event_ptr =
                 js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
             let error_event = scope.root_string_ptr(error_event_ptr);
-            let reject_listener =
-                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = js_closure_alloc(
+                perry_runtime::fn_info!(events_once_stream_reject_listener, 1; with_rest(0)),
+                4,
+            );
             let reject_listener = scope.root_raw_mut_ptr(reject_listener);
             js_closure_set_capture_ptr(
                 reject_listener.get_raw_mut_ptr(),

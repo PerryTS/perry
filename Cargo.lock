@@ -5226,9 +5226,10 @@ dependencies = [
 
 [[package]]
 name = "perry-ffi"
-version = "0.5.1654"
+version = "0.6.0"
 dependencies = [
  "dashmap 6.2.1",
+ "perry-abi",
  "perry-native-registration",
  "perry-runtime",
 ]

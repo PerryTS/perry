@@ -16,9 +16,9 @@ use std::cell::RefCell;
 
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call0(closure: *const u8) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
     #[allow(dead_code)]
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
 }
@@ -653,7 +653,7 @@ fn drain_pending_callbacks() {
                 js_run_stdlib_pump();
                 let _ = js_promise_run_microtasks();
                 let ptr = js_nanbox_get_pointer(closure_f64);
-                let _ = js_closure_call0(ptr as *const u8);
+                let _ = js_closure_call0(ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
             }
         }
     }
@@ -712,7 +712,7 @@ fn drain_pending_callbacks() {
                 js_run_stdlib_pump();
                 let _ = js_promise_run_microtasks();
                 let ptr = js_nanbox_get_pointer(closure_f64);
-                let _ = js_closure_call0(ptr as *const u8);
+                let _ = js_closure_call0(ptr as *const u8, perry_ffi::JsThis::UNDEFINED);
             }
         }
         if should_clean {

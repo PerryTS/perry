@@ -1,7 +1,12 @@
 use super::*;
 use crate::closure::ClosureHeader;
 
-extern "C" fn captured_direction(closure: *const ClosureHeader, a: f64, b: f64) -> f64 {
+extern "C" fn captured_direction(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    a: f64,
+    b: f64,
+) -> f64 {
     // Model generated capture loads: no forwarding lookup can repair a stale
     // closure argument. The getter changes only the relocated capture.
     let direction = unsafe {
@@ -10,7 +15,10 @@ extern "C" fn captured_direction(closure: *const ClosureHeader, a: f64, b: f64) 
     direction * (a - b)
 }
 
-extern "C" fn collecting_getter(closure: *const ClosureHeader) -> f64 {
+extern "C" fn collecting_getter(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let scope = RuntimeHandleScope::new();
     let getter = scope.root_raw_const_ptr(closure);
     gc_collect_minor();
@@ -25,11 +33,19 @@ extern "C" fn collecting_getter(closure: *const ClosureHeader) -> f64 {
     3.0
 }
 
-extern "C" fn accept_sorted_value(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn accept_sorted_value(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-extern "C" fn collecting_index_setter(_closure: *const ClosureHeader, _value: f64) -> f64 {
+extern "C" fn collecting_index_setter(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _value: f64,
+) -> f64 {
     gc_collect_minor();
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -47,7 +63,7 @@ fn indexed_accessor_set_returns_the_relocated_receiver() {
         let scope = RuntimeHandleScope::new();
         let receiver = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(3));
         let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            collecting_index_setter as *const u8,
+            crate::fn_info!(collecting_index_setter, 1),
             0,
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
@@ -109,7 +125,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
     for real_array in [true, false] {
         let scope = RuntimeHandleScope::new();
         let comparator = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            captured_direction as *const u8,
+            crate::fn_info!(captured_direction, 2),
             1,
         ));
         comparator.with_mut_ptr(|ptr| crate::closure::js_closure_set_capture_f64(ptr, 0, -1.0));
@@ -127,7 +143,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
             );
         }
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            collecting_getter as *const u8,
+            crate::fn_info!(collecting_getter, 0),
             1,
         ));
         getter.with_mut_ptr(|getter| {
@@ -140,7 +156,7 @@ fn sort_collection_getters_relocate_comparator_and_receiver() {
             });
         });
         let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-            accept_sorted_value as *const u8,
+            crate::fn_info!(accept_sorted_value, 1),
             0,
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));

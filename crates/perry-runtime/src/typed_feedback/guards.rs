@@ -1500,7 +1500,7 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
 pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
     site_id: u64,
     closure_value: f64,
-    expected_func_ptr: *const u8,
+    expected_info: *const crate::closure::JsFunctionInfo,
     expected_arity: u32,
     call_arity: u32,
 ) -> i32 {
@@ -1513,19 +1513,17 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
         std::ptr::null()
     };
     let closure_ptr = crate::closure::clean_closure_ptr(raw_ptr);
-    let func_ptr = crate::closure::get_valid_func_ptr(closure_ptr);
-    let has_rest = !func_ptr.is_null() && crate::closure::lookup_closure_rest(func_ptr).is_some();
-    let declared = if func_ptr.is_null() {
-        None
-    } else {
-        crate::closure::lookup_closure_arity(func_ptr)
-    };
-    let contract_valid = !expected_func_ptr.is_null()
-        && !func_ptr.is_null()
-        && func_ptr == expected_func_ptr
-        && func_ptr != crate::closure::BOUND_METHOD_FUNC_PTR
-        && !has_rest
-        && declared.unwrap_or(expected_arity) == expected_arity
+    let info = crate::closure::closure_info(closure_ptr);
+    let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
+    // The body's own info is the identity; its rest kind and parameter count
+    // are the contract a direct call at `call_arity` relies on.
+    let contract_valid = !expected_info.is_null()
+        && info.is_some_and(|info| {
+            std::ptr::eq(info, expected_info)
+                && info.code != crate::closure::BOUND_METHOD_FUNC_PTR
+                && crate::closure::info_rest(info).is_none()
+                && u32::from(info.params) == expected_arity
+        })
         && expected_arity == call_arity;
     let observation = Observation {
         source: ObservationSource::Closure,
@@ -1557,7 +1555,7 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
 /// direct call.
 ///
 /// Whole-program object-literal capabilities already prove the target's
-/// arity/rest contract at compile time. Repeating the closure registry lookups
+/// arity/rest contract at compile time. Repeating the closure info checks
 /// and recording a typed-feedback observation on every call therefore adds no
 /// safety. This smaller guard deliberately keeps the speculation-safe closure
 /// header validation used by the universal dispatcher: arbitrary replacement
@@ -1577,14 +1575,14 @@ fn closure_ptr_from_value_bits(bits: u64) -> *const crate::closure::ClosureHeade
 #[no_mangle]
 pub extern "C" fn js_closure_exact_func_guard(
     closure_value: f64,
-    expected_func_ptr: *const u8,
+    expected_info: *const crate::closure::JsFunctionInfo,
 ) -> u64 {
-    if expected_func_ptr.is_null() {
+    if expected_info.is_null() {
         return 0;
     }
     let raw_ptr = closure_ptr_from_value_bits(closure_value.to_bits());
     let closure_ptr = crate::closure::clean_closure_ptr(raw_ptr);
-    if crate::closure::get_valid_func_ptr(closure_ptr) == expected_func_ptr {
+    if std::ptr::eq(crate::closure::get_valid_info(closure_ptr), expected_info) {
         closure_ptr as u64
     } else {
         0
@@ -1626,7 +1624,7 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     field_index: u32,
     method_name_ptr: *const i8,
     method_name_len: usize,
-    expected_func_ptr: *const u8,
+    expected_info: *const crate::closure::JsFunctionInfo,
     cache_slot: *mut MethodPicCacheSlot,
 ) -> u64 {
     {
@@ -1635,7 +1633,7 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
             (*cache)[0] = 0;
         }
     }
-    if expected_class_id == 0 || expected_func_ptr.is_null() || cache_slot.is_null() {
+    if expected_class_id == 0 || expected_info.is_null() || cache_slot.is_null() {
         return 0;
     }
     let Some(method_bytes) = method_name_bytes(method_name_ptr, method_name_len) else {
@@ -1689,7 +1687,7 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     let closure_bits = std::ptr::read(fields.add(field_index as usize));
     let raw_ptr = closure_ptr_from_value_bits(closure_bits);
     let closure = crate::closure::clean_closure_ptr(raw_ptr);
-    if crate::closure::get_valid_func_ptr(closure) != expected_func_ptr {
+    if !std::ptr::eq(crate::closure::get_valid_info(closure), expected_info) {
         return 0;
     }
 
@@ -1730,11 +1728,11 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G2: unsafe extern "C" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
+    #[used(compiler)] static G3: extern "C" fn(u64, f64, *const crate::closure::JsFunctionInfo, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G3B: extern "C" fn(f64, *const u8) -> u64 = js_closure_exact_func_guard;
+    #[used(compiler)] static G3B: extern "C" fn(f64, *const crate::closure::JsFunctionInfo) -> u64 = js_closure_exact_func_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
+    #[used(compiler)] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const crate::closure::JsFunctionInfo, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]

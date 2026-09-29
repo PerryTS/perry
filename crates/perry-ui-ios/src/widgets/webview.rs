@@ -16,8 +16,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 extern "C" {
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call2(closure: *const u8, arg1: f64, arg2: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call2(closure: *const u8, this: perry_ffi::JsThis, arg1: f64, arg2: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     fn js_nanbox_string(ptr: i64) -> f64;
@@ -153,7 +153,7 @@ define_class!(
                     crate::catch_callback_panic(
                         "webview onShouldNavigate",
                         std::panic::AssertUnwindSafe(|| {
-                            let r = unsafe { js_closure_call1(closure_ptr, url_nb) };
+                            let r = unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb) };
                             result_cell_ref.set(r);
                         }),
                     );
@@ -202,7 +202,7 @@ define_class!(
                     let url_nb = nanbox_str(&url_str);
                     let closure_ptr = js_nanbox_get_pointer(on_loaded) as *const u8;
                     if !closure_ptr.is_null() {
-                        js_closure_call1(closure_ptr, url_nb);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, url_nb);
                     }
                 }),
             );
@@ -264,7 +264,12 @@ impl PerryWebViewDelegate {
                 let msg_nb = nanbox_str(&msg);
                 let closure_ptr = js_nanbox_get_pointer(on_error) as *const u8;
                 if !closure_ptr.is_null() {
-                    js_closure_call2(closure_ptr, code as f64, msg_nb);
+                    js_closure_call2(
+                        closure_ptr,
+                        perry_ffi::JsThis::UNDEFINED,
+                        code as f64,
+                        msg_nb,
+                    );
                 }
             }),
         );
@@ -415,7 +420,7 @@ pub fn evaluate_js(handle: i64, js_ptr: *const u8, callback: f64) {
                     let nb = nanbox_str(&s);
                     let closure_ptr = js_nanbox_get_pointer(callback) as *const u8;
                     if !closure_ptr.is_null() {
-                        js_closure_call1(closure_ptr, nb);
+                        js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb);
                     }
                 }),
             );

@@ -140,7 +140,7 @@ fn park(path: f64, data: f64, options: f64, sink: f64, mode: f64) {
     let data_handle = scope.root_nanbox_f64(data);
     let options_handle = scope.root_nanbox_f64(options);
     let sink_handle = scope.root_nanbox_f64(sink);
-    let closure = js_closure_alloc(perform_deferred_fs_op as *const u8, CAPTURE_COUNT);
+    let closure = js_closure_alloc(crate::fn_info!(perform_deferred_fs_op, 0), CAPTURE_COUNT);
     js_closure_set_capture_f64(closure, CAP_PATH, path_handle.get_nanbox_f64());
     js_closure_set_capture_f64(closure, CAP_DATA, data_handle.get_nanbox_f64());
     js_closure_set_capture_f64(closure, CAP_OPTIONS, options_handle.get_nanbox_f64());
@@ -264,7 +264,10 @@ fn callback_from_sink(sink: f64) -> *const ClosureHeader {
 
 /// The parked operation. Runs on a later event-loop turn; never on the turn
 /// that scheduled it, which is the whole point.
-extern "C" fn perform_deferred_fs_op(closure: *const ClosureHeader) -> f64 {
+extern "C" fn perform_deferred_fs_op(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     let mode = js_closure_get_capture_f64(closure, CAP_MODE);
     // The operation allocates (error values, decoded strings), so the captured
     // JS values are read through handles rather than held raw across it — the

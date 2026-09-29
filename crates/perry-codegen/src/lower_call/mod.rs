@@ -276,31 +276,49 @@ pub(crate) fn emit_rooted_call(
 pub(crate) const MAX_FIXED_CLOSURE_CALL_ARGS: usize = 16;
 
 /// Dispatch an unboxed closure handle over already-lowered arguments through
-/// the closure-call ABI.
-///
-/// Up to [`MAX_FIXED_CLOSURE_CALL_ARGS`] arguments use the per-arity
-/// `js_closure_call{N}` register entry points — the fast path, unchanged.
-/// Wider calls marshal the arguments into an entry-block `[N x double]` buffer
-/// and dispatch through the variadic `js_closure_call_array(closure, args_ptr,
-/// argc)`, which owns arbitrary-arity dispatch including rest bundling (#3527).
-/// #10420: every closure-value call site used to either reject a 17th argument
-/// at compile time or truncate the list to 16; they all route here now.
-///
-/// The buffer is NOT a GC root, so callers pass values that are already valid
-/// below their last collection point; nothing emitted between the stores and
-/// the call can collect.
+/// the closure-call ABI as a PLAIN call (receiver `undefined`).
 pub(crate) fn emit_closure_handle_call(
     ctx: &mut FnCtx<'_>,
     closure_handle: &str,
     args: &[String],
 ) -> String {
+    emit_closure_handle_call_this(
+        ctx,
+        closure_handle,
+        crate::expr::body_call::JS_THIS_UNDEFINED,
+        args,
+    )
+}
+
+/// Dispatch an unboxed closure handle with receiver `this_bits` (the
+/// receiver's NaN-boxed bits, `i64`, already re-read from its root by the
+/// caller — nothing between here and the dispatch collects).
+///
+/// Up to [`MAX_FIXED_CLOSURE_CALL_ARGS`] arguments use the per-arity
+/// `js_closure_call{N}(closure, this, ...)` register entry points. Wider
+/// calls marshal the arguments into an entry-block `[N x double]` buffer and
+/// dispatch through `js_closure_call_array(closure, this, args_ptr, argc)`,
+/// which owns arbitrary-arity dispatch including rest bundling (#3527).
+/// #10420: every closure-value call site used to either reject a 17th
+/// argument at compile time or truncate the list to 16; they all route here.
+///
+/// The buffer is NOT a GC root, so callers pass values that are already valid
+/// below their last collection point; nothing emitted between the stores and
+/// the call can collect.
+pub(crate) fn emit_closure_handle_call_this(
+    ctx: &mut FnCtx<'_>,
+    closure_handle: &str,
+    this_bits: &str,
+    args: &[String],
+) -> String {
     use crate::types::{DOUBLE, I64, PTR};
     if args.len() <= MAX_FIXED_CLOSURE_CALL_ARGS {
-        let runtime_fn = format!("js_closure_call{}", args.len());
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = Vec::with_capacity(args.len() + 1);
+        let runtime_fn = crate::runtime_abi::JS_CLOSURE_CALL_ENTRIES[args.len()];
+        let mut call_args: Vec<(crate::types::LlvmType, &str)> = Vec::with_capacity(args.len() + 2);
         call_args.push((I64, closure_handle));
+        call_args.push((I64, this_bits));
         call_args.extend(args.iter().map(|value| (DOUBLE, value.as_str())));
-        return ctx.block().call(DOUBLE, &runtime_fn, &call_args);
+        return ctx.block().call(DOUBLE, runtime_fn, &call_args);
     }
     let n = args.len();
     let buf = ctx.func.alloca_entry_array(DOUBLE, n);
@@ -313,7 +331,12 @@ pub(crate) fn emit_closure_handle_call(
     blk.call(
         DOUBLE,
         "js_closure_call_array",
-        &[(I64, closure_handle), (PTR, &buf), (I64, &argc)],
+        &[
+            (I64, closure_handle),
+            (I64, this_bits),
+            (PTR, &buf),
+            (I64, &argc),
+        ],
     )
 }
 

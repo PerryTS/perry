@@ -662,7 +662,12 @@ pub extern "C" fn js_headers_for_each(handle: f64, callback: f64) -> f64 {
         let k_nan = JSValue::string_ptr(k_ptr).bits();
         let closure = perry_runtime::js_nanbox_get_pointer(cb_handle.get_nanbox_f64())
             as *const perry_runtime::ClosureHeader;
-        perry_runtime::js_closure_call2(closure, v_handle.get_nanbox_f64(), f64::from_bits(k_nan));
+        perry_runtime::js_closure_call2(
+            closure,
+            perry_runtime::closure::plain_call_receiver(),
+            v_handle.get_nanbox_f64(),
+            f64::from_bits(k_nan),
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }

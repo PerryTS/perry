@@ -79,12 +79,15 @@ mod tests {
     fn queued_microtask_runs_and_restores_quiescence() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 0);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 0), 0);
             crate::builtins::js_queue_microtask(callback as i64);
             assert!(!can_skip_callback_phases());
             assert!(js_promise_run_microtasks_event_loop() > 0);
@@ -181,12 +184,16 @@ mod tests {
     fn buffered_stdin_is_delivered_without_any_timer() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader, _: f64) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+                _: f64,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 1);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 1), 0);
             crate::os::test_set_stdin_data_listener(Some(callback as i64));
             crate::os::stdin_push_bytes(b"input");
             assert!(!crate::timer::timer_phase_work_pending());
@@ -237,12 +244,15 @@ mod tests {
     fn exit_promise_checkpoint_leaves_ticks_forbidden() {
         isolated(|| {
             static CALLED: AtomicU64 = AtomicU64::new(0);
-            extern "C" fn callback(_: *const crate::closure::ClosureHeader) -> f64 {
+            extern "C" fn callback(
+                _: *const crate::closure::ClosureHeader,
+                _this: crate::closure::JsThis,
+            ) -> f64 {
                 CALLED.fetch_add(1, Ordering::Relaxed);
                 0.0
             }
-            crate::closure::js_register_closure_arity(callback as *const u8, 0);
-            let callback = crate::closure::js_closure_alloc(callback as *const u8, 0);
+
+            let callback = crate::closure::js_closure_alloc(crate::fn_info!(callback, 0), 0);
             crate::builtins::js_queue_next_tick(callback as i64);
             assert_eq!(js_promise_run_promise_jobs(), 0);
             assert_eq!(CALLED.load(Ordering::Relaxed), 0);

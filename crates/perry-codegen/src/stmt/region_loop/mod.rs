@@ -61,11 +61,16 @@ use crate::expr::region_guard::{self, Sites, MAX_KEYS};
 use crate::expr::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
+mod arrays;
 mod bare;
 mod guard;
 mod plan;
 mod verify;
 
+use self::arrays::ArrayRecv;
+pub(crate) use self::arrays::{
+    alias_clone, emit_poll_refresh, is_bare_index_get, try_lower_bare_index_get, unalias_clone,
+};
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
@@ -73,7 +78,7 @@ use self::guard::{
     handle_of, lower_recv, store_admission,
 };
 use self::plan::{
-    accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible,
+    accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,
     Recheck,
 };
 use self::verify::{successors, verify};
@@ -190,6 +195,7 @@ pub(crate) struct Receiver {
 
 /// A region whose body has not been lowered yet: `lower_stmts` recognises the
 /// body slice by address and splits it.
+#[derive(Clone)]
 pub(crate) struct Pending {
     body_ptr: usize,
     body_len: usize,
@@ -207,6 +213,26 @@ pub(crate) struct Pending {
     /// Loop regions: which split copy [`lower_loop`] is lowering — the one
     /// for a word with a spill-located key, or the all-inline one.
     spill_mode: bool,
+    /// Loop regions: array receivers (S3), guarded in the preheader.
+    arrays: Vec<ArrayRecv>,
+    /// Loop regions with array receivers: the body region split inside
+    /// F-body (a per-iteration receiver read from the array). Its fact
+    /// trees' generic arms set the loop's dirty flag (its `dirty_slot` is the
+    /// loop's); its G-tail leaves the loop region (`parent_valid`).
+    inner: Option<Box<Pending>>,
+    /// A body region nested in a loop region: the loop's valid slot. A
+    /// failed body guard means the per-iteration receiver is not what the
+    /// region serves; re-deriving the loop's facts after every such
+    /// iteration costs more than the straight-line read it replaces, so the
+    /// G-tail clears the loop's valid flag and the loop runs G-body (the
+    /// judgement that refuses a plan which re-checks every iteration, made
+    /// where the failure is seen).
+    parent_valid: Option<String>,
+    /// The copy of that body region inside the loop's G-body: the loop's
+    /// dirty slot. A passing body guard there asks the next iteration to
+    /// re-check the loop's facts (a receiver that failed while its layout
+    /// was warming up comes back to F-body).
+    retry: Option<String>,
 }
 
 /// The facts active while F-body is lowered.
@@ -225,6 +251,9 @@ pub(crate) struct Active {
     /// This F copy serves words with a SPILL-located key (bit 62): a read's
     /// slot field then says inline (`< 32`) or spill index (`32 + i`).
     spill: bool,
+    /// Array receivers (S3) and the emitted bare element reads.
+    arrays: Vec<ArrayRecv>,
+    emitted_arr: Vec<(usize, usize)>,
 }
 
 thread_local! {
@@ -300,6 +329,27 @@ pub(crate) fn begin(
     body: &[Stmt],
     update: Option<&Expr>,
 ) -> Result<Option<u64>> {
+    begin_with(ctx, cond, body, update, false)
+}
+
+/// [`begin`] for a loop a specialised tier versioned and whose slow copy
+/// still reads arrays: only a region with a bare element read is formed.
+pub(crate) fn begin_for_arrays(
+    ctx: &mut FnCtx<'_>,
+    cond: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Expr>,
+) -> Result<Option<u64>> {
+    begin_with(ctx, cond, body, update, true)
+}
+
+fn begin_with(
+    ctx: &mut FnCtx<'_>,
+    cond: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Expr>,
+    arrays_only: bool,
+) -> Result<Option<u64>> {
     if disabled()
         || crate::codegen::full_outline_ic_enabled()
         || crate::expr::typed_feedback_emission_enabled()
@@ -314,9 +364,51 @@ pub(crate) fn begin(
     }
     // A loop region; failing that, a body region (per-iteration receiver).
     let cands = candidates_for_loop(ctx, cond, body, update);
-    if let Some(p) = plan(ctx, body, cands, Some((cond, update)))
-        .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len()))
-    {
+    let arrs = arrays::candidates(ctx, cond, body, update);
+    // Array receivers (S3): the loop region, with the body region nested in
+    // its F-body when there is one. Without a bare element read, today's
+    // choice below.
+    let mut nested: Option<(Plan, Option<(usize, Plan)>)> = None;
+    if !arrs.is_empty() {
+        let inner = body_region_plan(ctx, body);
+        let p = plan(
+            ctx,
+            body,
+            cands.clone(),
+            arrs,
+            Some((cond, update)),
+            inner.as_ref().map(|(k, ip)| (*k, &ip.bare, &ip.trees)),
+        )
+        // A re-check every iteration re-derives the array's facts every
+        // iteration: that is the straight-line read's cost, plus a split.
+        .filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
+        if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("4") {
+            eprintln!(
+                "[perry region] array plan in {}: {:?}",
+                ctx.func.name,
+                p.as_ref()
+                    .map(|p| (p.recheck, p.arrays.len(), p.bare.len()))
+            );
+        }
+        if let Some(p) = p {
+            let bare = p.bare.len() + inner.as_ref().map_or(0, |(_, ip)| ip.bare.len());
+            if pays(ctx, "loop", body_nodes(body), bare) {
+                nested = Some((p, inner));
+            }
+        }
+    }
+    if nested.is_none() && arrays_only {
+        return Ok(None);
+    }
+    let (first, inner) = match nested {
+        Some((p, inner)) => (Some(p), inner),
+        None => (
+            plan(ctx, body, cands, HashMap::new(), Some((cond, update)), None)
+                .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len())),
+            None,
+        ),
+    };
+    if let Some(p) = first {
         let token = NEXT_TOKEN.with(|t| {
             let v = t.get();
             t.set(v + 1);
@@ -344,10 +436,27 @@ pub(crate) fn begin(
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
+        let mut arrs: Vec<ArrayRecv> = Vec::new();
+        for (r, m) in &p.arrays {
+            let a = ArrayRecv {
+                recv: *r,
+                max_index: *m,
+                base_slot: ctx.func.alloca_entry(I64),
+            };
+            let pass = arrays::emit_guard(ctx, &a)?;
+            all = ctx.block().and(I1, &all, &pass);
+            arrs.push(a);
+        }
         ctx.block().store(I1, &all, &valid_slot);
         let dirty_slot = ctx.func.alloca_entry(I1);
         ctx.block().store(I1, "false", &dirty_slot);
         stat(0, 1);
+        let inner = inner.map(|(k, ip)| {
+            let mut ib = body_pending(ip, body, k);
+            ib.dirty_slot = Some(dirty_slot.clone());
+            ib.parent_valid = Some(valid_slot.clone());
+            Box::new(ib)
+        });
         ctx.region_loops.push(Pending {
             body_ptr: body.as_ptr() as usize,
             body_len: body.len(),
@@ -360,11 +469,28 @@ pub(crate) fn begin(
             trees: p.trees,
             token,
             spill_mode: false,
+            arrays: arrs,
+            inner,
+            parent_valid: None,
+            retry: None,
         });
         return Ok(Some(token));
     }
     // Body region: the first `const o = <expr>` whose binding the rest of the
     // body reads or writes by static key.
+    if let Some((k, p)) = body_region_plan(ctx, body) {
+        let pending = body_pending(p, body, k);
+        let token = pending.token;
+        ctx.region_loops.push(pending);
+        return Ok(Some(token));
+    }
+    stat(5, 1);
+    Ok(None)
+}
+
+/// The body region of `body`: the first `const o = <expr>` whose binding the
+/// rest of the body reads or writes by static key, and its plan.
+fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
     for (i, s) in body.iter().enumerate() {
         let Stmt::Let {
             id, init: Some(_), ..
@@ -393,47 +519,53 @@ pub(crate) fn begin(
         }
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
-        let Some(p) = plan(ctx, tail, cands, None)
+        if let Some(p) = plan(ctx, tail, cands, HashMap::new(), None, None)
             .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
-        else {
-            continue;
-        };
-        let token = NEXT_TOKEN.with(|t| {
-            let v = t.get();
-            t.set(v + 1);
-            v
-        });
-        let receivers: Vec<Receiver> = p
-            .receivers
-            .iter()
-            .map(|(r, k, st, sm)| Receiver {
-                recv: *r,
-                keys: k.clone(),
-                has_store: *st,
-                stored_mask: effective_stored_mask(*sm, k.len()),
-                spill: "false".to_string(),
-                sites: None,
-                word: String::new(),
-                slots: Vec::new(),
-            })
-            .collect();
-        ctx.region_loops.push(Pending {
-            body_ptr: body.as_ptr() as usize,
-            body_len: body.len(),
-            split_at: i + 1,
-            valid_slot: None,
-            dirty_slot: None,
-            recheck: Recheck::None,
-            receivers,
-            bare: p.bare,
-            trees: p.trees,
-            token,
-            spill_mode: false,
-        });
-        return Ok(Some(token));
+        {
+            return Some((i + 1, p));
+        }
     }
-    stat(5, 1);
-    Ok(None)
+    None
+}
+
+/// A body region's pending split at `split_at`.
+fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
+    let token = NEXT_TOKEN.with(|t| {
+        let v = t.get();
+        t.set(v + 1);
+        v
+    });
+    let receivers: Vec<Receiver> = p
+        .receivers
+        .iter()
+        .map(|(r, k, st, sm)| Receiver {
+            recv: *r,
+            keys: k.clone(),
+            has_store: *st,
+            stored_mask: effective_stored_mask(*sm, k.len()),
+            spill: "false".to_string(),
+            sites: None,
+            word: String::new(),
+            slots: Vec::new(),
+        })
+        .collect();
+    Pending {
+        body_ptr: body.as_ptr() as usize,
+        body_len: body.len(),
+        split_at,
+        valid_slot: None,
+        dirty_slot: None,
+        recheck: Recheck::None,
+        receivers,
+        bare: p.bare,
+        trees: p.trees,
+        token,
+        spill_mode: false,
+        arrays: Vec::new(),
+        inner: None,
+        parent_valid: None,
+        retry: None,
+    }
 }
 
 fn expr_refused(e: &Expr) -> bool {
@@ -589,16 +721,30 @@ pub(crate) fn lower_split(
     }
     let tail = &stmts[split_at..];
     let mut receivers = ctx.region_loops[idx].receivers.clone();
+    // A body region nested in a loop region: its G-tail leaves the loop
+    // region (see `Pending::parent_valid`).
+    let parent_valid = ctx.region_loops[idx].parent_valid.clone();
     // A body region's binding was declared by the prefix just lowered: if its
     // lowering gave it a special representation, the tail lowers plainly.
     if split_at > 0 && !receivers.iter().all(|rv| receiver_eligible(ctx, rv.recv)) {
+        if let Some(v) = &parent_valid {
+            ctx.block().store(I1, "false", v);
+        }
         return lower_list(ctx, tail);
     }
+    let inner = ctx.region_loops[idx].inner.clone();
     let valid_slot = ctx.region_loops[idx].valid_slot.clone();
-    let recheck = ctx.region_loops[idx].recheck;
+    // A loop region with a nested body region re-checks on the dirty flag
+    // (G-body's retry sets it).
+    let recheck = match ctx.region_loops[idx].recheck {
+        Recheck::None if inner.is_some() => Recheck::Dirty,
+        r => r,
+    };
+    let retry = ctx.region_loops[idx].retry.clone();
     let bare = ctx.region_loops[idx].bare.clone();
     let trees = ctx.region_loops[idx].trees.clone();
     let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
+    let arrs = ctx.region_loops[idx].arrays.clone();
     // The layouts F-body must serve: a loop region's split copy was chosen by
     // its preheader (one layout); a body region chooses per iteration, so it
     // carries the all-inline copy and, unless every key it names is stored
@@ -625,6 +771,10 @@ pub(crate) fn lower_split(
     // once `verify` has judged F-body.
     let decide;
     let mut decide_top: Option<(usize, String, String)> = None;
+    // With a nested body region the top tests the dirty flag first: G-body
+    // sets it to come back (`Pending::retry`); `decide_top` then carries
+    // the valid flag.
+    let dirty_first = inner.is_some();
     let mut direct: Option<(Sites, String)> = None;
     match &valid_slot {
         Some(slot) => {
@@ -636,13 +786,20 @@ pub(crate) fn lower_split(
                 let rc_l = ctx.block_label(rc);
                 let top = ctx.new_block("rloop.top");
                 let top_l = ctx.block_label(top);
-                ctx.block().cond_br(&v, &top_l, &slow_l);
-                ctx.current_block = top;
                 let d_slot = dirty_slot.clone().expect("loop regions carry a dirty slot");
-                let need = if recheck == Recheck::Dirty {
-                    ctx.block().load(I1, &d_slot)
+                let need = if dirty_first {
+                    let d = ctx.block().load(I1, &d_slot);
+                    ctx.block().cond_br(&d, &rc_l, &top_l);
+                    ctx.current_block = top;
+                    v
                 } else {
-                    "true".to_string()
+                    ctx.block().cond_br(&v, &top_l, &slow_l);
+                    ctx.current_block = top;
+                    if recheck == Recheck::Dirty {
+                        ctx.block().load(I1, &d_slot)
+                    } else {
+                        "true".to_string()
+                    }
                 };
                 // Fresh without a re-check: straight into F-body. The
                 // terminator of `top` is written at the end, like `decide`.
@@ -669,6 +826,10 @@ pub(crate) fn lower_split(
                         eq
                     };
                     ok = ctx.block().and(I1, &ok, &eq);
+                }
+                for a in &arrs {
+                    let pass = arrays::emit_guard(ctx, a)?;
+                    ok = ctx.block().and(I1, &ok, &pass);
                 }
                 ctx.block().store(I1, &ok, slot);
                 ctx.block().store(I1, "false", &d_slot);
@@ -712,6 +873,9 @@ pub(crate) fn lower_split(
         let fl = ctx.block_label(fb);
         ctx.current_block = fb;
         note(ctx, Route::RloopF);
+        if let Some(d) = &retry {
+            ctx.block().store(I1, "true", d);
+        }
         let scan_start = ctx.func.num_blocks();
         ctx.region_loop_facts.push(Active {
             receivers: receivers.clone(),
@@ -721,15 +885,44 @@ pub(crate) fn lower_split(
             emitted: Vec::new(),
             handles: Vec::new(),
             spill: mode,
+            arrays: arrs.clone(),
+            emitted_arr: Vec::new(),
         });
-        let r = lower_list(ctx, tail);
+        let r = match &inner {
+            Some(ib) => {
+                ctx.region_loops.push((**ib).clone());
+                let j = ctx.region_loops.len() - 1;
+                let r = lower_split(ctx, tail, j, lower_list);
+                ctx.region_loops.truncate(j);
+                r
+            }
+            None => lower_list(ctx, tail),
+        };
         let active = ctx.region_loop_facts.pop().expect("pushed above");
         r?;
         if !ctx.block().is_terminated() {
             ctx.block().br(&join_l);
         }
         let scan_end = ctx.func.num_blocks();
-        let ok = verify(ctx, fb, scan_start, scan_end, &active.emitted);
+        // The element reads are judged for JS like every bare access, and
+        // for collections on their own (their base is an address).
+        let all_emitted: Vec<(usize, usize)> = active
+            .emitted
+            .iter()
+            .chain(active.emitted_arr.iter())
+            .copied()
+            .collect();
+        let ok = verify(ctx, fb, scan_start, scan_end, &all_emitted)
+            && arrays::verify_arrays(
+                ctx,
+                fb,
+                scan_start,
+                scan_end,
+                &active.emitted_arr,
+                recheck,
+                dirty_slot.as_deref(),
+                valid_slot.as_deref(),
+            );
         if !ok {
             stat(4, 1);
             if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("2") {
@@ -747,14 +940,33 @@ pub(crate) fn lower_split(
     // G-body: today's lowering. A loop region with nothing between
     // iterations that can invalidate its facts (no re-check) never leaves F
     // once its split loop is entered — the preheader's plain loop is its G —
-    // so the split loop carries no G copy.
-    let g_dead = ok && valid_slot.is_some() && recheck == Recheck::None;
+    // so the split loop carries no G copy. A nested body region's G-tail
+    // leaves the loop region, so that loop keeps its G.
+    let g_dead = ok && valid_slot.is_some() && recheck == Recheck::None && inner.is_none();
     ctx.current_block = slow;
     if g_dead {
         ctx.block().unreachable();
     } else {
         note(ctx, Route::RloopG);
-        lower_list(ctx, tail)?;
+        if let Some(v) = &parent_valid {
+            ctx.block().store(I1, "false", v);
+        }
+        // A loop region's G-body is today's loop body, which splits at the
+        // nested body region.
+        match &inner {
+            Some(ib) => {
+                let mut ib = (**ib).clone();
+                ib.retry = dirty_slot.clone();
+                // G-body runs only while the loop is not valid.
+                ib.parent_valid = None;
+                ctx.region_loops.push(ib);
+                let j = ctx.region_loops.len() - 1;
+                let r = lower_split(ctx, tail, j, lower_list);
+                ctx.region_loops.truncate(j);
+                r?;
+            }
+            None => lower_list(ctx, tail)?,
+        }
         if !ctx.block().is_terminated() {
             ctx.block().br(&join_l);
         }
@@ -762,7 +974,9 @@ pub(crate) fn lower_split(
 
     if let Some((top_idx, need, rc_l)) = decide_top {
         ctx.current_block = top_idx;
-        if ok {
+        if ok && dirty_first {
+            ctx.block().cond_br(&need, &fast_l, &slow_l);
+        } else if ok {
             ctx.block().cond_br(&need, &rc_l, &fast_l);
         } else {
             ctx.block().br(&slow_l);

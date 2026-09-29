@@ -673,22 +673,22 @@ pub(crate) fn lower(
         // 3, 4)`), wrap it in a heap closure so the receiver can call
         // it via `js_closure_callN`. The wrapper function
         // `__perry_wrap_<name>` is emitted by `compile_module` for
-        // every user function and has the closure-call ABI: it takes
-        // `(closure_ptr, arg0, arg1, ...)` and forwards to the
-        // underlying function.
+        // every user function and has the JS body ABI: it takes
+        // `(closure_ptr, this, arg0, arg1, ...)` and forwards the
+        // arguments to the underlying function.
         Expr::FuncRef(id) => {
             let wrap_name = ctx.func_names.get(id).map_or_else(
                 || crate::codegen::helpers::unknown_func_wrapper_name(ctx.strings.module_prefix()),
                 |func_name| format!("__perry_wrap_{func_name}"),
             );
             let blk = ctx.block();
-            let wrap_ptr = format!("@{}", wrap_name);
+            let wrap_info = blk.fn_info_ref(&wrap_name);
             // FuncRef wrappers always have 0 captures, so we can route
-            // through the singleton-cached allocator: same func_ptr always
+            // through the singleton-cached allocator: the same body info always
             // yields the same ClosureHeader. Eliminates the per-evaluation
             // gc_malloc + gc_check_trigger that was the dominant cost in
             // tight loops which pass a function as a callback.
-            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+            let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_info)]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))
         }
 

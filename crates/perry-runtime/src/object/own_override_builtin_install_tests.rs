@@ -4,9 +4,16 @@
 use super::own_override::ARMS_NOTED;
 use crate::object::descriptor_state::{define_builtin_data_property, PropertyAttrs};
 
-extern "C" fn intrinsic_fixture(_closure: *const crate::closure::ClosureHeader) -> f64 {
+extern "C" fn intrinsic_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
     0.0
 }
+
+static INTRINSIC_FIXTURE: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
+    intrinsic_fixture as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+);
 
 fn key(name: &str) -> *const crate::StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
@@ -21,7 +28,7 @@ fn arms() -> usize {
 #[test]
 fn a_builtin_install_on_an_intrinsic_does_not_arm_the_guard() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let ctor = crate::closure::js_closure_alloc(intrinsic_fixture as *const u8, 0);
+    let ctor = crate::closure::js_closure_alloc(&INTRINSIC_FIXTURE, 0);
     let before = arms();
     define_builtin_data_property(
         ctor as *mut crate::object::ObjectHeader,

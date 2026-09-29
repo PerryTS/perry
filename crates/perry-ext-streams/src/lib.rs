@@ -428,7 +428,7 @@ unsafe fn invoke_start(stream_id: usize) {
     };
     if cb != 0 {
         let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-        let _ = closure.call1(controller);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, controller);
     }
 }
 
@@ -452,7 +452,7 @@ unsafe fn maybe_pull(stream_id: usize) {
         return;
     }
     let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-    let _ = closure.call1(controller);
+    let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, controller);
     if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
         s.pulling = false;
     }
@@ -597,7 +597,7 @@ pub unsafe extern "C" fn js_readable_stream_cancel(
     };
     if cb != 0 {
         let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-        let _ = closure.call1(reason);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, reason);
     }
     close_pending(id);
     promise_resolve_bits(promise, TAG_UNDEFINED);
@@ -949,7 +949,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
                         .unwrap_or(0);
                     if write_cb != 0 {
                         let closure = JsClosure::from_raw(write_cb as *const RawClosureHeader);
-                        let _ = closure.call1(f64::from_bits(chunk));
+                        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, f64::from_bits(chunk));
                     }
                 }
             }
@@ -970,7 +970,7 @@ pub unsafe extern "C" fn js_readable_stream_pipe_to(
             .unwrap_or(0);
         if close_cb != 0 {
             let closure = JsClosure::from_raw(close_cb as *const RawClosureHeader);
-            let _ = closure.call0();
+            let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
         if let Some(w) = WRITABLE_STREAMS.lock().unwrap().get_mut(&w_id) {
             w.state = WritableState::Closed;
@@ -1073,7 +1073,7 @@ pub unsafe extern "C" fn js_writable_stream_close(stream_handle: f64) -> *mut Pr
     };
     if cb != 0 {
         let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-        let _ = closure.call0();
+        let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
     }
     if !closed_p.is_null() {
         promise_resolve_bits(closed_p, TAG_UNDEFINED);
@@ -1100,7 +1100,7 @@ pub unsafe extern "C" fn js_writable_stream_abort(stream_handle: f64, reason: f6
     };
     if cb != 0 {
         let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-        let _ = closure.call1(reason);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, reason);
     }
     if !closed_p.is_null() {
         promise_reject_bits(closed_p, reason_bits);
@@ -1145,7 +1145,7 @@ pub unsafe extern "C" fn js_writer_write(writer_handle: f64, chunk: f64) -> *mut
     };
     if cb != 0 {
         let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-        let _ = closure.call1(chunk);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, chunk);
     }
     promise_resolve_bits(promise, TAG_UNDEFINED);
     promise
@@ -1349,7 +1349,7 @@ unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Promise {
     };
     if transform_cb != 0 && readable_id != 0 {
         let closure = JsClosure::from_raw(transform_cb as *const RawClosureHeader);
-        let _ = closure.call2(chunk, readable_id as f64);
+        let _ = closure.call2(perry_ffi::JsThis::UNDEFINED, chunk, readable_id as f64);
     } else {
         // Identity transform — pass-through.
         js_readable_stream_controller_enqueue(readable_id as f64, chunk);
@@ -1375,7 +1375,7 @@ unsafe fn transform_close(writable_id: usize) -> *mut Promise {
     };
     if flush_cb != 0 && readable_id != 0 {
         let closure = JsClosure::from_raw(flush_cb as *const RawClosureHeader);
-        let _ = closure.call1(readable_id as f64);
+        let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, readable_id as f64);
     }
     if readable_id != 0 {
         js_readable_stream_controller_close(readable_id as f64);

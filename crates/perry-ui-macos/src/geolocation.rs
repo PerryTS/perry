@@ -18,8 +18,15 @@ extern "C" {
     fn js_run_stdlib_pump();
     fn js_promise_run_microtasks() -> i32;
     fn js_nanbox_get_pointer(value: f64) -> i64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
-    fn js_closure_call4(closure: *const u8, arg0: f64, arg1: f64, arg2: f64, arg3: f64) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
+    fn js_closure_call4(
+        closure: *const u8,
+        this: perry_ffi::JsThis,
+        arg0: f64,
+        arg1: f64,
+        arg2: f64,
+        arg3: f64,
+    ) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
 }
 
@@ -113,7 +120,14 @@ unsafe fn pump() {
 unsafe fn invoke_success(closure_f64: f64, lat: f64, lng: f64, accuracy: f64, timestamp_ms: f64) {
     pump();
     let ptr = js_nanbox_get_pointer(closure_f64) as *const u8;
-    js_closure_call4(ptr, lat, lng, accuracy, timestamp_ms);
+    js_closure_call4(
+        ptr,
+        perry_ffi::JsThis::UNDEFINED,
+        lat,
+        lng,
+        accuracy,
+        timestamp_ms,
+    );
 }
 
 unsafe fn invoke_error(closure_f64: f64, message: &str) {
@@ -123,14 +137,14 @@ unsafe fn invoke_error(closure_f64: f64, message: &str) {
     pump();
     let ptr = js_nanbox_get_pointer(closure_f64) as *const u8;
     let msg = nanbox_str(message);
-    js_closure_call1(ptr, msg);
+    js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, msg);
 }
 
 unsafe fn invoke_status(closure_f64: f64, status: &str) {
     pump();
     let ptr = js_nanbox_get_pointer(closure_f64) as *const u8;
     let msg = nanbox_str(status);
-    js_closure_call1(ptr, msg);
+    js_closure_call1(ptr, perry_ffi::JsThis::UNDEFINED, msg);
 }
 
 fn auth_status_string(status: i32) -> &'static str {

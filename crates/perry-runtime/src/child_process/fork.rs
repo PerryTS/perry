@@ -25,10 +25,6 @@ use std::time::Duration;
 /// codegen boundary string-coerces a URL module path before calling this.
 #[no_mangle]
 pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr: i64) -> f64 {
-    cp_register_arities();
-
-    reactor::cp_register_reactor_arities();
-
     let module_raw = unsafe { cp_read_string_header(module_ptr) };
     if module_raw.contains('\0') {
         crate::fs::validate::throw_type_error_with_code(
@@ -127,22 +123,43 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     }
 
     let cp_methods: [(&str, CpFn); 13] = [
-        ("on", cp_cast2(cp_method_on)),
-        ("once", cp_cast2(cp_method_on)),
-        ("addListener", cp_cast2(cp_method_on)),
-        ("prependListener", cp_cast2(cp_method_on)),
-        ("removeListener", cp_cast2(cp_method_remove_listener)),
-        ("off", cp_cast2(cp_method_remove_listener)),
+        ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        ("once", crate::fn_info!(cp_method_on, 2; with_declared(2))),
+        (
+            "addListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "prependListener",
+            crate::fn_info!(cp_method_on, 2; with_declared(2)),
+        ),
+        (
+            "removeListener",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
+        (
+            "off",
+            crate::fn_info!(cp_method_remove_listener, 2; with_declared(2)),
+        ),
         (
             "removeAllListeners",
-            cp_cast1(cp_method_remove_all_listeners),
+            crate::fn_info!(cp_method_remove_all_listeners, 1; with_declared(1)),
         ),
-        ("emit", cp_cast2(cp_method_emit)),
-        ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_ref)),
-        ("unref", cp_cast0(cp_method_unref)),
-        ("send", cp_cast4(cp_method_send)),
-        ("disconnect", cp_cast0(cp_method_disconnect)),
+        ("emit", crate::fn_info!(cp_method_emit, 2; with_declared(2))),
+        ("kill", crate::fn_info!(cp_method_kill, 1; with_declared(1))),
+        ("ref", crate::fn_info!(cp_method_ref, 0; with_declared(0))),
+        (
+            "unref",
+            crate::fn_info!(cp_method_unref, 0; with_declared(0)),
+        ),
+        (
+            "send",
+            crate::fn_info!(cp_method_send, 4; with_declared(4), with_length(4)),
+        ),
+        (
+            "disconnect",
+            crate::fn_info!(cp_method_disconnect, 0; with_declared(0)),
+        ),
     ];
     // Distinct shape band from spawn's ChildProcess (which carries no send/disconnect).
     let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + 0x20 + cp_methods.len() as u32);
@@ -253,8 +270,10 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
             ],
         );
         cp_set_field(cp, b"__cpError", err);
-        let emit_closure =
-            crate::closure::js_closure_alloc(reactor::cp_emit_spawn_error as *const u8, 1);
+        let emit_closure = crate::closure::js_closure_alloc(
+            crate::fn_info!(reactor::cp_emit_spawn_error, 0; with_declared(0)),
+            1,
+        );
         crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
         crate::timer::js_set_immediate_callback(emit_closure as i64);
     }
@@ -318,8 +337,11 @@ fn fork_launch(
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
             let channel = cp_build_object(
                 &[
-                    ("ref", cp_cast0(cp_method_this0)),
-                    ("unref", cp_cast0(cp_method_this0)),
+                    ("ref", crate::fn_info!(cp_method_this0, 0; with_declared(0))),
+                    (
+                        "unref",
+                        crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+                    ),
                 ],
                 CP_SHAPE_ID + 0x40,
             );
@@ -367,8 +389,11 @@ fn fork_launch(
             cp_set_field(cp, b"connected", TAG_TRUE_F64);
             let channel = cp_build_object(
                 &[
-                    ("ref", cp_cast0(cp_method_this0)),
-                    ("unref", cp_cast0(cp_method_this0)),
+                    ("ref", crate::fn_info!(cp_method_this0, 0; with_declared(0))),
+                    (
+                        "unref",
+                        crate::fn_info!(cp_method_this0, 0; with_declared(0)),
+                    ),
                 ],
                 CP_SHAPE_ID + 0x40,
             );

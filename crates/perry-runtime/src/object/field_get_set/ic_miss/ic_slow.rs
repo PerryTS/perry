@@ -216,8 +216,8 @@ unsafe fn overflow_arm(
     super::ic_miss::get_field_ic_miss_impl(obj, key, cache_slot, std::ptr::null())
 }
 
-/// The exit for a receiver that IS a heap pointer — every failing guard on the
-/// emitted site's object path lands here.
+/// The exit for a receiver that IS a heap pointer — every failing guard and
+/// every MRU miss on the emitted site's object path lands here (one call).
 ///
 /// * `obj_handle` — the receiver with the NaN-box tag already masked off. The
 ///   caller has established the POINTER/STRING tag; this entry re-establishes
@@ -238,62 +238,32 @@ pub extern "C-unwind" fn js_object_get_field_ic_slow(
     cache_slot: *mut PicCacheSlot,
     packed: *const AtomicU64,
 ) -> f64 {
-    // --- 0. a MEGAMORPHIC site's slot guess, confirmed by the receiver ------
-    //
-    // A site whose way state is latched negative sees more shapes than any
-    // per-site entry can name, and every read that misses its compact word
-    // lands here. The site may still hold one thing: a slot GUESS (the compact
-    // word's high half — the slot the receiver's shape answered last, step 2b),
-    // which the RECEIVER'S own shape confirms or refutes
-    // (`shapes::confirm_slot_guess`: the position bound says key position
-    // `guess` is inline slot `guess`, and the key there IS this key, one
-    // pointer compare). Everything the guess cannot answer continues in
-    // `ic_slow_body` unchanged. Asked first, and only at a latched site, so a
-    // site that can still be primed is primed exactly as before. `length` is
-    // excluded as in step 2b: an Array-subclass receiver serves it from its
-    // elements store. Kept in this frameless entry, with the body out of line,
-    // so the confirmed read pays no prologue for the arms below.
-    if let Some(value) = unsafe { megamorphic_slot_guess(obj_handle, key, cache_slot, packed) } {
-        return value;
+    // First-read D3: the site asked its GC-leaf front
+    // (`read_confirm::js_object_get_field_ic_front`) first; what reaches this
+    // entry is what the front declined. A never-primed site asks the
+    // inherited-read cache (#10834/#10842) — the one edge an inherited read
+    // ever takes — and everything else runs the collecting body.
+    let addr = obj_handle as usize;
+    if !key.is_null()
+        && crate::value::addr_class::is_above_handle_band(addr)
+        // SAFETY: the site passes its own cache slot or null.
+        && unsafe { crate::object::pic_slot_peek(cache_slot) }.is_null()
+    {
+        // SAFETY: a POINTER-tagged payload above the handle band.
+        let v = unsafe {
+            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(
+                addr as *const ObjectHeader,
+                key,
+            )
+        };
+        if v.to_bits() != crate::value::TAG_HOLE {
+            return v;
+        }
     }
     ic_slow_body(obj_handle, key, cache_slot, packed)
 }
 
-/// Step 0 of [`js_object_get_field_ic_slow`]: the latched site's slot guess.
-///
-/// # Safety
-/// The entry's contract: a POINTER receiver handle, this site's cache slot
-/// and packed word.
-#[inline(always)]
-unsafe fn megamorphic_slot_guess(
-    obj_handle: i64,
-    key: *const crate::StringHeader,
-    cache_slot: *mut PicCacheSlot,
-    packed: *const AtomicU64,
-) -> Option<f64> {
-    let obj = obj_handle as usize as *const ObjectHeader;
-    if packed.is_null()
-        || key.is_null()
-        || !crate::value::addr_class::is_above_handle_band(obj as usize)
-    {
-        return None;
-    }
-    let cache = crate::object::pic_slot_peek(cache_slot);
-    if cache.is_null()
-        || (*cache)[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] >= 0
-        || key_is_length(key)
-    {
-        return None;
-    }
-    let guess = ((*packed).load(Ordering::Relaxed) >> 32) as usize;
-    let value = crate::object::shapes::confirm_slot_guess(obj, key, guess)?;
-    #[cfg(test)]
-    crate::object::shapes::SHAPE_ANSWERED_READS.fetch_add(1, Ordering::Relaxed);
-    Some(value)
-}
-
-/// Everything after step 0 of [`js_object_get_field_ic_slow`].
-#[inline(never)]
+/// The body of [`js_object_get_field_ic_slow`].
 fn ic_slow_body(
     obj_handle: i64,
     key: *const crate::StringHeader,
@@ -434,7 +404,7 @@ fn ic_slow_body(
 
 /// `key` spells `length` — six bytes, compared directly (no UTF-8 validation).
 #[inline]
-unsafe fn key_is_length(key: *const crate::StringHeader) -> bool {
+pub(super) unsafe fn key_is_length(key: *const crate::StringHeader) -> bool {
     (*key).byte_len == 6
         && std::slice::from_raw_parts(crate::string::string_data(key), 6) == b"length"
 }
@@ -443,6 +413,10 @@ unsafe fn key_is_length(key: *const crate::StringHeader) -> bool {
 mod tests {
     use super::*;
     use crate::object::{PicCache, PIC_CACHE_WORDS};
+
+    /// The read an emitted site performs on its miss edge: the confirm stub
+    /// first at a latched site, then the slow entry.
+    use super::super::read_confirm::test_site_miss_read as site_read;
 
     /// The compact word an emitted site is born holding.
     const PACKED_GET_EMPTY_WORD: u64 = 0xFFFF_FFFF;
@@ -503,7 +477,7 @@ mod tests {
         let packed = AtomicU64::new(0);
         let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
             o.with_mut_ptr(|p: *mut ObjectHeader| {
-                kind.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+                kind.with_const_ptr(|k| unsafe { site_read(handle(p), k, slot, &packed) })
             })
         };
         // Drive the site until it latches.
@@ -567,17 +541,13 @@ mod tests {
         for _ in 0..4 {
             for o in &objs {
                 o.with_mut_ptr(|p: *mut ObjectHeader| {
-                    kind.with_const_ptr(|k| {
-                        js_object_get_field_ic_slow(handle(p), k, &mut slot, &packed)
-                    })
+                    kind.with_const_ptr(|k| unsafe { site_read(handle(p), k, &mut slot, &packed) })
                 });
             }
         }
         for o in &objs {
             let v = o.with_mut_ptr(|p: *mut ObjectHeader| {
-                absent.with_const_ptr(|k| {
-                    js_object_get_field_ic_slow(handle(p), k, &mut slot, &packed)
-                })
+                absent.with_const_ptr(|k| unsafe { site_read(handle(p), k, &mut slot, &packed) })
             });
             assert_eq!(
                 v.to_bits(),
@@ -642,7 +612,7 @@ mod tests {
         let packed = AtomicU64::new(0);
         let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
             o.with_mut_ptr(|p: *mut ObjectHeader| {
-                key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+                key.with_const_ptr(|k| unsafe { site_read(handle(p), k, slot, &packed) })
             })
         };
         for round in 0..4 {
@@ -874,9 +844,13 @@ mod tests {
     /// says key position `guess` is inline slot `guess` and holds exactly the
     /// key `site_key_bits` names, `None` for a decline.
     unsafe fn guess_walk(shape_id: u32, guess: u64, site_key_bits: u64) -> Option<usize> {
-        let key = (site_key_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-        crate::object::shapes::slot_guess_confirmed(shape_id, key, guess as usize)
-            .then_some(guess as usize)
+        crate::object::shapes::slot_guess_confirmed(
+            crate::object::shapes::ordinary_dir_addr(),
+            shape_id,
+            site_key_bits,
+            guess as usize,
+        )
+        .then_some(guess as usize)
     }
 
     fn stamp_of(o: &crate::gc::RuntimeHandle<'_>) -> u32 {
@@ -1470,7 +1444,7 @@ mod tests {
         let packed = AtomicU64::new(PACKED_GET_EMPTY_WORD);
         let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
             o.with_mut_ptr(|p: *mut ObjectHeader| {
-                key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+                key.with_const_ptr(|k| unsafe { site_read(handle(p), k, slot, &packed) })
             })
         };
         let want = |i: usize| {

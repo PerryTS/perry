@@ -77,8 +77,8 @@ extern "C" {
     fn js_array_push_f64(arr: *mut c_void, value: f64) -> *mut c_void;
     fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
-    fn js_closure_call0(closure: *const u8) -> f64;
-    fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
+    fn js_closure_call0(closure: *const u8, this: perry_ffi::JsThis) -> f64;
+    fn js_closure_call1(closure: *const u8, this: perry_ffi::JsThis, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
     // Converts an arbitrary JS value to a runtime `StringHeader` (typed here as
     // `*const u8` so it feeds `str_from_header`, the same way `clipboard.rs`
@@ -279,7 +279,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
                 js_object_set_field_by_name(obj, js_key(b"urls"), js_nanbox_pointer(arr as i64));
             }
             let payload = js_nanbox_pointer(obj as i64);
-            js_closure_call1(closure_ptr, payload);
+            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, payload);
         }
         pump_microtasks();
     });
@@ -312,7 +312,7 @@ fn drag_provider_payload(key: i64) -> Option<String> {
         return None;
     }
     unsafe {
-        let ret = js_closure_call0(closure_ptr);
+        let ret = js_closure_call0(closure_ptr, perry_ffi::JsThis::UNDEFINED);
         if ret.to_bits() == TAG_UNDEFINED {
             return None;
         }

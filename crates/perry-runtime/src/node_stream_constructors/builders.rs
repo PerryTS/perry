@@ -8,7 +8,6 @@ use crate::value::JSValue;
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
-    register_iter_helper_arities();
     let methods = readable_methods();
     let obj = build_object(&methods, READABLE_SHAPE_ID + methods.len() as u32);
     let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
@@ -34,7 +33,6 @@ pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) -> f64 {
-    register_iter_helper_arities();
     let raw = raw_ptr_from_value(this);
     if raw == 0 {
         return this;
@@ -119,7 +117,7 @@ pub extern "C" fn js_node_stream_legacy_subclass_init(this: f64) -> f64 {
     }
     let obj = raw as *mut ObjectHeader;
     let mut methods: Vec<(&str, StubFn)> = emitter_methods().to_vec();
-    methods.push(("pipe", cast2(ns_pipe2)));
+    methods.push(("pipe", crate::fn_info!(ns_pipe2, 2; with_declared(2))));
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }
@@ -243,8 +241,8 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     js_object_set_field_by_name(obj, length_key, len);
-    crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 3);
-    let methods: [(&str, StubFn); 1] = [("fill", super::cast3(ns_array_fill))];
+    let methods: [(&str, StubFn); 1] =
+        [("fill", crate::fn_info!(ns_array_fill, 3; with_declared(3)))];
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }
@@ -286,6 +284,7 @@ pub unsafe extern "C" fn js_array_subclass_init_args(
 /// Legacy shape-carried compatibility closure for `Array.prototype.fill`.
 pub(super) extern "C" fn ns_array_fill(
     closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
     value: f64,
     start: f64,
     end: f64,
@@ -296,7 +295,7 @@ pub(super) extern "C" fn ns_array_fill(
     // from index 1 (node: `7|8|8`, perry: `8|8|8`).
     let present = |v: f64| i32::from(!JSValue::from_bits(v.to_bits()).is_undefined());
     crate::array::js_array_fill_generic(
-        super::this_value(closure),
+        super::this_value(closure, this),
         value,
         present(start),
         start,
@@ -392,7 +391,6 @@ pub extern "C" fn js_node_stream_writable_subclass_init(this: f64, opts: f64) ->
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
-    register_iter_helper_arities();
     let methods = duplex_methods();
     let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
     let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
@@ -435,7 +433,6 @@ pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_subclass_init(this: f64, opts: f64) -> f64 {
-    register_iter_helper_arities();
     let raw = raw_ptr_from_value(this);
     if raw == 0 {
         return this;

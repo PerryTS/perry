@@ -608,10 +608,11 @@ fn string_via_engine(receiver: f64, separator: f64, limit_value: f64) -> Result<
 
 pub(crate) extern "C" fn regexp_thunk(
     _: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
     input: f64,
     limit: f64,
 ) -> f64 {
-    api::finish(regexp(crate::object::js_implicit_this_get(), input, limit))
+    api::finish(regexp(this.as_f64(), input, limit))
 }
 
 #[no_mangle]
