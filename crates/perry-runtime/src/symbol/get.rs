@@ -721,11 +721,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // Check CLASS_STATIC_SYMBOLS first when receiver is a class ref
+    // Check the class's static symbols first when receiver is a class ref
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
+    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
             if let Some(v) =
@@ -734,7 +733,12 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 return v;
             }
         }
-        if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
+        let static_lookup = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
+            class_static_symbol_lookup(class_id, sym_f64)
+        } else {
+            super::class_static_symbol_lookup_in_chain(class_id, sym_f64)
+        };
+        if let Some(vb) = static_lookup {
             return f64::from_bits(vb);
         }
         // #9101: statically-known well-known-symbol METHODS are registered

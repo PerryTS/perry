@@ -1164,6 +1164,88 @@ unsafe fn array_is_sweep_eligible(header: *mut GcHeader) -> bool {
         && crate::arena::pointer_in_nursery((header as *mut u8).add(GC_HEADER_SIZE) as usize)
 }
 
+/// A slot in an array's `[length, capacity)` that does not hold `TAG_HOLE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ArrayHoleTailViolation {
+    pub array: usize,
+    pub index: u32,
+    pub length: u32,
+    pub capacity: u32,
+    pub bits: u64,
+}
+
+/// The first array whose `[length, capacity)` is not all `TAG_HOLE`.
+///
+/// The runtime keeps that range hole-filled (`array::array_truncate_length`)
+/// because emitted element reads bound an index by `capacity` and read any
+/// slot past `length` as a hole. A length decrease that leaves the old value
+/// behind makes a read past the new `length` return it. This walk is the
+/// invariant's falsifier: debug builds run it at the start of every
+/// collection and panic on a violation, release builds when
+/// `PERRY_GC_VERIFY_ARRAY_HOLES` is set.
+pub(crate) fn verify_array_hole_tails() -> Option<ArrayHoleTailViolation> {
+    let mut first = None;
+    let mut check = |header: *mut GcHeader| unsafe {
+        if first.is_some()
+            || header.is_null()
+            || (*header).obj_type != GC_TYPE_ARRAY
+            || (*header).gc_flags & GC_FLAG_FORWARDED != 0
+        {
+            return;
+        }
+        let arr = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::array::ArrayHeader;
+        let (length, capacity) = ((*arr).length, (*arr).capacity);
+        if length >= capacity {
+            return;
+        }
+        let elements = crate::array::array_elements_ptr(arr);
+        for index in length..capacity {
+            let bits = *elements.add(index as usize);
+            if bits != crate::value::TAG_HOLE {
+                first = Some(ArrayHoleTailViolation {
+                    array: arr as usize,
+                    index,
+                    length,
+                    capacity,
+                    bits,
+                });
+                return;
+            }
+        }
+    };
+    crate::arena::arena_walk_objects(|hp| check(hp as *mut GcHeader));
+    for header in malloc_headers_for_verification() {
+        check(header);
+    }
+    first
+}
+
+fn gc_verify_array_holes_enabled() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *crate::once_init::get_or_init(&ENABLED, || {
+        super::env_flag_enabled("PERRY_GC_VERIFY_ARRAY_HOLES")
+    })
+}
+
+/// [`verify_array_hole_tails`] at a collection entry (every entry that builds
+/// the stack maps: the minor, compacting, evacuating and full collections and
+/// both budgeted cycle starts); panics on a violation.
+pub(super) fn verify_array_hole_tails_at_collection() {
+    if !gc_verify_array_holes_enabled() {
+        return;
+    }
+    if let Some(v) = verify_array_hole_tails() {
+        panic!(
+            "[gc-array-holes] array 0x{:x}: slot {} of [length {}, capacity {}) holds 0x{:x}, \
+             not TAG_HOLE — a length decrease skipped array_truncate_length",
+            v.array, v.index, v.length, v.capacity, v.bits
+        );
+    }
+}
+
 /// [`verify_array_pointer_slots_enumerated_for`] over every live array.
 pub(super) fn verify_array_pointer_slots_enumerated() -> ArraySlotEnumerationStats {
     let mut stats = ArraySlotEnumerationStats::default();

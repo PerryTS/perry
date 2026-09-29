@@ -82,10 +82,15 @@ thread_local! {
 /// puts into a global queue is tagged as its own.
 ///
 /// Returns the new id so the caller can hand it to [`retire_agent`] at exit.
+///
+/// Every agent start is also where the agent runs the program's static shape
+/// seed (design step 4): once the thread reports its own agent, and before
+/// any user code on it can mint a seeded literal's facts under a counter id.
 pub fn enter_worker_agent() -> AgentId {
     let id = NEXT_AGENT.fetch_add(1, Ordering::Relaxed);
     crate::object::method_site::note_worker_agent();
     CURRENT_AGENT.with(|slot| slot.set(Some(id)));
+    crate::object::static_shapes::js_shape_run_static_seed();
     id
 }
 

@@ -798,6 +798,14 @@ pub extern "C" fn js_class_field_set_ic(
 /// outline drops the inline path's static raw-number type hint (the result is
 /// treated as a general JS value), which is value-correct — acceptable on the
 /// size-gated full-outline path.
+///
+/// `cache_slot` is the site's own read cache (the `PicCacheSlot` every
+/// generic read site has). With typed feedback off, a read the inline
+/// pre-check could not prove is the One Path read, exactly as for any other
+/// receiver: the receiver's shape against the site's word, then the generic
+/// ladder (own miss, the inherited-read cache, priming) — see
+/// [`class_field_get_one_path`]. With feedback on, the guard runs and records
+/// as before.
 #[no_mangle]
 pub extern "C" fn js_class_field_get_ic(
     site_id: u64,
@@ -807,7 +815,11 @@ pub extern "C" fn js_class_field_get_ic(
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: i32,
+    cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
+    if !typed_feedback_enabled() {
+        return class_field_get_one_path(site_id, receiver, key, cache_slot, true);
+    }
     let guard_ok = js_typed_feedback_class_field_get_guard(
         site_id,
         receiver,
@@ -830,8 +842,115 @@ pub extern "C" fn js_class_field_get_ic(
     class_field_get_after_guard_fail(site_id, receiver, key)
 }
 
-/// `js_class_field_get_ic`'s guard-FAIL arm, shared with the S2 miss
-/// continuation [`js_class_field_get_ic_fast_miss`].
+/// The class-field read's miss arm with typed feedback off: the One Path
+/// read every other receiver takes, from the site's own cache.
+///
+/// The guard's answer is not needed first: a receiver its contract passes
+/// holds the key in slot `expected_field_index` of a shape that lists it
+/// there, which is the slot the shape read loads, so asking the shape answers
+/// the same value for it and for every receiver the contract refuses. What
+/// the shape read cannot serve inline (an inherited key, a getter, a Proxy,
+/// a primitive, a nullish receiver's TypeError) the ladder handles exactly as
+/// it does for `o.key` at a generic site. Before, a refused receiver took
+/// `js_object_get_field_by_name_f64`, a walk with no site memo, on every
+/// read: `this.pa` in a literal's method called on an `Object.create` child
+/// of it cost ~1,300 instructions where the same read through a parameter
+/// cost ~310.
+///
+/// `probe_mru` is false only when the S2 leaf entry already asked the word.
+fn class_field_get_one_path(
+    site_id: u64,
+    receiver: f64,
+    key: *const crate::StringHeader,
+    cache_slot: *mut crate::object::PicCacheSlot,
+    probe_mru: bool,
+) -> f64 {
+    let bits = receiver.to_bits();
+    // `key` is always the class field's literal name, loaded from a
+    // string-literal handle global (perry-codegen's property_get.rs), and a
+    // literal handle is always heap-allocated regardless of length
+    // (perry-codegen's strings.rs), so this can never be a SHORT_STRING_TAG
+    // value in practice; checked explicitly so a short string here declines
+    // to the generic ladder (which is SSO-aware) instead of being masked
+    // into a garbage pointer.
+    if crate::value::JSValue::from_bits(key as u64).is_short_string() {
+        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_LADDER);
+        return crate::object::field_get_set::get_field_ic_dispatch(
+            bits as i64,
+            key,
+            site_id,
+            cache_slot,
+            false,
+        );
+    }
+    let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    if probe_mru {
+        if let Some(value) = unsafe { class_field_get_from_shape(bits, key, cache_slot, false) } {
+            return value;
+        }
+    }
+    crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_LADDER);
+    crate::object::field_get_set::get_field_ic_dispatch(
+        bits as i64,
+        key,
+        site_id,
+        cache_slot,
+        false,
+    )
+}
+
+/// The two answers the receiver's shape gives without the ladder, in the
+/// order the emitted generic read asks them: the site's own word, then (on
+/// its declined edge) the inherited-read cache. `None` for everything else.
+///
+/// `leaf`: the caller is the S2 GC-leaf entry, so an inherited ACCESSOR entry
+/// (which runs a getter) is declined, as `js_inherited_read_cache_hit_f64`
+/// declines it for the emitted read. Otherwise the cache is asked once, as
+/// the ladder's own first question (`get_field_ic_miss_impl`'s hook A) asks
+/// it, getter included.
+///
+/// # Safety
+/// `cache_slot` is null or the site's live read cache; `key` is the interned
+/// key with its tag masked off.
+#[inline(always)]
+unsafe fn class_field_get_from_shape(
+    bits: u64,
+    key: *const crate::StringHeader,
+    cache_slot: *mut crate::object::PicCacheSlot,
+    leaf: bool,
+) -> Option<f64> {
+    // POINTER tag above the handle band: the receiver test every emitted
+    // generic read makes before either lookup.
+    if bits >> 48 != 0x7FFD {
+        return None;
+    }
+    let handle = (bits & crate::value::POINTER_MASK) as usize as *const ObjectHeader;
+    if !crate::value::addr_class::is_above_handle_band(handle as usize) {
+        return None;
+    }
+    if let Some(value) = crate::object::field_get_set::pic_outlined_mru_hit(handle, cache_slot) {
+        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
+        return Some(value);
+    }
+    let value = if leaf {
+        let value =
+            crate::object::inherited_read_cache::js_inherited_read_cache_hit_f64(handle, key);
+        (value.to_bits() != crate::value::TAG_HOLE).then_some(value)
+    } else {
+        match crate::object::inherited_read_cache::inherited_read_cache_lookup(handle, key) {
+            crate::object::inherited_read_cache::Lookup::Hit(value) => {
+                Some(f64::from_bits(value.bits()))
+            }
+            _ => None,
+        }
+    };
+    if value.is_some() {
+        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
+    }
+    value
+}
+
+/// `js_class_field_get_ic`'s guard-FAIL arm with typed feedback on.
 fn class_field_get_after_guard_fail(
     site_id: u64,
     receiver: f64,
@@ -936,8 +1055,9 @@ pub extern "C" fn js_class_field_get_ic_fast(
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: i32,
+    cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
-    let _ = (site_id, key);
+    let _ = site_id;
     if !class_field_fast_entries_serve()
         || !class_field_fast_contract(
             receiver,
@@ -947,6 +1067,28 @@ pub extern "C" fn js_class_field_get_ic_fast(
             require_raw_f64 != 0,
         )
     {
+        // The receiver's shape (GC leaves, as in
+        // `js_object_get_field_ic_fast`): the One Path hit for a receiver
+        // the contract does not describe. Feedback on asks nothing here.
+        //
+        // `key` is always the class field's literal name, loaded from a
+        // string-literal handle global (perry-codegen's property_get.rs),
+        // and a literal handle is always heap-allocated regardless of
+        // length (perry-codegen's strings.rs), so this can never be a
+        // SHORT_STRING_TAG value in practice; checked explicitly so a short
+        // string declines here (falls through to `TAG_HOLE`, and the miss
+        // continuation's ladder) instead of being masked into a garbage
+        // pointer.
+        if !typed_feedback_enabled()
+            && !crate::value::JSValue::from_bits(key as u64).is_short_string()
+        {
+            let key = (key as u64 & crate::value::POINTER_MASK) as *const crate::StringHeader;
+            if let Some(value) =
+                unsafe { class_field_get_from_shape(receiver.to_bits(), key, cache_slot, true) }
+            {
+                return value;
+            }
+        }
         return f64::from_bits(crate::value::TAG_HOLE);
     }
     let object_addr = normalize_raw_object_addr(receiver.to_bits());
@@ -957,10 +1099,11 @@ pub extern "C" fn js_class_field_get_ic_fast(
     }
 }
 
-/// Collecting continuation of [`js_class_field_get_ic_fast`]. When the fast
-/// entry served nothing because feedback or descriptors are in use, this is
-/// the whole `js_class_field_get_ic`; otherwise its (side-effect-free) guard
-/// already failed and this is exactly that helper's guard-FAIL arm.
+/// Collecting continuation of [`js_class_field_get_ic_fast`]. With typed
+/// feedback on, the fast entry served nothing and this is the whole
+/// `js_class_field_get_ic`. With it off, the fast entry already asked the
+/// contract (when descriptors allow) and the site's shape word, and this is
+/// the rest of the One Path read: the generic ladder.
 #[no_mangle]
 pub extern "C" fn js_class_field_get_ic_fast_miss(
     site_id: u64,
@@ -970,8 +1113,9 @@ pub extern "C" fn js_class_field_get_ic_fast_miss(
     key: *const crate::StringHeader,
     expected_field_index: u32,
     require_raw_f64: i32,
+    cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
-    if !class_field_fast_entries_serve() {
+    if typed_feedback_enabled() {
         return js_class_field_get_ic(
             site_id,
             receiver,
@@ -980,9 +1124,10 @@ pub extern "C" fn js_class_field_get_ic_fast_miss(
             key,
             expected_field_index,
             require_raw_f64,
+            cache_slot,
         );
     }
-    class_field_get_after_guard_fail(site_id, receiver, key)
+    class_field_get_one_path(site_id, receiver, key, cache_slot, false)
 }
 
 /// GC-leaf hit of the full-outline class-field SET; returns one of the
@@ -1581,7 +1726,7 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G1D: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
     #[cfg(feature = "keepalive-anchors")]
-    #[used(compiler)] static G1E: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
+    #[used(compiler)] static G1E: extern "C" fn(u64, f64, u32, u32, *const crate::StringHeader, u32, i32, *mut crate::object::PicCacheSlot) -> f64 = js_class_field_get_ic;
     #[cfg(feature = "keepalive-anchors")]
     #[used(compiler)] static G2: unsafe extern "C" fn(u64, f64, u32, u32, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]

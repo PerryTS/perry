@@ -778,6 +778,10 @@ pub(super) fn get_field_ic_miss_impl(
     // the lookup returns `Unknown` in about ten instructions without
     // dereferencing anything further. See the rule-3 note in
     // `object::inherited_read_cache`.
+    // Charter step 5: a receiver still carrying a shape whose lane the
+    // lineage generalized moves to the normalized shape before anything is
+    // learned from it, so the site converges instead of going polymorphic.
+    unsafe { crate::object::field_rep_store::migrate_on_miss(obj as usize) };
     let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // Lane 3 hook A: an INHERITED read that this site has already resolved
@@ -1382,7 +1386,7 @@ fn outlined_mru_hit_enabled() -> bool {
 /// the caller has established that the tag was `POINTER`. `cache_slot` is the
 /// codegen-emitted per-site slot or null.
 #[inline]
-pub(super) unsafe fn pic_outlined_mru_hit(
+pub(crate) unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> Option<f64> {
@@ -1436,7 +1440,7 @@ pub extern "C" fn js_object_get_field_ic(
 /// The whole full-outline read ladder; `probe_mru` is false only on the cold
 /// arm of the S2 split, whose leaf entry has already asked the MRU word.
 #[inline(always)]
-pub(super) fn get_field_ic_dispatch(
+pub(crate) fn get_field_ic_dispatch(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,

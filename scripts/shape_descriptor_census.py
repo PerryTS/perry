@@ -498,8 +498,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
 
     # The insert/reverse-index body lives in the `_with_holes` variant since
     # the tombstone-delete work; `_with_generation` is a thin forwarding
-    # wrapper. The authority ordering is checked where the writes are.
-    ensure = function_body(shapes, "shape_descriptor_ensure_with_rep")
+    # wrapper, and so is `_with_rep` since charter step 5 split the intern
+    # (`shape_descriptor_intern_with_rep`, which takes an exact summary) out of
+    # it. The authority ordering is checked where the writes are.
+    ensure = function_body(shapes, "shape_descriptor_intern_with_rep")
     # The property is that the by-id descriptor is installed BEFORE the reverse
     # accelerator points at it — never which append spells it. #9768 added
     # `family_append_fresh`, which is `family_push_back` minus a membership scan
@@ -513,7 +515,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if ensure_append is None:
         raise CensusError(
             "shape descriptor authority surface missing: family append in "
-            "shape_descriptor_ensure_with_rep"
+            "shape_descriptor_intern_with_rep"
         )
     assert_before(
         ensure,
@@ -771,9 +773,14 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 # the ShapeId in the high 32 bits. All three halves are
                 # required, so dropping the ShapeId from the compare fails.
                 #
-                # The expectation is the class's own `@perry_class_shape_id_*`
-                # global, read VOLATILE per access (the runtime rewrites it once
-                # when an imported class's typed id is published). S6 retired
+                # The expectation is the class's own ShapeId: the driver's
+                # static id as an immediate when there is one (#11653),
+                # otherwise the `@perry_class_shape_id_*` global, read VOLATILE
+                # per access (the runtime rewrites it once when an imported
+                # class's typed id is published). The precheck asks
+                # `class_shape_id_operand_on_block` for it with `volatile`
+                # true; that helper owns the immediate-or-volatile-load
+                # choice. S6 retired
                 # the poisonable `@perry_class_guard_shape_*` twin: nothing may
                 # tell this compare not to trust the shape.
                 require_code(
@@ -788,8 +795,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 )
                 require_code(
                     body,
-                    r"load_volatile\s*\(\s*I32\s*,\s*&format!\(\s*\"@\{class_shape_global\}\"",
-                    f"{name} reads the class ShapeId expectation VOLATILE, per access",
+                    r"class_shape_id_operand_on_block\s*\(\s*blk\s*,\s*keys_global_name\s*,\s*true\s*\)",
+                    f"{name} reads the class ShapeId expectation VOLATILE (immediate or volatile load), per access",
                 )
                 require_code(
                     function_body(raw_class_guard, "expected_class_identity"),
