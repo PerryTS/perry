@@ -439,6 +439,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `PERRY_REGION_DIAG=1`: report step 4b's regions and the statement-level
     // runs it does not reach, when this module's codegen ends.
     let _region_diag = crate::expr::region_guard::ModuleDiag::start(hir);
+    crate::stmt::region_loop::begin_module(hir);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
     // #5334 lever B: decide ONCE, up front, whether this module is large enough

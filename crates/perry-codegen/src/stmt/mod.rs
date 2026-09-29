@@ -46,6 +46,7 @@ mod packed_range_global_cache_rooting_tests;
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+pub(crate) mod region_loop;
 mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
@@ -87,6 +88,15 @@ pub(crate) fn record_boxed_slot_js_value_bits(
 /// statement splits control flow, `ctx.current_block` is updated to the
 /// "fall-through" block after the split.
 pub(crate) fn lower_stmts(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
+    // Step 4b: a loop / body region's body lowers as F-body + G-body.
+    if let Some(idx) = region_loop::pending_for(ctx, stmts) {
+        return region_loop::lower_split(ctx, stmts, idx, lower_region_list);
+    }
+    lower_stmts_inner(ctx, stmts, false)
+}
+
+/// The split's own list lowering: never re-enters the region hook.
+fn lower_region_list(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) -> Result<()> {
     lower_stmts_inner(ctx, stmts, false)
 }
 
