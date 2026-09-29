@@ -130,6 +130,16 @@ pub extern "C" fn js_put_value_set_packed_miss(
     packed: *const AtomicU64,
 ) -> f64 {
     let site = packed as *const super::packed_add::PackedSetSite;
+    // Charter step 5: migrate a receiver whose shape the lineage generalized
+    // before the key-add memo or a way is keyed by it.
+    let target_bits = target.to_bits();
+    if target_bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        unsafe {
+            crate::object::field_rep_store::migrate_on_miss(
+                (target_bits & crate::value::POINTER_MASK) as usize,
+            )
+        };
+    }
     // The site's key-add memo, for what the emitted add hit refuses per
     // object or never takes (a spill slot). Nothing else has run yet.
     unsafe {
