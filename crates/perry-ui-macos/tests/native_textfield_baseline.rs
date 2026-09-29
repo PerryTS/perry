@@ -65,7 +65,13 @@ fn main() {
             let content = window.contentView().unwrap();
             content.addSubview(&view);
 
+            let single_line = field.cell().unwrap().usesSingleLineMode();
             let idle = ink_top(&content, field_frame);
+            assert_eq!(
+                field.cell().unwrap().usesSingleLineMode(),
+                single_line,
+                "drawing the idle field must leave its single-line mode as it was"
+            );
             window.makeFirstResponder(Some(field));
             let editor = field
                 .currentEditor()
@@ -73,7 +79,6 @@ fn main() {
             let editor = unsafe { &*(Retained::as_ptr(&editor) as *const NSTextView) };
             editor.setSelectedRange(NSRange::new(3, 0));
             editor.setInsertionPointColor(Some(&NSColor::whiteColor()));
-            content.display();
             let editing = ink_top(&content, field_frame);
             window.close();
 
