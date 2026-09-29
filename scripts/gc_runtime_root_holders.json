@@ -873,12 +873,6 @@
       "why": "#[cfg(test)] Cell<u64> counting the inherited-access chain-verdict hits served on the calling test thread, so a test can assert its own site fired while others run beside it. It stores only a count and is absent from shipped binaries."
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/static_accessor_attrs.rs",
-      "name": "STATIC_ACCESSOR_ATTRS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Reflective enumerable/configurable overrides applied by a generic Object.defineProperty(/ies) descriptor to a DECLARED STATIC class accessor (#10480), keyed by (class_id: u32, name: String) to (enumerable: bool, configurable: bool). Every field is a plain scalar or an owned String \u2014 no NaN-boxed JSValue, no heap ObjectHeader address, nothing for the collector to mark or rewrite. The static accessor's getter/setter function pointers stay in CLASS_STATIC_ACCESSORS; this table only remembers which two attribute bits a generic descriptor overrode. Instance accessors are real accessor properties of the class prototype and have no entry here."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_DECLARED_STATIC_GLOBAL_SLOTS",
       "verdict": "not_a_gc_pointer",

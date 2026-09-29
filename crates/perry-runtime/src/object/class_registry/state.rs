@@ -127,13 +127,7 @@ pub(crate) fn class_static_alias_sync(class_id: u32, name: &str) {
     };
     let plain = !class_is_key_deleted(class_id, name)
         && class_static_defined_attrs(class_id, name).is_none_or(|(writable, _, _)| writable)
-        && class_own_static_accessor_ptrs(class_id, name).is_none()
-        && super::class_dynamic_static_accessor_descriptor(
-            class_id,
-            name,
-            crate::object::class_value::class_value(class_id),
-        )
-        .is_none();
+        && !crate::object::class_value::class_static_has_own_accessor(class_id, name);
     let value = plain
         .then(|| crate::object::class_value::class_static_get(class_id, name))
         .flatten()

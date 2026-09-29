@@ -453,10 +453,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                                 class_id, name,
                             )
                             .is_some()
-                                || super::super::class_registry::class_own_static_accessor_ptrs(
+                                || super::super::class_registry::static_accessor_in_chain(
                                     class_id, name,
                                 )
-                                .is_some()
                                 || inherited_data));
                     if present {
                         return nanbox_true;

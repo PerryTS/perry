@@ -68,16 +68,13 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
-mod static_accessor_attrs;
 pub(crate) mod verdict_classes;
 mod vm_brand;
 
-// ── static_accessor_attrs.rs ────────────────────────────────────────────────
-pub(crate) use static_accessor_attrs::{
-    set_static_accessor_attrs, static_accessor_attrs, static_accessor_attrs_in_use,
-    static_accessor_descriptor, static_declared_accessor_ptrs, static_enumerable_accessor_names,
-    CLASS_ACCESSOR_DEFAULT_ATTRS,
-};
+// Static accessors are accessor properties of the class function object
+// (`object::class_value`); the ClassBody defaults are shared with instance
+// accessors.
+pub(crate) use crate::object::class_value::CLASS_ACCESSOR_DEFAULT_ATTRS;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 pub(crate) use state::async_resource_prototype_value;
@@ -201,7 +198,7 @@ pub(crate) use gc_roots::{
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
     class_accessor_function_value, class_accessor_source_func_ptr, class_own_accessor_ptrs,
-    class_own_static_accessor_ptrs, invalidate_class_string_member_order,
+    class_registered_static_accessor_ptrs, invalidate_class_string_member_order,
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,
