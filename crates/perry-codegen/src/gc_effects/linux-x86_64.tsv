@@ -3029,6 +3029,7 @@ js_sqlite_stmt_get	Reenters
 js_sqlite_stmt_raw	Reenters
 js_sqlite_stmt_run	Reenters
 js_sqlite_transaction	Reenters
+js_stack_overflow	Reenters
 js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
