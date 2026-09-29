@@ -1483,14 +1483,17 @@ fn server_response_method_bytes_for_handle(handle: i64, name: &str) -> Option<&'
 }
 
 /// Strip a NaN-boxed string arg to the raw `*const StringHeader` pointer the
-/// existing `js_node_http_server_on` / `_im_on` FFI expects.
+/// existing `js_node_http_server_on` / `_im_on` FFI expects. An inline SSO
+/// event name (`"da" + "ta"`, a template) goes through `string_arg_ptr`'s
+/// scratch header rather than a bare mask (#11519); every consumer copies the
+/// name out before returning.
 #[inline]
 fn string_arg(value: f64) -> *const StringHeader {
     let v = JsValue::from_bits(value.to_bits());
-    if !v.is_string() {
+    if !v.is_string() && !v.is_short_string() {
         return std::ptr::null();
     }
-    (value.to_bits() & PTR_MASK) as *const StringHeader
+    perry_ffi::string_arg_ptr(value)
 }
 
 /// Strip a NaN-boxed closure/function arg to the raw closure-pointer i64 the

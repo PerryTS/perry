@@ -2,6 +2,7 @@
 //! and tint, but CALayers retain resolved CGColors. A zero-size, unarranged child
 //! view observes inherited appearance changes and refreshes those layer values.
 //! It owns only colors; its superview owns it, avoiding an observer/owner cycle.
+use crate::srgb;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
@@ -10,13 +11,9 @@ use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSStr
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
-pub(super) fn rgba([r, g, b, a]: [f64; 4]) -> Retained<NSColor> {
-    NSColor::colorWithRed_green_blue_alpha(r, g, b, a)
-}
-
-fn color(light: [f64; 4], dark: [f64; 4]) -> Retained<NSColor> {
-    let light = rgba(light);
-    let dark = rgba(dark);
+fn color([lr, lg, lb, la]: [f64; 4], [dr, dg, db, da]: [f64; 4]) -> Retained<NSColor> {
+    let light = srgb::ns_color(lr, lg, lb, la);
+    let dark = srgb::ns_color(dr, dg, db, da);
     // Include the concrete accessibility variants: on macOS 26 a two-name
     // Aqua/DarkAqua lookup can classify high-contrast DarkAqua as Aqua.
     let dark_names = [

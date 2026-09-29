@@ -51,7 +51,7 @@ fn coerce_ym(v: f64) -> PlainYearMonth {
         return ym.clone();
     }
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_string() {
+    if jv.is_any_string() {
         return ok_or_throw(dispatch::read_string(v).parse::<PlainYearMonth>());
     }
     if jv.is_pointer() {
@@ -76,7 +76,7 @@ pub fn from_static(args: &[f64]) -> f64 {
     // then `overflow` LAST.
     let item = raw_arg(args, 0);
     let opts = raw_arg(args, 1);
-    if JSValue::from_bits(item.to_bits()).is_string() {
+    if JSValue::from_bits(item.to_bits()).is_any_string() {
         let ym = ok_or_throw(dispatch::read_string(item).parse::<PlainYearMonth>());
         let _ = super::options::overflow(opts);
         return wrap(ym);

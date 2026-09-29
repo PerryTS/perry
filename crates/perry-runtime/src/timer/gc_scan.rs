@@ -127,6 +127,13 @@ fn scan_store_step(
                 }
                 state.slot = 3;
             }
+            if state.slot == 3 {
+                if !consume_timer_root_work(remaining) {
+                    return false;
+                }
+                visitor.visit_nanbox_f64_slot(&mut entry.js_handle);
+                state.slot = 4;
+            }
             state.index += 1;
             state.finish_timer();
         }

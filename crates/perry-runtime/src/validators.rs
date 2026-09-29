@@ -36,7 +36,8 @@ fn jv(value: f64) -> JSValue {
 fn is_closure_value(value: f64) -> bool {
     let bits = value.to_bits();
     let top16 = bits >> 48;
-    let raw = if (0x7FF8..=0x7FFF).contains(&top16) {
+    // 0x7FF9 is an inline SSO string: characters, not an address (#11519).
+    let raw = if (0x7FF8..=0x7FFF).contains(&top16) && top16 != 0x7FF9 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else if top16 == 0 {
         bits as usize

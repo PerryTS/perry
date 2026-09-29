@@ -31,7 +31,7 @@ js_ads_request_consent	ptr
 js_ads_rewarded_load	ptr	ptr
 js_ads_rewarded_show	ptr	
 js_aggregateerror_new	ptr	ptr,ptr
-js_aggregateerror_new_full	ptr	f64,ptr,f64
+js_aggregateerror_new_full	ptr	f64,f64,f64
 js_arena_alloc	ptr	i32u
 js_arena_stats	void	ptr,ptr
 js_argon2_hash	ptr	ptr
@@ -3517,6 +3517,7 @@ js_sqlite_stmt_get	f64	i64,ptr
 js_sqlite_stmt_raw	i64	i64
 js_sqlite_stmt_run	ptr	i64,ptr
 js_sqlite_transaction	ptr	i64,i64
+js_stack_overflow	void	
 js_state_get	f64	f64
 js_state_init	void	f64,f64
 js_state_set	void	f64,f64

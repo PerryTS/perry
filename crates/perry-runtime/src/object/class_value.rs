@@ -406,6 +406,16 @@ pub extern "C" fn js_class_value(class_id: i32) -> f64 {
 
 /// GC root scan for [`CLASS_VALUES`]; registered in `gc::mod`'s runtime
 /// scanner list.
+///
+/// A class function object is PINNED, and marking never queues a pinned
+/// header (`try_mark_*`: "pinned objects are always live"), so no collector
+/// enumerates its child slots from a root. Its one heap edge, the own-property
+/// bag (`props`, the statics), is therefore visited here as a root slot of its
+/// own: a full trace marks and traces the bag (and notes the shape it carries,
+/// which post-trace descriptor retirement reads), and a moving collection
+/// rewrites the edge. A minor also reaches the edge through the remembered set
+/// the `bag_ensure` store barrier dirtied; the second visit of a rewritten
+/// slot sees the forwarded address and is a no-op.
 pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
     for i in 0..len {
@@ -416,8 +426,14 @@ pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         }
         // SAFETY: a live leaked page of this agent.
         for slot in unsafe { (*page).iter_mut() } {
-            if !slot.is_null() {
-                visitor.visit_raw_mut_ptr_slot(slot);
+            if slot.is_null() {
+                continue;
+            }
+            visitor.visit_raw_mut_ptr_slot(slot);
+            // SAFETY: a live class function object of this agent.
+            let props = unsafe { &mut (**slot).props };
+            if !props.is_null() {
+                visitor.visit_raw_mut_ptr_slot(props);
             }
         }
     }
@@ -898,6 +914,56 @@ mod tests {
             },
         ));
         assert!(seen, "the class-value table must be a GC root");
+    }
+
+    /// #11609: the class function object is pinned, and marking never queues a
+    /// pinned header, so its own-property bag (the statics) is reached only
+    /// because the class-value root scan visits the `props` edge itself.
+    /// Without that, a full trace never visits the bag: the shape the bag
+    /// carries is never noted as carried, post-trace descriptor retirement
+    /// drops it, and every static reads back as absent.
+    #[test]
+    fn a_full_collection_keeps_the_class_statics_bag() {
+        let cid = 0x6B02;
+        register(cid);
+        // A unit-test thread may not have run `gc_init`'s scanner list.
+        crate::gc::gc_register_mutable_root_scanner(scan_class_value_roots_mut);
+        let ptr = class_value_ptr(cid) as usize;
+        let text = "static-payload-11609";
+        let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        class_static_set(
+            cid,
+            "k11609",
+            f64::from_bits(crate::value::JSValue::string_ptr(s).bits()),
+        );
+        let mut saw_bag = false;
+        let bag = unsafe { crate::closure::props::bag_of(ptr) } as usize;
+        assert_ne!(bag, 0, "the static installed a bag");
+        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
+            &mut |v: f64| {
+                let bits = v.to_bits();
+                if bits as usize == bag || (bits & crate::value::POINTER_MASK) as usize == bag {
+                    saw_bag = true;
+                }
+            },
+        ));
+        assert!(
+            saw_bag,
+            "the root scan must visit the pinned class's bag edge"
+        );
+        crate::gc::js_gc_collect();
+        crate::gc::js_gc_collect();
+        let got = class_static_get(cid, "k11609").expect("the static survives a full collection");
+        let got = crate::value::JSValue::from_bits(got.to_bits());
+        let hdr = got.as_string_ptr();
+        assert!(!hdr.is_null());
+        let bytes = unsafe { crate::string::OwnedStringBytes::copy_from_header(hdr) };
+        assert_eq!(bytes.as_bytes(), text.as_bytes());
+        let keys: Vec<String> = class_static_entries(cid)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert!(keys.iter().any(|k| k == "k11609"), "own keys: {keys:?}");
     }
 
     /// The kind is a shape fact: class function objects carry their own
