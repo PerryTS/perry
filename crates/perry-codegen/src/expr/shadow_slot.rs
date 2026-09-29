@@ -468,8 +468,10 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     // ordinary mirroring after the scope ends. A masked-window fast copy
     // (#6750) admits a flow-refined local at its refinement point after
     // clearing the slot, and withdraws it at the first write it cannot prove
-    // Number (`stmt::masked_window_region`).
-    if ctx.receiver_descriptors.local_is_number_in_scope(local_id) {
+    // Number (`stmt::masked_window_region`). A function-scope Number local
+    // has no slot at all (`codegen::helpers::drop_number_local_root_slots`);
+    // asking the one query keeps both scopes on one rule.
+    if crate::type_analysis::local_is_number(ctx, local_id) {
         return;
     }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {

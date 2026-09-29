@@ -2334,7 +2334,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         if class_id != 0
             && (!class_prototype_fast_guard_invalidated_for_method(
                 class_prototype_method_guard_slot(method_name),
-            ) || !class_is_key_deleted(class_id, method_name))
+            ) || !class_proto_key_deleted(class_id, method_name))
         {
             if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                 if let Some(ref reg) = *registry {
@@ -2689,7 +2689,10 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) && {
                 let class_id = crate::object::js_object_get_class_id(recv);
                 class_id != 0
-                    && !crate::object::class_registry::class_is_key_deleted(class_id, method_name)
+                    && !crate::object::class_registry::class_proto_key_deleted(
+                        class_id,
+                        method_name,
+                    )
                     && crate::object::class_registry::class_chain_has_instance_accessor(
                         class_id,
                         method_name,

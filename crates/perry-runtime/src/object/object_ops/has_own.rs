@@ -221,15 +221,13 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 .map(|key| {
                     if super::super::field_get_set::is_internal_runtime_key(key) {
                         false
-                    } else if super::super::class_registry::class_is_key_deleted(class_id, key) {
+                    } else if super::super::class_registry::class_static_key_deleted(class_id, key)
+                    {
                         false
                     } else if matches!(key, "length" | "prototype") {
                         true
                     } else if key == "name"
-                        && super::super::class_registry::lookup_static_method_in_chain(
-                            class_id, key,
-                        )
-                        .is_none()
+                        && !crate::object::class_value::class_static_owns_method(class_id, key)
                     {
                         super::super::class_registry::class_name_for_id(class_id).is_some()
                     } else {
@@ -237,13 +235,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                             crate::object::class_value::class_static_get(class_id, key).is_some();
                         has_public_data
                             || (!key.starts_with('#')
-                                && (super::super::class_registry::lookup_static_method_in_chain(
+                                && (crate::object::class_value::class_static_owns_method(
                                     class_id, key,
-                                )
-                                .is_some()
-                                    || crate::object::class_value::class_static_has_own_accessor(
-                                        class_id, key,
-                                    )))
+                                ) || crate::object::class_value::class_static_has_own_accessor(
+                                    class_id, key,
+                                )))
                     }
                 })
                 .unwrap_or(false);
@@ -467,7 +463,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             super::super::class_registry::class_id_for_decl_prototype_object(obj as usize)
         {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
-                if !super::super::class_registry::class_is_key_deleted(cid, key)
+                if !super::super::class_registry::class_proto_key_deleted(cid, key)
                     && (key == "constructor"
                         || (!key.starts_with('#')
                             && super::super::native_module::class_has_own_method(cid, key)))

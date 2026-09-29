@@ -239,11 +239,25 @@ pub(crate) const NULL_PROTOTYPE_SERIAL: u64 = u64::MAX;
 /// # Safety
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
 pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
-    if let Some(meta) =
+    if obj == 0 || !crate::value::addr_class::is_plausible_heap_addr(obj) {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(obj as *mut crate::object::ObjectHeader);
+    let (meta, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
         ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
-    {
+    });
+    if let Some(meta) = meta {
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER;
+        // The flag makes the receiver's [[Prototype]] identity its own
+        // (`shapes::object_proto_id`), and the identity is part of the shape:
+        // move it to a shape that says so. That makes "its reads are not
+        // answered by its shape" a SHAPE fact for a memo keyed on the
+        // receiver's ShapeId alone (`method_site::read_holder`).
+        let _ = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            crate::object::shapes::restamp_object_proto_id(object)
+        });
     }
 }
 

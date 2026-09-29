@@ -86,6 +86,8 @@
 //! a worker never reads a primary-heap closure through a site.
 
 use crate::object::ObjectHeader;
+
+pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// `word` of a site no prime has touched: no receiver word is all-ones.
@@ -201,6 +203,7 @@ static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
 pub fn note_worker_agent() {
     if !WORKER_AGENTS_EXIST.swap(true, Ordering::SeqCst) {
         super::proto_validity::bump_proto_validity();
+        read_holder::empty_read_holder_entries();
     }
 }
 
@@ -285,8 +288,9 @@ fn stats_report_enabled() -> bool {
                         refused.push_str(&format!(" refused.{}={n}", REFUSALS[i]));
                     }
                 }
+                let (hd, ha, hr) = read_holder::read_holder_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} marked_value_write_bumps={}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr} marked_value_write_bumps={}{refused}",
                     method_site_function_primes(),
                     crate::object::proto_validity::marked_value_write_bumps()
                 );

@@ -163,9 +163,10 @@ pub(crate) use page_meta::{
     old_page_account_dirty_slot, old_page_account_dirty_slots, old_page_account_promoted_object,
     old_page_account_swept_object, old_page_account_swept_tally, old_page_clear_dirty,
     old_page_mark_dirty, old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
-    old_pages_reset_sweep_accounting, record_arena_object_start, unregister_old_object_pages,
-    unregister_old_objects_batch, HeapGeneration, HeapSpace, OldArenaPageObjectCursor,
-    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary, OldPageSweepTally,
+    old_pages_reset_sweep_accounting, record_arena_object_start, uniform_heap_generation,
+    unregister_old_object_pages, unregister_old_objects_batch, HeapGeneration, HeapSpace,
+    OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    OldPageSweepTally,
 };
 
 #[cfg(test)]

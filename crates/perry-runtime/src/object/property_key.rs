@@ -658,6 +658,7 @@ mod property_key_tests {
                 0,
                 0,
                 1,
+                0,
             );
             let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
                 class_id, sym_key, false,

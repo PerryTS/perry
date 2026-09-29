@@ -85,7 +85,7 @@ pub(super) unsafe fn dispatch_common(
                     super::has_own_helpers::str_from_string_header(key_str)
                         .map(|key| {
                             matches!(key, "length" | "name" | "prototype")
-                                && !super::class_registry::class_is_key_deleted(class_id, key)
+                                && !super::class_registry::class_static_key_deleted(class_id, key)
                         })
                         .unwrap_or(false)
                 };
@@ -106,22 +106,20 @@ pub(super) unsafe fn dispatch_common(
                 if let Some(class_id) = super::class_ref_id(object) {
                     let present = super::has_own_helpers::str_from_string_header(key_str)
                         .map(|key| {
-                            if super::class_registry::class_is_key_deleted(class_id, key) {
+                            if super::class_registry::class_static_key_deleted(class_id, key) {
                                 false
                             } else if key == "name"
-                                && super::class_registry::lookup_static_method_in_chain(
+                                && !crate::object::class_value::class_static_owns_method(
                                     class_id, key,
                                 )
-                                .is_none()
                             {
                                 super::class_registry::class_name_for_id(class_id).is_some()
                             } else {
                                 crate::object::class_value::class_static_get(class_id, key)
                                     .is_some()
-                                    || super::class_registry::lookup_static_method_in_chain(
+                                    || crate::object::class_value::class_static_owns_method(
                                         class_id, key,
                                     )
-                                    .is_some()
                             }
                         })
                         .unwrap_or(false);

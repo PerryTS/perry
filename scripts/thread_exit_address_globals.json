@@ -4067,6 +4067,14 @@
    "why": "Diagnostic refusal counters indexed by a reason code: the only writes are `SITE_REFUSED[reason].fetch_add(1, ..)` and the only reads are loads in the counter dump; never stores an address."
   },
   {
+   "file": "crates/perry-runtime/src/object/method_site/read_holder.rs",
+   "names": [
+    "HOLDER_SITES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. The primary-heap holder and hop addresses the caches hold are written only by the primary agent (`prime_read_holder` checks `current_agent() == PRIMARY_AGENT` and `WORKER_AGENTS_EXIST`), are strong roots visited by `scan_read_holder_roots_mut`, and are emptied by `empty_read_holder_entries` when the first worker agent starts."
+  },
+  {
    "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
    "names": [
     "ORPHANS"

@@ -3218,7 +3218,7 @@ pub(crate) const PROTO_ID_DEFAULT: u64 = 0;
 /// A null [[Prototype]].
 pub(crate) const PROTO_ID_NULL: u64 = u64::MAX;
 const PROTO_ID_TAG_SHIFT: u32 = 62;
-const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
+pub(crate) const PROTO_ID_CLASS: u64 = 1 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_MIXED: u64 = 2 << PROTO_ID_TAG_SHIFT;
 const PROTO_ID_UNIQUE: u64 = 3 << PROTO_ID_TAG_SHIFT;
 /// The prototype identity of a shape that answers nothing about its receiver
@@ -3300,6 +3300,13 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
     let class_id = (*obj).class_id;
     let class = vtable_class(class_id);
     let meta = (*obj).meta;
+    // An exotic read receiver (`process.env`, `arguments`) is answered by no
+    // shape: its identity is its own, so every lineage it mints keeps it and
+    // no shape-keyed memo admits it (`proto_validity::mark_exotic_read_receiver`).
+    if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+    {
+        return PROTO_ID_PER_OBJECT;
+    }
     if !meta.is_null() && (*meta).prototype != 0 {
         let bits = (*meta).prototype;
         if bits == crate::value::TAG_NULL {

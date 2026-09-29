@@ -388,14 +388,16 @@ fn pic_cache_layout_matches_runtime() {
         "the way-state word sits below the ways, as in perry-runtime"
     );
     assert_eq!(
-        PIC_CACHE_WORDS, 12,
-        "perry-runtime's PIC_CACHE_WORDS is 12; update both sides together"
+        PIC_CACHE_WORDS, 21,
+        "perry-runtime's PIC_CACHE_WORDS is 21; update both sides together"
     );
     assert_eq!(
         PIC_WAY_BASE + PIC_WAYS * 2,
-        PIC_CACHE_WORDS,
-        "the ways must fill the emitted global exactly"
+        crate::runtime_abi::PIC_HOLDER_RECV_WORD,
+        "the holder entry starts where the ways end"
     );
+    assert!(crate::runtime_abi::PIC_HOLDER_KIND_WORD < PIC_CACHE_WORDS);
+    assert_eq!(crate::runtime_abi::PIC_CACHE_WORDS, PIC_CACHE_WORDS);
     let ir = emit(false, None);
     let ic_defs: Vec<&str> = ir
         .lines()

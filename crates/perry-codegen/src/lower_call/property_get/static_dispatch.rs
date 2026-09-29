@@ -43,6 +43,8 @@ pub(crate) fn try_lower_static_dispatch(
         }
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
         let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
+        // The class whose ClassBody declares the resolved body.
+        let mut owner_class: Option<String> = None;
         let mut cur = Some(cls_name.clone());
         while let Some(c) = cur {
             if let Some(class_info) = ctx.classes.get(&c) {
@@ -64,6 +66,7 @@ pub(crate) fn try_lower_static_dispatch(
                             .map(|p| p.arguments_object.is_some())
                             .unwrap_or(false);
                         resolved = Some((fname, true, declared, has_rest, is_synth_args));
+                        owner_class = Some(c.clone());
                         break;
                     }
                 }
@@ -150,6 +153,79 @@ pub(crate) fn try_lower_static_dispatch(
                 let collects =
                     has_rest || crate::rooting::any_operand_may_collect(ctx, args.iter());
                 let recv_idx = group.adopt(ctx, object, &recv_box, collects);
+
+                // The shape is the authority: the declared body runs directly
+                // only while `<receiver>.<property>` is still that declaration's
+                // function object (`js_class_static_value_call_guard`, checked
+                // before the arguments, as the property read is). Otherwise the
+                // call reads the property and calls its value.
+                let owner_cid = owner_class
+                    .as_ref()
+                    .and_then(|c| ctx.class_ids.get(c).copied())
+                    .filter(|&c| c != 0 && !property.starts_with("__perry_static_init_"));
+                let guarded = if let Some(owner_cid) = owner_cid {
+                    let name_idx = ctx.strings.intern(property);
+                    let name_entry = ctx.strings.entry(name_idx);
+                    let name_bytes = format!("@{}", name_entry.bytes_global);
+                    let name_len = name_entry.byte_len.to_string();
+                    let recv_now = group.reread(ctx, recv_idx)?;
+                    let recv_bits = ctx.block().bitcast_double_to_i64(&recv_now);
+                    let body_i64 = ctx.block().ptrtoint(&format!("@{}", fn_name), I64);
+                    let ok = crate::expr::static_method::emit_static_call_guard(
+                        ctx,
+                        Some(&recv_bits),
+                        false,
+                        "js_class_static_value_call_guard",
+                        &[
+                            (DOUBLE, recv_now.clone()),
+                            (I32, owner_cid.to_string()),
+                            (crate::types::PTR, name_bytes.clone()),
+                            (I64, name_len.clone()),
+                            (I64, body_i64),
+                        ],
+                    );
+                    let direct_idx = ctx.new_block("static_value_call.direct");
+                    let generic_idx = ctx.new_block("static_value_call.property");
+                    let join_idx = ctx.new_block("static_value_call.join");
+                    let direct_label = ctx.block_label(direct_idx);
+                    let generic_label = ctx.block_label(generic_idx);
+                    ctx.block().cond_br(&ok, &direct_label, &generic_label);
+                    ctx.current_block = generic_idx;
+                    let mut raw: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        raw.push(lower_expr(ctx, a)?);
+                    }
+                    let (args_ptr, args_len) = if raw.is_empty() {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf = ctx.func.alloca_entry_array(DOUBLE, raw.len());
+                        let blk = ctx.block();
+                        for (i, value) in raw.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                            blk.store(DOUBLE, value, &slot);
+                        }
+                        (buf, raw.len().to_string())
+                    };
+                    let recv_g = group.reread(ctx, recv_idx)?;
+                    let via_property = ctx.block().call(
+                        DOUBLE,
+                        "js_native_call_method",
+                        &[
+                            (DOUBLE, &recv_g),
+                            (crate::types::PTR, &name_bytes),
+                            (I64, &name_len),
+                            (crate::types::PTR, &args_ptr),
+                            (I64, &args_len),
+                        ],
+                    );
+                    let generic_pred = ctx.block().label.clone();
+                    let join_label = ctx.block_label(join_idx);
+                    ctx.block().br(&join_label);
+                    ctx.current_block = direct_idx;
+                    Some((via_property, generic_pred, join_idx))
+                } else {
+                    None
+                };
 
                 // Refs #915 (gap 3 / #321 follow-up): Effect's `class
                 // SchemaClass { static pipe() { ... arguments ... } }`
@@ -276,7 +352,17 @@ pub(crate) fn try_lower_static_dispatch(
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
                 let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
-                Ok(Some(result))
+                let Some((via_property, generic_pred, join_idx)) = guarded else {
+                    return Ok(Some(result));
+                };
+                let direct_pred = ctx.block().label.clone();
+                let join_label = ctx.block_label(join_idx);
+                ctx.block().br(&join_label);
+                ctx.current_block = join_idx;
+                Ok(Some(ctx.block().phi(
+                    DOUBLE,
+                    &[(&result, &direct_pred), (&via_property, &generic_pred)],
+                )))
             });
         }
         // #1787 / #321: the call target is a static FIELD holding a callable,

@@ -15,7 +15,9 @@
 //!    compact word's high half), confirmed by the receiver's own shape — the
 //!    shape record's `POSBOUND` and its canonical key list compared with the
 //!    key atom — and, on a wrong guess, one bounded scan of that key list that
-//!    re-aims the guess (D3b).
+//!    re-aims the guess (D3b);
+//! 4. the site's HOLDER entry (`method_site::read_holder`): a key that is not
+//!    own, answered from the receiver's shape and the holder's.
 //!
 //! Anything else answers `TAG_HOLE`, and only then does the site branch to
 //! its cold block and call the collecting `js_object_get_field_ic_slow` with
@@ -131,7 +133,22 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
     }
     if state < 0 {
         // 3. Latched.
-        return confirm_in(dir, obj, shape_id, packed, word, key_bits);
+        let own = confirm_in(dir, obj, shape_id, packed, word, key_bits);
+        if own.to_bits() != crate::value::TAG_HOLE || cache.is_null() {
+            return own;
+        }
+    }
+    // 4. The site's HOLDER entry (`method_site::read_holder`): the answer for a
+    // key that is NOT own on this receiver, as facts of the receiver's shape
+    // and the holder's. Asked last, so an own-key read pays nothing for it.
+    // A GC leaf like everything above: it reads site words and object words.
+    if !cache.is_null() {
+        if let Some(bits) = crate::object::method_site::read_holder::entry_answer(
+            &*cache,
+            (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64,
+        ) {
+            return f64::from_bits(bits);
+        }
     }
     hole()
 }
