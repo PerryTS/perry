@@ -130,6 +130,11 @@ pub(super) fn emit_string_pool(
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // The classes this module defines, by identity: the registration loops
+    // below (names, methods, static methods and their function-object
+    // entries, constructors, accessors) key each class by its ClassId, never
+    // by a name (`classes` above maps names, and two classes may share one).
+    module_classes: &[perry_hir::Class],
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -348,21 +353,18 @@ pub(super) fn emit_string_pool(
     // Pre-allocate string constants for class-name registration. We need
     // these BEFORE `init_fn` is created, because once `init_fn` borrows
     // `llmod` we can no longer mutate the module's constant pool. (#1021.)
+    // Every class this module defines, keyed by identity (its ClassId).
+    // Imported stubs are not here: the defining module registers them.
+    let local_classes: Vec<(u32, &perry_hir::Class)> = module_classes
+        .iter()
+        .filter(|c| c.id != 0)
+        .map(|c| (c.id, c))
+        .collect();
     let mut named_class_name_constants: Vec<(u32, String, usize)> = Vec::new();
     {
         let mut named: Vec<(u32, String)> = Vec::new();
-        for (class_name, class) in classes.iter() {
-            // Imported stubs (id == 0) use consumer lookup keys, which may
-            // be aliases or synthetic namespace keys. Only the defining
-            // module owns the JavaScript display name; an importer must not
-            // overwrite it when its string initializer runs.
-            if class.id == 0 || *class_name != class.name {
-                continue;
-            }
-            let cid = match class_ids.get(class_name).copied() {
-                Some(c) if c != 0 => c,
-                _ => continue,
-            };
+        for &(cid, class) in &local_classes {
+            let class_name = &class.name;
             if !class_name.starts_with("__AnonShape_") {
                 // #5592: prefer the recorded JS name when the registration
                 // key was uniquified (e.g. a second `C = class {…}`).
@@ -903,30 +905,8 @@ pub(super) fn emit_string_pool(
     // ctor's `arguments` / rest slot correctly (a zero-declared-param parent
     // that reads `arguments`, e.g. tsc's emitted pass-through ctor).
     let mut ctor_flag_regs: Vec<(u32, bool, bool)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        // Refs #486: skip alias keys (class_table now contains both the
-        // canonical name and self-binding aliases like `_X` from
-        // `var X = class _X`); the symbol emission iterates by canonical
-        // class.name. Without this skip the alias key generates bogus
-        // symbol names like `perry_method_<mod>___X__method` (extra
-        // leading underscore from sanitize("_X")) that don't resolve at
-        // link time.
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name) {
-            Some(&c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for method in &class.methods {
             let llvm_name = format!(
                 "perry_method_{}__{}__{}",
@@ -1461,24 +1441,8 @@ pub(super) fn emit_string_pool(
     // (class_id, prop_name, llvm_symbol, is_static) — static accessors register
     // onto the class constructor (CLASS_STATIC_ACCESSORS), not the instance vtable.
     let mut getter_pairs: Vec<(u32, String, String, bool, u32)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        // Refs #486: skip alias keys (see method-emission loop above).
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name).copied() {
-            Some(c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for (prop, getter_fn) in &class.getters {
             // The local-emit path at codegen.rs:1858 prepends `__get_`
             // to the HIR-assigned getter name (`get_<prop>`), giving
@@ -1565,23 +1529,8 @@ pub(super) fn emit_string_pool(
     // the runtime fell back to the setter's ABI arity (1), over-counting the
     // defaulted param.
     let mut setter_pairs: Vec<(u32, String, String, bool, u32, u32)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name).copied() {
-            Some(c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for (prop, setter_fn) in &class.setters {
             let is_static = class.static_accessor_fn_ids.contains(&setter_fn.id);
             let llvm_name = if is_static {

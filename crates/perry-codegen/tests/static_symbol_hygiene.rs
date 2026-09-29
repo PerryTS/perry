@@ -227,16 +227,15 @@ fn duplicate_class_static_methods_use_class_id_in_symbols() {
         ),
         1
     );
-    // This module hands codegen two classes of one name; the registration
-    // pass reads the name-keyed class table, which keeps the last (c12), so
-    // only its static method is registered and gets the function-object
-    // entry. (A real module's classes never share a table name.)
+    // This module hands codegen two classes of one name. Registration keys
+    // each class by its ClassId, so both static methods are registered, each
+    // with its own function-object entry `<body>__clo`.
     assert_eq!(
         count(
             &ir,
             "define double @perry_static_marked_symbol_hygiene_ts__x__c11__lex__clo("
         ),
-        0
+        1
     );
     // The body, and its function object's closure-convention entry
     // `<body>__clo`: exactly one definition each.
@@ -254,6 +253,17 @@ fn duplicate_class_static_methods_use_class_id_in_symbols() {
         ),
         1
     );
+    // Each class registers its own static method under its own id.
+    for cid in [11, 12] {
+        assert_eq!(
+            count(
+                &ir,
+                &format!("call void @js_register_class_static_method_entry(i64 {cid}, ")
+            ),
+            1,
+            "class {cid}"
+        );
+    }
     assert_eq!(
         count(
             &ir,
