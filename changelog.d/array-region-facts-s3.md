@@ -1,0 +1,1 @@
+- perf(codegen): array element reads with a static index range are region facts inside #11650 loop regions: one array guard in the preheader, a bare `base + 8*idx` read with an inline hole select, the base refreshed on the poll arm (array slice S3).

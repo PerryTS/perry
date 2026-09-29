@@ -118,7 +118,15 @@ pub(super) struct Planner<'p, 'a> {
     ctx: &'p FnCtx<'a>,
     cands: &'p HashSet<Recv>,
     keys: &'p HashMap<Recv, Vec<String>>,
+    /// Array receivers (S3) and their static index bound.
+    arrays: &'p HashMap<Recv, u32>,
     bare: HashSet<usize>,
+    bare_arrays: HashSet<Recv>,
+    /// A body region nested in this loop region (array regions): while its
+    /// tail is walked, its bare accesses run no JS and its fact trees only
+    /// set the loop's dirty flag.
+    inner: Option<(&'p HashSet<usize>, &'p HashSet<usize>)>,
+    in_inner: bool,
     trees: HashSet<usize>,
     bare_stores: HashSet<Recv>,
     continues: Vec<St>,
@@ -164,6 +172,21 @@ impl Planner<'_, '_> {
 
     fn expr(&mut self, e: &Expr, mut st: St) -> St {
         st.as_ref()?;
+        if self.in_inner {
+            if let Some((ibare, itrees)) = self.inner {
+                let key = e as *const Expr as usize;
+                if itrees.contains(&key) {
+                    dirty(&mut st);
+                    return st;
+                }
+                if ibare.contains(&key) {
+                    if let Expr::PutValueSet { value, .. } = e {
+                        return self.expr(value, st);
+                    }
+                    return st;
+                }
+            }
+        }
         match e {
             Expr::PropertyGet {
                 object, property, ..
@@ -204,6 +227,27 @@ impl Planner<'_, '_> {
                 st
             }
             Expr::LocalSet(_, v) => self.expr(v, st),
+            // An element read of a region array with a static index range is
+            // bare while the facts are fresh: it runs no JS, so it stales
+            // nothing. Any other element read is today's tower.
+            Expr::IndexGet { object, index } => {
+                st = self.expr(object, st);
+                st = self.expr(index, st);
+                let r = Recv::of(object).filter(|r| self.arrays.contains_key(r));
+                match r {
+                    Some(r)
+                        if arrays::static_index_max(index).is_some()
+                            && st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH)) =>
+                    {
+                        if self.record {
+                            self.bare.insert(e as *const Expr as usize);
+                            self.bare_arrays.insert(r);
+                        }
+                    }
+                    _ => kill(&mut st),
+                }
+                st
+            }
             Expr::Binary { left, right, .. } => {
                 let keys = self.keys;
                 let cands = self.cands;
@@ -741,6 +785,8 @@ pub(super) struct Plan {
     pub(super) bare: HashSet<usize>,
     pub(super) trees: HashSet<usize>,
     pub(super) recheck: Recheck,
+    /// Array receivers with a bare read, and their static index bound.
+    pub(super) arrays: Vec<(Recv, u32)>,
 }
 
 /// What the top of an iteration must do before F-body.
@@ -762,9 +808,11 @@ pub(super) fn plan(
     ctx: &FnCtx<'_>,
     tail: &[Stmt],
     cands: HashSet<Recv>,
+    arrays: HashMap<Recv, u32>,
     loop_ctl: Option<(Option<&Expr>, Option<&Expr>)>,
+    inner: Option<(usize, &HashSet<usize>, &HashSet<usize>)>,
 ) -> Option<Plan> {
-    if cands.is_empty() {
+    if cands.is_empty() && arrays.is_empty() {
         return None;
     }
     let mut keys: HashMap<Recv, Vec<String>> = HashMap::new();
@@ -786,21 +834,44 @@ pub(super) fn plan(
         .into_iter()
         .filter(|r| keys.contains_key(r) && !overflow.contains(r))
         .collect();
-    if cands.is_empty() {
+    if cands.is_empty() && arrays.is_empty() {
         return None;
     }
-    let fresh: BTreeMap<Recv, u8> = cands.iter().map(|r| (*r, FRESH)).collect();
+    let fresh: BTreeMap<Recv, u8> = cands
+        .iter()
+        .chain(arrays.keys())
+        .map(|r| (*r, FRESH))
+        .collect();
     let mut p = Planner {
         ctx,
         cands: &cands,
         keys: &keys,
+        arrays: &arrays,
         bare: HashSet::new(),
+        bare_arrays: HashSet::new(),
+        inner: inner.map(|(_, b, t)| (b, t)),
+        in_inner: false,
         trees: HashSet::new(),
         bare_stores: HashSet::new(),
         continues: Vec::new(),
         record: true,
     };
-    let end = p.stmts(tail, Some(fresh.clone()));
+    let end = match inner {
+        // The nested body region's tail: F-tail keeps the loop's facts,
+        // G-tail sets the loop's dirty flag. Loop accesses inside it are not
+        // recorded (the tail lowers under the body region's facts).
+        Some((k, _, _)) => {
+            let st = p.stmts(&tail[..k], Some(fresh.clone()));
+            p.record = false;
+            p.in_inner = true;
+            let mut st = p.stmts(&tail[k..], st);
+            p.in_inner = false;
+            p.record = true;
+            dirty(&mut st);
+            st
+        }
+        None => p.stmts(tail, Some(fresh.clone())),
+    };
     let conts = std::mem::take(&mut p.continues);
     let mut recheck = Recheck::None;
     if let Some((cond, update)) = loop_ctl {
@@ -823,6 +894,7 @@ pub(super) fn plan(
             Some(m) => {
                 let worst = cands
                     .iter()
+                    .chain(arrays.keys())
                     .map(|r| m.get(r).copied().unwrap_or(0))
                     .min()
                     .unwrap_or(FRESH);
@@ -839,6 +911,11 @@ pub(super) fn plan(
     let bare = std::mem::take(&mut p.bare);
     let trees = std::mem::take(&mut p.trees);
     let bare_stores = std::mem::take(&mut p.bare_stores);
+    let mut plan_arrays: Vec<(Recv, u32)> = std::mem::take(&mut p.bare_arrays)
+        .into_iter()
+        .map(|r| (r, arrays[&r]))
+        .collect();
+    plan_arrays.sort();
     if bare.is_empty() {
         return None;
     }
@@ -880,5 +957,6 @@ pub(super) fn plan(
         bare,
         trees,
         recheck,
+        arrays: plan_arrays,
     })
 }
