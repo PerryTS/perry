@@ -57,10 +57,14 @@ define_class!(
             unsafe { msg_send![super(this), initTextCell: string] }
         }
 
-        #[unsafe(method(drawingRectForBounds:))]
-        fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
-            unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
+        // Padding goes on the frames AppKit hands in to draw and to edit, not
+        // in drawingRectForBounds:. AppKit's editing path for a borderless
+        // cell never calls drawingRectForBounds:, so padding there would put
+        // the editing text somewhere other than the idle text.
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
+            unsafe { msg_send![super(self), drawInteriorWithFrame: frame, inView: view] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
@@ -119,10 +123,14 @@ define_class!(
             unsafe { msg_send![super(this), initTextCell: string] }
         }
 
-        #[unsafe(method(drawingRectForBounds:))]
-        fn drawing_rect_for_bounds(&self, bounds: CGRect) -> CGRect {
-            let bounds = inset_rect(bounds, self.ivars().get(), unsafe { self.controlView() }.is_some_and(|view| view.isFlipped()));
-            unsafe { msg_send![super(self), drawingRectForBounds: bounds] }
+        // Padding goes on the frames AppKit hands in to draw and to edit, not
+        // in drawingRectForBounds:. AppKit's editing path for a borderless
+        // cell never calls drawingRectForBounds:, so padding there would put
+        // the editing text somewhere other than the idle text.
+        #[unsafe(method(drawInteriorWithFrame:inView:))]
+        fn draw_interior(&self, frame: CGRect, view: &NSView) {
+            let frame = inset_rect(frame, self.ivars().get(), view.isFlipped());
+            unsafe { msg_send![super(self), drawInteriorWithFrame: frame, inView: view] }
         }
 
         #[unsafe(method(cellSizeForBounds:))]
