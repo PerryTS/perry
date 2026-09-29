@@ -1240,6 +1240,7 @@ mod prototype_identity_tests {
             0,
             proto_id,
             0,
+            None,
         ))
     }
 
@@ -1453,6 +1454,7 @@ mod field_rep_identity_tests {
             PROTO,
             0,
             rep,
+            None,
         ))
     }
 
@@ -1523,6 +1525,7 @@ mod field_rep_identity_tests {
             0,
             PROTO,
             0,
+            None,
         ));
         assert_eq!(explicit, legacy);
     }
@@ -1540,6 +1543,7 @@ mod field_rep_identity_tests {
             PROTO,
             0,
             reserved,
+            None,
         )
         .is_err());
     }

@@ -4145,6 +4145,7 @@ fn gc_start_budgeted_full_cycle(
     // Otherwise the first root-scan step reaches #9182's fail-closed guard
     // with an owed index and aborts.
     super::roots::ensure_stack_maps_built();
+    super::verify::verify_array_hole_tails_at_collection();
     let mut state = GcCycleState::new_full(GcTriggerSnapshot::capture(trigger_kind));
     state.set_progress_kind(progress_kind);
     BudgetedGcCycle {
@@ -4174,6 +4175,7 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
 ) -> BudgetedGcCycle {
     // Same direct-constructor path as gc_start_budgeted_full_cycle above.
     super::roots::ensure_stack_maps_built();
+    super::verify::verify_array_hole_tails_at_collection();
     let prev_in_alloc = GC_FLAGS.with(|f| {
         let prev = f.get();
         f.set(prev | GC_FLAG_IN_ALLOC);

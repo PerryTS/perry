@@ -126,6 +126,10 @@ pub(crate) enum Route {
     RloopRecheck = 17,
     /// One bare access (read, store, or fact-tree leaf) executed.
     RloopBare = 18,
+    // 19..=27 are runtime-counted (`hot_diag::RT_ROUTE_RLOOP_*`).
+    /// A region guard's STATIC supplier matched (DESIGN §4.1): the receiver
+    /// carries the driver's static id, so the region ran with no word.
+    RloopStatic = 28,
 }
 
 /// `PERRY_RECV_ROUTE_COUNT=1` at COMPILE time: emit one

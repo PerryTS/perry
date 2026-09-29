@@ -1553,7 +1553,7 @@ fn buffer_dump() {
 
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 28] = [
+const RECV_ROUTE_NAMES: [&str; 29] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1591,6 +1591,9 @@ const RECV_ROUTE_NAMES: [&str; 28] = [
     "rt_rloop_refuse_spill_unservable",
     "rt_rloop_refuse_range",
     "rt_rloop_retire",
+    // Step 4 (link-time shape ids), emitted: a region guard's static
+    // supplier matched (`Route::RloopStatic`).
+    "rloop_static",
 ];
 
 /// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
@@ -1606,8 +1609,8 @@ pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE: u32 = 25;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_RANGE: u32 = 26;
 pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 27;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 28] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 28];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 29] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 29];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
