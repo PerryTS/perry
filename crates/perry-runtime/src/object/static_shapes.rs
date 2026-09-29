@@ -106,8 +106,9 @@ pub extern "C" fn js_shape_seed_plain(
 /// stamp `got` while the guards compare the immediate `requested`. Requests
 /// happen only at seeds and module init, so the gate costs one load there.
 pub(crate) fn note_static_request(path: &str, requested: u32, got: u32) {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if requested != 0 && *ON.get_or_init(|| std::env::var_os("PERRY_STATIC_SHAPE_CENSUS").is_some())
+    static CENSUS_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if requested != 0
+        && *CENSUS_ENABLED.get_or_init(|| std::env::var_os("PERRY_STATIC_SHAPE_CENSUS").is_some())
     {
         let verdict = if requested == got { "hit" } else { "miss" };
         eprintln!("perry-static-shape: {path} requested={requested:#x} got={got:#x} {verdict}");

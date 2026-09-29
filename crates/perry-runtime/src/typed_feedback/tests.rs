@@ -1231,9 +1231,9 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
 #[test]
 fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
-    let native_module = include_str!(concat!(
+    let class_method_bind = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/object/native_module.rs"
+        "/src/object/native_module/class_method_bind.rs"
     ));
     let guards = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1353,7 +1353,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "js_native_call_method_apply_by_id",
         ),
         (
-            native_module,
+            class_method_bind,
             "KEEP_CLASS_METHOD_BIND_BY_ID",
             "static KEEP_CLASS_METHOD_BIND_BY_ID: extern \"C\" fn(f64, i64) -> f64",
             "js_class_method_bind_by_id",

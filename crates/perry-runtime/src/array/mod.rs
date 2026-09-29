@@ -53,7 +53,7 @@ mod species;
 mod splice_slice;
 mod storage;
 pub use storage::array_elements_ptr;
-pub(crate) use storage::{array_front_offset, array_physical_capacity};
+pub(crate) use storage::{array_front_offset, array_physical_capacity, array_truncate_length};
 mod subclass;
 pub(crate) mod subclass_elements;
 
@@ -67,6 +67,8 @@ mod dense_move_tests;
 mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
+#[cfg(test)]
+mod hole_tail_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
 #[cfg(test)]

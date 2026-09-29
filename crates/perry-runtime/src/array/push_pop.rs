@@ -156,8 +156,12 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // sized. The bound also removes the `old_capacity * 2` overflow this
         // line used to carry: with `old_capacity <= 2^31-1` the doubling can
         // no longer wrap a `u32`.
+        // The doubling is clamped to the allocation ceiling
+        // (`ARRAY_MAX_CAPACITY`) so an array near it still grows by what it
+        // needs; only `min_capacity` itself past the ceiling throws.
+        let doubled = std::cmp::min(old_capacity * 2, super::alloc::ARRAY_MAX_CAPACITY);
         let new_capacity =
-            super::alloc::array_capacity_or_throw(std::cmp::max(old_capacity * 2, min_capacity));
+            super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));
         // A named-property reserve (`named_props.rs`) travels with the array:
         // the replacement allocation keeps the same number of physical slots
         // in front of logical element 0, so `capacity` excludes them on both
@@ -1215,7 +1219,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
                         crate::array::array_elements_ptr(arr as *const ArrayHeader).cast::<f64>();
                     let value = ptr::read(elements.add(new_length as usize));
                     if value.to_bits() != crate::value::TAG_HOLE {
-                        (*arr).length = new_length;
+                        crate::array::array_truncate_length(arr, new_length);
                         return value;
                     }
                 }
@@ -1268,8 +1272,13 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         if !exotic {
             let elements_ptr =
                 crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64;
-            let value = *elements_ptr.add(new_length as usize);
-            (*arr).length = new_length;
+            let value = if new_length < (*arr).capacity {
+                *elements_ptr.add(new_length as usize)
+            } else {
+                // Over-long array: no slot backs this index.
+                f64::from_bits(crate::value::TAG_HOLE)
+            };
+            crate::array::array_truncate_length(arr, new_length);
             // #9462: the popped slot can be a HOLE — `[1, ,].pop()`,
             // `new Array(3).pop()`, `delete a[a.length - 1]` then pop. The
             // dense fast path above explicitly DECLINES on `TAG_HOLE` and
@@ -1311,7 +1320,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             throw_frozen_array_mutation();
         }
         guard_writable_length(arr);
-        (*arr).length = new_length;
+        crate::array::array_truncate_length(arr, new_length);
         value_handle.get_nanbox_f64()
     }
 }
@@ -1712,7 +1721,7 @@ unsafe fn shift_array_spec_path(arr: *mut ArrayHeader) -> f64 {
             throw_frozen_array_mutation();
         }
         guard_writable_length(current);
-        (*current).length = len - 1;
+        crate::array::array_truncate_length(current, len - 1);
         rebuild_array_layout(current);
     });
     first_handle.get_nanbox_f64()

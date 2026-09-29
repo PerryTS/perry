@@ -836,10 +836,19 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
     // So this follows the EDGE too: the arm must branch into the gate, and the
     // gate must still hold the note. Asserting only that the call exists
     // somewhere would pass even if this arm stopped reaching it.
+    // The arm first settles the element kind (arrayread S2: the F64 bits
+    // are cleared BEFORE a non-Number is written), then continues in
+    // `idxset.inbounds.kind.done`, which is where it branches into the gate.
+    let kind_done_ir = block_between(
+        &ir,
+        "\nidxset.inbounds.kind.done.",
+        "\nidxset.inbounds.gc_bookkeeping.",
+    );
     assert!(
-        inbounds_ir.contains("label %idxset.inbounds.gc_bookkeeping."),
+        inbounds_ir.contains("label %idxset.inbounds.kind.done.")
+            && kind_done_ir.contains("label %idxset.inbounds.gc_bookkeeping."),
         "the in-bounds arm no longer branches into the #9237 pointer gate, so a \
-         pointer store here reaches no layout note at all:\n{inbounds_ir}"
+         pointer store here reaches no layout note at all:\n{inbounds_ir}\n{kind_done_ir}"
     );
     let note_gate_ir = block_between(
         &ir,

@@ -499,21 +499,24 @@ unsafe fn register_class_static_accessor_half(
             Err(_) => return,
         }
     };
-    let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
-    if guard.is_none() {
-        *guard = Some(crate::fast_hash::new_ptr_hash_map());
-    }
-    let entry = guard
-        .as_mut()
-        .unwrap()
-        .entry(class_id as u32)
-        .or_default()
-        .entry(name)
-        .or_insert((0, 0));
-    if is_getter {
-        entry.0 = func_ptr as usize;
-    } else {
-        entry.1 = func_ptr as usize;
+    {
+        let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
+        }
+        let entry = guard
+            .as_mut()
+            .unwrap()
+            .entry(class_id as u32)
+            .or_default()
+            .entry(name.clone())
+            .or_insert((0, 0));
+        if is_getter {
+            entry.0 = func_ptr as usize;
+        } else {
+            entry.1 = func_ptr as usize;
+        }
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
+    crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
 }

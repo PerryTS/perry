@@ -413,9 +413,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
             let mut cid = parent_class_id;
             let mut depth = 0usize;
             while cid != 0 && depth < 32 {
-                if let Some(v) = crate::object::CLASS_DYNAMIC_PROPS
-                    .with(|m| m.borrow().get(&cid).and_then(|f| f.get(key_name)).copied())
-                {
+                if let Some(v) = crate::object::class_value::class_static_get(cid, key_name) {
                     return v;
                 }
                 match crate::object::get_parent_class_id(cid) {

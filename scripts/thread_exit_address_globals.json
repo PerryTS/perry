@@ -3552,23 +3552,6 @@
    "why": "Monotonic u64 id counter handed out by next_id() to every new SymbolHeader."
   },
   {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOLS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Class ids are process-global but members hold symbol addresses and JS values from the writing thread; members with a freed symbol or value are dropped at thread exit.",
-   "hook": "release_symbol_tables_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/symbol.rs",
-   "names": [
-    "CLASS_STATIC_SYMBOL_ORDER"
-   ],
-   "verdict": "no_heap_address",
-   "why": "class_id -> Vec of SymbolHeader::id (monotonic u64 ids, stable across moves) recording creation order (symbol.rs:1162-1172); holds no addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/intl/segments_view.rs",
    "names": [
     "OPENS"
@@ -4091,6 +4074,14 @@
    ],
    "verdict": "per_thread",
    "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/static_shapes.rs",
+   "names": [
+    "STATIC_SEED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
   }
  ]
 }

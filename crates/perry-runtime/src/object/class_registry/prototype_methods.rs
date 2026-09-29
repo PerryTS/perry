@@ -47,6 +47,10 @@ pub unsafe extern "C" fn js_class_register_static_field(
     };
     class_register_declared_static_global_slot(class_id, name, global_slot);
     class_dynamic_prop_root_store(class_id, name, value);
+    // DefineField: a static field is an ordinary writable, enumerable,
+    // configurable own property — also when it replaces the class's
+    // intrinsic `name` / `length`.
+    crate::object::class_value::note_static_field_defined(class_id, name);
 }
 
 /// Read a computed instance-field key resolved at ClassDefinitionEvaluation.

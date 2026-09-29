@@ -64,7 +64,7 @@ fn test_implicit_this_root_scanner_marks_and_rewrites() {
 #[test]
 fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let _guard = GcTestIsolationGuard::new();
-    // `dynamic_value`/`prototype_value`/`cached_value`/`prototype_object` are
+    // `prototype_value`/`cached_value`/`prototype_object` are
     // all live across the two `arena_alloc_gc` calls below (`parent_closure`,
     // `function_key`), and `parent_closure` is live across `function_key`'s —
     // any of those allocations can reach the block-full slow path's
@@ -74,7 +74,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     clear_mark_seeds();
     crate::object::test_clear_class_side_table_roots();
 
-    let dynamic_value = young_leaf();
     let prototype_value = young_leaf();
     let cached_value = young_leaf();
     let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
@@ -93,7 +92,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
         init_test_closure(function_key as *mut u8);
     }
 
-    crate::object::test_seed_class_dynamic_prop_root(0x5201, "dyn", string_bits(dynamic_value));
     crate::object::test_seed_class_prototype_method_root(
         0x5201,
         "proto",
@@ -111,7 +109,6 @@ fn test_class_side_table_scanner_marks_values_but_not_function_keys() {
     let valid_ptrs = build_valid_pointer_set();
     crate::object::scan_class_side_table_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid_ptrs));
 
-    assert_marked_user_ptr(dynamic_value, "dynamic class property value");
     assert_marked_user_ptr(prototype_value, "prototype method value");
     assert_marked_user_ptr(cached_value, "cached bound prototype method value");
     assert_marked_user_ptr(prototype_object, "prototype-object side-table value");
@@ -159,7 +156,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
     let value_old_bits = ptr_bits(value_old as usize);
     let key_bits = ptr_bits(key_user as usize);
     let key_old_bits = ptr_bits(key_old as usize);
-    crate::object::test_seed_class_dynamic_prop_root(0x5202, "dyn", value_bits);
     crate::object::test_seed_class_prototype_method_root(0x5202, "proto", value_bits);
     crate::object::test_seed_class_prototype_method_value_root(0x5202, "bound", value_bits);
     crate::object::test_seed_class_prototype_object_root(0x5202, value_user as usize);
@@ -168,10 +164,6 @@ fn test_registered_class_side_table_scanner_rewrites_values_and_function_keys() 
 
     rewrite_mutable_registered_roots(&valid_ptrs);
 
-    assert_eq!(
-        crate::object::test_class_dynamic_prop_root_bits(0x5202, "dyn"),
-        value_old_bits
-    );
     assert_eq!(
         crate::object::test_class_prototype_method_root_bits(0x5202, "proto"),
         value_old_bits
