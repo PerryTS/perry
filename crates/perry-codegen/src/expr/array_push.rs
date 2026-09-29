@@ -61,7 +61,7 @@ use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
     NativeRep, SemanticKind,
 };
-use crate::rooting;
+use crate::rooting::{self, Repr};
 use crate::type_analysis::is_numeric_expr;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
@@ -715,15 +715,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
     else {
         return lower_inner(ctx, expr, value_discarded);
     };
-    // The bits BEFORE the append, held as an integer, never a pointer: a
-    // collection inside the push may move the array and refresh the rooted
-    // local, and stale bits then compare unequal — the conservative
-    // direction (one redundant re-point of the same object).
+    // The head BEFORE the append, ROOTED across it. The push evaluates the
+    // argument and can collect, so the compare below must see the head where
+    // the collector left it: bits taken before the push and compared after it
+    // are a stale-register use (gc-root-dominance's curated budget counted
+    // exactly this compare), and a copy of the loop around it copies the use.
+    // Rooted, a collection that moves the array updates this slot, the local
+    // and the field alike, so "unequal" means the append re-allocated and
+    // nothing else.
     let before_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
-    let before_bits = ctx.block().bitcast_double_to_i64(&before_box);
-    let result = lower_inner(ctx, expr, value_discarded)?;
-    emit_field_push_writeback(ctx, *array_id, field, &before_bits)?;
-    Ok(result)
+    rooting::with_rooted_group(ctx, 1, |ctx, group| {
+        let before = group.adopt_emitted(ctx, Repr::Boxed, &before_box, true);
+        let result = lower_inner(ctx, expr, value_discarded)?;
+        emit_field_push_writeback(ctx, *array_id, field, group, before)?;
+        Ok(result)
+    })
 }
 
 /// The write-back half of [`lower`]: `if (bits(local) != before && this is
@@ -740,14 +746,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
 /// does, because the field then no longer holds the captured head. (A
 /// collection that already rewrote the field to the moved array fails the
 /// same test and skips a store that would have been redundant.)
+///
+/// `before` is the rooted pre-append head. It is re-read at each compare, so
+/// no compare holds bits across a point that can collect (the field read in
+/// `apush.field.still_held` can take the IC's slow path).
 fn emit_field_push_writeback(
     ctx: &mut FnCtx<'_>,
     array_id: u32,
     field: &str,
-    before_bits: &str,
+    group: &rooting::RootedGroup<'_>,
+    before: rooting::EmittedValue,
 ) -> Result<()> {
     let after_box = lower_expr(ctx, &Expr::LocalGet(array_id))?;
     let this_box = lower_expr(ctx, &Expr::This)?;
+    let before_box = group.reread_emitted(ctx, before);
 
     let deref_idx = ctx.new_block("apush.field.deref");
     let field_idx = ctx.new_block("apush.field.still_held");
@@ -761,7 +773,8 @@ fn emit_field_push_writeback(
     {
         let blk = ctx.block();
         let after_bits = blk.bitcast_double_to_i64(&after_box);
-        let same = blk.icmp_eq(I64, &after_bits, before_bits);
+        let before_bits = blk.bitcast_double_to_i64(&before_box);
+        let same = blk.icmp_eq(I64, &after_bits, &before_bits);
         let this_bits = blk.bitcast_double_to_i64(&this_box);
         let tag = blk.lshr(I64, &this_bits, "48");
         let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
@@ -800,10 +813,12 @@ fn emit_field_push_writeback(
             byte_offset: 0,
         },
     )?;
+    let before_box = group.reread_emitted(ctx, before);
     {
         let blk = ctx.block();
         let field_bits = blk.bitcast_double_to_i64(&field_box);
-        let still_held = blk.icmp_eq(I64, &field_bits, before_bits);
+        let before_bits = blk.bitcast_double_to_i64(&before_box);
+        let still_held = blk.icmp_eq(I64, &field_bits, &before_bits);
         blk.cond_br(&still_held, &store_label, &done_label);
     }
 

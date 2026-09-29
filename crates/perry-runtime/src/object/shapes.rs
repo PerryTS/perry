@@ -144,6 +144,9 @@ pub(crate) struct ShapeDescriptor {
     /// keys this shape names — what may be an accessor, non-writable,
     /// non-enumerable or non-configurable. Zero for an all-default shape.
     pub(crate) summary: u8,
+    /// Charter step 5: the per-slot field representation (`field_rep`).
+    /// Compared under [`field_rep::identity`](super::field_rep::identity).
+    pub(crate) rep: u64,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
@@ -401,6 +404,7 @@ impl PartialEq for ShapeDescriptor {
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
             && self.summary == other.summary
+            && super::field_rep::identity(self.rep) == super::field_rep::identity(other.rep)
     }
 }
 
@@ -1012,6 +1016,39 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     proto_id: u64,
     extra_summary: u8,
 ) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_ensure_with_rep(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        extra_summary,
+        super::field_rep::REP_ANY,
+    )
+}
+
+/// [`shape_descriptor_ensure_with_holes`] with an explicit field
+/// representation (charter step 5, `field_rep`). `rep` is identity under
+/// [`field_rep::identity`](super::field_rep::identity): a request whose only
+/// difference from a live record is a deprecated lane finds that record.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_ensure_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    extra_summary: u8,
+    rep: u64,
+) -> Result<u32, ShapeDescriptorError> {
+    if !super::field_rep::is_valid(rep) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -1034,6 +1071,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         hole_count,
         proto_id,
         summary,
+        rep,
     )
 }
 
@@ -1063,6 +1101,7 @@ pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKi
         d.hole_count,
         d.proto_id,
         d.summary,
+        d.rep,
     )
     .ok()
 }
@@ -1081,6 +1120,7 @@ fn shape_descriptor_mint_with_summary(
     hole_count: u32,
     proto_id: u64,
     summary: u8,
+    rep: u64,
 ) -> Result<u32, ShapeDescriptorError> {
     let keys_id = keys as usize as u64;
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
@@ -1115,6 +1155,7 @@ fn shape_descriptor_mint_with_summary(
         hole_count,
         proto_id,
         summary,
+        rep,
     );
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1137,6 +1178,7 @@ fn shape_descriptor_mint_with_summary(
                     hole_count,
                     proto_id,
                     summary,
+                    rep,
                 )
             {
                 #[cfg(feature = "shape-mint-diag")]
@@ -1193,7 +1235,8 @@ fn shape_descriptor_mint_with_summary(
         hole_count,
     )
     .with_proto_id(proto_id)
-    .with_summary(summary);
+    .with_summary(summary)
+    .with_rep(rep);
     // Publish by-id first, then the reverse accelerators. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.

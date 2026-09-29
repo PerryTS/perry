@@ -1,3 +1,4 @@
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
@@ -179,7 +180,7 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 before this fix)
 /// - other       → silent no-op (matches the codegen's documented intent)
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    set_ns_color(handle, &super::dynamic_color::rgba([r, g, b, a]));
+    set_ns_color(handle, &srgb::ns_color(r, g, b, a));
 }
 
 pub(super) fn set_ns_color(handle: i64, color: &objc2_app_kit::NSColor) {

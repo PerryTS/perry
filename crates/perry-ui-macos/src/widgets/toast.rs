@@ -21,6 +21,7 @@
 //! the fade-in / hold / fade-out / cleanup steps — same scheduling
 //! pattern as `app::install_test_mode_exit_timer` and `perry_ui_app_set_timer`.
 
+use crate::srgb;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread};
@@ -147,13 +148,7 @@ fn present_toast(msg: String) {
         let _: () = msg_send![layer, setCornerRadius: 12.0_f64];
         let _: () = msg_send![layer, setMasksToBounds: true];
 
-        let bg: Retained<NSColor> = msg_send![
-            AnyClass::get(c"NSColor").unwrap(),
-            colorWithRed: 0.0 as CGFloat,
-            green: 0.0 as CGFloat,
-            blue: 0.0 as CGFloat,
-            alpha: 0.78 as CGFloat
-        ];
+        let bg = srgb::ns_color(0.0, 0.0, 0.0, 0.78);
         let cg: *mut AnyObject = msg_send![&*bg, CGColor];
         let _: () = msg_send![layer, setBackgroundColor: cg];
 

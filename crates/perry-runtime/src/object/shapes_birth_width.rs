@@ -75,7 +75,7 @@ fn find_birth_record(
     proto_id: u64,
 ) -> Option<*mut ShapeRecord> {
     let facts =
-        shapes_store::facts_key_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0);
+        shapes_store::facts_key_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0);
     let ids = inner.by_facts.get(&facts)?;
     for &id in ids.as_slice() {
         let Some(record) = slab.record_ptr(id) else {
@@ -84,7 +84,7 @@ fn find_birth_record(
         // SAFETY: a live slab record, read immediately on this agent.
         let r = unsafe { &*record };
         if r.has(RECORD_FLAG_FACTS_INDEXED)
-            && r.facts_match_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0)
+            && r.facts_match_proto(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0, proto_id, 0, 0)
         {
             return Some(record);
         }

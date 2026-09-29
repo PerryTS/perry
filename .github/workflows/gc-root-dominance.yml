@@ -412,13 +412,18 @@ jobs:
       # `InOrder.run` uses in test_gap_class_field_named_stack_index. Pinned
       # at the measured value, because a ratchet is only a ratchet if it is
       # pinned where it stands.
+      #
+      # 2 -> 0: those two were the `this.f.push(v)` field write-back compare
+      # (expr/array_push.rs), which held the pre-append head's bits in a
+      # register across the push. The head is now rooted across the push and
+      # re-read at each compare.
       - name: Stale-register budget (curated)
         run: |
           set -euo pipefail
           python3 scripts/gc_root_dominance_check.py ir-corpus \
             --stale-registers --moving-only \
             --min-files 90 --min-binds 1500 --min-funcs 1200 \
-            --max-stale 2
+            --max-stale 0
 
       # 86 -> 104 at #7616: widening POLL_CAPABLE_RUNTIME by 77 symbols makes
       # windows MOVING that `--moving-only` previously dropped. Still inside

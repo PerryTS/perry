@@ -254,3 +254,21 @@ fn unpatched_program_keeps_array_push_intrinsic() {
     let r = init_of(&m, 1);
     assert!(r.starts_with("ArrayPush"), "{r}");
 }
+
+/// #10848: a write through a local bound to the namespace patches it too.
+#[test]
+fn scans_member_writes_through_a_namespace_alias() {
+    let s = scan(
+        r#"
+        const M: any = Math;
+        M.min = () => "mine";
+        const C = globalThis.console;
+        Object.assign(C, { info() {} });
+        const notNs = { max: 1 };
+        notNs.max = 2;
+        "#,
+    );
+    assert!(s.contains(&pair("Math", "min")), "{s:?}");
+    assert!(s.contains(&pair("console", "info")), "{s:?}");
+    assert_eq!(s.len(), 2, "{s:?}");
+}
