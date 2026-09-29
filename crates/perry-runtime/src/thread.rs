@@ -1940,6 +1940,9 @@ pub(crate) fn purge_agent_thread_results(agent: crate::agent::AgentId) {
 #[cfg(test)]
 #[path = "thread_parent_class_id_tests.rs"]
 mod parent_class_id_serialization_tests;
+#[cfg(test)]
+#[path = "thread_static_shape_tests.rs"]
+mod static_shape_replay_tests;
 
 #[cfg(test)]
 #[path = "thread_transfer_guard_tests.rs"]

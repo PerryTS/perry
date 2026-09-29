@@ -213,6 +213,7 @@ fn test_registered_typed_shape_traces_without_a_per_object_install() {
         1,
         pointer_mask.as_ptr(),
         1,
+        0,
     );
     let obj =
         crate::object::js_object_alloc_class_inline_keys_stamped(class_id, 0, 2, keys, shape_id);

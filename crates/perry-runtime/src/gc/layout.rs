@@ -252,32 +252,18 @@ unsafe fn with_shape_shared_descriptor_from<R>(
     // bound. #8113: an unstamped receiver has no bound anywhere, so 0 — not a
     // second probe (`map_or`'s default is eager).
     let field_count = shape.map_or(0, |shape| shape.live_inline_slot_count() as usize);
-    if shape_layout_keyed_enabled() {
-        let map = hot_shape_layouts().borrow();
-        if let Some(desc) = map.get(&shape_id) {
-            let desc = desc.as_ref()?;
-            if desc.slot_count != field_count {
-                return None;
-            }
-            return Some(f(desc));
-        }
-    }
-
-    // #8405: codegen-registered pointer-bearing class layouts live in a
-    // process-global immutable registry because the module header image is
-    // shared by workers. A dedicated ShapeId makes this lookup unambiguous.
-    // Cache the descriptor in the current agent's ordinary hot table on first
-    // use, so the mutex is paid once per shape/thread, never per trace/store.
-    let desc = typed_shape::registered_typed_shape_layout(shape_id)?;
+    // The agent's hot table holds descriptors learned from objects (only while
+    // shape keying is on: `PERRY_SHAPE_LAYOUT_KEYED=0` stops those installs)
+    // and, always, the codegen-registered typed layouts (#8405) that module
+    // init installs in every agent (`js_gc_typed_shape_id_for_keys`).
+    // `SIDE_MASK | INTACT` header images depend on the latter, so the table is
+    // consulted whatever the switch says.
+    let map = hot_shape_layouts().borrow();
+    let desc = map.get(&shape_id)?.as_ref()?;
     if desc.slot_count != field_count {
         return None;
     }
-    if shape_layout_keyed_enabled() {
-        hot_shape_layouts()
-            .borrow_mut()
-            .insert(shape_id, Some(desc.clone()));
-    }
-    Some(f(&desc))
+    Some(f(desc))
 }
 
 /// Answer a *query* about `user_ptr`'s current canonical typed layout, whichever
