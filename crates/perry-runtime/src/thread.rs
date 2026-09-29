@@ -869,6 +869,16 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
                 *parent_class_id,
                 fields.len() as u32,
             );
+            if *class_id == 0 {
+                // A class-less transferred object is data only: the wire
+                // carries keys and values, never accessors or a prototype
+                // override, exactly like `JSON.parse` output. Marked before
+                // the first stamp so its layout is minted `Ordinary` (the
+                // kind a `{}` literal's static ShapeId names), not
+                // `OrdinaryUnmarked`.
+                // SAFETY: `obj` is the unpublished newborn just allocated.
+                crate::object::shapes::store_kind::premark_plain_ordinary(obj);
+            }
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
 

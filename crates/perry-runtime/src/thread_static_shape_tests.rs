@@ -31,6 +31,9 @@ fn replayable() -> SerializedValue {
     assert_eq!(seed_here(), REQUESTED, "sending agent: seed did not adopt");
     unsafe {
         let obj = crate::object::js_object_alloc_with_parent(0, 0, 2);
+        // A `{}` literal is birth-marked plain, which is the kind the static
+        // id names; an unmarked class-less object is `OrdinaryUnmarked`.
+        crate::object::shapes::store_kind::premark_plain_ordinary(obj);
         let keys = crate::object::static_shapes::canonical_keys_for_names(&[
             NAMES[0].as_bytes(),
             NAMES[1].as_bytes(),

@@ -264,11 +264,18 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
     );
     let descriptor = unsafe { shapes::object_shape_descriptor(obj) }.expect("published");
     assert_eq!(descriptor.keys, after.keys);
+    // Every identity fact of the receiver's descriptor, the store kind
+    // (charter step 3) included: a class-less unmarked receiver is
+    // `OrdinaryUnmarked`, not the keys-only default.
     assert_eq!(
-        shapes::shape_descriptor_ensure(
+        shapes::shape_descriptor_ensure_with_generation(
             after.keys as usize as *const crate::ArrayHeader,
             descriptor.logical_key_count,
             descriptor.live_inline_slot_count,
+            descriptor.semantic_generation,
+            descriptor.object_kind,
+            descriptor.proto_id,
+            0,
         ),
         Ok(id),
         "#9706: interning the moved facts must answer the existing id, not mint a duplicate"
@@ -614,9 +621,11 @@ fn build_transition_cache_target_then_drop(slot: u32) -> (u32, u32) {
     // Model the process-lifetime module global that can birth the predecessor
     // again after no receiver currently carries it.
     let predecessor = shapes::js_object_shape_id_for_keys(0, 0);
+    // A keys-only mint is `Ordinary` (charter step 3), so its carrier is a
+    // plain-ordinary birth.
     js_shadow_slot_set(
         slot,
-        ptr_bits(crate::object::js_object_alloc(0, 0) as usize),
+        ptr_bits(crate::object::object_alloc_plain(0) as usize),
     );
     let key = crate::string::js_string_from_bytes(b"cache6".as_ptr(), 6);
     let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
@@ -653,7 +662,8 @@ fn transition_cache_target_survives_and_can_restamp_after_full_trace() {
         "the transition target must own its id"
     );
 
-    js_shadow_slot_set(0, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+    // The same birth as the predecessor's carrier (plain-ordinary).
+    js_shadow_slot_set(0, ptr_bits(crate::object::object_alloc_plain(0) as usize));
     let key = crate::string::js_string_from_bytes(b"cache6".as_ptr(), 6);
     let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     shapes::test_watch_cached_transition_stamps(consumer as usize);
