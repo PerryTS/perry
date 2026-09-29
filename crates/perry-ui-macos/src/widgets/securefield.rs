@@ -1,8 +1,8 @@
 use crate::ffi::js_string_from_bytes;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{NSSecureTextField, NSTextField, NSView};
+use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
 };
@@ -98,18 +98,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let ns_placeholder = NSString::from_str(&placeholder);
 
     unsafe {
-        let text_field: Retained<NSSecureTextField> = msg_send![
-            NSSecureTextField::alloc(mtm), initWithFrame: objc2_core_foundation::CGRect::new(
-                objc2_core_foundation::CGPoint::new(0.0, 0.0),
-                objc2_core_foundation::CGSize::new(200.0, 22.0),
-            )
-        ];
-
-        let tf_ref: &NSTextField = &Retained::cast_unchecked::<NSTextField>(text_field.clone());
-        super::padding::install_secure_text_field_cell(tf_ref, mtm);
-        tf_ref.setPlaceholderString(Some(&ns_placeholder));
-        tf_ref.setEditable(true);
-        tf_ref.setBezeled(true);
+        let text_field = super::padding::secure_text_field(&NSString::from_str(""), mtm);
+        text_field.setPlaceholderString(Some(&ns_placeholder));
 
         let view: Retained<NSView> = Retained::cast_unchecked(text_field);
         let handle = super::register_widget(view);
