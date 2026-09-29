@@ -124,6 +124,27 @@ fn string_method_call_returns_number(ctx: &FnCtx<'_>, object: &Expr, property: &
         && crate::lower_string_method::is_known_string_method_name(property)
 }
 
+/// 5L (step5 DESIGN §4.1): THE query for "this local holds a Number here".
+///
+/// A local is Number in scope Σ iff every write to it that can reach a read in
+/// Σ is Number-producing, judged by a greatest fixed point. The function scope
+/// is `number_by_construction_locals` (#8105: literals, numeric operators,
+/// `Math.*`, Number locals, proven numeric fields; parameters, boxed cells and
+/// module globals excluded). A guarded loop clone adds its own scope: the
+/// locals its entry test admitted and whose every in-clone write is
+/// Number-preserving (`ReceiverDescriptorTable::materialize_number_locals`),
+/// ended with the clone.
+///
+/// A Number's representation IS its raw double and every leaf of the rule
+/// yields a canonical one (arithmetic gives the default NaN; typed-array float
+/// lanes are canonicalised at the read), so a member never holds a pointer or
+/// a NaN-box tag at a read in its scope. Every consumer that asks "Number?",
+/// "raw f64?" or "non-pointer?" about a `LocalGet` asks this.
+pub(crate) fn local_is_number(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.number_by_construction_locals.contains(&id)
+        || ctx.receiver_descriptors.local_is_number_in_scope(id)
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_)
@@ -146,20 +167,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             true
         }
         Expr::LocalGet(id) => {
-            ctx.element_shape_loop_facts
-                .iter()
-                .rev()
-                .any(|fact| fact.numeric_accumulator == *id)
-                // The stable-packed twin: the fast preheader tag-tested the
-                // accumulator and every in-clone write is numeric-preserving,
-                // so within the fast clone the local provably holds a Number.
-                // The fact is pushed around the fast-clone lowering only, so
-                // the slow clone and post-loop code never see it.
-                || ctx
-                    .stable_packed_loop_facts
-                    .iter()
-                    .rev()
-                    .any(|fact| fact.numeric_accumulators.contains(id))
+            local_is_number(ctx, *id)
                 || ctx.integer_locals.contains(id)
                 || ctx.unsigned_i32_locals.contains(id)
                 || ctx.int_valued_i64_locals.contains_key(id)
@@ -167,40 +175,6 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     ctx.stable_local_type_proof(id),
                     Some(HirType::Number) | Some(HirType::Int32)
                 )
-                // #8105: the reassignment-tolerant proof. Every arm above
-                // either needs the local to be write-once
-                // (`stable_local_type_proof` answers `None` the moment it is
-                // reassigned) or is an integer-range fact, so a plain
-                // fractional accumulator — `let x = 0.0; … x = x * x - y * y
-                // + cx` — had NO numeric proof and every `x * x` bailed to
-                // the BigInt-aware `js_dynamic_mul`. This set proves the
-                // value is a Number from the WRITES, so reassignment is fine.
-                || ctx.number_by_construction_locals.contains(id)
-                // The packed-f64 clone twin of the stable-packed arm above:
-                // tag-tested in the versioned/range fast preheader, and every
-                // in-clone write is numeric-preserving by the accumulator
-                // walk.
-                || ctx
-                    .receiver_descriptors
-                    .packed_f64_loop_facts()
-                    .rev()
-                    .any(|fact| fact.numeric_accumulators.contains(id))
-                // #9160: the string-window clone admits the accumulator only
-                // after an entry tag check, and its sole write adds a proven
-                // string length. The fact exists only while lowering that
-                // clone, so the slow copy retains dynamic `+` semantics.
-                // The dense masked-window clone's twin: same entry tag
-                // check, same numeric-preserving write proof.
-                || ctx
-                    .receiver_descriptors
-                    .masked_window_array_facts()
-                    .rev()
-                    .any(|fact| fact.numeric_accumulators.contains(id))
-                || ctx
-                    .string_window_array_facts
-                    .iter()
-                    .rev()
-                    .any(|fact| fact.numeric_accumulator == *id)
         }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle
@@ -637,9 +611,14 @@ pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// * explicit `NumberCoerce`;
 /// * `Logical` selections whose BOTH operands are themselves canonical.
 ///
-/// Deliberately NOT admitted: `LocalGet` (a Number-typed local can hold an
-/// INT32-boxed value assigned from a boxed read fallback), reads
-/// (`IndexGet`/`PropertyGet` — cold fallbacks return boxed bits), and calls.
+/// * a `LocalGet` of an integer-provenance local or a [`local_is_number`]
+///   member: every write reaching the read is Number-producing, so the slot
+///   holds a canonical double. A declared `number` type is NOT evidence (a
+///   Number-typed local can hold an INT32-boxed value assigned from a boxed
+///   read fallback), which is why the proof is the write rule, not the type.
+///
+/// Deliberately NOT admitted: reads (`IndexGet`/`PropertyGet` — cold
+/// fallbacks return boxed bits) outside the arms below, and calls.
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
@@ -656,7 +635,9 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         // boxed, captured, or a module global (those can be rebound by code
         // the dataflow walk cannot see).
         Expr::LocalGet(id) => {
-            (ctx.i32_counter_slots.contains_key(id) || ctx.integer_locals.contains(id))
+            (ctx.i32_counter_slots.contains_key(id)
+                || ctx.integer_locals.contains(id)
+                || local_is_number(ctx, *id))
                 && (ctx.locals.contains_key(id) || ctx.local_slot_reps.contains_key(id))
                 && !ctx.boxed_vars.contains(id)
                 && !ctx.closure_captures.contains_key(id)

@@ -1742,8 +1742,11 @@ pub(super) fn lower_element_shape_versioned_for(
             fields,
             synthesized_body: matched.fast_body.is_some(),
             element_binding: matched.element_binding,
-            numeric_accumulator: matched.accumulator_id,
         });
+    // The preheader proved the accumulator's current value is a Number and the
+    // matcher admits only Number-preserving writes: the clone's 5L scope.
+    ctx.receiver_descriptors
+        .materialize_number_locals(scope_id, &[matched.accumulator_id]);
     let lowered = lower_for_after_init_with_i32_bound(
         ctx,
         init,
@@ -1755,6 +1758,7 @@ pub(super) fn lower_element_shape_versioned_for(
     );
     ctx.element_shape_loop_facts
         .retain(|fact| fact.scope_id != scope_id);
+    ctx.receiver_descriptors.dematerialize_scope(scope_id);
     native.finish(ctx, &merge_label);
     lowered?;
     if !ctx.block().is_terminated() {

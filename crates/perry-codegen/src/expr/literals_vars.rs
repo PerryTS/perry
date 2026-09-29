@@ -654,7 +654,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // arms below keep their calls.
             let needs_numeric_coerce = !ctx.integer_locals.contains(id)
                 && !ctx.unsigned_i32_locals.contains(id)
-                && !ctx.number_by_construction_locals.contains(id);
+                && !crate::type_analysis::local_is_number(ctx, *id);
             let is_increment_arg = match op {
                 UpdateOp::Increment => "1",
                 UpdateOp::Decrement => "0",

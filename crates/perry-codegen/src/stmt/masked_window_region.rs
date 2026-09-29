@@ -888,7 +888,6 @@ pub(super) fn lower_masked_window_region(
                     values_i32: true,
                     allows_stores: false,
                     elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
-                    numeric_accumulators: Vec::new(),
                 });
         }
         let privatize = ctx.try_depth == 0;
@@ -1005,7 +1004,6 @@ pub(super) fn lower_masked_window_region(
                 values_i32: true,
                 allows_stores: false,
                 elem: MaskedWindowElem::TaI32 { data_ptr },
-                numeric_accumulators: Vec::new(),
             });
     }
     let privatize = ctx.try_depth == 0;
@@ -1040,7 +1038,6 @@ pub(super) fn lower_masked_window_region(
                 values_i32: false,
                 allows_stores: false,
                 elem: MaskedWindowElem::PlainF64,
-                numeric_accumulators: Vec::new(),
             });
     }
     lower_region_copy(

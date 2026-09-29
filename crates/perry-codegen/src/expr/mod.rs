@@ -1804,15 +1804,6 @@ pub(crate) struct StablePackedReadCache {
 pub(crate) struct StablePackedLoopFact {
     pub counter_local_id: u32,
     pub array_local_id: u32,
-    /// Plain locals the fast preheader proved to hold a Number (one tag test
-    /// per admitted accumulator) and whose every write inside the loop body is
-    /// numeric-preserving with all leaves provable numeric in-loop, so the
-    /// value stays a Number by induction for the whole fast clone.
-    /// `is_numeric_expr` consults this for `LocalGet`, exactly like the
-    /// element-shape clone's `numeric_accumulator` — it is what lets
-    /// `s += arr[i]` lower to a native `fadd` instead of
-    /// `js_dynamic_string_or_number_add` on every iteration.
-    pub numeric_accumulators: Vec<u32>,
     pub side_exit_label: String,
     pub descriptor: String,
     /// Boxed bound passed to the runtime guard (`-1` requests live length).
@@ -1989,15 +1980,6 @@ pub(crate) struct PackedF64LoopFact {
     /// RHS is numeric bits (side-exiting otherwise) and skip the per-iteration
     /// store guard — the range guard already proved bounds and mutability.
     pub allow_holes: bool,
-    /// Plain locals the packed fast preheader proved to hold a Number (one
-    /// tag test per admitted accumulator) whose every in-body write is
-    /// numeric-preserving — the packed twin of
-    /// `StablePackedLoopFact::numeric_accumulators`. `is_numeric_expr`
-    /// consults this for `LocalGet`, which is what lets `s += arr[i]` inside
-    /// the fast clone lower to a native `fadd` instead of
-    /// `js_dynamic_string_or_number_add` on every iteration. Scope-safe by
-    /// construction: the fact is pushed around the fast-clone lowering only.
-    pub numeric_accumulators: Vec<u32>,
     /// True when a *range* guard (hole-tolerant or dense) validated the whole
     /// constant-offset index window `[start + min_offset, bound + max_offset)`
     /// at loop entry — `arr[i ± c]` loads may use non-zero offsets even
@@ -2081,12 +2063,6 @@ pub(crate) struct MaskedWindowArrayFact {
     /// element type is exactly i32 (Int32Array tier), so loads may
     /// materialize elements as native `i32`.
     pub values_i32: bool,
-    /// Accumulator locals admitted by the entry tag check for THIS clone:
-    /// every in-clone write is numeric-preserving (verified by the
-    /// accumulator walk), so `is_numeric_expr` may treat them as Numbers
-    /// while the fact is live. Mirrors `StringWindowArrayFact`'s
-    /// `numeric_accumulator` (#9160) and `PackedF64LoopFact`'s vec.
-    pub numeric_accumulators: Vec<u32>,
     /// Storage layout the guard proved — selects the inline load shape.
     pub elem: MaskedWindowElem,
     /// True only in a dense fast-loop scope whose matcher admitted masked
@@ -2111,7 +2087,6 @@ pub(crate) struct StringWindowArrayFact {
     pub scope_id: u32,
     pub min_idx: i64,
     pub max_idx_exclusive: i64,
-    pub numeric_accumulator: u32,
 }
 
 /// #5093: one fact per (receiver, versioned loop). See
@@ -2367,10 +2342,6 @@ pub(crate) struct ElementShapeLoopFact {
     /// binds `r` generically. `None` for the single-statement accumulator
     /// form.
     pub element_binding: Option<u32>,
-    /// Mutable accumulator whose current value the preheader proved is a
-    /// Number. The matcher admits only assignments that preserve this fact,
-    /// and the fact exists only while lowering the guarded fast clone.
-    pub numeric_accumulator: u32,
 }
 
 /// Find the innermost active element-shape loop fact covering a
@@ -3837,7 +3808,7 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
         // ToInt32 conversion; nested bitwise expressions continue through the
         // native structural path above.
         None if matches!(expr, Expr::LocalGet(id)
-                if ctx.number_by_construction_locals.contains(id)) =>
+                if crate::type_analysis::local_is_number(ctx, *id)) =>
         {
             let value = lower_expr(ctx, expr)?;
             return Ok(Some(if is_known_i32_range(ctx, expr) {
