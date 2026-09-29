@@ -1646,6 +1646,15 @@ pub(crate) unsafe fn nm_attach_tls(
     value
 }
 
+/// #10454: `http.ServerResponse.prototype` carries its methods so
+/// `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit them.
+pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_addr: usize) -> f64 {
+    if property_name == "ServerResponse" {
+        return crate::object::native_this_alias::attach_http_server_response_prototype(value);
+    }
+    value
+}
+
 #[allow(unused_mut)]
 pub(crate) unsafe fn nm_attach_wasi(
     property_name: &str,

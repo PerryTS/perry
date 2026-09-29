@@ -499,7 +499,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # The insert/reverse-index body lives in the `_with_holes` variant since
     # the tombstone-delete work; `_with_generation` is a thin forwarding
     # wrapper. The authority ordering is checked where the writes are.
-    ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
+    ensure = function_body(shapes, "shape_descriptor_ensure_with_rep")
     # The property is that the by-id descriptor is installed BEFORE the reverse
     # accelerator points at it — never which append spells it. #9768 added
     # `family_append_fresh`, which is `family_push_back` minus a membership scan
@@ -513,7 +513,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if ensure_append is None:
         raise CensusError(
             "shape descriptor authority surface missing: family append in "
-            "shape_descriptor_ensure_with_holes"
+            "shape_descriptor_ensure_with_rep"
         )
     assert_before(
         ensure,
