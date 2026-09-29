@@ -44,14 +44,33 @@ pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
 /// (`js_array_constructor_single`) and represents a larger fresh array as a
 /// logical length over a small store. Reaching it requires actually writing
 /// 2^31 live elements.
+///
+/// The binding bound is tighter: [`ARRAY_MAX_CAPACITY`], the largest backing
+/// store whose allocation size fits `GcHeader::size`.
 #[inline]
 #[must_use]
 pub(crate) fn array_capacity_or_throw(capacity: u32) -> u32 {
-    if capacity > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD {
+    if capacity > ARRAY_MAX_CAPACITY {
         throw_invalid_array_length()
     }
     capacity
 }
+
+/// The largest number of physical element slots one array allocation holds.
+///
+/// `GcHeader::size` is a `u32` and records the whole allocation (GC header,
+/// `ArrayHeader`, slots). The element base is derived from it
+/// (`storage::array_front_offset`), in the runtime and in emitted code, so a
+/// backing store whose size does not fit would address the wrong memory. Such
+/// a request raises `RangeError: Invalid array length` before any memory is
+/// reserved (`header::array_byte_size`), as node does for an array it cannot
+/// hold. The capacity (logical slots plus any named-property reserve) is at
+/// most 536 870 909 elements, a 4 GiB block.
+pub(crate) const ARRAY_MAX_CAPACITY: u32 =
+    ((u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ArrayHeader>())
+        / std::mem::size_of::<f64>()) as u32;
+
+const _: () = assert!(ARRAY_MAX_CAPACITY <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD);
 
 /// Allocate a new array with the given initial capacity
 #[no_mangle]
@@ -151,6 +170,9 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = actual_capacity;
+        // The caller writes a slot before it publishes the length that
+        // covers it, so every slot it does not reach stays a hole.
+        fill_fresh_capacity_with_holes(ptr);
         // Arena slots can be reused after a raw-f64 array. The all-pointer
         // layout owns the same header, so clear numeric representation flags
         // before publishing it as pointer-only.
@@ -165,6 +187,23 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
 /// lists never grow, so no minimum-capacity reserve or initialized slack is
 /// needed. The caller fills every slot before publishing length and records
 /// old-to-young barriers if a large allocation is born in old generation.
+/// Write `TAG_HOLE` into every slot of a just-allocated array's capacity.
+///
+/// `[length, capacity)` is hole-filled on every array
+/// (`array_truncate_length`), and arena memory can hold stale bits, so a
+/// caller that fills only a prefix leaves holes, never garbage, behind it.
+///
+/// # Safety
+/// `ptr` is a just-allocated, unpublished GC_TYPE_ARRAY whose `capacity` is set.
+unsafe fn fill_fresh_capacity_with_holes(ptr: *mut ArrayHeader) {
+    let elements = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
+    for i in 0..(*ptr).capacity as usize {
+        // GC_STORE_AUDIT(INIT): a just-allocated array nothing references yet,
+        // written with a non-pointer sentinel: no old value, no edge, no barrier.
+        std::ptr::write(elements.add(i), crate::value::TAG_HOLE);
+    }
+}
+
 pub(crate) fn js_array_alloc_key_list(capacity: u32, all_ptr: bool) -> *mut ArrayHeader {
     let capacity = array_capacity_or_throw(capacity);
     let ptr = arena_alloc_gc(
@@ -175,6 +214,7 @@ pub(crate) fn js_array_alloc_key_list(capacity: u32, all_ptr: bool) -> *mut Arra
     unsafe {
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
+        fill_fresh_capacity_with_holes(ptr);
         clear_array_numeric_layout(ptr);
         if all_ptr {
             crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
@@ -206,6 +246,7 @@ pub(crate) fn js_array_alloc_key_list_reserved(capacity: u32, all_ptr: bool) -> 
         // GC_STORE_AUDIT(INIT): the reserve word of a just-allocated array
         // nothing references yet; a non-pointer, so no edge and no barrier.
         std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
+        fill_fresh_capacity_with_holes(ptr);
         clear_array_numeric_layout(ptr);
         if all_ptr {
             crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
@@ -255,7 +296,9 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
         (*ptr).length = capacity; // Set length = requested capacity
         (*ptr).capacity = actual_capacity;
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
-        for i in 0..capacity as usize {
+        // The whole capacity: `[length, capacity)` is hole-filled on every
+        // array (`array_truncate_length`).
+        for i in 0..actual_capacity as usize {
             // GC_STORE_AUDIT(POINTER_FREE): TAG_HOLE is a non-pointer sentinel for fresh array slots.
             std::ptr::write(elements_ptr.add(i), crate::value::TAG_HOLE);
         }

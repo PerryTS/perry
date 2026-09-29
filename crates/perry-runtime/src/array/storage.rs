@@ -42,6 +42,37 @@ pub unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *mut u64 {
     (arr.add(1) as *mut u64).add(array_front_offset(arr))
 }
 
+/// Lower an array's `length` to `new_length`, writing `TAG_HOLE` into every
+/// vacated slot that exists.
+///
+/// The runtime keeps `[length, capacity)` hole-filled: allocation fills the
+/// whole capacity, growth copies into a hole-filled block, and every length
+/// decrease goes through here. Emitted element reads rely on it: they bound an
+/// index by `capacity`, and a slot past `length` must then read as a hole,
+/// never as the value that used to live there. The same write also stops the
+/// slack from retaining a removed element past its lifetime.
+///
+/// An over-long array (`length > capacity`, `new Array(n)` past the dense
+/// threshold) has no slots past `capacity`; only `[new_length,
+/// min(length, capacity))` is written.
+///
+/// # Safety
+/// `arr` must be a live, forwarding-resolved GC_TYPE_ARRAY and
+/// `new_length <= (*arr).length`.
+pub(crate) unsafe fn array_truncate_length(arr: *mut ArrayHeader, new_length: u32) {
+    let end = (*arr).length.min((*arr).capacity);
+    if new_length < end {
+        let elements = array_elements_ptr(arr);
+        for i in new_length..end {
+            // GC_STORE_AUDIT(BARRIERED): the slot leaves the live range when
+            // `length` is lowered below; a hole is not an edge, and the
+            // collector never traced the slot past the new length.
+            elements.add(i as usize).write(crate::value::TAG_HOLE);
+        }
+    }
+    (*arr).length = new_length;
+}
+
 /// Remove one ordinary dense slot without relocating any surviving element.
 /// Receiver/property checks happen before entry and nothing here can collect.
 pub(super) unsafe fn shift_dense(arr: *mut ArrayHeader) -> f64 {

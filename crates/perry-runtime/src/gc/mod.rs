@@ -306,6 +306,7 @@ pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCol
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed, CopyingFastPath::Allowed)
 }
@@ -329,6 +330,7 @@ pub(super) enum CopyingFastPath {
 /// the caller a collection that cannot compact — the #6946 argument).
 pub(super) fn gc_collect_compacting_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
     let _armed = oldgen_defrag::IdleCompactDefragArm::new();
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Skipped)
 }
@@ -361,6 +363,7 @@ pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> 
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused, CopyingFastPath::Allowed)
 }
@@ -825,6 +828,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // allocation-free once the collector owns the heap, which is why the build
     // cannot be deferred any further than this.
     roots::ensure_stack_maps_built();
+    verify::verify_array_hole_tails_at_collection();
 
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
