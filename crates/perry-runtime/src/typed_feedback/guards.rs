@@ -899,9 +899,10 @@ fn class_field_get_one_path(
     )
 }
 
-/// The two answers the receiver's shape gives without the ladder, in the
-/// order the emitted generic read asks them: the site's own word, then (on
-/// its declined edge) the inherited-read cache. `None` for everything else.
+/// The answers the receiver's shape gives without the ladder, in the order
+/// the emitted generic read asks them: the site's own word, the site's holder
+/// entry, then (on its declined edge) the inherited-read cache. `None` for
+/// everything else.
 ///
 /// `leaf`: the caller is the S2 GC-leaf entry, so an inherited ACCESSOR entry
 /// (which runs a getter) is declined, as `js_inherited_read_cache_hit_f64`
@@ -929,6 +930,13 @@ unsafe fn class_field_get_from_shape(
         return None;
     }
     if let Some(value) = crate::object::field_get_set::pic_outlined_mru_hit(handle, cache_slot) {
+        crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
+        return Some(value);
+    }
+    // The site's holder entry, which the emitted generic read asks next.
+    if let Some(value) =
+        crate::object::method_site::read_holder::read_holder_hit(handle, cache_slot)
+    {
         crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_CLASS_MISS_SHAPE);
         return Some(value);
     }

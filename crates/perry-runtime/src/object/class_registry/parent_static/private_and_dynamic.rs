@@ -126,6 +126,8 @@ pub(crate) fn register_class_dynamic_static_accessor(
             set: set_bits.map(|_| set.get_nanbox_u64()).unwrap_or(have.set),
             raw_get: if get_bits.is_some() { 0 } else { have.raw_get },
             raw_set: if set_bits.is_some() { 0 } else { have.raw_set },
+            static_get: if get_bits.is_some() { 0 } else { have.static_get },
+            static_set: if set_bits.is_some() { 0 } else { have.static_set },
         };
         let enumerable = enumerable
             .or(existing.map(|(_, e, _)| e))
@@ -319,7 +321,7 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    let (func_ptr, param_count, has_rest) = CLASS_STATIC_METHODS
+    let (func_ptr, param_count, has_rest, _) = CLASS_STATIC_METHODS
         .read()
         .ok()?
         .as_ref()?

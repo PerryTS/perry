@@ -900,3 +900,8 @@ test_gap_gc_template_coerce_join
 # so the collector never traced the slot. claude-code `-p` read a tool
 # record's `prompt` method back as a plain object.
 test_gap_gc_11559_spill_headroom_store
+# `F.prototype.x = <call>` held F (a boxed function declaration) in a register
+# across the value's call, so an evacuating minor inside it left the
+# registration reading the retired closure. moment 2.31.0 module init under a
+# seeded schedule (#11635).
+test_gap_gc_11635_func_proto_register_across_call

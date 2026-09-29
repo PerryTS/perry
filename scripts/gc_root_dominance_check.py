@@ -2833,7 +2833,11 @@ RECEIVER_SINKS = re.compile(
     # A stale RegExpHeader* is dereferenced immediately by both of these —
     # this is #7154's residual, and it faulted rather than merely answering
     # wrong, so it belongs in the fatal ranking and not just the raw count.
-    r"regexp_test|regexp_exec|regexp_match\w*|regexp_replace\w*"
+    r"regexp_test|regexp_exec|regexp_match\w*|regexp_replace\w*|"
+    # Both read the function's closure header (`is_callable_function_value`)
+    # to key its synthetic class id. A stale function register here faulted
+    # at moment's module init (#11635), so it ranks as fatal too.
+    r"register_function_prototype_method|get_function_prototype_method"
     r")$"
 )
 

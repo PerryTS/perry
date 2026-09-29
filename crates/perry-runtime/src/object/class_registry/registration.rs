@@ -232,6 +232,17 @@ static CLASS_ACCESSOR_SETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
         class_accessor_setter_thunk as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
     );
 
+static CLASS_STATIC_ACCESSOR_GETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_static_accessor_getter_thunk
+            as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+static CLASS_STATIC_ACCESSOR_SETTER_THUNK_INFO: crate::closure::JsFunctionInfo =
+    crate::closure::JsFunctionInfo::of(
+        class_static_accessor_setter_thunk
+            as crate::codegen_abi::JsBody1<crate::closure::ClosureHeader>,
+    );
+
 /// Trampoline giving a raw vtable getter func_ptr (`fn(this) -> f64`) the
 /// closure calling convention. The receiver is the `this` argument passed
 /// by the method-call dispatch the closure value travels through.
@@ -246,6 +257,48 @@ extern "C" fn class_accessor_getter_thunk(
     let this = this.as_f64();
     let f = unsafe { crate::closure::body_call::js_method_body_fn!(raw as *const u8;) };
     f(this)
+}
+
+/// Trampoline for a raw STATIC getter func_ptr (`fn() -> f64`): the closure
+/// call's `this` is the class the getter runs on, armed as its static `this`
+/// and its private/capture owner exactly as a direct static access arms them.
+extern "C" fn class_static_accessor_getter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = this.as_f64();
+    crate::object::static_this_arm_if_unarmed(this);
+    crate::object::static_private_owner_push(this);
+    let f = unsafe { crate::closure::body_call::js_bare_body_fn!(raw as *const u8;) };
+    let result = f();
+    crate::object::static_private_owner_pop();
+    crate::object::static_this_disarm();
+    result
+}
+
+/// Trampoline for a raw STATIC setter func_ptr (`fn(value) -> f64`): the
+/// value is its only parameter; `this` is armed as for the getter.
+extern "C" fn class_static_accessor_setter_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+    if raw == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let this = this.as_f64();
+    crate::object::static_this_arm_if_unarmed(this);
+    crate::object::static_private_owner_push(this);
+    let f = unsafe { crate::closure::body_call::js_bare_body_fn!(raw as *const u8; value) };
+    let result = f(value);
+    crate::object::static_private_owner_pop();
+    crate::object::static_this_disarm();
+    result
 }
 
 /// Trampoline for a raw vtable setter func_ptr (`fn(this, value) -> f64`).
@@ -275,6 +328,8 @@ pub(crate) unsafe fn class_accessor_source_func_ptr(
     let thunk = (*closure).code();
     if thunk != class_accessor_getter_thunk as *const u8
         && thunk != class_accessor_setter_thunk as *const u8
+        && thunk != class_static_accessor_getter_thunk as *const u8
+        && thunk != class_static_accessor_setter_thunk as *const u8
     {
         return None;
     }
@@ -295,16 +350,20 @@ pub(crate) unsafe fn class_accessor_source_func_ptr(
 pub(crate) fn class_accessor_function_value(
     raw_ptr: usize,
     is_setter: bool,
+    is_static: bool,
     prop_name: &str,
     setter_length: Option<u32>,
 ) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let thunk = if is_setter {
-        &CLASS_ACCESSOR_SETTER_THUNK_INFO
-    } else {
-        &CLASS_ACCESSOR_GETTER_THUNK_INFO
+    // The thunk matches the entry calling convention: an instance entry takes
+    // the receiver as a parameter, a static one is a bare body.
+    let thunk = match (is_setter, is_static) {
+        (true, false) => &CLASS_ACCESSOR_SETTER_THUNK_INFO,
+        (false, false) => &CLASS_ACCESSOR_GETTER_THUNK_INFO,
+        (true, true) => &CLASS_STATIC_ACCESSOR_SETTER_THUNK_INFO,
+        (false, true) => &CLASS_STATIC_ACCESSOR_GETTER_THUNK_INFO,
     };
     let closure = crate::closure::js_closure_alloc(thunk, 1);
     if closure.is_null() {

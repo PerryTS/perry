@@ -2469,11 +2469,14 @@ pub extern "C" fn js_super_put_value_set(
     // the value captured at class-definition time. The previous instance-only
     // path looked at `Parent.prototype` and made valid static writes fail.
     if let Some(child_id) = crate::object::class_ref_id(receiver) {
-        let target = if parent_class_id != 0 {
-            crate::object::class_value::class_value(parent_class_id)
-        } else {
-            crate::object::js_get_dynamic_parent_value(child_id)
-        };
+        // A builtin parent id (`extends Error`) never gets a class function
+        // object; its constructor is the class's dynamic parent value.
+        let target =
+            if parent_class_id != 0 && crate::object::is_class_id_registered(parent_class_id) {
+                crate::object::class_value::class_value(parent_class_id)
+            } else {
+                crate::object::js_get_dynamic_parent_value(child_id)
+            };
         let tv = crate::value::JSValue::from_bits(target.to_bits());
         if !tv.is_undefined() && !tv.is_null() {
             return js_put_value_set(target, key, value, receiver, strict);

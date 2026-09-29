@@ -50,6 +50,17 @@ pub const CLOSURE_INFO_OFFSET: usize = 8;
 pub const CLOSURE_PROPS_OFFSET: usize = 16;
 pub const CLOSURE_HEADER_SIZE: usize = 24;
 
+/// `object::ObjectHeader::parent_class_id`: the object's ShapeId word (LP64
+/// and ILP32 alike; `CLOSURE_SHAPE_OFFSET` is the same word of a closure).
+pub const OBJECT_SHAPE_OFFSET: usize = 4;
+
+/// `object::class_value::StaticCallMemo` (LP64) — the words the emitted
+/// static-call guard reads (`perry-codegen/src/expr/static_method.rs`).
+pub const STATIC_CALL_MEMO_KEY_OFFSET: usize = 0;
+pub const STATIC_CALL_MEMO_C_OFFSET: usize = 8;
+pub const STATIC_CALL_MEMO_OWNER_OFFSET: usize = 16;
+pub const STATIC_CALL_MEMO_VALUE_OFFSET: usize = 24;
+
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;
@@ -514,6 +525,24 @@ pub const METHOD_SITE_CODE_OFFSET: usize = 40;
 /// Entries per method site, and one entry's size.
 pub const METHOD_SITE_WAYS: usize = 2;
 pub const METHOD_SITE_ENTRY_SIZE: usize = 48;
+
+/// `object::method_site::read_holder` — the property-read cache words
+/// (`PicCache`) holding the read site's holder entry, which the emitted read
+/// tower checks where the MRU word and the ways miss
+/// (`perry-codegen/src/expr/property_get/generic_dispatch.rs`).
+pub const PIC_HOLDER_RECV_WORD: usize = 12;
+pub const PIC_HOLDER_OBJ_WORD: usize = 13;
+pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
+pub const PIC_HOLDER_KIND_WORD: usize = 15;
+/// The site's holder state word, and its bit for a LATCHED site: one that
+/// refused, or whose non-own receivers took several shapes. Its misses ask the
+/// inherited-read hook, as a never-primed site's do.
+pub const PIC_HOLDER_STATE_WORD: usize = 20;
+pub const PIC_HOLDER_STATE_LATCHED: i64 = 2;
+/// The kind word of a depth-1 ABSENT entry: the answer is `undefined`.
+pub const PIC_HOLDER_ABSENT_DEPTH1: i64 = 1 << 62;
+/// Words in a property-read cache: MRU, way state, four ways, the holder entry.
+pub const PIC_CACHE_WORDS: usize = 21;
 /// A method site calls a body with its argument count padded by `undefined`
 /// up to this many extra arguments (never past 16), and admits bodies that
 /// declare up to that many parameters.

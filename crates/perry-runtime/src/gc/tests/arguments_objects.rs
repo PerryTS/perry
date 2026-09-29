@@ -252,3 +252,22 @@ fn only_the_state_word_identifies_an_arguments_object() {
     assert_eq!(test_arguments_mapped_box(restricted, 0), None);
     assert!(test_arguments_mapping_array(restricted).is_none());
 }
+
+/// The exotic flag is a SHAPE fact: marking moves the receiver to a shape
+/// whose [[Prototype]] identity is its own, which no shape-keyed read memo
+/// admits (`object::method_site::read_holder`), and a key added afterwards
+/// keeps it.
+#[test]
+fn the_exotic_flag_moves_the_receiver_to_a_per_object_identity() {
+    let _guard = GcTestIsolationGuard::with_realm_bootstrapped();
+    let obj = js_object_alloc(0, 1);
+    let before = unsafe { crate::object::shapes::object_shape_stamp(obj) };
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
+    let after = unsafe { crate::object::shapes::object_shape_stamp(obj) };
+    assert_ne!(before, after, "marking must move the receiver's ShapeId");
+    assert_eq!(
+        crate::object::shapes::shape_proto_id(after),
+        Some(crate::object::shapes::PROTO_ID_PER_OBJECT),
+        "the marked receiver's shape must carry a per-object identity"
+    );
+}

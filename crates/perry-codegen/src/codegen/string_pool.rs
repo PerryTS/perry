@@ -50,6 +50,12 @@ impl<'a> InitChunker<'a> {
     /// Start a fresh chunk function if the current one is full. Call ONCE at the
     /// top of each loop iteration (one independent init op), before
     /// [`current_block`]. Closes the previous chunk with `ret void`.
+    /// The module, for a definition an init op registers (the chunk being
+    /// filled is addressed by index, so appending functions is fine).
+    fn module(&mut self) -> &mut LlModule {
+        self.llmod
+    }
+
     fn roll_if_full(&mut self) {
         if self.ops_in_current >= self.ops_per_chunk {
             if !self.chunk_names.is_empty() {
@@ -124,6 +130,11 @@ pub(super) fn emit_string_pool(
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // The classes this module defines, by identity: the registration loops
+    // below (names, methods, static methods and their function-object
+    // entries, constructors, accessors) key each class by its ClassId, never
+    // by a name (`classes` above maps names, and two classes may share one).
+    module_classes: &[perry_hir::Class],
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
@@ -340,21 +351,18 @@ pub(super) fn emit_string_pool(
     // Pre-allocate string constants for class-name registration. We need
     // these BEFORE `init_fn` is created, because once `init_fn` borrows
     // `llmod` we can no longer mutate the module's constant pool. (#1021.)
+    // Every class this module defines, keyed by identity (its ClassId).
+    // Imported stubs are not here: the defining module registers them.
+    let local_classes: Vec<(u32, &perry_hir::Class)> = module_classes
+        .iter()
+        .filter(|c| c.id != 0)
+        .map(|c| (c.id, c))
+        .collect();
     let mut named_class_name_constants: Vec<(u32, String, usize)> = Vec::new();
     {
         let mut named: Vec<(u32, String)> = Vec::new();
-        for (class_name, class) in classes.iter() {
-            // Imported stubs (id == 0) use consumer lookup keys, which may
-            // be aliases or synthetic namespace keys. Only the defining
-            // module owns the JavaScript display name; an importer must not
-            // overwrite it when its string initializer runs.
-            if class.id == 0 || *class_name != class.name {
-                continue;
-            }
-            let cid = match class_ids.get(class_name).copied() {
-                Some(c) if c != 0 => c,
-                _ => continue,
-            };
+        for &(cid, class) in &local_classes {
+            let class_name = &class.name;
             if !class_name.starts_with("__AnonShape_") {
                 // #5592: prefer the recorded JS name when the registration
                 // key was uniquified (e.g. a second `C = class {…}`).
@@ -865,7 +873,10 @@ pub(super) fn emit_string_pool(
     // subclass whose parent is a class-expression value inherits the parent's
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
-    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32, u32)> = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32, u32, bool, bool)> =
+        Vec::new();
+    let mut computed_static_entries: Vec<StaticMethodEntry> = Vec::new();
     // #1787: (cid, standalone-constructor symbol, total_param_count).
     // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
     // class-expression value constructed dynamically) can replay the class's
@@ -890,30 +901,8 @@ pub(super) fn emit_string_pool(
     // (Next.js `new c.AppPageRouteModule({...})`). A fact of the class's
     // constructor table, keyed by class id like every other one.
     let mut ctor_flag_regs: Vec<(u32, bool, bool, i64)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        // Refs #486: skip alias keys (class_table now contains both the
-        // canonical name and self-binding aliases like `_X` from
-        // `var X = class _X`); the symbol emission iterates by canonical
-        // class.name. Without this skip the alias key generates bogus
-        // symbol names like `perry_method_<mod>___X__method` (extra
-        // leading underscore from sanitize("_X")) that don't resolve at
-        // link time.
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name) {
-            Some(&c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for method in &class.methods {
             let llvm_name = format!(
                 "perry_method_{}__{}__{}",
@@ -992,7 +981,41 @@ pub(super) fn emit_string_pool(
                 has_rest,
                 spec_length,
                 sm.id,
+                sm.params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none()),
+                sm.params.iter().any(|p| p.arguments_object.is_some()),
             ));
+        }
+        // A computed-name static method is a ClassBody static method too: its
+        // own function object runs the same closure-convention entry. Its
+        // key (and so its `name`) exists only when the class definition
+        // evaluates, which registers the entry with it
+        // (`js_register_class_computed_method`).
+        for member in class
+            .computed_members
+            .iter()
+            .filter(|m| m.is_static && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method))
+        {
+            let f = &member.function;
+            let mut spec_length = 0u32;
+            for p in &f.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
+            computed_static_entries.push(StaticMethodEntry {
+                cid,
+                llvm_name: scoped_static_method_name(module_prefix, cid, class_name, &f.name),
+                param_count: f.params.len() as u32,
+                spec_length,
+                has_user_rest: f
+                    .params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none()),
+                has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
+            });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
         // (emitted unconditionally in `artifacts.rs`). Its arity is the
@@ -1139,8 +1162,17 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_rest, spec_length, definition_order) in
-        static_method_triples
+    for (
+        cid,
+        method_name,
+        llvm_name,
+        param_count,
+        has_rest,
+        spec_length,
+        definition_order,
+        has_user_rest,
+        has_synth_args,
+    ) in static_method_triples
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
@@ -1187,6 +1219,37 @@ pub(super) fn emit_string_pool(
                 (I64, &spec_length.to_string()),
             ],
         );
+        let (entry_ref, entry_info_ref) = emit_static_method_entry(
+            &mut chunker,
+            &StaticMethodEntry {
+                cid,
+                llvm_name: llvm_name.clone(),
+                param_count,
+                spec_length,
+                has_user_rest,
+                has_synth_args,
+            },
+        );
+        let blk = chunker.current_block();
+        blk.call_void(
+            register_name_fn,
+            &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
+        );
+        let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
+        blk.call_void(
+            "js_register_class_static_method_entry",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &entry_i64),
+            ],
+        );
+    }
+    computed_static_entries.sort_unstable_by(|a, b| a.llvm_name.cmp(&b.llvm_name));
+    for e in &computed_static_entries {
+        chunker.roll_if_full();
+        let _ = emit_static_method_entry(&mut chunker, e);
     }
     // #1787: register each class's standalone constructor into
     // CLASS_CONSTRUCTORS. ptrtoint @symbol both stores the function pointer
@@ -1359,24 +1422,8 @@ pub(super) fn emit_string_pool(
     // (class_id, prop_name, llvm_symbol, is_static) — static accessors register
     // onto the class constructor (CLASS_STATIC_ACCESSORS), not the instance vtable.
     let mut getter_pairs: Vec<(u32, String, String, bool, u32)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        // Refs #486: skip alias keys (see method-emission loop above).
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name).copied() {
-            Some(c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for (prop, getter_fn) in &class.getters {
             // The local-emit path at codegen.rs:1858 prepends `__get_`
             // to the HIR-assigned getter name (`get_<prop>`), giving
@@ -1463,23 +1510,8 @@ pub(super) fn emit_string_pool(
     // the runtime fell back to the setter's ABI arity (1), over-counting the
     // defaulted param.
     let mut setter_pairs: Vec<(u32, String, String, bool, u32, u32)> = Vec::new();
-    for (class_name, class) in classes.iter() {
-        if *class_name != class.name {
-            continue;
-        }
-        // Imported class stubs carry id == 0 (they're typed-name
-        // placeholders for cross-module dispatch; the defining module's init
-        // registers their methods). Skip them here so we don't re-emit the
-        // registration. Previously this filter was `method.body.is_empty()`;
-        // the id check is equivalent for stubs and also catches getter/setter
-        // and property-decorator init that legitimately has an empty body.
-        if class.id == 0 {
-            continue;
-        }
-        let cid = match class_ids.get(class_name).copied() {
-            Some(c) if c != 0 => c,
-            _ => continue,
-        };
+    for &(cid, class) in &local_classes {
+        let class_name = &class.name;
         for (prop, setter_fn) in &class.setters {
             let is_static = class.static_accessor_fn_ids.contains(&setter_fn.id);
             let llvm_name = if is_static {
@@ -1710,3 +1742,72 @@ fn record_fn_info_facts(llmod: &LlModule, module_prefix: &str, src: FnInfoFactSo
 #[cfg(test)]
 #[path = "class_name_registration_tests.rs"]
 mod class_name_registration_tests;
+
+/// A ClassBody static method's closure-convention entry (`<body>__clo`).
+struct StaticMethodEntry {
+    cid: u32,
+    llvm_name: String,
+    param_count: u32,
+    spec_length: u32,
+    has_user_rest: bool,
+    has_synth_args: bool,
+}
+
+/// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
+/// method's own function object: the call's `this` (the JS body ABI's receiver
+/// parameter) becomes the body's `this` (enter), the body runs, leave drops
+/// what enter set up. Arity, rest bundling, length and strictness are facts of
+/// the entry's own `JsFunctionInfo`, as for any function body (the caller
+/// registers the name against the code). Returns `(@<body>__clo,
+/// @<body>__clo$info)`: the code and the info a function object allocates
+/// from.
+fn emit_static_method_entry(
+    chunker: &mut InitChunker<'_>,
+    e: &StaticMethodEntry,
+) -> (String, String) {
+    use crate::fn_info::RestKind;
+    let entry_name = format!("{}__clo", e.llvm_name);
+    {
+        let n = e.param_count as usize;
+        let mut params: Vec<(crate::types::LlvmType, String)> =
+            vec![(I64, "%callee".to_string()), (I64, "%this".to_string())];
+        params.extend((0..n).map(|i| (DOUBLE, format!("%a{}", i))));
+        let f = chunker
+            .module()
+            .define_function(&entry_name, DOUBLE, params);
+        let _ = f.create_block("entry");
+        let b = f.block_mut(0).unwrap();
+        b.call_void(
+            "js_static_method_entry_enter",
+            &[(I32, &e.cid.to_string()), (I64, "%this")],
+        );
+        let arg_names: Vec<String> = (0..n).map(|i| format!("%a{}", i)).collect();
+        let call_args: Vec<(crate::types::LlvmType, &str)> =
+            arg_names.iter().map(|a| (DOUBLE, a.as_str())).collect();
+        let r = b.call(DOUBLE, &e.llvm_name, &call_args);
+        b.call_void("js_static_method_entry_leave", &[]);
+        b.ret(DOUBLE, &r);
+    }
+    let (rest, rest_kind) = match (e.has_user_rest, e.has_synth_args) {
+        (true, true) => (
+            Some(e.param_count.saturating_sub(2)),
+            Some(RestKind::UserAndArguments),
+        ),
+        (true, false) => (Some(e.param_count.saturating_sub(1)), Some(RestKind::User)),
+        (false, true) => (
+            Some(e.param_count.saturating_sub(1)),
+            Some(RestKind::SyntheticArguments),
+        ),
+        (false, false) => (None, None),
+    };
+    chunker.module().note_fn_info(&entry_name, |f| {
+        match (rest, rest_kind) {
+            (Some(fixed), Some(kind)) => f.set_rest(fixed as usize, kind),
+            _ => f.set_declared(e.param_count),
+        }
+        f.set_length(e.spec_length);
+        f.set_strict();
+    });
+    let info_ref = chunker.current_block().fn_info_ref(&entry_name);
+    (format!("@{}", entry_name), info_ref)
+}

@@ -73,12 +73,14 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
                 super::class_registry::class_accessor_function_value(
                     get,
                     false,
+                    is_static,
                     &display_name,
                     None,
                 ),
                 super::class_registry::class_accessor_function_value(
                     set,
                     true,
+                    is_static,
                     &display_name,
                     None,
                 ),

@@ -442,7 +442,13 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             // Treat it as a root: a native-module namespace's [[Prototype]] is
             // %Object.prototype%, so the synthetic class whose proto was that
             // namespace inherits Object.prototype too.
-            if parent_id != 0 && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID {
+            // A builtin parent id (`extends Error`) is not a compiled class
+            // and never gets a class function object: its constructor is the
+            // dynamic parent value above, and without one this is a root.
+            if parent_id != 0
+                && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
+                && crate::object::is_class_id_registered(parent_id)
+            {
                 return crate::object::class_value::class_value(parent_id);
             }
         }
