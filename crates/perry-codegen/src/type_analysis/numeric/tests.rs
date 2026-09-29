@@ -294,6 +294,33 @@ fn reassigned_number_accumulator_multiply_is_an_inline_fmul() {
 }
 
 #[test]
+fn a_number_local_is_a_canonical_raw_double_at_its_reads() {
+    // 5L: `local_is_number` reaches `expr_produces_canonical_raw_f64`. The
+    // accumulators are fractional (not integer locals), so before 5L the
+    // raw-f64 predicate refused them and the array literal re-tested each
+    // element against the lowest NaN-box tag (`0x7FF9 << 48`).
+    let mut body = mandelbrot_shaped_body(Expr::Number(0.5), Expr::Number(0.25));
+    *body.last_mut().expect("return") = Stmt::Return(Some(Expr::Array(vec![
+        Expr::LocalGet(10),
+        Expr::LocalGet(11),
+    ])));
+    let ir = emitted_ir(probe_module(
+        "number_local_raw_f64_unit.ts",
+        Vec::new(),
+        body,
+    ));
+    assert!(
+        ir.contains("fmul double"),
+        "the accumulators must still be proven Numbers:\n{ir}"
+    );
+    assert!(
+        !ir.contains("9221401712017801216"),
+        "a Number local is canonical raw f64 at its reads; the array literal \
+         must not re-test it for a NaN-box tag:\n{ir}"
+    );
+}
+
+#[test]
 fn a_reassigned_local_seeded_from_a_parameter_keeps_the_dynamic_helper() {
     // The SABOTAGE arm. Identical body, but `x` is seeded from an `Any`
     // parameter — an unconstrained incoming value that could be a boxed

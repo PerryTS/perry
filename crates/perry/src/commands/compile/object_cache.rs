@@ -1440,15 +1440,6 @@ fn compute_object_cache_key_with_env(
             .unwrap_or(""),
     );
 
-    // #10777 — numeric-provenance fact ordering. `=1` lets the function-scope
-    // `number_by_construction` fixpoint see the `Ptr<Shape>` receiver proofs
-    // computed before it, which flips `both_numeric` and with it the `+`
-    // lowering. Different IR, different .o bytes.
-    h.field(
-        "env_l14_nbc_order",
-        env_var("PERRY_L14_NBC_ORDER").as_deref().unwrap_or(""),
-    );
-
     // #10884 step 4b — the region kill switch. Same reasoning as the build
     // cache above, and the same trap #10929 fell into: keying ONE of the two
     // caches leaves the other serving objects compiled the other way.

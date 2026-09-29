@@ -47,7 +47,7 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
             // annotation and remains valid at every read, including loop
             // counters whose back-edge update makes an initializer-only
             // proof ineligible.
-            if ctx.integer_locals.contains(id) || ctx.number_by_construction_locals.contains(id) {
+            if ctx.integer_locals.contains(id) || crate::type_analysis::local_is_number(ctx, *id) {
                 return true;
             }
             // A reserved shadow slot means the local is pointer-possible even
@@ -461,23 +461,15 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     value_reg: &str,
     rhs: &Expr,
 ) {
-    // #6750 follow-up: inside a masked-window region fast copy, a local
-    // flow-refined to Number had its slot cleared at the refinement point
-    // and every subsequent region write stores a proven number — no
-    // per-statement shadow traffic needed until the refinement is dropped
-    // (see `stmt::masked_window_region`).
-    if ctx.masked_region_scalar_locals.contains(&local_id) {
-        return;
-    }
-    // The element-shape clone's preheader checked this accumulator's current
-    // Number tag, and the matcher admits only numeric-preserving writes in a
-    // call-free clone. Its old shadow value may remain conservatively rooted;
-    // the slow clone resumes ordinary mirroring after the scoped fact is gone.
-    if ctx
-        .element_shape_loop_facts
-        .iter()
-        .any(|fact| fact.numeric_accumulator == local_id)
-    {
+    // A clone-scoped Number local (5L): the clone's entry test checked its
+    // current value is a Number and every in-clone write is Number-preserving,
+    // so the shadow slot already holds a non-pointer and keeps doing so. The
+    // old value may remain conservatively rooted; the slow clone resumes
+    // ordinary mirroring after the scope ends. A masked-window fast copy
+    // (#6750) admits a flow-refined local at its refinement point after
+    // clearing the slot, and withdraws it at the first write it cannot prove
+    // Number (`stmt::masked_window_region`).
+    if ctx.receiver_descriptors.local_is_number_in_scope(local_id) {
         return;
     }
     let Some(slot_idx) = ctx.shadow_slot_map.get(&local_id).copied() else {
