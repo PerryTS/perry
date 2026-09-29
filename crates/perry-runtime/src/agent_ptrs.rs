@@ -114,4 +114,3 @@ pub extern "C" fn perry_shape_dir_cell() -> *const u8 {
     publish(AGENT_PTR_SHAPE_DIR, dir);
     dir
 }
-
