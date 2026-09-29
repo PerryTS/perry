@@ -319,7 +319,7 @@ pub(crate) mod sabotage {
         static DROP_TOP_PAYLOAD_SLOT: Cell<bool> = const { Cell::new(false) };
         static CLAIM_NOTED_CARRIERS: Cell<bool> = const { Cell::new(false) };
         static NO_CROSS_CHECK: Cell<bool> = const { Cell::new(false) };
-        static PLAN_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
+        static PLAN_ATTEMPTS: Cell<u32> = const { Cell::new(0) };
     }
 
     /// The generic-walk cross-check off. Its walk makes the old-carrier note
@@ -362,11 +362,11 @@ pub(crate) mod sabotage {
     }
 
     pub(super) fn note_plan_attempt() {
-        PLAN_ATTEMPTS.with(|c| c.set(c.get() + 1));
+        PLAN_ATTEMPTS.with(|c| c.set(c.get().wrapping_add(1)));
     }
 
     /// Objects that reached plan construction on this thread.
-    pub(crate) fn plan_attempts() -> u64 {
+    pub(crate) fn plan_attempts() -> u32 {
         PLAN_ATTEMPTS.with(Cell::get)
     }
 

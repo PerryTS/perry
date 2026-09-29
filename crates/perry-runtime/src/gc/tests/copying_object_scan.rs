@@ -21,7 +21,7 @@ const FIELDS: usize = 3;
 /// A rooted young object whose every field holds a young string, then a minor.
 /// `Ok((plan attempts, every child moved and intact))`; `Err` is the
 /// collection thread's panic message.
-fn minor_over_a_plain_object(sabotaged: bool) -> Result<(u64, bool), String> {
+fn minor_over_a_plain_object(sabotaged: bool) -> Result<(u32, bool), String> {
     minor_over_a_plain_object_with(sabotaged, false)
 }
 
@@ -32,7 +32,7 @@ fn minor_over_a_plain_object(sabotaged: bool) -> Result<(u64, bool), String> {
 fn minor_over_a_plain_object_with(
     sabotaged: bool,
     residual_armed: bool,
-) -> Result<(u64, bool), String> {
+) -> Result<(u32, bool), String> {
     std::thread::spawn(move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
