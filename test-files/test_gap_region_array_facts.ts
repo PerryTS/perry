@@ -199,15 +199,139 @@ function moduleConst(n: number): number {
     return h;
 }
 
+
+// Facts broken BEFORE the loop. The bodies below run no calls, so the loop
+// region forms (PERRY_REGION_DIAG=4 prints an array plan for each) and only
+// the preheader guard stands between F-body and a wrong read. The body only
+// counts the elements that read `undefined` and stays small, so the region
+// pays for its copy; a property read of the element would run
+// the tower and re-check the array every iteration.
+
+function eightObjs(): any[] {
+    return [{ v: 1 }, { v: 2 }, { v: 3 }, { v: 4 }, { v: 5 }, { v: 6 }, { v: 7 }, { v: 8 }];
+}
+
+// A holey array, and Array.prototype gets an index property before the loop:
+// the hole at 5 reads the prototype's element.
+function protoIndexBefore(n: number): number {
+    const xs: any[] = [{ v: 1 }, { v: 2 }];
+    xs.length = 8;
+    (Array.prototype as any)[5] = { v: 50 };
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    delete (Array.prototype as any)[5];
+    return h;
+}
+
+// The array's own prototype is replaced before the loop.
+function ownProtoBefore(n: number): number {
+    const xs: any[] = [{ v: 1 }, { v: 2 }];
+    xs.length = 8;
+    const p: any = Object.create(Array.prototype);
+    p[6] = { v: 60 };
+    Object.setPrototypeOf(xs, p);
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+// Reads past the capacity: the guard must refuse. JSON.parse allocates an
+// array of exactly its length (capacity 8, `k & 15`); a literal gets the
+// minimum capacity of 16 (`k & 31`).
+function capacityJson(n: number): number {
+    const xs: any[] = JSON.parse('[{"v":1},{"v":2},{"v":3},{"v":4},{"v":5},{"v":6},{"v":7},{"v":8}]');
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 15];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+function capacityPastMin(n: number): number {
+    const xs: any[] = eightObjs();
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 31];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+// A hole written before the loop reads `undefined`; with a prototype element
+// at the same index it reads that element.
+function holeBefore(n: number): number {
+    const xs: any[] = eightObjs();
+    delete xs[3];
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+function holeProtoBefore(n: number): number {
+    const xs: any[] = eightObjs();
+    delete xs[2];
+    (Array.prototype as any)[2] = { v: 20 };
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    delete (Array.prototype as any)[2];
+    return h;
+}
+
+// The length shrinks before the loop: the vacated slots read `undefined`.
+function shrinkBefore(n: number): number {
+    const xs: any[] = eightObjs();
+    xs.length = 3;
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+function popBefore(n: number): number {
+    const xs: any[] = eightObjs();
+    xs.pop();
+    xs.pop();
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 7];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
+// Not an array: an array-like object and a typed array.
+function notArrayQuiet(xs: any, n: number): number {
+    let h = 0;
+    for (let k = 0; k < n; k++) {
+        const o: any = xs[k & 1];
+        if (o === undefined) h++;
+    }
+    return h;
+}
+
 const N = 50000;
+// An index property on a prototype turns off the array fast paths for the
+// rest of the process, so every case that sets one runs last.
 console.log("plain", plain(objs(8), N));
 console.log("varying", varying(objs(8), N));
 console.log("grownInLoop", grownInLoop(objs(8), 200));
 console.log("storedInLoop", storedInLoop(objs(8), 200));
 console.log("holes", holes(200));
-console.log("protoMidLoop", protoMidLoop(200));
-console.log("protoBefore", protoBefore(200));
-console.log("ownProtoMidLoop", ownProtoMidLoop(200));
 console.log("accessorMidLoop", accessorMidLoop(200));
 console.log("shrinkMidLoop", shrinkMidLoop(200));
 console.log("lengthGrowMidLoop", lengthGrowMidLoop(200));
@@ -215,3 +339,17 @@ console.log("boundTooBig", boundTooBig(200));
 console.log("notArray", notArray(200));
 console.log("allocInLoop", allocInLoop(objs(8), 200000));
 console.log("moduleConst", moduleConst(N));
+console.log("capacityJson", capacityJson(200));
+console.log("capacityPastMin", capacityPastMin(200));
+console.log("holeBefore", holeBefore(200));
+console.log("shrinkBefore", shrinkBefore(200));
+console.log("popBefore", popBefore(200));
+console.log("notArrayQuiet obj", notArrayQuiet({ 0: { v: 5 }, 1: { v: 6 }, length: 2 }, 200));
+console.log("notArrayQuiet f64", notArrayQuiet(new Float64Array([1.5, 2.5]), 200));
+console.log("notArrayQuiet arr", notArrayQuiet([{ v: 5 }, { v: 6 }], 200));
+console.log("ownProtoMidLoop", ownProtoMidLoop(200));
+console.log("ownProtoBefore", ownProtoBefore(200));
+console.log("protoMidLoop", protoMidLoop(200));
+console.log("protoBefore", protoBefore(200));
+console.log("protoIndexBefore", protoIndexBefore(200));
+console.log("holeProtoBefore", holeProtoBefore(200));
