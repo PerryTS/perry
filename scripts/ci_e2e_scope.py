@@ -155,6 +155,7 @@ _CODEGEN_SUITES = [
     "string_array_length_9160",
     "temp_root_operand_temporaries",
     "typed_array_rmw_8692",
+    "typed_array_update_lowering",
     "typed_shape_declared_at_allocation",
     "typed_shape_descriptor",
     "typed_shape_descriptors",
