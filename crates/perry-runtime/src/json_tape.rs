@@ -672,11 +672,11 @@ unsafe fn materialize_object(
     end_idx: usize,
 ) -> JSValue {
     let field_count = count_object_fields(source, *idx, end_idx);
-    let obj = crate::object::js_object_alloc(0, 0);
     // #8098: a lazily materialized tape record is `JSON.parse` output too — the
     // >1 KB top-level-array payloads (HTTP bodies, ORM result sets) that the
-    // eager `DirectParser` never sees all arrive through here.
-    crate::object::mark_object_plain_ordinary(obj);
+    // eager `DirectParser` never sees all arrive through here. Born marked
+    // plain-ordinary (charter step 3: `mark_object_plain_ordinary`).
+    let obj = crate::object::object_alloc_plain(0);
     let obj_handle = scope.root_raw_mut_ptr(obj);
     json_tape_safepoint(JsonTapeSafepoint::MaterializeObjectRooted, obj as usize);
     let obj = obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();

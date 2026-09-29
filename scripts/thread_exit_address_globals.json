@@ -460,6 +460,14 @@
    "why": "Census counts keyed by (&'static event, &'static owner-kind name); owner address is only classified, never stored."
   },
   {
+   "file": "crates/perry-runtime/src/object/shapes_store_kind.rs",
+   "names": [
+    "COUNTERS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "shape-fact-audit diagnostic counters: an array of eight AtomicU64, only ever bumped by fetch_add(1) (audit::bump) and read by the atexit report; no store of a computed value, so it cannot hold an address. Absent unless the shape-fact-audit feature is on."
+  },
+  {
    "file": "crates/perry-runtime/src/event_pump.rs",
    "names": [
     "WAKE_CALLBACK"

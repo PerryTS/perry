@@ -501,6 +501,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
                     let gc = (proto_obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE)
                         as *mut crate::gc::GcHeader;
                     (*gc)._reserved |= crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                    // Charter step 3: a store-kind input.
+                    crate::object::shapes::store_kind::restamp_object_store_kind(
+                        proto_obj as *mut crate::object::ObjectHeader,
+                    );
                 }
                 // Record the per-kind proto's `[[Prototype]]` as the shared
                 // `%TypedArray%.prototype` so the ordinary property-get chain

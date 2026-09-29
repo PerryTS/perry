@@ -553,6 +553,7 @@ mod descriptor_tests_8067 {
             1,
             1,
             PROTO_ID_DEFAULT,
+            ShapeObjectKind::Ordinary,
         ));
 
         assert_eq!(
@@ -668,6 +669,7 @@ mod descriptor_tests_8067 {
                 2,
                 2,
                 PROTO_ID_DEFAULT,
+                ShapeObjectKind::Ordinary,
             ));
             assert_eq!(
                 shape_descriptor_by_id(module_id).unwrap().keys,
@@ -1168,7 +1170,11 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         // `transition_object_shape_to_class` keeps the keys array and both
         // counts and changes ONLY the kind, so the pair below differs in
         // exactly the conjunct under test.
-        let obj = crate::object::js_object_alloc_class_inline_keys_stamped(0, 0, 1, keys, ordinary);
+        // Born marked plain-ordinary: a class-less unmarked receiver would
+        // derive `OrdinaryUnmarked` and decline the `Ordinary` id (charter
+        // step 3).
+        let obj =
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(1, keys, ordinary);
         assert_eq!((*obj).parent_class_id, ordinary, "test premise: stamped");
         let class_kind = transition_object_shape_to_class(obj);
         assert_ne!(

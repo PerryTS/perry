@@ -81,7 +81,7 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
             return None;
         }
         let descriptor = shapes::object_shape_descriptor(object)?;
-        if descriptor.object_kind != shapes::ShapeObjectKind::Ordinary {
+        if !descriptor.object_kind.is_ordinary_layout() {
             return None;
         }
         let class_id = (*object).class_id;

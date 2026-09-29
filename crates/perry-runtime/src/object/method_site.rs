@@ -877,9 +877,7 @@ unsafe fn prime_inherited(
             refuse(8);
             return;
         };
-        if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
-            || super::shapes::object_shape_stamp(next) == 0
-        {
+        if !shape.object_kind.is_ordinary_layout() || super::shapes::object_shape_stamp(next) == 0 {
             refuse(8);
             return;
         }
