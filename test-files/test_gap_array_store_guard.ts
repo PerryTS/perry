@@ -97,6 +97,17 @@ function show(xs: any[]): string {
     console.log("nonext add throws", (e as Error).constructor.name);
   }
   console.log("nonext", n.length, n[2], n[3]);
+  // Spare capacity: `[length, capacity)` holds holes, so the add would fit
+  // inline. Only the header word's NO_EXTEND bit refuses it.
+  const m: any[] = [1, 2, 3, 4];
+  m.length = 3;
+  Object.preventExtensions(m);
+  try {
+    put(m, 3, 5);
+  } catch (e) {
+    console.log("nonext spare add throws", (e as Error).constructor.name);
+  }
+  console.log("nonext spare", m.length, m[3], 3 in m);
 }
 
 // 5. An accessor element: the store must call the setter.
@@ -160,5 +171,10 @@ function show(xs: any[]): string {
   new Holder(b).put(1, "own");
   const c: any[] = [1, , 3];
   new Holder(c).put(1, "z");
+  // An append that fits the spare capacity inline must still reach the setter.
+  const e: any[] = [1, 2, 3, 4, 5];
+  e.length = 3;
+  put(e, 3, "w");
+  log += "e.length=" + e.length + ";";
   console.log("proto", log, 1 in a, b.length, b[1], 1 in c);
 }
