@@ -150,14 +150,33 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     } else {
         vbits
     };
-    super::mark_object_dynamic_shape_unknown(obj);
     let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
-    if (idx as usize) < alloc_limit {
-        if idx >= live_slots {
-            set_object_live_slot_count(obj, idx + 1);
+    if idx < live_slots {
+        // An overwrite of a key the shape already places in a live inline
+        // slot changes no fact the layout records: the keys, the slot and the
+        // shape stay. What the VALUE may change (a pointer into a slot the
+        // pointer mask does not cover, a non-number into a raw-f64 slot of a
+        // typed descriptor) is decided per slot by `layout_note_slot`, which
+        // `store_object_field_slot` runs: the same funnel the emitted store
+        // hit and `js_object_set_field` use. Declaring the object's whole
+        // layout unknown here instead dropped `GC_OBJ_TYPED_LAYOUT_INTACT` on
+        // the first by-name store of ANY value, and every class-field read
+        // guard on the object missed from then on (a method body's `this.a`,
+        // ~1,300 instructions per call through a parameter receiver).
+        if crate::hot_diag::recv_routes_armed() && crate::gc::layout_has_typed_descriptor(obj_addr)
+        {
+            crate::hot_diag::recv_route_note_runtime(
+                crate::hot_diag::RT_ROUTE_OVERWRITE_KEPT_TYPED,
+            );
         }
         store_object_field_slot(obj, idx as usize, vbits);
+    } else if (idx as usize) < alloc_limit {
+        // The store widens the live bound, which the layout records.
+        super::mark_object_dynamic_shape_unknown(obj);
+        set_object_live_slot_count(obj, idx + 1);
+        store_object_field_slot(obj, idx as usize, vbits);
     } else {
+        super::mark_object_dynamic_shape_unknown(obj);
         overflow_set(obj_addr, idx as usize, vbits);
     }
     true
