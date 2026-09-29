@@ -5840,7 +5840,7 @@ fn lower_class_field_versioned_for(
     // emitted IR is call-free, so the pointer the check validates is the
     // pointer the fast clone uses.
     let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let expected_shape_id = crate::typed_shape::load_class_shape_id(
+    let expected_shape_id = crate::typed_shape::class_shape_id_operand(
         ctx,
         &matched.class_name,
         &matched.keys_global_name,

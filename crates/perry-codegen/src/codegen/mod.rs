@@ -245,6 +245,14 @@ mod spec_return_proof;
 #[cfg(test)]
 mod spec_self_recursion_tests;
 pub(crate) mod static_fields;
+mod static_shape_ids;
+pub use static_shape_ids::{
+    assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
+    BirthProto, BirthShape, DefinedClassShape, ModuleBirth, ProgramClassShapeIds, TypedMasks,
+};
+pub(crate) use static_shape_ids::{
+    static_region_slots, static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
+};
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;
@@ -429,6 +437,27 @@ pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
 /// guarantee — do not change to `&mut` without also moving the cache
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
+    compile_module_impl(hir, opts, None)
+}
+
+/// Design step 4's pre-pass: the content of every class birth this module's
+/// string pool mints (local classes and imported stubs), from the SAME code
+/// codegen runs — `compile_module` up to the header-image table, then an early
+/// return. `opts` must be the options the module's codegen will get.
+pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<ModuleBirth>> {
+    let mut births = Vec::new();
+    compile_module_impl(hir, opts, Some(&mut births))?;
+    Ok(births)
+}
+
+/// `compile_module`, or — with `births` — its pre-pass form: fill `births`
+/// and return an empty object right after the header-image table.
+fn compile_module_impl(
+    hir: &HirModule,
+    opts: CompileOptions,
+    births: Option<&mut Vec<ModuleBirth>>,
+) -> Result<Vec<u8>> {
+    let collect_births = births.is_some();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
@@ -438,7 +467,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     }
     // `PERRY_REGION_DIAG=1`: report step 4b's regions and the statement-level
     // runs it does not reach, when this module's codegen ends.
-    let _region_diag = crate::expr::region_guard::ModuleDiag::start(hir);
+    let _region_diag = (!collect_births).then(|| crate::expr::region_guard::ModuleDiag::start(hir));
     crate::stmt::region_loop::begin_module(hir);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
@@ -452,7 +481,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     crate::expr::agent_ptr::set_output_is_executable(opts.output_type == "executable");
     // #8595: report the module-entry outlining analysis when asked. Pure
     // diagnostic — no transform yet (see codegen/entry_outline.rs).
-    entry_outline::report_entry_outlining(hir);
+    if !collect_births {
+        entry_outline::report_entry_outlining(hir);
+    }
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
@@ -466,8 +497,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `--opt-report` (#6952): mark the closures that are iterating-builtin
     // callbacks before any region is lowered, so their denials carry the
     // per-element hotness column. No-op when the report is off.
-    crate::opt_report::scan_module(hir);
-    if let Some(source) = opts.module_source.as_deref() {
+    if !collect_births {
+        crate::opt_report::scan_module(hir);
+    }
+    if let Some(source) = opts.module_source.as_deref().filter(|_| !collect_births) {
         crate::opt_report::register_module_source(&hir.name, source, opts.debug_source_line_offset);
     }
     // Module-wide fallback attribution scope. Per-region scopes nest inside
@@ -1385,6 +1418,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             typed_layout.pointer_mask_words,
         ));
     }
+    let defined_class_keys_len = class_keys_init_data.len();
     // Same naming convention for IMPORTED class stubs. Pack the field
     // names so the importing module allocates the right inline slot count
     // and the slot index for each field matches what the source module's
@@ -2407,6 +2441,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         inits.retain(|_, (class_id, _, _)| *class_id != u32::MAX);
         inits
     };
+    if let Some(births) = births {
+        *births = static_shape_ids::module_births(
+            &module_prefix,
+            &class_keys_init_data,
+            defined_class_keys_len,
+            &class_header_image_inits,
+            &class_ids,
+        );
+        return Ok(Vec::new());
+    }
+    static_shape_ids::set_module_static_ids(
+        &module_prefix,
+        &class_keys_init_data,
+        &class_header_image_inits,
+        &class_ids,
+        &opts.static_shape_ids,
+        &opts.program_class_shape_ids,
+    );
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
         class_keys_globals_map
             .iter()
