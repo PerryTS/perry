@@ -198,6 +198,10 @@ const ARRAY_READ_GUARD_EXPECT_I32: &str = "1";
 /// The array STORE's guard mask: the read's, plus the integrity bits a
 /// write must respect, `FROZEN | SEALED | NO_EXTEND` (0x1..0x4 in `_reserved`).
 pub(in crate::expr) const ARRAY_STORE_GUARD_MASK_I32: &str = "67600639"; // 0x0407_80FF
+/// The STORE's band: `is_valid_obj_ptr`'s 2^47 ceiling, less the 1 MiB the
+/// band is measured from. A store keeps the ceiling the runtime guard applies
+/// before it dereferences anything (#7396), at no extra instruction.
+pub(in crate::expr) const HEAP_POINTER_STORE_BAND_SPAN_I64: &str = "140737487306752"; // 2^47 - 1 MiB
 /// The masked word of a writable array (the read's expectation).
 pub(in crate::expr) const ARRAY_STORE_GUARD_EXPECT_I32: &str = ARRAY_READ_GUARD_EXPECT_I32;
 

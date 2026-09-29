@@ -17,7 +17,7 @@
 //!
 //! | tested here | why |
 //! |---|---|
-//! | the box minus `POINTER_TAG << 48 \| 1 MiB` is below `2^48 - 1 MiB` | a heap pointer above the runtime-id band (the element read's band test) |
+//! | the box minus `POINTER_TAG << 48 \| 1 MiB` is below `2^47 - 1 MiB` | a heap pointer above the runtime-id band and below `is_valid_obj_ptr`'s 2^47 ceiling (#7396) |
 //! | `([h-8] as i32) & 0x0407_80FF == GC_TYPE_ARRAY` | ONE header word: an ordinary array, not a growth stub, no element descriptors, not frozen / sealed / non-extensible (DESIGN arrayread §3) |
 //! | `index <u capacity`, then the slot is not `TAG_HOLE` | the slot holds an own data property. `[length, capacity)` holds holes (`array_truncate_length`), so this is also `index < length`: the store cannot add an element, change `length`, or reach a prototype setter, which is why the prototype facts are not tested here |
 //!
@@ -37,7 +37,7 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
 use super::index_get::guarded_array::{
     emit_array_guard_word, ARRAY_STORE_GUARD_EXPECT_I32, ARRAY_STORE_GUARD_MASK_I32,
-    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_BAND_SPAN_I64,
+    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_STORE_BAND_SPAN_I64,
 };
 use super::write_barrier::{
     emit_jsvalue_slot_store_deferred_layout_note_without_addref_on_block,
@@ -260,12 +260,12 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     // ONE header word is the structural guard (DESIGN arrayread §3): the
     // read's mask plus the integrity bits. The receiver is a heap pointer iff
     // its box, less `POINTER_TAG << 48 | 1 MiB`, lands in the band below
-    // 2^48 - 1 MiB; the handle is then that offset plus 1 MiB.
+    // 2^47 - 1 MiB (`is_valid_obj_ptr`'s ceiling, #7396); the handle is then that offset plus 1 MiB.
     let band_offset = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
         let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
-        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
+        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_STORE_BAND_SPAN_I64);
         blk.cond_br(&in_band, &deref_label, &slow_label);
         band_offset
     };

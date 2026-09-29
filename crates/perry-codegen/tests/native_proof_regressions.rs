@@ -16046,8 +16046,9 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     );
     // `is_valid_obj_ptr`'s upper bound, which `gc_header_for_user_addr` applies
     // before the out-of-line guard dereferences anything.
+    // The band test measures from 1 MiB, so the ceiling reads 2^47 - 1 MiB.
     assert!(
-        ir.contains("140737488355328"),
+        ir.contains("140737487306752"),
         "the inline tier must bound the receiver address from ABOVE before \
          dereferencing it for a store (#7396):\n{ir}"
     );

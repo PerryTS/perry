@@ -17,7 +17,7 @@ use crate::types::{DOUBLE, I1, I16, I32, I64};
 
 use super::index_get::guarded_array::{
     emit_array_guard_word, ARRAY_STORE_GUARD_EXPECT_I32, ARRAY_STORE_GUARD_MASK_I32,
-    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_BAND_SPAN_I64,
+    HEAP_POINTER_BAND_BASE_I64, HEAP_POINTER_STORE_BAND_SPAN_I64,
 };
 
 /// Inline fast-path lowering for `local_arr[i] = v`.
@@ -201,9 +201,9 @@ pub(crate) fn lower_index_set_fast(
         {
             let blk = ctx.block();
             // A heap pointer iff the box, less `POINTER_TAG << 48 | 1 MiB`,
-            // lands below 2^48 - 1 MiB (the element read's band test).
+            // lands below 2^47 - 1 MiB (`is_valid_obj_ptr`'s ceiling, #7396).
             let band_offset = blk.sub(I64, &arr_bits, HEAP_POINTER_BAND_BASE_I64);
-            let heap_candidate = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
+            let heap_candidate = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_STORE_BAND_SPAN_I64);
             blk.cond_br(&heap_candidate, &deref_label, &cold_label);
         }
         ctx.current_block = deref_idx;
