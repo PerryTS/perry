@@ -178,6 +178,17 @@ fn alloc_instance_keeping_keys_collecting(
 /// traces the unfinished array never reads uninitialized words. Callers own
 /// the layout policy (`js_build_class_keys_array` adds its immortal scope).
 ///
+/// Every caller passes key names from program text: the key literals the
+/// modules' string pools mint as ATOMS (`js_string_pool_atom`), the one
+/// string object per key text a read site passes and a canonical list
+/// stores. A list can be built before the pool holding one of its texts runs
+/// (a seed runs before every pool; a class registers at its own module's
+/// init, before the modules it does not import), so the atom of each name is
+/// minted HERE first (the pool finds it later) and the canonical copy stores
+/// the atoms, exactly as a list first written after the pools ran. Without
+/// it the list holds strings no read site ever passes, and every pointer
+/// confirm against it (the megamorphic slot guess) misses.
+///
 /// # Safety
 /// `prefix` is a live keys array with at least `prefix_len` slots, or null
 /// with `prefix_len == 0`, and was read with no allocation since.
@@ -190,6 +201,9 @@ pub(crate) unsafe fn build_longlived_keys_array(
     let scope = crate::gc::RuntimeHandleScope::new();
     let prefix_handle = scope.root_raw_mut_ptr(prefix);
     let (arr, _) = prefix_handle.across_mut::<ArrayHeader, _>(|| {
+        for key_bytes in keys {
+            mint_pool_atom(key_bytes);
+        }
         crate::array::js_array_alloc_with_length_longlived(total as u32)
     });
     let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
@@ -228,6 +242,22 @@ pub(crate) unsafe fn build_longlived_keys_array(
         });
     }
     arr
+}
+
+/// Mint (or find) the atom a module pool mints for key literal `name`: a
+/// pool gives one to every non-empty UTF-8 literal of at most
+/// `INTERN_MAX_BYTE_LEN` bytes (a WTF-8 literal holds a lone surrogate, is
+/// not UTF-8, and gets none). Nothing is held across the allocation; the
+/// atom table roots the atom.
+fn mint_pool_atom(name: &[u8]) {
+    if name.is_empty()
+        || name.len() > crate::string::INTERN_MAX_BYTE_LEN as usize
+        || std::str::from_utf8(name).is_err()
+    {
+        return;
+    }
+    let hash = super::key_bytes_hash(name.as_ptr(), name.len());
+    crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0);
 }
 
 /// Fast class instance allocator that takes a pre-built keys_array

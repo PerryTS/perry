@@ -26,7 +26,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 /// here and `pic_cache_words_match_codegen` in the runtime: change one and both
 /// fail.
 #[cfg(test)]
-pub(crate) const PIC_CACHE_WORDS: usize = 12;
+pub(crate) const PIC_CACHE_WORDS: usize = 21;
 /// First word of the polymorphic way array (words 0..2 are the MRU entry and
 /// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
 #[cfg(test)]

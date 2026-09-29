@@ -245,8 +245,10 @@ fn resolve_prototype_addr(slot: usize) -> usize {
     // and that read MATERIALIZES the realm global when this thread has none —
     // allocating the singleton and running `populate_global_this_builtins`, which
     // its own `[gc-globalthis-bootstrap]` diagnostic measures at ~5 ms. Before the
-    // realm global exists, neither intrinsic prototype object has been allocated,
-    // so NO address can be one of them and the honest answer is already known:
+    // realm global exists, Array.prototype and Function.prototype have not been
+    // allocated, and %Object.prototype% (which can exist without the realm
+    // global) memoized its row when it was built, so an unmemoized row here
+    // means NO address can be the intrinsic and the honest answer is already known:
     // "not resolved" (0), which every caller of these accessors handles because
     // `bootstrap_prototype_addr` can return it anyway.
     //
@@ -276,6 +278,12 @@ fn resolve_prototype_addr(slot: usize) -> usize {
 #[cold]
 #[inline(never)]
 fn bootstrap_prototype_addr(slot: usize) -> usize {
+    if slot == OBJECT_PROTO_CACHE {
+        // %Object.prototype% is built on its own (`ensure_object_intrinsics`),
+        // which memoizes this row itself; 0 only while that build is running.
+        let (_, proto) = crate::object::ensure_object_intrinsics();
+        return proto as usize;
+    }
     let builtin = PROTOTYPE_ADDR_BUILTINS[slot];
     let ctor = crate::object::js_get_global_this_builtin_value(builtin.as_ptr(), builtin.len());
     let ctor_value = crate::value::JSValue::from_bits(ctor.to_bits());
@@ -318,6 +326,13 @@ pub(crate) fn object_prototype_addr() -> usize {
 /// startup this answers exactly what `object_prototype_addr` does.
 pub(crate) fn object_prototype_addr_if_resolved() -> usize {
     memoized_prototype_addr(&prototype_addrs()[OBJECT_PROTO_CACHE]).unwrap_or(0)
+}
+
+/// Memoize THIS realm's `%Object.prototype%` the moment it is built, so the
+/// store path's "is this Object.prototype?" check answers for it even before
+/// the realm global exists (the class prototype chain reaches it first).
+pub(crate) fn note_object_prototype_intrinsic(addr: usize) {
+    prototype_addrs()[OBJECT_PROTO_CACHE].set(addr);
 }
 
 /// **This realm's** `%Function.prototype%` address, or 0 while this thread

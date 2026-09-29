@@ -618,11 +618,10 @@ pub(super) fn compile_module_entry(
         // `enable_post_init_shadow_frame` sized the frame from the unpruned
         // map, so the retained slot indices stay valid with holes, exactly as
         // in the function-body twin.
-        main_shadow_slot_map.retain(|id, _| {
-            !main_native_facts
-                .number_by_construction_locals()
-                .contains(id)
-        });
+        super::helpers::drop_number_local_root_slots(
+            &mut main_shadow_slot_map,
+            main_native_facts.number_by_construction_locals(),
+        );
         let main_shadow_slot_clears_after_stmt =
             crate::collectors::collect_shadow_slot_clear_points(&hir.init, &main_shadow_slot_map);
 
@@ -1483,11 +1482,10 @@ pub(super) fn compile_module_entry(
         // `enable_post_init_shadow_frame` sized the frame from the unpruned
         // map, so the retained slot indices stay valid with holes, exactly as
         // in the function-body twin.
-        init_shadow_slot_map.retain(|id, _| {
-            !init_native_facts
-                .number_by_construction_locals()
-                .contains(id)
-        });
+        super::helpers::drop_number_local_root_slots(
+            &mut init_shadow_slot_map,
+            init_native_facts.number_by_construction_locals(),
+        );
         let init_shadow_slot_clears_after_stmt =
             crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
 

@@ -1058,7 +1058,7 @@ pub(super) unsafe fn dispatch_handle(
                         let mut depth = 0u32;
                         while depth < 32 {
                             let deleted =
-                                prototype_mutated && class_is_key_deleted(cur_cid, method_name);
+                                prototype_mutated && class_proto_key_deleted(cur_cid, method_name);
                             // A runtime assignment is an own property of this
                             // exact prototype and replaces the declared vtable
                             // entry. Resolve it first; deletion hides both.

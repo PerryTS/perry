@@ -426,6 +426,23 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_static_this_resolve", DOUBLE, &[DOUBLE]);
     module.declare_function("js_static_this_resolve_class", DOUBLE, &[I32, PTR]);
     module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
+    module.declare_function("js_static_method_entry_enter", VOID, &[I32, I64]);
+    module.declare_function("js_static_method_entry_leave", VOID, &[]);
+    module.declare_function(
+        "js_class_static_call_guard",
+        I32,
+        &[I32, I32, PTR, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_class_static_value_call_guard",
+        I32,
+        &[DOUBLE, I32, PTR, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_register_class_static_method_entry",
+        VOID,
+        &[I64, I64, I64, I64],
+    );
     module.declare_function("js_static_this_arm_value", VOID, &[DOUBLE]);
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_new_target_get", DOUBLE, &[]);

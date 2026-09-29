@@ -15,8 +15,18 @@
 //! |---|---|
 //! | [`PAIR_GET`] | the getter as a NaN-boxed closure, or `undefined` |
 //! | [`PAIR_SET`] | the setter as a NaN-boxed closure, or `undefined` |
-//! | [`PAIR_RAW_GET`] | a class getter's compiled entry `fn(this) -> value` (its address bits), or 0 |
-//! | [`PAIR_RAW_SET`] | a class setter's compiled entry `fn(this, v) -> value` (its address bits), or 0 |
+//! | [`PAIR_RAW_GET`] | a class getter's compiled entry (its address bits, see below), or 0 |
+//! | [`PAIR_RAW_SET`] | a class setter's compiled entry (its address bits, see below), or 0 |
+//!
+//! A compiled entry has one of two calling conventions, and the word says
+//! which. An INSTANCE accessor's entry takes the receiver as a parameter
+//! (`fn(this) -> value` / `fn(this, v)`); its word is the bare address. A
+//! STATIC accessor's entry (a ClassBody `static get`/`static set`, installed
+//! on the class function object) takes no receiver (`fn() -> value` /
+//! `fn(v)`, `this` armed by the caller); its word carries
+//! [`STATIC_ENTRY_BIT`] above the address. Decoding splits the two into
+//! different [`Accessor`] fields, so a reader that calls with the receiver
+//! as a parameter (`raw_get`/`raw_set`) is never handed a static entry.
 //!
 //! The two closure words are ordinary traced slots. The raw entries are code
 //! addresses stored as their plain bits: an address below 2^48 has none of the
@@ -52,30 +62,58 @@ pub(crate) struct Accessor {
     pub get: u64,
     /// NaN-boxed setter closure bits, 0 when absent.
     pub set: u64,
-    /// A class getter's compiled entry, 0 when absent.
+    /// An instance class getter's compiled entry `fn(this) -> value`, 0 when
+    /// absent.
     pub raw_get: usize,
-    /// A class setter's compiled entry, 0 when absent.
+    /// An instance class setter's compiled entry `fn(this, v)`, 0 when absent.
     pub raw_set: usize,
+    /// A static class getter's compiled entry `fn() -> value` (`this` armed
+    /// by the caller), 0 when absent. Never set together with `raw_get`.
+    pub static_get: usize,
+    /// A static class setter's compiled entry `fn(v)` (`this` armed by the
+    /// caller), 0 when absent. Never set together with `raw_set`.
+    pub static_set: usize,
 }
 
 /// Largest code address a raw word can hold: below it no NaN-box tag bit is
 /// set, so the word is a Number to the collector.
 const RAW_ADDRESS_LIMIT: u64 = 1 << 48;
 
+/// Marks a raw word's entry as a STATIC accessor's (`fn()` / `fn(v)`, no
+/// receiver parameter). It sits just above the address bits and below every
+/// NaN-box tag bit, so the word is still a Number to the collector.
+pub(crate) const STATIC_ENTRY_BIT: u64 = RAW_ADDRESS_LIMIT;
+
+/// The word for one half: its instance entry `raw`, or its static entry
+/// `stat` tagged with [`STATIC_ENTRY_BIT`]; a half has at most one.
 #[inline]
-fn raw_word(raw: usize) -> u64 {
-    debug_assert!((raw as u64) < RAW_ADDRESS_LIMIT);
-    if (raw as u64) < RAW_ADDRESS_LIMIT {
+fn raw_word(raw: usize, stat: usize) -> u64 {
+    debug_assert!(raw == 0 || stat == 0);
+    debug_assert!((raw as u64) < RAW_ADDRESS_LIMIT && (stat as u64) < RAW_ADDRESS_LIMIT);
+    if raw != 0 && (raw as u64) < RAW_ADDRESS_LIMIT {
         raw as u64
+    } else if stat != 0 && (stat as u64) < RAW_ADDRESS_LIMIT {
+        stat as u64 | STATIC_ENTRY_BIT
     } else {
         0
     }
 }
 
+/// A raw word's INSTANCE entry, 0 when it holds none (or a static one).
 #[inline]
 fn raw_of(word: u64) -> usize {
     if word < RAW_ADDRESS_LIMIT {
         word as usize
+    } else {
+        0
+    }
+}
+
+/// A raw word's STATIC entry, 0 when it holds none (or an instance one).
+#[inline]
+fn static_of(word: u64) -> usize {
+    if word & !(RAW_ADDRESS_LIMIT - 1) == STATIC_ENTRY_BIT {
+        (word & (RAW_ADDRESS_LIMIT - 1)) as usize
     } else {
         0
     }
@@ -91,11 +129,14 @@ fn raw_of(word: u64) -> usize {
 #[inline(always)]
 pub(crate) unsafe fn pair_of_value_unchecked(value: u64) -> Accessor {
     let w = crate::array::array_elements_ptr((value & POINTER_MASK) as *const ArrayHeader);
+    let (raw_get_word, raw_set_word) = (*w.add(PAIR_RAW_GET), *w.add(PAIR_RAW_SET));
     Accessor {
         get: closure_of(*w.add(PAIR_GET)),
         set: closure_of(*w.add(PAIR_SET)),
-        raw_get: raw_of(*w.add(PAIR_RAW_GET)),
-        raw_set: raw_of(*w.add(PAIR_RAW_SET)),
+        raw_get: raw_of(raw_get_word),
+        raw_set: raw_of(raw_set_word),
+        static_get: static_of(raw_get_word),
+        static_set: static_of(raw_set_word),
     }
 }
 
@@ -131,8 +172,8 @@ pub(crate) unsafe fn pair_new(acc: Accessor) -> *mut ArrayHeader {
     // the slots below, after `length` covers them, before anything can read it.
     *w.add(PAIR_GET) = get.get_nanbox_u64();
     *w.add(PAIR_SET) = set.get_nanbox_u64();
-    *w.add(PAIR_RAW_GET) = raw_word(acc.raw_get);
-    *w.add(PAIR_RAW_SET) = raw_word(acc.raw_set);
+    *w.add(PAIR_RAW_GET) = raw_word(acc.raw_get, acc.static_get);
+    *w.add(PAIR_RAW_SET) = raw_word(acc.raw_set, acc.static_set);
     (*pair).length = PAIR_LEN as u32;
     crate::object::gc_slots::rebuild_array_layout_from_slots(pair);
     if crate::arena::pointer_in_old_gen(pair as usize) {
@@ -160,11 +201,14 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
         return None;
     }
     let w = crate::array::array_elements_ptr(pair);
+    let (raw_get_word, raw_set_word) = (*w.add(PAIR_RAW_GET), *w.add(PAIR_RAW_SET));
     Some(Accessor {
         get: closure_of(*w.add(PAIR_GET)),
         set: closure_of(*w.add(PAIR_SET)),
-        raw_get: raw_of(*w.add(PAIR_RAW_GET)),
-        raw_set: raw_of(*w.add(PAIR_RAW_SET)),
+        raw_get: raw_of(raw_get_word),
+        raw_set: raw_of(raw_set_word),
+        static_get: static_of(raw_get_word),
+        static_set: static_of(raw_set_word),
     })
 }
 
@@ -220,8 +264,7 @@ pub(crate) fn pair_from(acc: &crate::object::AccessorDescriptor) -> Accessor {
     Accessor {
         get: acc.get,
         set: acc.set,
-        raw_get: 0,
-        raw_set: 0,
+        ..Accessor::default()
     }
 }
 

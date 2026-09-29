@@ -471,6 +471,8 @@ crate::perry_thread_local! {
     static LOCAL_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static SESSION_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static URL_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static OBJECT_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static OBJECT_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 static HTTP_METHODS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&HTTP_METHODS_CACHE_SLOT);
@@ -512,6 +514,12 @@ pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
 /// native constructor builds must keep the real component accessors (#11585).
 pub(crate) static URL_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&URL_INTRINSIC_PROTO_PTR_SLOT);
+/// `%Object%` and `%Object.prototype%`, built by `ensure_object_intrinsics`
+/// without the realm global and adopted by it.
+pub(crate) static OBJECT_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&OBJECT_INTRINSIC_PTR_SLOT);
+pub(crate) static OBJECT_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&OBJECT_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static LOCAL_STORAGE_PTR: RealmAtomicI64 = RealmAtomicI64::new(&LOCAL_STORAGE_PTR_SLOT);
 pub(crate) static SESSION_STORAGE_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&SESSION_STORAGE_PTR_SLOT);
@@ -741,17 +749,6 @@ pub(crate) struct ShapeCacheEntry {
     /// backing shared with longer lists, so its header length is not it.
     key_count: u32,
     keys_array: *mut ArrayHeader,
-}
-
-crate::perry_thread_local! {
-    /// #7190: `(writable, enumerable)` for static own keys installed by
-    /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
-    /// next to `static x = …` fields, which are writable AND enumerable by
-    /// CreateDataPropertyOrThrow — a data descriptor defaults to neither. An
-    /// ABSENT entry therefore means "declared static field", and keeps the
-    /// previous `(true, true)` reporting untouched.
-    pub(crate) static CLASS_STATIC_DEFINED_ATTRS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, (bool, bool, bool)>>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 // Storage: `ObjectHotTables::{shape_inline_cache, shape_cache_overflow}`.
@@ -1514,6 +1511,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &LOCAL_STORAGE_PTR,
         &SESSION_STORAGE_PTR,
         &URL_INTRINSIC_PROTO_PTR,
+        &OBJECT_INTRINSIC_PTR,
+        &OBJECT_INTRINSIC_PROTO_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
@@ -1775,6 +1774,9 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
 
 // 16-byte header with `meta` last (target_layout.rs): offset 8 LP64, 12 ILP32.
 const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 16 - size_of::<usize>());
+const _: () = assert!(
+    std::mem::offset_of!(ObjectHeader, parent_class_id) == crate::codegen_abi::OBJECT_SHAPE_OFFSET
+);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 pub(crate) mod cell_meta;

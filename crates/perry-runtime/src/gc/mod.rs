@@ -1083,6 +1083,10 @@ pub fn gc_init() {
     // Method-calls lane: an inherited method-site entry holds the method
     // closure it calls, so the closure is a STRONG root (`object::method_site`).
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
+    // A read site's holder entry names the object that holds the answer (and
+    // the hops to it); the emitted hit loads through it, so each is a STRONG
+    // root (`object::method_site::read_holder`).
+    reg_scanner!(crate::object::method_site::read_holder::scan_read_holder_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);

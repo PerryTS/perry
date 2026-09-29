@@ -147,21 +147,13 @@ pub extern "C" fn js_shape_run_static_seed() {
 /// is (`js_build_class_keys_array`): interned strings in a long-lived array,
 /// then the canonical trie.
 ///
-/// The names are program text: the key literals the modules' string pools
-/// mint as ATOMS (`js_string_pool_atom`), the one string object per key text
-/// that a read site passes and a canonical list stores. A seed runs before
-/// any module's pool, so the atom of each name is minted HERE first (the pool
-/// finds it later) and the canonical copy stores the atoms, exactly as a list
-/// first written after the pools ran. Without it the list holds strings no
-/// read site ever passes, and every pointer confirm against it (the
-/// megamorphic slot guess) misses.
+/// A seed runs before any module's pool; the builder mints each name's atom
+/// first, so the canonical copy stores the atoms the pools find later
+/// (`build_longlived_keys_array`).
 ///
 /// # Safety
 /// May collect; holds no caller object.
 pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectKeys {
-    for name in names {
-        mint_pool_atom(name);
-    }
     let _immortal = crate::gc::ImmortalLayoutScope::new();
     let arr = super::alloc::build_longlived_keys_array(std::ptr::null_mut(), 0, names);
     crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
@@ -171,22 +163,6 @@ pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectK
         names.len() as u32,
     )
     .view()
-}
-
-/// Mint (or find) the atom a module pool mints for key literal `name`: a
-/// pool gives one to every non-empty UTF-8 literal of at most
-/// `INTERN_MAX_BYTE_LEN` bytes (a WTF-8 literal holds a lone surrogate, is
-/// not UTF-8, and gets none). Nothing is held across the allocation; the
-/// atom table roots the atom.
-fn mint_pool_atom(name: &[u8]) {
-    if name.is_empty()
-        || name.len() > crate::string::INTERN_MAX_BYTE_LEN as usize
-        || std::str::from_utf8(name).is_err()
-    {
-        return;
-    }
-    let hash = super::key_bytes_hash(name.as_ptr(), name.len());
-    crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0);
 }
 
 #[cfg(feature = "keepalive-anchors")]

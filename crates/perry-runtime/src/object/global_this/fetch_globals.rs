@@ -86,6 +86,13 @@ pub(crate) fn global_this_is_materialized() -> bool {
     THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }
 
+/// Whether `obj` is THIS thread's realm global, as opposed to the global of a
+/// `vm` context or an eval realm that `populate_global_this_builtins` also
+/// fills (each of those gets its own intrinsics).
+pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
+    !obj.is_null() && THREAD_GLOBAL_THIS.with(|c| c.get()) == obj as i64
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {

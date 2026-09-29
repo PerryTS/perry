@@ -600,9 +600,11 @@ js_class_prototype_method_value	Reenters
 js_class_register_capture_values	Leaf
 js_class_register_static_field	Reenters
 js_class_register_static_symbol	Reenters
+js_class_static_call_guard	Reenters
 js_class_static_field_get	Reenters
 js_class_static_field_put	Reenters
 js_class_static_method_call	Reenters
+js_class_static_value_call_guard	Reenters
 js_class_value	Reenters
 js_clear_exception	Leaf
 js_clear_immediate_value	Reenters
@@ -2747,6 +2749,7 @@ js_register_class_source_static	Leaf
 js_register_class_static_getter	Reenters
 js_register_class_static_method	Reenters
 js_register_class_static_method_bind_length	Leaf
+js_register_class_static_method_entry	Reenters
 js_register_class_static_setter	Reenters
 js_register_class_string_member_order	Leaf
 js_register_class_to_string_tag	Leaf
@@ -3027,6 +3030,8 @@ js_stack_overflow	Reenters
 js_state_get	Reenters
 js_state_init	Reenters
 js_state_set	Reenters
+js_static_method_entry_enter	Reenters
+js_static_method_entry_leave	Leaf
 js_static_this_arm_classref	Reenters
 js_static_this_arm_value	Leaf
 js_static_this_resolve	Leaf
