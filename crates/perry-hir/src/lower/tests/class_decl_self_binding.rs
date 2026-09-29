@@ -81,10 +81,11 @@ fn private_class_decl_self_reference_reads_its_evaluation() {
 }
 
 #[test]
-fn shared_template_class_decl_keeps_its_class_ref() {
-    // No private elements and no heritage: the declaration keeps the shared
-    // template path, so a self-reference stays the cheap `ClassRef` and does
-    // not become a capture that could move the class onto the fresh path.
+fn function_nested_class_decl_is_per_evaluation() {
+    // Every call of `factory` evaluates the declaration again and must create
+    // a distinct class, so even a class with no private elements and no
+    // heritage takes the per-evaluation path, and its members' own name reads
+    // this evaluation's class object instead of the shared template.
     let hir = lower(
         r#"
             export function factory() {
@@ -98,12 +99,12 @@ fn shared_template_class_decl_keeps_its_class_ref() {
     );
     let self_body = static_method_body(&hir, "Plain", "self");
     assert!(
-        self_body.contains("ClassRef(\"Plain\")"),
-        "a shared-template declaration keeps its ClassRef: {self_body}"
+        !self_body.contains("ClassRef(\"Plain\")") && self_body.contains("ClassCaptureValue"),
+        "a per-evaluation declaration reads its own evaluation: {self_body}"
     );
     let factory = factory_body(&hir);
     assert!(
-        !factory.contains("ClassExprFresh"),
-        "a shared-template declaration must stay off the fresh path: {factory}"
+        factory.contains("ClassExprFresh"),
+        "a declaration in a function body is evaluated per call: {factory}"
     );
 }

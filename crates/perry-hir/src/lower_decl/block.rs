@@ -75,6 +75,16 @@ pub(crate) fn rebind_nested_forward_scope_lets(
         return tdz_boxes;
     }
     for stmt in stmts {
+        if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            if let Some(&id) = ctx.lexical_forward_decls.get(&class_decl.ident.span.lo.0) {
+                if ctx.nested_forward_scope_ids.contains(&id) {
+                    ctx.locals
+                        .push((class_decl.ident.sym.to_string(), id, Type::Any));
+                    tdz_boxes.push(id);
+                }
+            }
+            continue;
+        }
         let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt else {
             continue;
         };
@@ -292,6 +302,39 @@ pub(crate) fn pre_register_forward_captured_lets(
                                 }
                             }
                         }
+                    }
+                }
+            }
+            // A class declaration in a function body binds its name like a
+            // `let` (TDZ until evaluated) to this evaluation's class object
+            // (`body_stmt.rs`). An earlier closure that names it (a hoisted
+            // function, or a sibling class's method) must capture that
+            // binding's box, not resolve to the shared template.
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                let name = class_decl.ident.sym.to_string();
+                let span_lo = class_decl.ident.span.lo.0;
+                if !class_decl.declare
+                    && seen_closure_refs.contains(&name)
+                    && !registered_here.contains(&name)
+                {
+                    if is_nested {
+                        let id = ctx.fresh_local();
+                        ctx.var_hoisted_ids.insert(id);
+                        ctx.tdz_forward_ids.insert(id);
+                        ctx.nested_forward_scope_ids.insert(id);
+                        ctx.lexical_forward_decls.insert(span_lo, id);
+                        registered_here.insert(name);
+                    } else if ctx
+                        .locals
+                        .lookup_index_in_scope(&name, body_entry_locals_len)
+                        .is_none()
+                    {
+                        let id = ctx.define_local(name.clone(), Type::Any);
+                        ctx.var_hoisted_ids.insert(id);
+                        ctx.tdz_forward_ids.insert(id);
+                        forward_boxed_ids.push(id);
+                        ctx.lexical_forward_decls.insert(span_lo, id);
+                        registered_here.insert(name);
                     }
                 }
             }

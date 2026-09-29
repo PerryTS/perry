@@ -37,13 +37,15 @@ fn class_self_new_wins_over_same_named_outer_local() {
         .find(|method| method.name == "instance")
         .expect("static instance method should be lowered");
 
+    // A class declared in a function is evaluated per call: `new h()` in its
+    // own member constructs this evaluation, read from the class's own
+    // self-binding capture, never the outer `var h` slot.
+    let body = format!("{:#?}", instance.body);
     assert!(
-        instance.body.iter().any(|stmt| matches!(
-            stmt,
-            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == "h"
-        )),
-        "class self-construction must bind to the class, not the outer local: {:#?}",
-        instance.body
+        body.contains("NewDynamic")
+            && body.contains("ClassCaptureValue")
+            && body.contains("class_name: \"h\""),
+        "class self-construction must bind to the class, not the outer local: {body}"
     );
 }
 
@@ -74,13 +76,13 @@ fn collision_renamed_class_self_new_uses_unique_class_name() {
         .find(|method| method.name == "instance")
         .expect("static instance method should be lowered");
 
+    // The self-binding capture is keyed by the unique registration name.
+    let body = format!("{:#?}", instance.body);
     assert!(
-        instance.body.iter().any(|stmt| matches!(
-            stmt,
-            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == &class.name
-        )),
-        "renamed class self-construction must use its unique name: {:#?}",
-        instance.body
+        body.contains("NewDynamic")
+            && body.contains("ClassCaptureValue")
+            && body.contains(&format!("class_name: {:?}", class.name)),
+        "renamed class self-construction must use its unique name: {body}"
     );
 }
 

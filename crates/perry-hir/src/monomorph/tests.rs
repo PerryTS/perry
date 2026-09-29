@@ -1146,10 +1146,15 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
 #[test]
 fn fill_defaults_pads_before_appended_class_captures() {
     let source = r#"
+        import { EventEmitter } from "events";
         function outer() {
             const K = { tag: "K" };
-            class Doc {
+            // A native-module parent keeps the shared-template class (and so
+            // the static construct this test pads); any other class declared
+            // in a function is constructed per evaluation.
+            class Doc extends EventEmitter {
                 constructor(bson, offset = 0, isArray = false, elements) {
+                    super();
                     this.bson = bson; this.offset = offset; this.isArray = isArray;
                     this.elements = elements ?? [K.tag];
                 }

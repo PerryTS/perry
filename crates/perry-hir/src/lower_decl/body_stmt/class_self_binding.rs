@@ -49,13 +49,17 @@ pub(super) fn decl_self_binding_owner(
         || named_statics.iter().any(|(_, value)| uses_self(value))
         || computed_keys.iter().any(|(_, key)| uses_self(key))
         || computed_statics.iter().any(|(_, value)| uses_self(value));
-    if !used {
-        return None;
-    }
     let ids = ctx
         .lookup_class_captures(class_name)
         .map(<[_]>::to_vec)
         .unwrap_or_default();
+    // A capturing evaluation needs an owner too: a captured binding assigned
+    // after the declaration (a sibling class declared later, a `var` set
+    // below) is refreshed on THIS evaluation's class object, not on the
+    // template-keyed snapshot that the next evaluation overwrites.
+    if !used && ids.is_empty() {
+        return None;
+    }
     let env_class = ctx.is_class_env(class_name).then(|| class_name.to_string());
     ctx.body_class_expr_captures.push((self_id, ids, env_class));
     Some(self_id)

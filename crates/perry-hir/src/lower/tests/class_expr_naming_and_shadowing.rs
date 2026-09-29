@@ -89,10 +89,12 @@ fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
         .expect("static method mk is lowered");
     let body = format!("{:#?}", mk.body);
 
+    // The class is declared in a function, so `new A()` constructs this
+    // evaluation, read from the class's own self-binding capture (never the
+    // enclosing binding's slot).
     assert!(
-        !body.contains("NewDynamic"),
-        "`new A()` inside A's own method must not construct through an \
-         enclosing-scope local slot: {body}"
+        body.contains("ClassCaptureValue") && body.contains("NewDynamic"),
+        "`new A()` inside A's own method must construct its own evaluation: {body}"
     );
     assert!(
         body.contains("class_name: \"A\""),
@@ -221,14 +223,12 @@ fn nested_method_constructs_forward_declared_sibling_class() {
         .find(|method| method.name == "makeChild")
         .expect("makeChild method is lowered");
 
+    // `Child` is declared per evaluation, so the earlier method constructs
+    // the evaluation it captured, never the shared template.
+    let body = format!("{:#?}", make_child.body);
     assert!(
-        matches!(
-            make_child.body.as_slice(),
-            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
-                if class_name == "Child"
-        ),
-        "forward sibling construction must remain a static class construct: {:#?}",
-        make_child.body
+        body.contains("NewDynamic") && !body.contains("ClassRef("),
+        "forward sibling construction must construct the captured evaluation: {body}"
     );
 }
 
@@ -534,10 +534,12 @@ fn first_of_several_same_named_nested_classes_constructs_itself() {
         .expect("static method mk is lowered");
     let body = format!("{:#?}", mk.body);
 
+    // The class is declared in a function, so `new i()` constructs this
+    // evaluation, read from the class's own self-binding capture (never the
+    // enclosing binding's slot).
     assert!(
-        !body.contains("NewDynamic"),
-        "`new i()` inside i's own method must not construct through the \
-         enclosing binding's slot: {body}"
+        body.contains("ClassCaptureValue") && body.contains("NewDynamic"),
+        "`new i()` inside i's own method must construct its own evaluation: {body}"
     );
     assert!(
         body.contains("class_name: \"i\""),

@@ -179,7 +179,7 @@ pub fn lower_class_decl(
     let heritage_lexically_shadowed = match class_decl.class.super_class.as_deref() {
         Some(ast::Expr::Ident(ident)) => {
             let n = ident.sym.to_string();
-            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+            ctx.heritage_names_lexical_local(&n)
         }
         _ => false,
     };
@@ -287,9 +287,8 @@ pub fn lower_class_decl(
                 .require_destructured_native_locals
                 .get(&parent_name)
                 .is_some_and(|key| *key == canonical_parent_name);
-            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some()
-                && !require_native_reexport;
+            let locally_shadowed =
+                ctx.heritage_names_lexical_local(&parent_name) && !require_native_reexport;
             if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still
@@ -458,12 +457,13 @@ pub fn lower_class_decl(
         (None, None, None, None)
     };
 
-    // #11157: a function-body declaration with a runtime heritage value or
-    // private elements is evaluated per evaluation (`ClassExprFresh`). Give
-    // its members the evaluated class, not the template, for its own name.
+    // #11157: a function-body declaration is evaluated per evaluation
+    // (`ClassExprFresh`, see `body_stmt.rs`). Give its members the evaluated
+    // class, not the template, for its own name.
     let class_self_binding = (self_binding_wanted
         && (extends_expr.is_some()
-            || decl_self_binding::class_body_has_private_names(&class_decl.class)))
+            || decl_self_binding::class_body_has_private_names(&class_decl.class)
+            || (native_extends.is_none() && ctx.class_evaluates_per_call())))
     .then(|| decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name));
 
     // Issue #10486: the branches above deliberately leave `extends_name`

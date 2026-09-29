@@ -581,6 +581,29 @@ impl LoweringContext {
         (!shadowed_by_nearer_local).then_some(*binding_id)
     }
 
+    /// Does the heritage identifier `name` bind to an in-scope lexical local,
+    /// the value `extends` must evaluate at runtime? A scope-local class
+    /// rename (#5437) normally wins, because its template is exact; but a
+    /// renamed class declared per evaluation is bound to its evaluated class
+    /// object, and a subclass must extend THAT object, not the template.
+    pub(crate) fn heritage_names_lexical_local(&self, name: &str) -> bool {
+        self.locals.lookup(name).is_some()
+            && (!self.class_renames.contains_key(name)
+                || self
+                    .per_evaluation_class_decls
+                    .contains(&self.resolve_class_name(name)))
+    }
+
+    /// Does a class definition lowered here run once per call of an
+    /// enclosing function (or per pass of an enclosing block)? Every
+    /// ClassDefinitionEvaluation creates a distinct constructor with its own
+    /// statics and prototype, so such a class must become a per-evaluation
+    /// class object. Only a definition at module top runs exactly once and
+    /// keeps the shared-template `ClassRef` form.
+    pub(crate) fn class_evaluates_per_call(&self) -> bool {
+        !(self.scope_depth == 0 && self.inside_block_scope == 0)
+    }
+
     /// #11157: may `<ident>.<static>` be lowered to a template-keyed
     /// `StaticFieldSet` / `StaticFieldGet`? Not when `ident` is a per-evaluation class's
     /// self-binding, and not for a class declaration lowered per evaluation at

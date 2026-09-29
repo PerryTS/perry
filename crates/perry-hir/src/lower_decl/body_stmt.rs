@@ -341,6 +341,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let already_exists = ctx.pending_classes.iter().any(|c| c.name == class_name)
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
+                let evaluates_per_call = ctx.class_evaluates_per_call();
+                // The binding an earlier closure already captured (see
+                // `pre_register_forward_captured_lets`).
+                let forward_binding = ctx
+                    .lexical_forward_decls
+                    .remove(&class_decl.ident.span.lo.0);
                 let (class, decl_self_binding) = lower_body_class_decl(ctx, class_decl)?;
                 if let Some(extends_expr) = &class.extends_expr {
                     result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
@@ -380,26 +386,25 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         result.push(snapshot);
                     }
                 }
-                // Captures (#6465), private brands (#5893), computed names,
-                // and dynamic heritage (#9502) belong to each evaluation.
-                // The class-id-keyed registries above are last-wins: a factory
-                // whose only varying input is its superclass would otherwise
-                // return one ClassRef every time, collapsing its heritage chain.
-                // ClassExprFresh snapshots the parent on the heap class object
-                // as well as carrying that evaluation's captures and statics.
-                // Capture-only classes with public static state retain the
-                // shared-template path unless another condition requires a
-                // fresh evaluation.
-                let has_static_state = !class.static_fields.is_empty()
-                    || class
-                        .static_methods
-                        .iter()
-                        .any(|m| m.name.starts_with("__perry_static_init_"));
+                // Every evaluation of a class declaration creates a distinct
+                // constructor, prototype and statics (ClassDefinitionEvaluation),
+                // exactly as a class expression does (#11298). The class-id-keyed
+                // template is last-wins: a factory declaring `class K { static
+                // s = n }` returned ONE class for every call, with the last
+                // call's statics and captures. A declaration in a function body
+                // therefore binds its name to a per-evaluation class object
+                // (ClassExprFresh), which carries that evaluation's captures,
+                // statics, private brand and evaluated parent. A sibling
+                // `class J extends K` then sees `K` as a local and takes the
+                // evaluated parent too. A native-module parent (`extends
+                // AsyncResource`) stays on the shared template (#10623: a fresh
+                // class value does not forward `new` arguments to the native
+                // base's init).
                 let has_private_elements = class.has_private_elements();
                 let fresh_binding = has_private_elements
                     || class.extends_expr.is_some()
                     || !computed_keys.is_empty()
-                    || (!captured_exprs.is_empty() && !has_static_state)
+                    || (evaluates_per_call && class.native_extends.is_none())
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
@@ -488,7 +493,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     // bypassing this evaluation's private brand and own static
                     // fields whenever another nested class already claimed C.
                     let binding_name = class_decl.ident.sym.to_string();
-                    let class_local = ctx.define_local(binding_name.clone(), Type::Any);
+                    let class_local = forward_binding
+                        .unwrap_or_else(|| ctx.define_local(binding_name.clone(), Type::Any));
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
                         id: class_local,
@@ -528,7 +534,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // `local_class_aliases`) so the in-scope read resolves to the
                 // class. Gated on a pre-existing outer binding so working
                 // packages (no collision) are byte-for-byte unaffected.
-                if !fresh_binding && ctx.lookup_local(&class_name).is_some() {
+                if let (false, Some(class_local)) = (fresh_binding, forward_binding) {
+                    // A shared-template class an earlier closure captured.
+                    result.push(Stmt::Let {
+                        id: class_local,
+                        name: class_decl.ident.sym.to_string(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                } else if !fresh_binding && ctx.lookup_local(&class_name).is_some() {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
