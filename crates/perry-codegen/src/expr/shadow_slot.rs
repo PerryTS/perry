@@ -461,19 +461,14 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
     value_reg: &str,
     rhs: &Expr,
 ) {
-    // #6750 follow-up: inside a masked-window region fast copy, a local
-    // flow-refined to Number had its slot cleared at the refinement point
-    // and every subsequent region write stores a proven number — no
-    // per-statement shadow traffic needed until the refinement is dropped
-    // (see `stmt::masked_window_region`).
-    if ctx.masked_region_scalar_locals.contains(&local_id) {
-        return;
-    }
     // A clone-scoped Number local (5L): the clone's entry test checked its
     // current value is a Number and every in-clone write is Number-preserving,
     // so the shadow slot already holds a non-pointer and keeps doing so. The
     // old value may remain conservatively rooted; the slow clone resumes
-    // ordinary mirroring after the scope ends.
+    // ordinary mirroring after the scope ends. A masked-window fast copy
+    // (#6750) admits a flow-refined local at its refinement point after
+    // clearing the slot, and withdraws it at the first write it cannot prove
+    // Number (`stmt::masked_window_region`).
     if ctx.receiver_descriptors.local_is_number_in_scope(local_id) {
         return;
     }

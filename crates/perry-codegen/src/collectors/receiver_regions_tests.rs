@@ -1232,3 +1232,24 @@ fn a_number_local_scope_ends_with_its_clone() {
     table.dematerialize_scope(5);
     assert!(!table.local_is_number_in_scope(NUM));
 }
+
+#[test]
+fn a_flow_refined_number_local_joins_and_leaves_its_copy_scope() {
+    // 5L: a masked-window fast copy admits a local at its refinement point and
+    // withdraws it at the first write it cannot prove Number. Withdrawal from
+    // one scope leaves another scope's own proof standing.
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.admit_number_local(9, NUM));
+    assert!(!table.admit_number_local(9, NUM));
+    assert!(table.local_is_number_in_scope(NUM));
+    assert!(table.withdraw_number_local(9, NUM));
+    assert!(!table.local_is_number_in_scope(NUM));
+    assert!(!table.withdraw_number_local(9, NUM));
+    table.materialize_number_locals(5, &[NUM2]);
+    assert!(table.admit_number_local(9, NUM2));
+    assert!(table.withdraw_number_local(9, NUM2));
+    assert!(table.local_is_number_in_scope(NUM2));
+    assert!(table.admit_number_local(9, NUM));
+    table.dematerialize_scope(9);
+    assert!(!table.local_is_number_in_scope(NUM));
+}

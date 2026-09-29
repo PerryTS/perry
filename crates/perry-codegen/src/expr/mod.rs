@@ -1015,21 +1015,17 @@ pub(crate) struct FnCtx<'a> {
     /// in-bounds SSO-or-heap string, so reads may bypass ordinary array
     /// dispatch and string `.length` needs no dynamic miss arm.
     pub string_window_array_facts: Vec<StringWindowArrayFact>,
-    /// #6750 follow-up: locals currently flow-refined to Number inside a
-    /// masked-window region fast copy — their shadow slots were cleared at
-    /// the refinement point and per-statement shadow updates are suppressed
-    /// until the refinement is dropped (`expr::shadow_slot`).
-    pub masked_region_scalar_locals: std::collections::HashSet<u32>,
 
     /// #6794 follow-up (b): shadow slots that a masked-window region fast copy
     /// has already cleared to 0 for a currently-suppressed local. Because
-    /// `emit_shadow_slot_update_for_expr` skips every write to a local in
-    /// `masked_region_scalar_locals`, such a slot provably stays 0 for the rest
+    /// `emit_shadow_slot_update_for_expr` skips every write to a local in the
+    /// copy's Number-local scope (`type_analysis::local_is_number`), such a
+    /// slot provably stays 0 for the rest
     /// of the suppression window — so every later per-statement clear of it (the
     /// `_tlv_get_addr`-heavy `js_shadow_slot_set(slot, 0)` that dominated
     /// bcryptjs `_encipher` profiles) is a redundant no-op. `emit_shadow_slot_clear`
     /// skips slots in this set; entries are added right after the first clear and
-    /// removed the moment the local leaves `masked_region_scalar_locals`.
+    /// removed the moment the local leaves that scope.
     pub suppressed_cleared_shadow_slots: std::collections::HashSet<u32>,
 
     /// #5093: scoped loop-versioning facts for monomorphic class-field loops.

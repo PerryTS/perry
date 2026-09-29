@@ -676,6 +676,7 @@ fn lower_region_copy(
     base_idx: usize,
     emit_shadow_clears: bool,
     refinements: &[RegionRefinement],
+    scope_id: u32,
     privatize: bool,
     enable_i32: bool,
 ) -> Result<()> {
@@ -729,14 +730,17 @@ fn lower_region_copy(
             if set_number {
                 ctx.local_types.insert(id, perry_hir::types::Type::Number);
                 // The local now provably holds a number for the rest of the
-                // copy (or until an unset): clear its shadow slot once and
-                // suppress the per-statement shadow updates — numbers need
-                // no GC root, and the region admits no statement that could
-                // store a pointer while suppressed. When the statement's own
-                // shadow update already emitted a clear (its RHS was a known
-                // non-pointer shape), don't emit a second one.
+                // copy (or until an unset): it joins this copy's Number-local
+                // scope, the one set `type_analysis::local_is_number` answers
+                // from. Its shadow slot is cleared once and the per-statement
+                // shadow updates are suppressed — numbers need no GC root, and
+                // the region admits no statement that could store a pointer
+                // while suppressed. When the statement's own shadow update
+                // already emitted a clear (its RHS was a known non-pointer
+                // shape), don't emit a second one.
+                let admitted = ctx.receiver_descriptors.admit_number_local(scope_id, id);
                 if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
-                    if ctx.masked_region_scalar_locals.insert(id) {
+                    if admitted {
                         let already_cleared = matches!(
                             stmt,
                             Stmt::Expr(Expr::LocalSet(_, rhs))
@@ -795,7 +799,7 @@ fn lower_region_copy(
                 // prove numeric while its shadow update was suppressed —
                 // re-bind the slot from the local's current value so GC sees
                 // it again.
-                if ctx.masked_region_scalar_locals.remove(&id) {
+                if ctx.receiver_descriptors.withdraw_number_local(scope_id, id) {
                     if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
                         // #6794 (b): suppression ended — later clears of this slot
                         // are real again, so stop skipping them.
@@ -832,10 +836,13 @@ fn lower_region_copy(
     for id in &bound_i32 {
         ctx.i32_counter_slots.remove(id);
     }
-    // Drop any still-active suppressions before leaving the copy — the slow
-    // copy and post-region code use the ordinary shadow protocol.
+    // Drop any still-active admissions before leaving the copy — the slow
+    // copy and post-region code use the ordinary shadow protocol. The caller's
+    // `dematerialize_scope` ends the scope too; this keeps the copy's own
+    // bookkeeping closed on the early-return paths.
     for (id, _) in &saved {
-        ctx.masked_region_scalar_locals.remove(id);
+        ctx.receiver_descriptors
+            .withdraw_number_local(scope_id, *id);
     }
     // #6794 (b): the redundant-clear skip set is scoped to this copy; drop it so
     // the next copy / post-region code emits real clears again.
@@ -897,6 +904,7 @@ pub(super) fn lower_masked_window_region(
             base_idx,
             emit_shadow_clears,
             &region.refinements,
+            ta_scope_id,
             privatize,
             true,
         );
@@ -1013,6 +1021,7 @@ pub(super) fn lower_masked_window_region(
         base_idx,
         emit_shadow_clears,
         &region.refinements,
+        ta_scope_id,
         privatize,
         // ta_i32 copy: masked reads are native i32, so bind region-scoped i32
         // shadow slots and keep the whole bit-mixing chain out of the ToInt32
@@ -1046,6 +1055,7 @@ pub(super) fn lower_masked_window_region(
         base_idx,
         emit_shadow_clears,
         &region.refinements,
+        plain_scope_id,
         privatize,
         // plain_f64 copy: masked reads are f64, so an i32 shadow slot would be
         // maintained by no write — keep the ordinary Number lowering here.
@@ -1058,12 +1068,15 @@ pub(super) fn lower_masked_window_region(
 
     // Slow copy: the untouched per-access lowering, original static types.
     ctx.current_block = slow_pre_idx;
+    // The slow copy admits nothing (no refinements); its scope stays empty.
+    let slow_scope_id = ctx.next_loop_proof_scope_id();
     lower_region_copy(
         ctx,
         region_stmts,
         base_idx,
         emit_shadow_clears,
         &[],
+        slow_scope_id,
         false,
         false,
     )?;

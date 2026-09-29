@@ -729,6 +729,42 @@ impl ReceiverDescriptorTable {
         }
     }
 
+    /// Admit `local` to the Number set of the open scope `scope_id` at a flow
+    /// point inside it: a masked-window refinement lands strictly after the
+    /// statement that wrote a Number, and holds until a write the region cannot
+    /// prove Number withdraws it. Returns whether the local was newly admitted.
+    pub(crate) fn admit_number_local(&mut self, scope_id: u32, local: u32) -> bool {
+        if let Some((_, locals)) = self
+            .number_locals
+            .iter_mut()
+            .find(|(scope, _)| *scope == scope_id)
+        {
+            if locals.contains(&local) {
+                return false;
+            }
+            locals.push(local);
+            return true;
+        }
+        self.number_locals.push((scope_id, vec![local]));
+        true
+    }
+
+    /// Withdraw `local` from the Number set of scope `scope_id` (the write just
+    /// lowered is not provably a Number). Returns whether it was a member.
+    /// Another open scope that proved it by its own fixed point keeps it.
+    pub(crate) fn withdraw_number_local(&mut self, scope_id: u32, local: u32) -> bool {
+        let Some((_, locals)) = self
+            .number_locals
+            .iter_mut()
+            .find(|(scope, _)| *scope == scope_id)
+        else {
+            return false;
+        };
+        let before = locals.len();
+        locals.retain(|member| *member != local);
+        before != locals.len()
+    }
+
     /// Whether an active clone scope proved `local` a Number.
     pub(crate) fn local_is_number_in_scope(&self, local: u32) -> bool {
         self.number_locals
