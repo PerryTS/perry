@@ -1,7 +1,9 @@
 //! The two runtime funnels that store a JS value into an object's inline
 //! slot (split out of `object/mod.rs`, which is at the file-size cap).
 //! Every one also tells `proto_validity` about writes to prototype-marked
-//! objects (owner decision D3(b)).
+//! objects (owner decision D3(b)), and runs the field-representation store
+//! check (charter step 5, `field_rep_store::checked_slot_bits`) before the
+//! value reaches the slot.
 use super::ObjectHeader;
 
 #[inline]
@@ -11,6 +13,7 @@ pub(crate) unsafe fn store_object_field_slot(
     value_bits: u64,
 ) {
     super::proto_validity::note_marked_value_write(obj);
+    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
     crate::gc::runtime_store_jsvalue_slot(obj as usize, slot as usize, field_index, value_bits);
@@ -26,6 +29,7 @@ pub(crate) unsafe fn store_object_field_slot_layout_deferred(
     field_index: usize,
     value_bits: u64,
 ) -> bool {
+    let value_bits = super::field_rep_store::checked_slot_bits(obj, field_index, value_bits);
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let slot = fields_ptr.add(field_index);
     crate::gc::runtime_store_jsvalue_slot_layout_deferred(

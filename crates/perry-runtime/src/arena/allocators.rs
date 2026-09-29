@@ -182,7 +182,7 @@ pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut
         (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
         crate::gc::gc_note_black_birth(header);
         (*header)._reserved = 0;
-        (*header).size = total as u32;
+        (*header).size = crate::gc::gc_header_size_word(total);
     }
     record_arena_object_start(raw as usize, obj_type);
     unsafe { raw.add(GC_HEADER_SIZE) }
@@ -245,7 +245,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
             (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
             crate::gc::gc_note_black_birth(header);
             (*header)._reserved = 0;
-            (*header).size = total as u32;
+            (*header).size = crate::gc::gc_header_size_word(total);
         }
         record_arena_object_start(raw as usize, obj_type);
         defer_old_object_page_registration(raw as usize, total);
@@ -259,7 +259,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
         (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
         crate::gc::gc_note_black_birth(header);
         (*header)._reserved = 0;
-        (*header).size = total as u32;
+        (*header).size = crate::gc::gc_header_size_word(total);
     }
     record_arena_object_start(raw as usize, obj_type);
     defer_old_object_page_registration(raw as usize, total);
@@ -318,7 +318,7 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
             (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
             crate::gc::gc_note_black_birth(header);
             (*header)._reserved = 0;
-            (*header).size = total as u32;
+            (*header).size = crate::gc::gc_header_size_word(total);
         }
         record_arena_object_start(raw as usize, obj_type);
         register_old_object_pages(raw as usize, total);
@@ -332,7 +332,7 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
         (*header).gc_flags = GC_FLAG_ARENA | crate::gc::gc_birth_extra_flags();
         crate::gc::gc_note_black_birth(header);
         (*header)._reserved = 0;
-        (*header).size = total as u32;
+        (*header).size = crate::gc::gc_header_size_word(total);
     }
     record_arena_object_start(raw as usize, obj_type);
     register_old_object_pages(raw as usize, total);
