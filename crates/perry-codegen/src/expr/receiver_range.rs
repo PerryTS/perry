@@ -108,6 +108,24 @@ pub(crate) enum Route {
     /// serves it (first-read D3). The number stays reserved, as above.
     #[allow(dead_code)]
     GenericSpillHit = 8,
+    // 9 and 10 are runtime-counted (`hot_diag::RT_ROUTE_*`).
+    /// Step 4b (#10884): a loop/body region's guard ran (loop entry, or one
+    /// body-region iteration).
+    RloopGuard = 11,
+    /// ...and its word was not retired, so the receiver was tested.
+    RloopOpen = 12,
+    /// A loop region's preheader chose the split loop (guard passed).
+    RloopSplit = 13,
+    /// ...or the plain loop (guard failed).
+    RloopPlain = 14,
+    /// One iteration of F-body.
+    RloopF = 15,
+    /// One iteration of G-body inside a split loop / body region.
+    RloopG = 16,
+    /// A latch re-check ran (dirty flag set, or `Recheck::Always`).
+    RloopRecheck = 17,
+    /// One bare access (read, store, or fact-tree leaf) executed.
+    RloopBare = 18,
 }
 
 /// `PERRY_RECV_ROUTE_COUNT=1` at COMPILE time: emit one

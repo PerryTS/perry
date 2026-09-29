@@ -167,6 +167,12 @@ use crate::types::LlvmType;
 /// checker would not have demanded — a load, not a bug. A helper that is here
 /// and is NOT in the checker's set would be the unsafe direction, so the
 /// invariant to preserve on edit is one-way containment.
+/// Is `callee` on the audited non-collecting list? (`stmt::region_loop`'s
+/// verifier treats these as unable to run JS.)
+pub(crate) fn is_non_collecting(callee: &str) -> bool {
+    NON_COLLECTING.contains(&callee)
+}
+
 const NON_COLLECTING: &[&str] = &[
     // shadow stack / roots
     "js_shadow_slot_bind",

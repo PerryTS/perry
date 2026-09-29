@@ -650,6 +650,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.add_external_global(crate::expr::agent_ptr::TLS_INDEX_SYMBOL, I32);
     module.add_external_global(crate::expr::agent_ptr::AGENT_PTRS_SECREL_SYMBOL, I32);
     module.declare_function("perry_implicit_this_cell", PTR, &[]);
+    // #10812: the prologue stack check (`expr/stack_guard.rs`).
+    module.declare_function("js_stack_overflow", VOID, &[]);
     module.declare_function(
         "js_method_site_miss",
         DOUBLE,

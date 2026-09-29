@@ -41,6 +41,7 @@ pub(crate) mod hot_tls;
 mod literal_descriptor;
 #[cfg(test)]
 mod map_entry_at_tests;
+pub(crate) mod stack_guard;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
@@ -182,6 +183,8 @@ mod index_set_barrier_tests;
 #[cfg(test)]
 mod instanceof_imported_rhs_tests;
 mod record_value;
+#[cfg(test)]
+mod region_loop_tests;
 mod repsel_gates;
 mod scalar_slot_root;
 pub(crate) mod shadow_inline;
@@ -1044,6 +1047,10 @@ pub(crate) struct FnCtx<'a> {
     /// slow clone's preheader BEFORE committing any side effect of the
     /// current iteration.
     pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
+    /// Step 4b (#10884): loop / body regions whose body is not lowered yet
+    /// (`stmt::region_loop`), and the facts active while an F-body lowers.
+    pub region_loops: Vec<crate::stmt::region_loop::Pending>,
+    pub region_loop_facts: Vec<crate::stmt::region_loop::Active>,
 
     /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
     /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST

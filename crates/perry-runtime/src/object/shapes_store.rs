@@ -94,8 +94,14 @@ pub(crate) struct ShapeRecord {
     /// ONE field so the megamorphic read confirm (`js_object_read_confirm`)
     /// answers "is the guess a position of this shape" with one compare —
     /// `guess < position_bound` — instead of a flag test and a `min`.
-    /// Offset 40; the record is 48 bytes with 4 bytes of tail padding.
+    /// Offset 40; `rep` follows at 48 (4 bytes of padding between), so the
+    /// record is 56 bytes.
     position_bound: u32,
+    /// Charter step 5: the per-slot field representation, two bits per inline
+    /// slot 0..32 (`field_rep`). An identity fact under
+    /// [`field_rep::identity`](crate::object::field_rep::identity), folded into the
+    /// facts key only when nonzero.
+    pub(super) rep: u64,
 }
 
 const RECORD_KIND_SHIFT: u32 = 8;
@@ -143,9 +149,10 @@ const _: () = assert!(
     super::shapes_birth_width::TRACKING_BIRTHS <= RECORD_BIRTHS_MASK >> RECORD_BIRTHS_SHIFT
 );
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 48);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 56);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, position_bound) == 40);
+const _: () = assert!(std::mem::offset_of!(ShapeRecord, rep) == 48);
 
 impl ShapeRecord {
     const EMPTY: ShapeRecord = ShapeRecord {
@@ -157,6 +164,7 @@ impl ShapeRecord {
         hole_count: 0,
         flags_and_kind: 0,
         position_bound: 0,
+        rep: 0,
     };
 
     #[inline]
@@ -273,6 +281,7 @@ impl ShapeRecord {
             hole_count,
             flags_and_kind: u32::from(flags) | kind_bits,
             position_bound: 0,
+            rep: 0,
         };
         record.refresh_positional();
         record
@@ -325,6 +334,13 @@ impl ShapeRecord {
     /// * no ACCESSOR key in the attribute summary — an accessor key's slot
     ///   holds its accessor pair, not a value;
     /// * a keys array at all.
+    ///
+    /// The field representation (`rep`) is deliberately NOT an input: an
+    /// `F64` slot holds a JS Number as raw IEEE bits outside the tag band,
+    /// which is itself a valid NaN-boxed value, so key position `i` is inline
+    /// slot `i` whatever the slot's representation. A shape minted with a
+    /// non-`Any` rep is its own record and gets its own bound from these
+    /// facts at construction and slab insert, like every other shape.
     #[inline]
     pub(super) fn positional_by_facts(&self) -> bool {
         self.object_kind() == ShapeObjectKind::Ordinary
@@ -355,6 +371,14 @@ impl ShapeRecord {
         self.position_bound
     }
 
+    /// The same record carrying field representation `rep` (`field_rep`).
+    #[inline]
+    pub(super) fn with_rep(mut self, rep: u64) -> ShapeRecord {
+        debug_assert!(crate::object::field_rep::is_valid(rep), "reserved rep lane");
+        self.rep = rep;
+        self
+    }
+
     /// The same record for a receiver whose [[Prototype]] identity is
     /// `proto_id` (see [`ShapeRecord::proto_id`]).
     #[inline]
@@ -377,9 +401,12 @@ impl ShapeRecord {
         hole_count: u32,
         proto_id: u64,
         summary: u8,
+        rep: u64,
     ) -> bool {
         self.proto_id == proto_id
             && self.summary() == summary
+            && crate::object::field_rep::identity(self.rep)
+                == crate::object::field_rep::identity(rep)
             && self.facts_match(
                 keys,
                 logical_key_count,
@@ -427,6 +454,7 @@ impl ShapeRecord {
             self.hole_count,
             self.proto_id,
             self.summary(),
+            self.rep,
         )
     }
 
@@ -447,6 +475,7 @@ impl ShapeRecord {
             object_kind: self.object_kind(),
             hole_count: self.hole_count,
             summary: self.summary(),
+            rep: self.rep,
         }
     }
 }
@@ -477,10 +506,13 @@ pub(super) fn facts_key(
         hole_count,
         0,
         0,
+        0,
     )
 }
 
-/// The seven identity facts, the prototype identity included.
+/// The identity facts, the prototype identity, the attribute summary and the
+/// field representation included.
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub(super) fn facts_key_proto(
     keys: u64,
@@ -491,6 +523,7 @@ pub(super) fn facts_key_proto(
     hole_count: u32,
     proto_id: u64,
     summary: u8,
+    rep: u64,
 ) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -510,6 +543,14 @@ pub(super) fn facts_key_proto(
     // it had before the summary existed.
     if summary != 0 {
         h = fold(h, 0x5_0000 | u64::from(summary));
+    }
+    // The same rule for the field representation: an all-`Any` shape keeps
+    // the key it had before the word existed. The deprecated state is not
+    // identity, so it is masked here as it is in `facts_match_proto`.
+    let rep = crate::object::field_rep::identity(rep);
+    if rep != 0 {
+        h = fold(h, 0x6_0000);
+        h = fold(h, rep);
     }
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
@@ -1546,9 +1587,14 @@ mod tests {
     ///
     /// 32 -> 40 bytes is deliberate: [[Prototype]] is a shape fact
     /// (`proto_id`), and a 64-bit prototype identity does not fit the padding.
+    /// 40 -> 48 is deliberate too: the per-slot field representation (charter
+    /// step 5, `rep`) is a shape fact with no free bits left to live in.
+    /// 48 -> 56 is deliberate: POSBOUND (`position_bound`, offset 40) is the
+    /// one-compare position fact the megamorphic read confirm needs; `rep`
+    /// moves to offset 48 behind it.
     #[test]
     fn the_record_geometry_is_free_and_facts_key_is_o1() {
-        assert_eq!(std::mem::size_of::<ShapeRecord>(), 48, "record grew");
+        assert_eq!(std::mem::size_of::<ShapeRecord>(), 56, "record grew");
         assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
 
         // `facts_key` folds the keys ADDRESS; it must never dereference it.
@@ -1609,6 +1655,43 @@ mod tests {
         }
     }
 
+    /// Charter step 5, P1 is inert: an all-`Any` record's facts key is
+    /// EXACTLY the fold it had before the `rep` word existed (recomputed here
+    /// without it), so no existing shape changes bucket.
+    #[test]
+    fn an_all_any_rep_keeps_the_pre_rep_facts_key() {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let fold = |acc: u64, word: u64| (acc ^ word).wrapping_mul(FNV_PRIME);
+        for kind in [ShapeObjectKind::Ordinary, ShapeObjectKind::Class] {
+            let mut h = fold(FNV_OFFSET_BASIS, 0x1111_2222_3333_4444);
+            for word in [7, 3, 9, 2, kind.code(), 0x77] {
+                h = fold(h, word);
+            }
+            let pre_rep = h ^ (h >> 32);
+            let key = facts_key_proto(0x1111_2222_3333_4444, 7, 3, 9, kind, 2, 0x77, 0, 0);
+            assert_eq!(key, pre_rep, "an all-Any shape must keep its key");
+        }
+    }
+
+    /// `rep` is compared on every bucket hit, not only hashed: a 64-bit fold
+    /// collision must never hand an F64 shape to an all-`Any` request.
+    #[test]
+    fn facts_match_compares_the_rep_identity() {
+        use crate::object::field_rep::{with_slot_rep, REP_F64, REP_F64_DEPRECATED};
+        let f64_at_0 = with_slot_rep(0, 0, REP_F64);
+        let record =
+            ShapeRecord::new(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0).with_rep(f64_at_0);
+        let facts =
+            |rep| record.facts_match_proto(0x40, 1, 1, 0, ShapeObjectKind::Ordinary, 0, 0, 0, rep);
+        assert!(facts(f64_at_0));
+        assert!(!facts(0), "same facts, all-Any rep: not this shape");
+        assert!(
+            facts(with_slot_rep(0, 0, REP_F64_DEPRECATED)),
+            "deprecated is not identity"
+        );
+    }
+
     /// Varying any ONE fact must change the key: a fold that dropped a field
     /// would send two different shapes to one bucket for every value of it.
     #[test]
@@ -1653,6 +1736,18 @@ mod tests {
                 "changing `{field}` alone must change the facts key"
             );
         }
+        let rep = facts_key_proto(
+            0x1111_2222_3333_4444,
+            7,
+            3,
+            9,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            crate::object::field_rep::REP_F64,
+        );
+        assert_ne!(rep, base, "changing `rep` alone must change the facts key");
         let record = ShapeRecord::new(0x1111_2222_3333_4444, 7, 3, 9, ShapeObjectKind::Ordinary, 0);
         assert_eq!(record.facts_key_with_keys(0x1111_2222_3333_4444), base);
         assert_eq!(

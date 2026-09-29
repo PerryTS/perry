@@ -1234,6 +1234,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[PTR, I32, I32, I64, I64, I64, I64, I64],
     );
+    // Step 4b loop regions: the store-licensing twin (attribute summary 0).
+    module.declare_function(
+        "js_region_loop_prime",
+        I64,
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32],
+    );
     module.declare_function(
         "js_gc_typed_shape_id_for_keys",
         I32,

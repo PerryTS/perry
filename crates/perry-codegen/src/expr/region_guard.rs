@@ -291,6 +291,11 @@ impl ModuleDiag {
 impl Drop for ModuleDiag {
     fn drop(&mut self) {
         if let Some((runs, reads)) = self.census {
+            let l = crate::stmt::region_loop::take_stats();
+            eprintln!(
+                "[perry region] module={} loop_regions={} body_regions={} bare_reads={} bare_stores={} f_discarded={} loops_refused={}",
+                self.name, l[0], l[1], l[2], l[3], l[4], l[5]
+            );
             eprintln!(
                 "[perry region] module={} regions={} reads_covered={} stmt_regions={} stmt_reads_covered={} statement_runs_seen={} statement_reads_seen={}",
                 self.name,

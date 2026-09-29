@@ -143,6 +143,9 @@ pub(crate) struct ShapeDescriptor {
     /// keys this shape names — what may be an accessor, non-writable,
     /// non-enumerable or non-configurable. Zero for an all-default shape.
     pub(crate) summary: u8,
+    /// Charter step 5: the per-slot field representation (`field_rep`).
+    /// Compared under [`field_rep::identity`](super::field_rep::identity).
+    pub(crate) rep: u64,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
@@ -532,6 +535,7 @@ impl PartialEq for ShapeDescriptor {
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
             && self.summary == other.summary
+            && super::field_rep::identity(self.rep) == super::field_rep::identity(other.rep)
     }
 }
 
@@ -1105,6 +1109,39 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     proto_id: u64,
     extra_summary: u8,
 ) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_ensure_with_rep(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        proto_id,
+        extra_summary,
+        super::field_rep::REP_ANY,
+    )
+}
+
+/// [`shape_descriptor_ensure_with_holes`] with an explicit field
+/// representation (charter step 5, `field_rep`). `rep` is identity under
+/// [`field_rep::identity`](super::field_rep::identity): a request whose only
+/// difference from a live record is a deprecated lane finds that record.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) fn shape_descriptor_ensure_with_rep(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
+    extra_summary: u8,
+    rep: u64,
+) -> Result<u32, ShapeDescriptorError> {
+    if !super::field_rep::is_valid(rep) {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -1150,6 +1187,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         hole_count,
         proto_id,
         summary,
+        rep,
     );
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1172,6 +1210,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
                     hole_count,
                     proto_id,
                     summary,
+                    rep,
                 )
             {
                 #[cfg(feature = "shape-mint-diag")]
@@ -1228,7 +1267,8 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         hole_count,
     )
     .with_proto_id(proto_id)
-    .with_summary(summary);
+    .with_summary(summary)
+    .with_rep(rep);
     // Publish by-id first, then the reverse accelerators. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
@@ -1704,6 +1744,43 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
     -1
 }
 
+/// Step 4b loop regions: where objects of an ORDINARY, generation-0,
+/// hole-free shape (the caller checked all three) keep `key` — `(false,
+/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// position at or past the live inline bound IS the key's index in the
+/// buffer (`ShapeRecordRef::spill_position_of_key`). Answered in the same
+/// order the megamorphic read asks: the inline range front to back
+/// (`inline_slot_of_key`), then the spill range back to front (#10595: a
+/// shadowed field's most-derived position wins). The list is bounded by the
+/// shape's own key count, never its backing's length (#10969).
+/// Allocation-free; never calls user code.
+fn region_key_location(descriptor: &ShapeDescriptor, key_bits: u64) -> Option<(bool, usize)> {
+    let mut wanted_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut stored_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    unsafe {
+        let wanted = crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits(key_bits),
+            &mut wanted_buf,
+        )?;
+        let (slots, len) =
+            super::keys_array_dense_slots_resolved(descriptor.keys as usize as *const ArrayHeader);
+        if slots.is_null() {
+            return None;
+        }
+        let hi = len.min(descriptor.logical_key_count as usize);
+        let lo = hi.min(descriptor.live_inline_slot_count as usize);
+        let mut matches = |i: usize| {
+            let stored = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+            stored.bits() == key_bits
+                || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
+        };
+        if let Some(i) = (0..lo).find(|&i| matches(i)) {
+            return Some((false, i));
+        }
+        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+    }
+}
+
 /// Keepalive anchor — `js_shape_ordinary_inline_slot_for_key` is a
 /// generated-code-only callee (the element-shape loop clone's shape-keyed
 /// preheader), so the auto-optimize whole-program build would otherwise
@@ -1819,6 +1896,217 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
     u64,
     u64,
 ) -> u64 = js_region_guard_prime;
+
+/// Step 4b loop regions: pack a LOOP region's word, which licenses bare
+/// STORES as well as bare reads, or return [`REGION_GUARD_WORD_EMPTY`].
+///
+/// [`js_region_guard_pack`] proves each key is an ordinary own inline slot of
+/// `shape_id` (ordinary kind, semantic generation 0, no tombstones, every key
+/// inline). A store additionally needs every covered key to be a WRITABLE DATA
+/// property, which is the shape's attribute summary: zero means every key the
+/// shape names carries default attributes (data, writable, enumerable,
+/// configurable). A nonzero summary refuses the whole word; the loop then runs
+/// its generic body, which is today's code. Refusing is always correct.
+///
+/// The per-object store facts that are NOT shape facts yet (receiver kind,
+/// Array-subclass numeric proof: DESIGN §6.5a) are tested by the emitted
+/// guard itself, on the object, not here.
+///
+/// SPILL-located keys (the S5 facts): a key at or past the shape's live
+/// inline bound lives at index `position` of the object's spill buffer
+/// (`ShapeRecordRef::spill_position_of_key`), and every carrier of the shape
+/// has that storage — the same claim
+/// the emitted `pic.spill.hit` rests on, published under the same conditions
+/// (object-owned spill storage, an index it can address). Such a word carries
+/// the ShapeId with `PACKED_SPILL_FLIP` flipped into it — the S5 convention —
+/// so the guard's plain compare admits only all-inline words and a second
+/// compare, on its miss side, selects the region's spill copy. A spill key is
+/// served to READS only: a key in `stored_mask` must be inline (a spill store
+/// owes the buffer's own GC bookkeeping, which the bare store does not do).
+#[no_mangle]
+pub extern "C" fn js_region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+    stored_mask: u32,
+) -> u64 {
+    region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask)
+        .unwrap_or(REGION_GUARD_WORD_EMPTY)
+}
+
+/// Why [`js_region_loop_pack`] refused a shape — the route census's refusal
+/// histogram (DESIGN §9.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegionRefusal {
+    /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
+    Band,
+    /// A key is an accessor or not writable/enumerable/configurable data.
+    Summary,
+    /// Not `Ordinary`, a non-zero semantic generation, or tombstones.
+    Kind,
+    /// A key is not in the shape at all (inherited, or absent).
+    Absent,
+    /// A key the body STORES is spill-located.
+    SpillStored,
+    /// A spill-located key the S5 path could not serve (storage disabled,
+    /// index past `SPILL_MAX_FIELD_INDEX`, or past the word's 6-bit field).
+    SpillUnservable,
+    /// An inline slot past the word's 6-bit field (>= 32).
+    Range,
+}
+
+fn region_loop_pack(
+    shape_id: u32,
+    n: u32,
+    keys: [u64; 5],
+    stored_mask: u32,
+) -> Result<u64, RegionRefusal> {
+    use RegionRefusal::*;
+    if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+        return Err(Band);
+    }
+    match shape_record_by_id(shape_id) {
+        Some(record) if record.summary() == 0 => {}
+        Some(_) => return Err(Summary),
+        None => return Err(Band),
+    }
+    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
+        return Err(Band);
+    };
+    if descriptor.object_kind != ShapeObjectKind::Ordinary
+        || descriptor.semantic_generation != 0
+        || descriptor.hole_count != 0
+    {
+        return Err(Kind);
+    }
+    // (spilled, inline slot or spill index) per key.
+    let mut at = [(false, 0usize); REGION_GUARD_MAX_KEYS as usize];
+    let mut any_spill = false;
+    for (i, &key) in keys.iter().enumerate().take(n as usize) {
+        let (spilled, position) = region_key_location(&descriptor, key).ok_or(Absent)?;
+        if spilled {
+            if stored_mask & (1 << i) != 0 {
+                return Err(SpillStored);
+            }
+            if !super::object_spill_enabled() || position >= super::SPILL_MAX_FIELD_INDEX {
+                return Err(SpillUnservable);
+            }
+            any_spill = true;
+        }
+        at[i] = (spilled, position);
+    }
+    // Every field is `slot` (< 32) or `32 + spill index` (< 63), in BOTH
+    // kinds of word: a region with two receivers may run its spill copy for
+    // one receiver's spill word while the other's word is all-inline, and
+    // that copy reads each field the same way.
+    let id = if any_spill {
+        shape_id ^ crate::object::field_get_set::PACKED_SPILL_FLIP
+    } else {
+        shape_id
+    };
+    let mut word = u64::from(id);
+    for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
+        let field = match spilled {
+            false if n_at < 32 => n_at,
+            true if n_at < 31 => 32 + n_at,
+            false => return Err(Range),
+            true => return Err(SpillUnservable),
+        };
+        word |= (field as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
+    }
+    Ok(word)
+}
+
+/// The word a loop region's site holds once its last bounded prime attempt
+/// was refused: all ones. Its id half is `REGION_GUARD_WORD_EMPTY`'s, which no
+/// object carries, so it can never match; the emitted guard tests for it
+/// FIRST and skips the receiver test (DESIGN §4.3).
+pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
+
+/// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
+/// store-side twin of [`js_region_guard_prime`], with its memory ordering.
+/// `last` is non-zero on the site's final bounded attempt: a refusal then
+/// publishes [`REGION_LOOP_WORD_RETIRED`].
+///
+/// # Safety
+///
+/// `word` must be null or point to a live, 8-byte-aligned `AtomicU64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_region_loop_prime(
+    word: *const core::sync::atomic::AtomicU64,
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+    last: u32,
+    stored_mask: u32,
+) -> u64 {
+    let verdict = region_loop_pack(shape_id, n, [k0, k1, k2, k3, k4], stored_mask);
+    region_loop_prime_census(verdict);
+    let packed = verdict.unwrap_or(REGION_GUARD_WORD_EMPTY);
+    if word.is_null() {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    if packed == REGION_GUARD_WORD_EMPTY {
+        if last != 0 {
+            (*word).store(
+                REGION_LOOP_WORD_RETIRED,
+                core::sync::atomic::Ordering::Relaxed,
+            );
+            crate::hot_diag::recv_route_note_runtime(crate::hot_diag::RT_ROUTE_RLOOP_RETIRE);
+        }
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
+    packed
+}
+
+/// The route census's verdict on one loop-region prime (a relaxed load and a
+/// not-taken branch outside a census build): accepted, or WHY it was refused
+/// ([`RegionRefusal`]).
+fn region_loop_prime_census(verdict: Result<u64, RegionRefusal>) {
+    use crate::hot_diag::{
+        recv_route_note_runtime, RT_ROUTE_RLOOP_PRIME_OK, RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        RT_ROUTE_RLOOP_REFUSE_BAND, RT_ROUTE_RLOOP_REFUSE_KIND, RT_ROUTE_RLOOP_REFUSE_RANGE,
+        RT_ROUTE_RLOOP_REFUSE_SPILL_STORED, RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
+        RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+    };
+    let route = match verdict {
+        Ok(_) => RT_ROUTE_RLOOP_PRIME_OK,
+        Err(RegionRefusal::Band) => RT_ROUTE_RLOOP_REFUSE_BAND,
+        Err(RegionRefusal::Summary) => RT_ROUTE_RLOOP_REFUSE_SUMMARY,
+        Err(RegionRefusal::Kind) => RT_ROUTE_RLOOP_REFUSE_KIND,
+        Err(RegionRefusal::Absent) => RT_ROUTE_RLOOP_REFUSE_ABSENT,
+        Err(RegionRefusal::SpillStored) => RT_ROUTE_RLOOP_REFUSE_SPILL_STORED,
+        Err(RegionRefusal::SpillUnservable) => RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE,
+        Err(RegionRefusal::Range) => RT_ROUTE_RLOOP_REFUSE_RANGE,
+    };
+    recv_route_note_runtime(route);
+}
+
+/// Keepalive anchor — `js_region_loop_prime` is called only from generated
+/// code (a loop region's entry miss).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
+    *const core::sync::atomic::AtomicU64,
+    u32,
+    u32,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u32,
+    u32,
+) -> u64 = js_region_loop_prime;
 
 /// Mint a process-global ShapeId for a codegen-registered typed layout and
 /// install its structural descriptor in the current agent. Unlike
