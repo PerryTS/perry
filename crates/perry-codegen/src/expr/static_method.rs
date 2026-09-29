@@ -22,17 +22,22 @@ use super::{
 /// declaration's function object, a fact carried by the class function
 /// objects' shapes. The site's memo is a runtime `StaticCallMemo` (four
 /// words; thread-local when the program starts workers, so each agent arms
-/// its own). The hit is inline:
+/// its own) holding the (pinned) class function objects. The hit is inline,
+/// one shape word per class the read consults:
 ///
 /// ```text
-///   c = memo.c ; c != 0 [&& receiver == memo.c_value]      else MISS
-///   k = [[c + PROPS] + SHAPE] | [[memo.owner + PROPS] + SHAPE] << 32
-///   k == memo.key                                          else MISS
+///   [receiver == memo.c_value]                                  else MISS
+///   [[memo.c + PROPS] + SHAPE]      == low half of memo.key     else MISS
+///   [[[memo.owner + PROPS] + SHAPE] == high half of memo.key    else MISS]
 ///   MISS: ok = miss_fn(miss_args..., memo)  (re-validates, re-arms)
 /// ```
 ///
-/// `same_owner`: the class the call names declares the body itself, so one
-/// shape word is both halves. `receiver_bits`: a site whose receiver is a
+/// Never armed, both object words point at the site's constant, whose
+/// own-property word points at itself and whose shape word (0) never equals
+/// a half of the unarmed key (all ones).
+///
+/// `same_owner`: the class the call names declares the body itself, so its
+/// one shape word is both halves. `receiver_bits`: a site whose receiver is a
 /// value must also be looking at the memo's class function object. Returns
 /// the i1 "the body may run directly".
 pub(crate) fn emit_static_call_guard(
@@ -45,74 +50,89 @@ pub(crate) fn emit_static_call_guard(
     use crate::types::I1;
     let site = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
-    let memo = format!(
-        "@{}_smemo",
-        crate::expr::inline_cache_global_name(ctx, site)
-    );
+    let site_name = crate::expr::inline_cache_global_name(ctx, site);
+    let memo = format!("@{site_name}_smemo");
+    let unarmed = format!("@{site_name}_sunarmed");
     let tls = if crate::codegen::program_has_worker() {
         "thread_local "
     } else {
         ""
     };
+    // `[unarmed + PROPS]` is `unarmed`; `[unarmed + SHAPE]` is 0.
+    let props_words = crate::runtime_abi::CLOSURE_PROPS_OFFSET / 8;
+    debug_assert!(crate::runtime_abi::OBJECT_SHAPE_OFFSET + 4 <= 8 * props_words);
     ctx.typed_parse_rodata.push(format!(
-        "{memo} = private {tls}global [4 x i64] [i64 -1, i64 0, i64 0, i64 0], align 8"
+        "{unarmed} = private constant {{ [{props_words} x i64], ptr }} {{ [{props_words} x i64] zeroinitializer, ptr {unarmed} }}, align 8"
+    ));
+    ctx.typed_parse_rodata.push(format!(
+        "{memo} = private {tls}global {{ i64, ptr, ptr, i64 }} {{ i64 -1, ptr {unarmed}, ptr {unarmed}, i64 0 }}, align 8"
     ));
     let mut args: Vec<(crate::types::LlvmType, &str)> =
         miss_args.iter().map(|(t, v)| (*t, v.as_str())).collect();
     args.push((PTR, &memo));
-    // The inline hit reads LP64 layouts (8-byte memo words, `ClosureHeader`
-    // props at 16); other targets always ask the runtime.
+    // The inline hit reads little-endian LP64 layouts (8-byte memo words, the
+    // key's halves); other targets always ask the runtime.
     let triple = ctx.target_triple;
-    let lp64 =
-        (triple.starts_with("x86_64") || triple.starts_with("aarch64")) && !triple.contains("32");
-    if !lp64 {
+    let lp64_le = (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
+        && !triple.starts_with("aarch64_be")
+        && !triple.contains("32");
+    if !lp64_le {
         let ok = ctx.block().call(I32, miss_fn, &args);
         return ctx.block().icmp_ne(I32, &ok, "0");
     }
-    let word = |ctx: &mut FnCtx<'_>, offset: usize| -> String {
+    let miss_idx = ctx.new_block("static_guard.miss");
+    let join_idx = ctx.new_block("static_guard.join");
+    let miss_l = ctx.block_label(miss_idx);
+    let join_l = ctx.block_label(join_idx);
+    // One test per block, each expected to pass: the hit falls straight
+    // through to the direct call, every miss branches out of line.
+    let test = |ctx: &mut FnCtx<'_>, pass: &str, last: bool| {
+        let pass = ctx
+            .block()
+            .call(I1, "llvm.expect.i1", &[(I1, pass), (I1, "true")]);
+        if last {
+            ctx.block().cond_br(&pass, &join_l, &miss_l);
+        } else {
+            let next = ctx.new_block("static_guard.check");
+            let next_l = ctx.block_label(next);
+            ctx.block().cond_br(&pass, &next_l, &miss_l);
+            ctx.current_block = next;
+        }
+    };
+    let memo_word = |ctx: &mut FnCtx<'_>, ty: crate::types::LlvmType, offset: usize| -> String {
         let p = ctx
             .block()
             .gep(crate::types::I8, &memo, &[(I64, &offset.to_string())]);
-        ctx.block().load(I64, &p)
+        ctx.block().load(ty, &p)
     };
-    let shape_word = |ctx: &mut FnCtx<'_>, fo: &str| -> String {
-        let fo = ctx.block().inttoptr(I64, fo);
+    let shape_matches = |ctx: &mut FnCtx<'_>, fo_offset: usize, key_offset: usize| -> String {
+        let fo = memo_word(ctx, PTR, fo_offset);
         let props = crate::runtime_abi::CLOSURE_PROPS_OFFSET.to_string();
         let pp = ctx.block().gep(crate::types::I8, &fo, &[(I64, &props)]);
         let bag = ctx.block().load(PTR, &pp);
         let shape = crate::runtime_abi::OBJECT_SHAPE_OFFSET.to_string();
         let sp = ctx.block().gep(crate::types::I8, &bag, &[(I64, &shape)]);
         let w = ctx.block().load(I32, &sp);
-        ctx.block().zext(I32, &w, I64)
+        let k = memo_word(ctx, I32, key_offset);
+        ctx.block().icmp_eq(I32, &w, &k)
     };
-    let check_idx = ctx.new_block("static_guard.check");
-    let miss_idx = ctx.new_block("static_guard.miss");
-    let join_idx = ctx.new_block("static_guard.join");
-    let check_l = ctx.block_label(check_idx);
-    let miss_l = ctx.block_label(miss_idx);
-    let join_l = ctx.block_label(join_idx);
-    let c = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_C_OFFSET);
-    let mut armed = ctx.block().icmp_ne(I64, &c, "0");
     if let Some(bits) = receiver_bits {
-        let v = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_VALUE_OFFSET);
+        let v = memo_word(ctx, I64, crate::runtime_abi::STATIC_CALL_MEMO_VALUE_OFFSET);
         let same = ctx.block().icmp_eq(I64, bits, &v);
-        armed = ctx.block().and(I1, &armed, &same);
+        test(ctx, &same, false);
     }
-    ctx.block().cond_br(&armed, &check_l, &miss_l);
-    ctx.current_block = check_idx;
-    let sc = shape_word(ctx, &c);
-    let so = if same_owner {
-        sc.clone()
-    } else {
-        let o = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_OWNER_OFFSET);
-        shape_word(ctx, &o)
-    };
-    let hi = ctx.block().shl(I64, &so, "32");
-    let key = ctx.block().or(I64, &sc, &hi);
-    let memo_key = word(ctx, crate::runtime_abi::STATIC_CALL_MEMO_KEY_OFFSET);
-    let hit = ctx.block().icmp_eq(I64, &key, &memo_key);
-    let check_pred = ctx.block().label.clone();
-    ctx.block().cond_br(&hit, &join_l, &miss_l);
+    let key = crate::runtime_abi::STATIC_CALL_MEMO_KEY_OFFSET;
+    let c_ok = shape_matches(ctx, crate::runtime_abi::STATIC_CALL_MEMO_C_OFFSET, key);
+    test(ctx, &c_ok, same_owner);
+    if !same_owner {
+        let o_ok = shape_matches(
+            ctx,
+            crate::runtime_abi::STATIC_CALL_MEMO_OWNER_OFFSET,
+            key + 4,
+        );
+        test(ctx, &o_ok, true);
+    }
+    let hit_pred = ctx.block().label.clone();
     ctx.current_block = miss_idx;
     let ok = ctx.block().call(I32, miss_fn, &args);
     let ok = ctx.block().icmp_ne(I32, &ok, "0");
@@ -120,7 +140,7 @@ pub(crate) fn emit_static_call_guard(
     ctx.block().br(&join_l);
     ctx.current_block = join_idx;
     ctx.block()
-        .phi(I1, &[("true", &check_pred), (&ok, &miss_pred)])
+        .phi(I1, &[("true", &hit_pred), (&ok, &miss_pred)])
 }
 
 fn downgrade_unknown_call_args(ctx: &mut FnCtx<'_>, args: &[Expr]) {

@@ -624,10 +624,15 @@ pub unsafe extern "C" fn js_class_static_call_guard(
 /// A static-call site's memo (`perry-codegen/src/expr/static_method.rs`),
 /// four words the emitted hit reads (`perry_abi::STATIC_CALL_MEMO_*`):
 /// `key` = (C's shape word | owner's shape word << 32) of the last
-/// validation, and the two class function objects whose shape words the hit
-/// loads (pinned for the agent's life, so the pointers never go stale), plus
-/// C's function object as a value, for a site whose receiver is a value.
-/// `c == 0` means never armed: the hit tests it before any load.
+/// validation; the two class function objects whose own-property objects'
+/// shape words the hit loads (pinned for the agent's life, so the pointers
+/// never go stale); and C's function object as a value, for a site whose
+/// receiver is a value.
+///
+/// Never armed, `c` and `owner` point at a constant of the site's whose
+/// own-property word points at itself, a shape word of 0, and `key` is all
+/// ones, so the hit needs no "armed?" test: that shape word never equals a
+/// half of the unarmed key.
 #[repr(C)]
 pub struct StaticCallMemo {
     pub key: u64,
