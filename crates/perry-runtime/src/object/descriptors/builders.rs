@@ -70,8 +70,18 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
             super::class_registry::class_own_symbol_accessor_ptrs(cid, sym_key, is_static)
         {
             return build_accessor_descriptor(
-                super::class_registry::class_accessor_function_value(get, false, &display_name),
-                super::class_registry::class_accessor_function_value(set, true, &display_name),
+                super::class_registry::class_accessor_function_value(
+                    get,
+                    false,
+                    is_static,
+                    &display_name,
+                ),
+                super::class_registry::class_accessor_function_value(
+                    set,
+                    true,
+                    is_static,
+                    &display_name,
+                ),
                 false,
                 true,
             );

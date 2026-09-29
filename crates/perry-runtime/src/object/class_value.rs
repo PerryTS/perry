@@ -926,9 +926,10 @@ pub(crate) const CLASS_ACCESSOR_DEFAULT_ATTRS: (bool, bool) = (false, true);
 /// Install — or refresh, when a half arrives later — the ClassBody static
 /// accessor `name` of `class_id` as an accessor property of its function
 /// object's own-property object: the pair holds the reflected closures and
-/// the compiled static entries (`fn() -> value` / `fn(v)`, `this` armed by
-/// the caller — NOT the instance `fn(this)` convention; only this module and
-/// its callers read a class function object's pairs). A half whose compiled
+/// the compiled static entries in the pair's STATIC fields (`fn() -> value`
+/// / `fn(v)`, `this` armed by the caller — NOT the instance `fn(this)`
+/// convention, so a generic reader of `raw_get`/`raw_set` never sees them).
+/// A half whose compiled
 /// entry is unchanged keeps its closure, so reflection hands out the same
 /// function every time; attributes a `defineProperty` set are kept.
 /// Private (`#x`) accessors are not properties and are never installed.
@@ -957,19 +958,22 @@ fn install_declared_static_accessor(class_id: u32, name: &str) {
         } else if raw == have_raw && have != 0 {
             have
         } else {
-            super::class_registry::class_accessor_function_value(raw, is_setter, name).to_bits()
+            super::class_registry::class_accessor_function_value(raw, is_setter, true, name)
+                .to_bits()
         }
     };
-    let get = half(raw_get, have.raw_get, have.get, false);
-    let set = half(raw_set, have.raw_set, have.set, true);
+    let get = half(raw_get, have.static_get, have.get, false);
+    let set = half(raw_set, have.static_set, have.set, true);
     class_static_define_accessor(
         class_id,
         name,
         crate::object::accessor_pair::Accessor {
             get,
             set,
-            raw_get,
-            raw_set,
+            raw_get: 0,
+            raw_set: 0,
+            static_get: raw_get,
+            static_set: raw_set,
         },
         enumerable,
         configurable,
@@ -1062,10 +1066,10 @@ pub(crate) unsafe fn class_static_accessor_call_get(
     receiver: f64,
 ) -> f64 {
     let this = crate::object::field_get_set::accessor_receiver_override_take().unwrap_or(receiver);
-    if acc.raw_get != 0 {
+    if acc.static_get != 0 {
         crate::object::static_this_arm_if_unarmed(this);
         crate::object::static_private_owner_push(receiver);
-        let f: extern "C" fn() -> f64 = std::mem::transmute(acc.raw_get);
+        let f: extern "C" fn() -> f64 = std::mem::transmute(acc.static_get);
         let result = f();
         crate::object::static_private_owner_pop();
         crate::object::static_this_disarm();
@@ -1086,10 +1090,10 @@ pub(crate) unsafe fn class_static_accessor_call_set(
     receiver: f64,
     value: f64,
 ) -> bool {
-    if acc.raw_set != 0 {
+    if acc.static_set != 0 {
         crate::object::static_this_arm_if_unarmed(receiver);
         crate::object::static_private_owner_push(receiver);
-        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.raw_set);
+        let f: extern "C" fn(f64) -> f64 = std::mem::transmute(acc.static_set);
         let _ = f(value);
         crate::object::static_private_owner_pop();
         crate::object::static_this_disarm();

@@ -126,6 +126,8 @@ pub(crate) fn register_class_dynamic_static_accessor(
             set: set_bits.map(|_| set.get_nanbox_u64()).unwrap_or(have.set),
             raw_get: if get_bits.is_some() { 0 } else { have.raw_get },
             raw_set: if set_bits.is_some() { 0 } else { have.raw_set },
+            static_get: if get_bits.is_some() { 0 } else { have.static_get },
+            static_set: if set_bits.is_some() { 0 } else { have.static_set },
         };
         let enumerable = enumerable
             .or(existing.map(|(_, e, _)| e))

@@ -24,6 +24,8 @@ fn a_pair_round_trips_both_forms() {
             set: 0,
             raw_get: 0x5555_1234_5678,
             raw_set: 0,
+            static_get: 0,
+            static_set: 0x5555_8765_4320,
         };
         let pair = pair_new(acc);
         let value = crate::value::js_nanbox_pointer(pair as i64).to_bits();

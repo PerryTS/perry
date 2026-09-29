@@ -52,7 +52,7 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         } else if raw == have_raw && have != 0 {
             have
         } else {
-            class_accessor_function_value(raw, is_setter, name).to_bits()
+            class_accessor_function_value(raw, is_setter, false, name).to_bits()
         }
     };
     let get = scope.root_nanbox_u64(half(raw_get, existing.raw_get, existing.get, false));
@@ -62,6 +62,8 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
         set,
         raw_get,
         raw_set,
+        static_get: 0,
+        static_set: 0,
     };
     proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
         crate::object::set_builtin_accessor_pair(
