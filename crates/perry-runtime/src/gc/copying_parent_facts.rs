@@ -227,6 +227,29 @@ impl CopyingNurseryCollector {
             return None;
         }
         let addr = bits as usize;
+        // The memo holds only an address that CLASSIFIED this cycle, and a
+        // classification cannot change within a cycle: its page range stays
+        // registered until the from-space reset after the last trace, and the
+        // header fields `plausible_gc_header` reads are not ones forwarding
+        // rewrites. So a raw word naming the memo is validated already — the
+        // per-object shape `keys` word hits this on every shaped receiver
+        // (#11549). Test and debug builds re-derive the premise.
+        if let Some(new_addr) = self.memo_hit(addr) {
+            #[cfg(test)]
+            if copy_decode_sabotage::forgetting(copy_decode_sabotage::RAW_MARK) {
+                return None;
+            }
+            #[cfg(any(test, debug_assertions))]
+            assert!(
+                self.ptrs.classify(addr).is_some(),
+                "a memoized raw address stopped classifying mid-cycle: {addr:#x}"
+            );
+            return Some((
+                new_addr,
+                (new_addr != addr).then_some(new_addr as u64),
+                true,
+            ));
+        }
         let ptr = self.ptrs.classify_inline(addr)?;
         #[cfg(test)]
         if copy_decode_sabotage::forgetting(copy_decode_sabotage::RAW_MARK) {

@@ -1726,6 +1726,24 @@ pub(crate) unsafe fn note_old_generation_carrier(record: Option<ShapeRecordRef>)
     }
 }
 
+/// Would [`note_old_generation_carrier`] change nothing for `record` right now?
+///
+/// True when both of its flags are already set — the note then re-sets them
+/// and finds it is not the first this epoch — or when there is no record. The
+/// copying drain asks this BEFORE classifying the receiver's generation, so a
+/// shape whose carrier was already noted this epoch skips that page-map probe
+/// entirely (#11549). Exact: it reads the same two flags the note would.
+#[inline]
+pub(crate) unsafe fn old_generation_carrier_already_noted(
+    record: Option<ShapeRecordRef>,
+) -> bool {
+    let Some(record) = record else {
+        return true;
+    };
+    let record = record.0.as_ptr();
+    (*record).has(RECORD_FLAG_OLD_CARRIER) && (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN)
+}
+
 /// Note that a complete full trace visited a receiver carrying this shape.
 /// Unlike the old-generation gate, this answers receiver liveness regardless
 /// of generation and is consumed by post-trace descriptor retirement.

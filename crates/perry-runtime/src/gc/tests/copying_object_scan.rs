@@ -82,3 +82,68 @@ fn a_plan_that_drops_a_payload_slot_is_refused_by_the_generic_walk_cross_check()
         "a plan missing the top payload slot must be caught by the cross-check; got {outcome:?}"
     );
 }
+
+/// A young object whose shape has never had an old carrier, promoted IN PLACE
+/// by a traced minor — so it is scanned at an old address, and (the malloc
+/// registry being empty) the cycle skips the remembered-set rebuild whose
+/// generic walk would make the note itself.
+/// Returns whether its shape record was noted as old-carried, `(before,
+/// after)`: the note the plain-object path skips only when it would change
+/// nothing.
+fn promoted_receiver_notes_its_shape(sabotaged: bool) -> (bool, bool) {
+    std::thread::spawn(move || {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _promote = InPlacePromotionTestGuard::enabled(1000);
+        let _scan = ConservativeScanDisabledGuard::new();
+        let (parent, fields) = unsafe { alloc_nursery_test_object(2) };
+        unsafe { *fields = string_bits(young_leaf()) };
+        js_shadow_slot_set(0, ptr_bits(parent as usize));
+        let noted = |obj: usize| unsafe {
+            crate::object::shapes::old_generation_carrier_already_noted(
+                crate::object::shapes::object_shape_record(
+                    obj as *const crate::object::ObjectHeader,
+                ),
+            )
+        };
+        let before = noted(parent as usize);
+        {
+            let _no_cross_check = sabotage::NoCrossCheck::arm();
+            let _sabotage = sabotaged.then(sabotage::ClaimNotedCarriers::arm);
+            let attempts = sabotage::plan_attempts();
+            // Not `collect_minor_trace`: a traced cycle arms the layout-scan
+            // trace, which the plain-object path declines.
+            let _ = gc_collect_minor();
+            assert!(
+                sabotage::plan_attempts() > attempts,
+                "premise: the plain-object path scanned the promoted receiver"
+            );
+        }
+        assert!(
+            (js_shadow_slot_get(0) & POINTER_MASK) as usize == parent as usize
+                && crate::arena::pointer_in_old_gen(parent as usize),
+            "premise: the receiver was promoted where it stood"
+        );
+        (before, noted(parent as usize))
+    })
+    .join()
+    .expect("carrier-note test thread must not panic")
+}
+
+#[test]
+fn a_promoted_receiver_notes_its_shape_as_old_carried() {
+    assert_eq!(
+        promoted_receiver_notes_its_shape(false),
+        (false, true),
+        "a fresh shape starts un-noted and its promoted carrier must note it"
+    );
+}
+
+#[test]
+fn claiming_every_shape_already_noted_loses_the_old_carrier_note() {
+    assert_eq!(
+        promoted_receiver_notes_its_shape(true),
+        (false, false),
+        "with the skip claiming every shape noted, the note never runs"
+    );
+}

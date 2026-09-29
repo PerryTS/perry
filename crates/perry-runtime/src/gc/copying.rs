@@ -420,6 +420,13 @@ impl CopyingNurseryCollector {
         Some(self.mark_classified(addr, ptr))
     }
 
+    /// The memo's answer for `addr`, if `addr` is the last address a mark
+    /// classified successfully this cycle. See `memo_addr`.
+    #[inline(always)]
+    pub(super) fn memo_hit(&self, addr: usize) -> Option<usize> {
+        (addr == self.memo_addr).then_some(self.memo_result)
+    }
+
     /// [`mark_addr`](Self::mark_addr) for an address the caller has already
     /// classified: the memo, then the mark, without classifying again.
     #[inline]

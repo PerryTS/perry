@@ -135,8 +135,14 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> Option<PlainObjectPlan> {
         } => return None,
     };
     // `visit_gc_layout_slot_descriptors`' shape-keys edge. `full_trace_active`
-    // is false here, so only the old-carrier note applies.
-    if !crate::arena::pointer_in_nursery(user_ptr as usize) {
+    // is false here, so only the old-carrier note applies — and when the note
+    // would change nothing, the generation probe that gates it is skipped.
+    #[cfg(test)]
+    let already_noted = sabotage::claiming_noted_carriers()
+        || crate::object::shapes::old_generation_carrier_already_noted(shape);
+    #[cfg(not(test))]
+    let already_noted = crate::object::shapes::old_generation_carrier_already_noted(shape);
+    if !already_noted && !crate::arena::pointer_in_nursery(user_ptr as usize) {
         crate::object::shapes::note_old_generation_carrier(shape);
     }
     let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);
@@ -164,8 +170,14 @@ impl CopyingNurseryCollector {
         let Some(mut plan) = plain_object_plan(header) else {
             return false;
         };
+        #[cfg(test)]
+        let cross_check = !sabotage::cross_check_disabled();
+        #[cfg(all(not(test), debug_assertions))]
+        let cross_check = true;
         #[cfg(any(test, debug_assertions))]
-        assert_matches_generic_walk(header, &plan);
+        if cross_check {
+            assert_matches_generic_walk(header, &plan);
+        }
         let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
         let mut changed = false;
         // Asked lazily by the generic walk, at its first slot; both are
@@ -236,7 +248,48 @@ pub(crate) mod sabotage {
 
     thread_local! {
         static DROP_TOP_PAYLOAD_SLOT: Cell<bool> = const { Cell::new(false) };
+        static CLAIM_NOTED_CARRIERS: Cell<bool> = const { Cell::new(false) };
+        static NO_CROSS_CHECK: Cell<bool> = const { Cell::new(false) };
         static PLAN_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// The generic-walk cross-check off. Its walk makes the old-carrier note
+    /// itself, so a test of whether THIS path makes the note must not run it.
+    pub(super) fn cross_check_disabled() -> bool {
+        NO_CROSS_CHECK.with(Cell::get)
+    }
+
+    pub(crate) struct NoCrossCheck(bool);
+
+    impl NoCrossCheck {
+        pub(crate) fn arm() -> Self {
+            Self(NO_CROSS_CHECK.with(|c| c.replace(true)))
+        }
+    }
+
+    impl Drop for NoCrossCheck {
+        fn drop(&mut self) {
+            NO_CROSS_CHECK.with(|c| c.set(self.0));
+        }
+    }
+
+    /// Every shape reads as already noted, so the old-carrier note never runs.
+    pub(super) fn claiming_noted_carriers() -> bool {
+        CLAIM_NOTED_CARRIERS.with(Cell::get)
+    }
+
+    pub(crate) struct ClaimNotedCarriers(bool);
+
+    impl ClaimNotedCarriers {
+        pub(crate) fn arm() -> Self {
+            Self(CLAIM_NOTED_CARRIERS.with(|c| c.replace(true)))
+        }
+    }
+
+    impl Drop for ClaimNotedCarriers {
+        fn drop(&mut self) {
+            CLAIM_NOTED_CARRIERS.with(|c| c.set(self.0));
+        }
     }
 
     pub(super) fn note_plan_attempt() {
