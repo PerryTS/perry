@@ -45,6 +45,7 @@ mod fetch_globals;
 mod generator;
 mod install_static;
 mod math_temporal;
+mod object_intrinsic;
 mod populate;
 mod proto_methods;
 mod typed_array;
@@ -143,7 +144,7 @@ pub(crate) use fetch_globals::{
     global_this_date_thunk, global_this_eval_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
     global_this_response_error_thunk, global_this_response_json_thunk,
-    global_this_response_redirect_thunk, global_this_response_thunk,
+    global_this_response_redirect_thunk, global_this_response_thunk, is_thread_realm_global,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
@@ -174,6 +175,9 @@ pub(crate) use math_temporal::install_temporal_namespace;
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::temporal_kind_prototype;
 pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
+pub(crate) use object_intrinsic::{
+    ensure_object_intrinsics, object_intrinsics_for_realm, object_prototype_intrinsic_bits,
+};
 pub(crate) use populate::{
     default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
     scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,

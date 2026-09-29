@@ -223,8 +223,9 @@ pub use self::numeric_range::{
 };
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
-    array_prototype_addr, function_prototype_addr, object_prototype_addr,
-    object_prototype_addr_if_resolved, object_prototype_addr_matches, prime_prototype_addr_cache,
+    array_prototype_addr, function_prototype_addr, note_object_prototype_intrinsic,
+    object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
+    prime_prototype_addr_cache,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{

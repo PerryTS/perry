@@ -470,6 +470,8 @@ crate::perry_thread_local! {
     static LOCAL_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static SESSION_STORAGE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static URL_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static OBJECT_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static OBJECT_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 static HTTP_METHODS_CACHE: RealmAtomicU64 = RealmAtomicU64::new(&HTTP_METHODS_CACHE_SLOT);
@@ -511,6 +513,12 @@ pub(crate) static ASYNC_GENERATOR_PROTOTYPE_PTR: RealmAtomicI64 =
 /// native constructor builds must keep the real component accessors (#11585).
 pub(crate) static URL_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&URL_INTRINSIC_PROTO_PTR_SLOT);
+/// `%Object%` and `%Object.prototype%`, built by `ensure_object_intrinsics`
+/// without the realm global and adopted by it.
+pub(crate) static OBJECT_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&OBJECT_INTRINSIC_PTR_SLOT);
+pub(crate) static OBJECT_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&OBJECT_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static LOCAL_STORAGE_PTR: RealmAtomicI64 = RealmAtomicI64::new(&LOCAL_STORAGE_PTR_SLOT);
 pub(crate) static SESSION_STORAGE_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&SESSION_STORAGE_PTR_SLOT);
@@ -1500,6 +1508,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &LOCAL_STORAGE_PTR,
         &SESSION_STORAGE_PTR,
         &URL_INTRINSIC_PROTO_PTR,
+        &OBJECT_INTRINSIC_PTR,
+        &OBJECT_INTRINSIC_PROTO_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);

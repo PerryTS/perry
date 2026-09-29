@@ -872,22 +872,7 @@ pub(crate) fn class_default_prototype_superseded(obj_ptr: usize) -> bool {
 }
 
 pub(crate) fn default_object_prototype_bits() -> Option<u64> {
-    let object_ctor = super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_bits = object_ctor.to_bits();
-    if (ctor_bits >> 48) != 0x7FFD {
-        return None;
-    }
-    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
-    if ctor_ptr == 0 {
-        return None;
-    }
-    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
-    let proto_bits = proto.to_bits();
-    if (proto_bits >> 48) == 0x7FFD {
-        Some(proto_bits)
-    } else {
-        None
-    }
+    crate::object::object_prototype_intrinsic_bits()
 }
 
 pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Option<u64> {

@@ -193,12 +193,28 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             );
             continue;
         }
+        if name == "Object" {
+            // %Object% / %Object.prototype% are built on their own (a class
+            // prototype needs them without the realm global); the thread's
+            // realm global adopts them, a `vm`/eval realm gets its own pair.
+            let (object_ctor, _) = object_intrinsics_for_realm(singleton());
+            if !object_ctor.is_null() {
+                let name_key = crate::string::js_string_from_bytes(b"Object".as_ptr(), 6);
+                super::super::define_builtin_data_property(
+                    singleton(),
+                    name_key,
+                    crate::value::js_nanbox_pointer(object_ctor as i64),
+                    name.to_string(),
+                    super::super::PropertyAttrs::new(true, false, true),
+                );
+            }
+            continue;
+        }
         let func_ptr = match name {
             "Array" => global_this_array_thunk as *const u8,
             // #10423: `F(p, body)` through a `Function` value creates a
             // function, exactly like `new F(p, body)`.
             "Function" => global_this_function_call_thunk as *const u8,
-            "Object" => global_this_object_thunk as *const u8,
             "String" => global_this_string_thunk as *const u8,
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
             // global value coerce like the bare-call lowering does.
@@ -256,7 +272,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             "Date" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
-            "Object" | "String" | "Number" | "Boolean" | "BroadcastChannel" => {
+            "String" | "Number" | "Boolean" | "BroadcastChannel" => {
                 crate::closure::js_register_closure_arity(func_ptr, 1);
             }
             "Headers" => {

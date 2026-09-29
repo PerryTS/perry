@@ -618,13 +618,13 @@ pub(crate) fn function_prototype_fallback_target(ptr: usize, prop: &str) -> Opti
     if reentrant {
         return None;
     }
-    let proto_val = crate::object::builtin_prototype_value("Function");
+    // THIS realm's %Function.prototype% (the memoized intrinsic), not whatever
+    // `globalThis.Function` names now. It is 0 while the realm global has not
+    // been built: %Function.prototype% does not exist yet, so no descriptor
+    // can sit on it — and asking must not build the realm global (defining a
+    // static on %Object% or a class function object would otherwise do so).
+    let proto_ptr = crate::array::function_prototype_addr();
     IN_FN_PROTO_FALLBACK.with(|c| c.set(false));
-    let proto_jv = crate::value::JSValue::from_bits(proto_val.to_bits());
-    if !proto_jv.is_pointer() {
-        return None;
-    }
-    let proto_ptr = (proto_jv.bits() & crate::value::POINTER_MASK) as usize;
     if proto_ptr == 0 || proto_ptr == ptr || is_closure_ptr(proto_ptr) {
         return None;
     }
